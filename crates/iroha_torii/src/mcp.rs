@@ -56,6 +56,7 @@ const MCP_TOOL_NOT_ALLOWED: &str = "tool_not_allowed";
 const MCP_TOOL_NOT_FOUND: &str = "tool_not_found";
 const MCP_TOOL_EXECUTION_ERROR_CODE: &str = "tool_execution_error";
 const MCP_JOB_NOT_FOUND: &str = "job_not_found";
+const MCP_STRICT_BODY_SCHEMA_EXTENSION: &str = "x-iroha-mcp-strict-body";
 
 const HEADER_X_API_TOKEN: &str = "x-api-token";
 const HEADER_X_IROHA_ACCOUNT: &str = "x-iroha-account";
@@ -149,7 +150,7 @@ const MUSUBI_V1_TOOL_DEFINITIONS: &[MusubiV1ToolDefinition] = &[
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.archive_retention",
-        description: "Classify a bounded exact batch of Musubi V1 archives for safe cache retention.",
+        description: "Classify a bounded exact batch of Musubi V1 archives for safe cache retention with its consensus-finalized block time.",
         path: route_catalog::musubi::ARCHIVE_RETENTION.path(),
         effect: ToolEffect::Read,
     },
@@ -322,13 +323,20 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
         }
     };
 
+    let strict_body = root
+        .get(MCP_STRICT_BODY_SCHEMA_EXTENSION)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let has_disallowed_top_level_keywords = ["anyOf", "oneOf", "allOf", "enum", "not"]
         .iter()
         .any(|key| root.contains_key(*key));
     let is_object_schema = root.get("type").and_then(Value::as_str) == Some("object");
     if is_object_schema && !has_disallowed_top_level_keywords {
         let mut strict = schema.clone();
-        stricten_tool_input_schema(&mut strict, false);
+        if let Some(object) = strict.as_object_mut() {
+            object.remove(MCP_STRICT_BODY_SCHEMA_EXTENSION);
+        }
+        stricten_tool_input_schema(&mut strict, false, strict_body);
         return strict;
     }
 
@@ -364,6 +372,7 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
     schema_obj.remove("allOf");
     schema_obj.remove("enum");
     schema_obj.remove("not");
+    schema_obj.remove(MCP_STRICT_BODY_SCHEMA_EXTENSION);
     schema_obj.insert("type".into(), Value::String("object".to_owned()));
     schema_obj.insert("properties".into(), Value::Object(properties));
     schema_obj
@@ -371,33 +380,37 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
         .or_insert(Value::Bool(false));
 
     let mut schema = Value::Object(schema_obj);
-    stricten_tool_input_schema(&mut schema, false);
+    stricten_tool_input_schema(&mut schema, false, strict_body);
     schema
 }
 
-fn stricten_tool_input_schema(schema: &mut Value, inside_body: bool) {
+fn stricten_tool_input_schema(schema: &mut Value, inside_body: bool, strict_body: bool) {
     let Some(object) = schema.as_object_mut() else {
         return;
     };
     let is_object_schema = object.get("type").and_then(Value::as_str) == Some("object")
         || object.contains_key("properties");
     if is_object_schema {
-        object.insert("additionalProperties".into(), Value::Bool(inside_body));
+        if inside_body && strict_body {
+            object.insert("additionalProperties".into(), Value::Bool(false));
+        } else {
+            object.insert("additionalProperties".into(), Value::Bool(inside_body));
+        }
     }
     if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
         for (name, value) in properties {
-            stricten_tool_input_schema(value, inside_body || name == "body");
+            stricten_tool_input_schema(value, inside_body || name == "body", strict_body);
         }
     }
     for keyword in ["items", "additionalItems", "contains"] {
         if let Some(value) = object.get_mut(keyword) {
-            stricten_tool_input_schema(value, inside_body);
+            stricten_tool_input_schema(value, inside_body, strict_body);
         }
     }
     for keyword in ["anyOf", "oneOf", "allOf"] {
         if let Some(values) = object.get_mut(keyword).and_then(Value::as_array_mut) {
             for value in values {
-                stricten_tool_input_schema(value, inside_body);
+                stricten_tool_input_schema(value, inside_body, strict_body);
             }
         }
     }
@@ -628,7 +641,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_domains_list_tool());
     tools.push(iroha_domains_get_tool());
     tools.push(iroha_domains_query_tool());
-    tools.extend(iroha_musubi_v1_tools());
+    tools.extend(iroha_musubi_v1_tools(&spec));
     tools.push(iroha_subscriptions_plans_list_tool());
     tools.push(iroha_subscriptions_plans_create_tool());
     tools.push(iroha_subscriptions_list_tool());
@@ -2729,6 +2742,36 @@ fn deref_openapi_value<'a>(spec: &'a Value, value: &'a Value) -> &'a Value {
         current = resolved;
     }
     current
+}
+
+fn inline_openapi_schema(spec: &Value, value: &Value, depth: usize) -> Value {
+    const MAX_INLINE_SCHEMA_DEPTH: usize = 64;
+    if depth >= MAX_INLINE_SCHEMA_DEPTH {
+        return value.clone();
+    }
+    if let Some(reference) = value
+        .as_object()
+        .and_then(|object| object.get("$ref"))
+        .and_then(Value::as_str)
+        && let Some(resolved) = resolve_openapi_ref(spec, reference)
+    {
+        return inline_openapi_schema(spec, resolved, depth + 1);
+    }
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(name, value)| (name.clone(), inline_openapi_schema(spec, value, depth + 1)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| inline_openapi_schema(spec, item, depth + 1))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
 }
 
 fn resolve_openapi_ref<'a>(spec: &'a Value, reference: &str) -> Option<&'a Value> {
@@ -8976,7 +9019,7 @@ fn iroha_vpn_quotes_create_tool() -> ToolSpec {
                 "body": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "Raw VPN quote request body. If provided, its own fields take precedence over flat shortcuts. Successful responses include `tx_instructions` with a native `OpenVpnLeaseEscrow` skeleton for client signing/submission."
+                    "description": "Raw VPN quote request body. If provided, its own fields take precedence over flat shortcuts. Successful responses include the required `open_lease_instruction` native `OpenVpnLeaseEscrow` skeleton for client signing/submission."
                 },
                 "headers": {
                     "type": "object",
@@ -9147,7 +9190,7 @@ fn iroha_vpn_receipts_submit_tool() -> ToolSpec {
                 "body": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "Raw VPN receipt settlement body. If provided, its own fields take precedence over flat shortcuts. Successful responses include `tx_instructions` with a native `SettleVpnLease` skeleton for operator signing/submission."
+                    "description": "Raw VPN receipt settlement body. If provided, its own fields take precedence over flat shortcuts. Successful responses include the optional `settle_lease_instruction` native `SettleVpnLease` skeleton when operator signing/submission is required."
                 },
                 "headers": {
                     "type": "object",
@@ -12174,30 +12217,51 @@ fn iroha_domains_query_tool() -> ToolSpec {
     }
 }
 
-fn iroha_musubi_v1_tools() -> impl Iterator<Item = ToolSpec> {
-    MUSUBI_V1_TOOL_DEFINITIONS.iter().map(|definition| ToolSpec {
-        name: definition.name.to_owned(),
-        description: definition.description.to_owned(),
-        effect: definition.effect,
-        method: Method::POST,
-        path_template: definition.path.to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["body"],
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Exact bounded Norito JSON request object for this Musubi V1 query or instruction."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
+fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
+    MUSUBI_V1_TOOL_DEFINITIONS.iter().map(|definition| {
+        let request_body = spec
+            .get("paths")
+            .and_then(Value::as_object)
+            .and_then(|paths| paths.get(definition.path))
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("requestBody"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "Musubi V1 OpenAPI operation {} is missing its typed request body",
+                    definition.path
+                )
+            });
+        let body_schema = build_request_body_schema(spec, request_body)
+            .map(|schema| inline_openapi_schema(spec, &schema, 0))
+            .unwrap_or_else(|| {
+                panic!(
+                    "Musubi V1 OpenAPI operation {} has no JSON request schema",
+                    definition.path
+                )
+            });
+        ToolSpec {
+            name: definition.name.to_owned(),
+            description: definition.description.to_owned(),
+            effect: definition.effect,
+            method: Method::POST,
+            path_template: definition.path.to_owned(),
+            input_schema: norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "x-iroha-mcp-strict-body": true,
+                "required": ["body"],
+                "properties": {
+                    "body": (body_schema),
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    },
+                    "accept": { "type": "string" }
+                }
+            }),
+        }
     })
 }
 
@@ -14090,6 +14154,72 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_tool_input_schema_preserves_closed_typed_bodies() {
+        let schema = norito::json!({
+            "type": "object",
+            "x-iroha-mcp-strict-body": true,
+            "required": ["body"],
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "required": ["payload"],
+                    "properties": {
+                        "payload": {
+                            "type": "object",
+                            "properties": {
+                                "revision": { "type": "integer" }
+                            }
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                }
+            }
+        });
+
+        let sanitized = sanitize_tool_input_schema(&schema);
+        let root = sanitized.as_object().expect("sanitized object schema");
+        assert!(!root.contains_key(MCP_STRICT_BODY_SCHEMA_EXTENSION));
+        assert_eq!(
+            root.get("additionalProperties").and_then(Value::as_bool),
+            Some(false)
+        );
+        let properties = root
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties");
+        let body = properties
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("body schema");
+        assert_eq!(
+            body.get("additionalProperties").and_then(Value::as_bool),
+            Some(false)
+        );
+        let payload = body
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("payload"))
+            .and_then(Value::as_object)
+            .expect("payload schema");
+        assert_eq!(
+            payload.get("additionalProperties").and_then(Value::as_bool),
+            Some(false)
+        );
+        let headers = properties
+            .get("headers")
+            .and_then(Value::as_object)
+            .expect("headers schema");
+        assert_eq!(
+            headers.get("additionalProperties").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn descriptor_publishes_openai_compatible_input_schema() {
         let tool = ToolSpec {
             name: "iroha.connect.session.delete".to_owned(),
@@ -15134,6 +15264,140 @@ mod tests {
             documented_set, expected,
             "the Musubi MCP guide must list every curated V1 tool and no retired tool"
         );
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "all curated Musubi schemas and both shared fixture inventories stay in one contract check"
+    )]
+    fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
+        fn assert_closed_and_inlined(schema: &Value, tool_name: &str) {
+            let mut pending = vec![schema];
+            while let Some(value) = pending.pop() {
+                match value {
+                    Value::Object(object) => {
+                        assert!(
+                            !object.contains_key("$ref"),
+                            "{tool_name} exposes an unresolved OpenAPI reference"
+                        );
+                        if object.get("type").and_then(Value::as_str) == Some("object")
+                            || object.contains_key("properties")
+                        {
+                            assert_eq!(
+                                object.get("additionalProperties").and_then(Value::as_bool),
+                                Some(false),
+                                "{tool_name} exposes an open request-body object"
+                            );
+                        }
+                        pending.extend(object.values());
+                    }
+                    Value::Array(items) => pending.extend(items),
+                    _ => {}
+                }
+            }
+        }
+
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::Operator;
+        cfg.expose_operator_routes = true;
+        let tools = build_tool_specs(&cfg);
+        let openapi = openapi::generate_spec();
+        let paths = openapi
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        let query_fixture: Value =
+            json::from_str(include_str!("../../../fixtures/musubi/sdk_v1.json"))
+                .expect("Musubi SDK fixture");
+        let query_routes = query_fixture
+            .get("routes")
+            .and_then(Value::as_array)
+            .expect("Musubi query fixture routes");
+        let instruction_fixture: Value = json::from_str(include_str!(
+            "../../../fixtures/musubi/instructions_v1.json"
+        ))
+        .expect("Musubi instruction fixture");
+        let instruction_cases = instruction_fixture
+            .get("cases")
+            .and_then(Value::as_array)
+            .expect("Musubi instruction fixture cases");
+
+        assert_eq!(MUSUBI_V1_TOOL_DEFINITIONS.len(), 29);
+        for definition in MUSUBI_V1_TOOL_DEFINITIONS {
+            let matching = tools
+                .iter()
+                .filter(|tool| tool.name == definition.name)
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "MCP tool {}", definition.name);
+            let input_schema = matching[0]
+                .descriptor()
+                .get("inputSchema")
+                .cloned()
+                .expect("tool inputSchema");
+            let root = input_schema.as_object().expect("tool inputSchema object");
+            assert!(!root.contains_key(MCP_STRICT_BODY_SCHEMA_EXTENSION));
+            assert_eq!(
+                root.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+            assert!(
+                root.get("required")
+                    .and_then(Value::as_array)
+                    .is_some_and(|required| required
+                        .iter()
+                        .any(|name| name.as_str() == Some("body"))),
+                "{} must require its typed body",
+                definition.name
+            );
+            let body = root
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("body"))
+                .unwrap_or_else(|| panic!("{} typed body", definition.name));
+            assert_eq!(body.get("type").and_then(Value::as_str), Some("object"));
+            let body_properties = body
+                .get("properties")
+                .and_then(Value::as_object)
+                .filter(|properties| !properties.is_empty())
+                .unwrap_or_else(|| panic!("{} exact request fields", definition.name));
+            assert_closed_and_inlined(body, definition.name);
+
+            let request_type = paths
+                .get(definition.path)
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("post"))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("x-iroha-norito-request-type"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{} exact request type", definition.name));
+            let fixture_request = query_routes
+                .iter()
+                .find(|route| route.get("path").and_then(Value::as_str) == Some(definition.path))
+                .and_then(|route| route.get("request"))
+                .or_else(|| {
+                    instruction_cases.iter().find_map(|case| {
+                        let fixture_type = case
+                            .get("concrete_schema_name")
+                            .and_then(Value::as_str)?
+                            .rsplit("::")
+                            .next()?;
+                        if fixture_type == request_type {
+                            case.get("semantic")
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{request_type} shared fixture request"));
+            assert_eq!(
+                body_properties.keys().collect::<BTreeSet<_>>(),
+                fixture_request.keys().collect::<BTreeSet<_>>(),
+                "{} body fields must match its canonical fixture",
+                definition.name
+            );
+        }
     }
 
     #[test]
@@ -16638,6 +16902,14 @@ mod tests {
             .and_then(Value::as_object)
             .expect("quote properties");
         assert!(quote_properties.contains_key("metering_public_key_hex"));
+        let quote_body_description = quote_properties
+            .get("body")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("description"))
+            .and_then(Value::as_str)
+            .expect("quote body description");
+        assert!(quote_body_description.contains("open_lease_instruction"));
+        assert!(!quote_body_description.contains("tx_instructions"));
 
         let create = iroha_vpn_sessions_create_tool();
         assert_eq!(create.name, "iroha.vpn.sessions.create");
@@ -16667,6 +16939,14 @@ mod tests {
             .and_then(Value::as_object)
             .expect("receipt submit properties");
         assert!(properties.contains_key("lease_id_hex"));
+        let receipt_body_description = properties
+            .get("body")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("description"))
+            .and_then(Value::as_str)
+            .expect("receipt body description");
+        assert!(receipt_body_description.contains("settle_lease_instruction"));
+        assert!(!receipt_body_description.contains("tx_instructions"));
     }
 
     #[test]

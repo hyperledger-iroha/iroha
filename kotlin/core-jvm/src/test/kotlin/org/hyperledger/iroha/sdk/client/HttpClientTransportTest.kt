@@ -1919,8 +1919,6 @@ class HttpClientTransportTest {
                   "tunnel_addresses": ["10.208.0.2/32"],
                   "mtu_bytes": 1280,
                   "display_billing_label": "standard XOR",
-                  "fee_asset_id": "xor#universal.universal",
-                  "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
                   "lease_fee": "1000000.25",
                   "settlement_grace_secs": 120,
@@ -1946,8 +1944,6 @@ class HttpClientTransportTest {
         val profile = transport.getVpnProfile().join()
 
         assertTrue(profile.available)
-        assertEquals("xor#universal.universal", profile.feeAssetId)
-        assertEquals("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", profile.escrowAccountId)
         assertEquals("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", profile.operatorAccountId)
         assertEquals("1000000.25", profile.leaseFee)
         assertEquals(60L, profile.dnsPushIntervalSecs)
@@ -2056,9 +2052,7 @@ class HttpClientTransportTest {
         assertEquals(quoteId, quote.quoteId)
         assertEquals(quoteId, quote.leaseIdHex)
         assertEquals(meteringKey, quote.meteringPublicKeyHex)
-        assertEquals("iroha_data_model::isi::vpn::OpenVpnLeaseEscrow", quote.openLeaseInstruction?.wireId)
-        assertEquals(1, quote.txInstructions.size)
-        assertEquals(quote.openLeaseInstruction?.payloadHex, quote.txInstructions.first().payloadHex)
+        assertEquals("iroha_data_model::isi::vpn::OpenVpnLeaseEscrow", quote.openLeaseInstruction.wireId)
 
         val request = executor.lastRequest
         assertEquals("POST", request.method)
@@ -2446,7 +2440,6 @@ class HttpClientTransportTest {
         val missingCases = listOf(
             { VpnJsonParser.parseProfile(missing(profile, "relay_tls_spki_sha256_hex")) },
             { VpnJsonParser.parseQuote(missing(quote, "open_lease_instruction")) },
-            { VpnJsonParser.parseQuote(missing(quote, "tx_instructions")) },
             { VpnJsonParser.parseSession(missing(session, "route_pushes")) },
             { VpnJsonParser.parseReceipt(missing(receipt, "settle_lease_instruction")) },
             { VpnJsonParser.parseReceiptList(missing(receiptList, "items")) },
@@ -2473,11 +2466,8 @@ class HttpClientTransportTest {
             }
         }
 
-        val instruction = jsonObject(quote)["open_lease_instruction"]
-        listOf(emptyList<Any>(), listOf(instruction, instruction)).forEach { instructions ->
-            assertFailsWith<IllegalStateException> {
-                VpnJsonParser.parseQuote(mutated(quote, "tx_instructions", instructions))
-            }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseQuote(mutated(quote, "tx_instructions", emptyList<Any>()))
         }
         assertFailsWith<IllegalStateException> {
             VpnJsonParser.parseSession(mutated(session, "status", "settled"))
@@ -2487,11 +2477,8 @@ class HttpClientTransportTest {
                 VpnJsonParser.parseReceipt(mutated(receipt, field, value))
             }
         }
-        val receiptInstruction = mapOf("wire_id" to "SettleVpnLease", "payload_hex" to "abcd")
         assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceipt(
-                mutated(receipt, "tx_instructions", listOf(receiptInstruction, receiptInstruction)),
-            )
+            VpnJsonParser.parseReceipt(mutated(receipt, "tx_instructions", emptyList<Any>()))
         }
 
         val receiptObject = jsonObject(receipt)
@@ -3726,8 +3713,6 @@ class HttpClientTransportTest {
               "tunnel_addresses": ["10.208.0.2/32"],
               "mtu_bytes": 1280,
               "display_billing_label": "standard XOR",
-              "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "settlement_grace_secs": 120,
@@ -3776,13 +3761,7 @@ class HttpClientTransportTest {
               "open_lease_instruction": {
                 "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
                 "payload_hex": "cafe"
-              },
-              "tx_instructions": [
-                {
-                  "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
-                  "payload_hex": "cafe"
-                }
-              ]
+              }
             }
         """.trimIndent()
 
@@ -3836,17 +3815,10 @@ class HttpClientTransportTest {
               "settle_lease_instruction": {
                 "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
                 "payload_hex": "f00d"
-              },
-              "tx_instructions": [
-                {
-                  "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
-                  "payload_hex": "f00d"
-                }
-              ]"""
+              }"""
         } else {
             """,
-              "settle_lease_instruction": null,
-              "tx_instructions": []"""
+              "settle_lease_instruction": null"""
         }
         return """
             {

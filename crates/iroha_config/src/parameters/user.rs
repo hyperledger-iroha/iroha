@@ -6614,12 +6614,6 @@ pub struct SoranetVpn {
     pub meter_family: String,
     /// Optional 32-byte shared secret (hex) used to mint helper-authenticated VPN tickets.
     pub helper_ticket_secret_hex: Option<String>,
-    /// XOR asset definition used for escrowed VPN fees.
-    #[config(default = "defaults::soranet::vpn::fee_asset_id()")]
-    pub fee_asset_id: String,
-    /// Account that receives escrowed VPN lease fees.
-    #[config(default = "defaults::soranet::vpn::escrow_account_id()")]
-    pub escrow_account_id: String,
     /// Relay operator account eligible for receipt settlement.
     #[config(default = "defaults::soranet::vpn::operator_account_id()")]
     pub operator_account_id: String,
@@ -6663,8 +6657,6 @@ impl Default for SoranetVpn {
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
             helper_ticket_secret_hex: None,
-            fee_asset_id: defaults::soranet::vpn::fee_asset_id(),
-            escrow_account_id: defaults::soranet::vpn::escrow_account_id(),
             operator_account_id: defaults::soranet::vpn::operator_account_id(),
             lease_fee: defaults::soranet::vpn::lease_fee(),
             settlement_grace_secs: defaults::soranet::vpn::SETTLEMENT_GRACE_SECS,
@@ -6695,8 +6687,6 @@ impl SoranetVpn {
             exit_class,
             meter_family,
             helper_ticket_secret_hex,
-            fee_asset_id,
-            escrow_account_id,
             operator_account_id,
             lease_fee,
             settlement_grace_secs,
@@ -6750,14 +6740,6 @@ impl SoranetVpn {
         if enabled && helper_ticket_secret.is_none() {
             panic!("network.soranet_vpn.helper_ticket_secret_hex must be set when VPN is enabled");
         }
-        let fee_asset_id =
-            validate_nexus_fee_asset_selector_literal(&fee_asset_id).unwrap_or_else(|err| {
-                panic!("invalid network.soranet_vpn.fee_asset_id `{fee_asset_id}`: {err}")
-            });
-        let escrow_account_id = parse_account_id_literal(
-            &escrow_account_id,
-            "invalid network.soranet_vpn.escrow_account_id",
-        );
         let operator_account_id = parse_account_id_literal(
             &operator_account_id,
             "invalid network.soranet_vpn.operator_account_id",
@@ -6811,11 +6793,6 @@ impl SoranetVpn {
                 "network.soranet_vpn.guard_directory_digest_hex must be set when VPN is enabled"
             );
         }
-        if enabled && escrow_account_id == operator_account_id {
-            panic!(
-                "network.soranet_vpn.escrow_account_id and operator_account_id must be different when VPN is enabled"
-            );
-        }
         if lease_fee.is_zero() {
             panic!("network.soranet_vpn.lease_fee must be greater than zero");
         }
@@ -6835,8 +6812,6 @@ impl SoranetVpn {
             exit_class,
             meter_family,
             helper_ticket_secret,
-            fee_asset_id,
-            escrow_account_id,
             operator_account_id,
             lease_fee,
             settlement_grace: Duration::from_secs(settlement_grace_secs.max(1)),
@@ -6924,7 +6899,6 @@ mod soranet_vpn_tests {
     fn soranet_vpn_defaults_to_disabled() {
         let parsed = SoranetVpn::default().parse();
         assert!(!parsed.enabled);
-        assert_eq!(parsed.fee_asset_id, defaults::soranet::vpn::fee_asset_id());
         assert_eq!(parsed.route_pushes, defaults::soranet::vpn::route_pushes());
         assert_eq!(parsed.dns_servers, defaults::soranet::vpn::dns_servers());
     }
@@ -6971,23 +6945,6 @@ mod soranet_vpn_tests {
     fn soranet_vpn_rejects_noncanonical_trust_digest_hex() {
         let mut cfg = enabled_vpn_config();
         cfg.guard_directory_digest_hex = Some("CD".repeat(32));
-        let _ = cfg.parse();
-    }
-
-    #[test]
-    #[should_panic(expected = "escrow_account_id and operator_account_id must be different")]
-    fn soranet_vpn_enabled_requires_non_operator_escrow() {
-        let cfg = enabled_vpn_config();
-        let _ = cfg.parse();
-    }
-
-    #[test]
-    #[should_panic(expected = "must be charged in XOR")]
-    fn soranet_vpn_rejects_non_xor_fee_asset() {
-        let cfg = SoranetVpn {
-            fee_asset_id: "pkr#paynet".to_owned(),
-            ..SoranetVpn::default()
-        };
         let _ = cfg.parse();
     }
 
@@ -26152,7 +26109,7 @@ impl SorafsStorage {
             hedging_billing_runtime,
             provider_ingest_runtime,
             pdp_provider: self.pdp_provider.parse(emitter),
-            runtime: self.runtime.parse(),
+            runtime: self.runtime.parse(emitter),
             alias: self.alias.or_else(super::defaults::sorafs::storage::alias),
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
@@ -27738,10 +27695,26 @@ impl Default for SorafsRuntimeRetentionConfig {
 }
 
 impl SorafsRuntimeRetentionConfig {
-    fn parse(self) -> actual::SorafsRuntimeRetention {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsRuntimeRetention {
+        if self.state_entry_limit == 0
+            || self.state_entry_limit > defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX
+        {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.storage.runtime.state_entry_limit must be in 1..={}",
+                defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX
+            )));
+        }
+        if self.event_history_limit == 0 || self.event_history_limit > self.state_entry_limit {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.runtime.event_history_limit must be non-zero and not exceed state_entry_limit",
+            ));
+        }
+        let state_entry_limit = self
+            .state_entry_limit
+            .clamp(1, defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX);
         actual::SorafsRuntimeRetention {
-            event_history_limit: self.event_history_limit.max(1),
-            state_entry_limit: self.state_entry_limit.max(1),
+            event_history_limit: self.event_history_limit.clamp(1, state_entry_limit),
+            state_entry_limit,
             checkpoint_max_bytes: Bytes(self.checkpoint_max_bytes.0.max(1)),
             proof_outcome_forwarder_interval: Duration::from_millis(
                 self.proof_outcome_forwarder_interval_ms.get(),
@@ -28741,6 +28714,43 @@ mod sorafs_repair_gc_tests {
         assert_eq!(actual_gc.interval_secs, 1);
         assert_eq!(actual_gc.max_deletions_per_run, 1);
         assert_eq!(actual_gc.retention_grace_secs, 42);
+    }
+
+    #[test]
+    fn sorafs_runtime_retention_enforces_shared_projection_ceiling() {
+        let maximum = defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX;
+        let mut emitter = Emitter::new();
+        let actual = SorafsRuntimeRetentionConfig {
+            state_entry_limit: maximum.saturating_add(1),
+            event_history_limit: maximum.saturating_add(1),
+            ..SorafsRuntimeRetentionConfig::default()
+        }
+        .parse(&mut emitter);
+        assert!(emitter.into_result().is_err());
+        assert_eq!(actual.state_entry_limit, maximum);
+        assert_eq!(actual.event_history_limit, maximum);
+
+        let mut emitter = Emitter::new();
+        let actual = SorafsRuntimeRetentionConfig {
+            state_entry_limit: 8,
+            event_history_limit: 9,
+            ..SorafsRuntimeRetentionConfig::default()
+        }
+        .parse(&mut emitter);
+        assert!(emitter.into_result().is_err());
+        assert_eq!(actual.state_entry_limit, 8);
+        assert_eq!(actual.event_history_limit, 8);
+
+        let mut emitter = Emitter::new();
+        let actual = SorafsRuntimeRetentionConfig {
+            state_entry_limit: 8,
+            event_history_limit: 4,
+            ..SorafsRuntimeRetentionConfig::default()
+        }
+        .parse(&mut emitter);
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(actual.state_entry_limit, 8);
+        assert_eq!(actual.event_history_limit, 4);
     }
 
     #[test]

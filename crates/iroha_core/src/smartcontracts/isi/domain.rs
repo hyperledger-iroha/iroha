@@ -25,11 +25,10 @@ pub mod isi {
             curve::{CurveId, CurveRegistryError},
         },
         alias_setup::{AccountAliasRoleV1, AliasAccountIntentV1},
+        asset::AssetBalancePolicy,
         asset::definition::{
             validate_asset_alias_against_names, validate_asset_description, validate_asset_name,
         },
-        asset::{AssetBalancePolicy, AssetBalanceScope},
-        events::data::prelude::AssetChanged,
         governance::types::ProposalKind,
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
@@ -1376,7 +1375,7 @@ pub mod isi {
             }
 
             let created = AccountEvent::Created(AccountCreated::new(account));
-            state_transaction.world.emit_events(Some(created.into()));
+            state_transaction.world.emit_events(Some(created));
 
             Ok(())
         }
@@ -1409,6 +1408,16 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it is retained native escrow or VPN lease custody"
+                    )
+                    .into(),
+                )
+                    .into());
+            }
+            if crate::smartcontracts::isi::vpn::is_active_vpn_client(state_transaction, &account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it funds an active operator-signed VPN lease"
                     )
                     .into(),
                 )

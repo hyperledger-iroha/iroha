@@ -14,7 +14,7 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
-    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
+    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
     domain::DomainId,
     isi::{
         BurnBox, CustomInstruction, GrantBox, Instruction, InstructionBox, MintBox, RegisterBox,

@@ -424,22 +424,11 @@ fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
         })
         .transpose()?;
 
-    let mut requirements = BTreeSet::new();
-    for root in &roots {
-        requirements.extend(
-            root.dependencies
-                .iter()
-                .map(|dependency| (dependency.package.clone(), dependency.requirement.clone())),
-        );
-    }
-    if let Some(lock) = &previous {
-        requirements.extend(lock.nodes.iter().map(|node| {
-            (
-                node.release.package.clone(),
-                MusubiVersionReqV1::Exact(node.release.version.clone()),
-            )
-        }));
-    }
+    // Seed collection from the current graph only. Every reachable locked node
+    // is rediscovered through its parent-local incoming requirement. Inventing
+    // exact queries from the previous lock would make a freshly captured range
+    // page impossible to replay on the next offline/frozen invocation.
+    let mut requirements = initial_requirement_queries(&roots);
 
     let mut queried = BTreeSet::new();
     let mut rows = BTreeMap::new();
@@ -485,6 +474,19 @@ fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
         resolve(request)
     }
     .map_err(GraphErrorV1::from)
+}
+
+fn initial_requirement_queries(
+    roots: &[WorkspaceRootReqV1],
+) -> BTreeSet<(MusubiPackageIdV1, MusubiVersionReqV1)> {
+    roots
+        .iter()
+        .flat_map(|root| {
+            root.dependencies
+                .iter()
+                .map(|dependency| (dependency.package.clone(), dependency.requirement.clone()))
+        })
+        .collect()
 }
 
 fn collect_local_roots(
@@ -642,16 +644,17 @@ fn resolve_selector<S: ResolverRegistrySourceV1>(
     selector: &MusubiPackageSelectorV1,
     anchor: &mut Option<RegistryAnchorV1>,
 ) -> Result<MusubiPackageIdV1, GraphErrorV1> {
-    let page = source
-        .ordered_prefix(&MusubiOrderedPrefixQueryV1 {
-            prefix: MusubiOrderedPrefixV1::new(&selector.to_string())
-                .map_err(|error| GraphErrorV1::InvalidRegistryData(error.reason().to_owned()))?,
-            page: MusubiPageRequestV1 {
-                limit: 2,
-                cursor: None,
-            },
-        })
-        .map_err(S::map_error)?;
+    let request = MusubiOrderedPrefixQueryV1 {
+        prefix: MusubiOrderedPrefixV1::new(&selector.to_string())
+            .map_err(|error| GraphErrorV1::InvalidRegistryData(error.reason().to_owned()))?,
+        page: MusubiPageRequestV1 {
+            limit: 2,
+            cursor: None,
+        },
+    };
+    let page = source.ordered_prefix(&request).map_err(S::map_error)?;
+    page.validate_for(&request)
+        .map_err(|error| GraphErrorV1::InvalidRegistryData(error.reason().to_owned()))?;
     RegistryAnchorV1::observe_ordered(anchor, &page)?;
     let entry = page
         .items
@@ -672,16 +675,17 @@ fn observe_namespace_anchor<S: ResolverRegistrySourceV1>(
     anchor: &mut Option<RegistryAnchorV1>,
 ) -> Result<(), GraphErrorV1> {
     let prefix = format!("{}/", selector.namespace);
-    let page = source
-        .ordered_prefix(&MusubiOrderedPrefixQueryV1 {
-            prefix: MusubiOrderedPrefixV1::new(&prefix)
-                .map_err(|error| GraphErrorV1::InvalidRegistryData(error.reason().to_owned()))?,
-            page: MusubiPageRequestV1 {
-                limit: 1,
-                cursor: None,
-            },
-        })
-        .map_err(S::map_error)?;
+    let request = MusubiOrderedPrefixQueryV1 {
+        prefix: MusubiOrderedPrefixV1::new(&prefix)
+            .map_err(|error| GraphErrorV1::InvalidRegistryData(error.reason().to_owned()))?,
+        page: MusubiPageRequestV1 {
+            limit: 1,
+            cursor: None,
+        },
+    };
+    let page = source.ordered_prefix(&request).map_err(S::map_error)?;
+    page.validate_for(&request)
+        .map_err(|error| GraphErrorV1::InvalidRegistryData(error.reason().to_owned()))?;
     if page.namespace_binding.namespace != selector.namespace {
         return Err(GraphErrorV1::InvalidRegistryData(format!(
             "namespace binding for `{selector}` does not match its ordered-prefix query"
@@ -700,17 +704,18 @@ fn collect_requirement_rows<S: ResolverRegistrySourceV1>(
     let mut seen_cursor_keys = BTreeSet::new();
     let mut rows = Vec::new();
     loop {
-        let page = source
-            .resolver_index(&MusubiResolverIndexQueryV1 {
-                package: package.clone(),
-                requirement: Some(requirement.clone()),
-                page: MusubiPageRequestV1 {
-                    limit: u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1)
-                        .expect("Musubi page maximum fits u32"),
-                    cursor,
-                },
-            })
-            .map_err(S::map_error)?;
+        let request = MusubiResolverIndexQueryV1 {
+            package: package.clone(),
+            requirement: Some(requirement.clone()),
+            page: MusubiPageRequestV1 {
+                limit: u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1)
+                    .expect("Musubi page maximum fits u32"),
+                cursor,
+            },
+        };
+        let page = source.resolver_index(&request).map_err(S::map_error)?;
+        page.validate_for(&request)
+            .map_err(|error| GraphErrorV1::InvalidRegistryData(error.reason().to_owned()))?;
         RegistryAnchorV1::observe_resolver(anchor, &page)?;
         for row in page.items {
             if row.release.package != package
@@ -831,6 +836,13 @@ exports = []
 
     fn anchor_page(hash: u8) -> MusubiOrderedPackagePageV1 {
         MusubiOrderedPackagePageV1 {
+            query: MusubiOrderedPrefixQueryV1 {
+                prefix: MusubiOrderedPrefixV1::new("apps.sora/").expect("prefix"),
+                page: MusubiPageRequestV1 {
+                    limit: 1,
+                    cursor: None,
+                },
+            },
             chain_id: "musubi-graph-test".parse().expect("chain id"),
             genesis_hash: [7; 32],
             namespace_binding: MusubiNamespaceBindingV1 {
@@ -871,6 +883,30 @@ exports = []
         assert_eq!(result.lockfile.genesis_hash, [7; 32]);
         assert_eq!(result.lockfile.roots.len(), 1);
         assert!(result.lockfile.nodes.is_empty());
+    }
+
+    #[test]
+    fn initial_query_inventory_contains_only_current_manifest_ranges() {
+        let package = MusubiPackageIdV1::new(
+            iroha_data_model::nexus::DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "codec".parse().expect("package name"),
+        );
+        let requirement = "^1.2.0".parse::<MusubiVersionReqV1>().expect("requirement");
+        let roots = vec![WorkspaceRootReqV1 {
+            package: "apps.sora/app".parse().expect("root selector"),
+            dependencies: vec![WorkspaceDependencyReqV1 {
+                alias: "codec".parse().expect("alias"),
+                kind: MusubiDependencyKindV1::Normal,
+                package: package.clone(),
+                requirement: requirement.clone(),
+            }],
+        }];
+
+        assert_eq!(
+            initial_requirement_queries(&roots),
+            BTreeSet::from([(package, requirement)])
+        );
     }
 
     #[test]
@@ -966,7 +1002,20 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
             finalized_block_hash: [8; 32],
             index_revision: 4,
         };
+        let package = MusubiPackageIdV1::new(
+            iroha_data_model::nexus::DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "demo".parse().expect("package name"),
+        );
         let page = MusubiResolverIndexPageV1 {
+            query: MusubiResolverIndexQueryV1 {
+                package: package.clone(),
+                requirement: Some(MusubiVersionReqV1::Any),
+                page: MusubiPageRequestV1 {
+                    limit: u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("page maximum fits u32"),
+                    cursor: None,
+                },
+            },
             chain_id: "musubi-graph-test".parse().expect("chain id"),
             genesis_hash: [7; 32],
             items: Vec::new(),
@@ -978,11 +1027,6 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
             }),
             snapshot,
         };
-        let package = MusubiPackageIdV1::new(
-            iroha_data_model::nexus::DataSpaceId::new(7),
-            MusubiPackageScopeV1::DataspaceRoot,
-            "demo".parse().expect("package name"),
-        );
         let error = collect_requirement_rows(
             &LoopingResolverRegistry { page },
             package,

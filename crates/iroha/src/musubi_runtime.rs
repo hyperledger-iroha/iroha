@@ -20,10 +20,11 @@ use iroha_data_model::{
     musubi::{
         ArchiveId, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_CAR_BYTES_V1,
         MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1,
-        MUSUBI_MAX_SEED_INGRESS_RECEIPT_LIFETIME_MS_V1, MusubiArchiveCommitmentV1,
-        MusubiArchiveLocationIdV1, MusubiArchiveLocationStateV1, MusubiArchiveLocationV1,
-        MusubiArchiveRecordV1, MusubiContentDigestV1,
-        MusubiProviderBundleVerificationAttestationV1, MusubiSeedIngressReceiptApprovalV1,
+        MUSUBI_MAX_SEED_INGRESS_RECEIPT_LIFETIME_MS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+        MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationStateV1,
+        MusubiArchiveLocationV1, MusubiArchiveRecordV1, MusubiArchiveRegistrationProjectionV1,
+        MusubiContentDigestV1, MusubiProviderBundleVerificationAttestationV1,
+        MusubiRegistrySnapshotV1, MusubiSeedIngressReceiptApprovalV1,
         MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
         MusubiSeedIngressReceiptV1, MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
     },
@@ -88,12 +89,12 @@ const RESPONSE_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
     64,
 );
 
-// The transport-independent server counterpart below is complete, but deployments must still
-// inject and qualify their private HTTPS listener, durable replay journal, broker HSM/signer,
-// and SoraFS backends. Before declaring a deployment production-qualified, bind each configured
-// hostname to deployment-signed provider-advert IPs and add DNS-rebinding tests; disabling proxies
-// and redirects alone is not DNS pinning. Do not adapt the daemon-private provider broker or
-// restore `/v1/sorafs/upload`; this protocol intentionally exposes neither interface.
+// TODO: Deployments must inject and qualify their private HTTPS listener, durable replay journal,
+// broker HSM/signer, and authoritative SoraFS backends around the transport-independent server
+// below. Before declaring a deployment production-qualified, bind each configured hostname to
+// deployment-signed provider-advert IPs and add DNS-rebinding tests; disabling proxies and
+// redirects alone is not DNS pinning. Do not adapt the daemon-private provider broker or restore
+// `/v1/sorafs/upload`; this protocol intentionally exposes neither interface.
 
 /// Fixed private publication-control operation covered by account authorization.
 #[derive(
@@ -335,6 +336,58 @@ impl MusubiSeedIngressStageRequestV1 {
     }
 }
 
+/// Finalized immutable archive-registration evidence sent to the storage coordinator.
+///
+/// The named registry snapshot proves when the immutable registration became
+/// observable. A backend may reproduce `registration` from any later finalized
+/// archive read because Core permits only the omitted location directory to
+/// change after registration.
+#[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+pub struct MusubiFinalizedArchiveRegistrationEvidenceV1 {
+    /// Closed schema version; must equal one.
+    pub version: u8,
+    /// Deployment-selected chain identity.
+    pub chain_id: ChainId,
+    /// Exact committed genesis block hash.
+    pub genesis_block_hash: [u8; 32],
+    /// Exact finalized transaction identity that registered the archive.
+    pub transaction_hash: [u8; 32],
+    /// Finalized registry snapshot at or after registration.
+    pub snapshot: MusubiRegistrySnapshotV1,
+    /// Immutable projection reproduced from the authoritative archive record.
+    pub registration: MusubiArchiveRegistrationProjectionV1,
+}
+
+impl MusubiFinalizedArchiveRegistrationEvidenceV1 {
+    /// Validate deployment, finality, and immutable archive-registration bindings.
+    pub fn validate(&self) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
+        self.snapshot.validate().map_err(|_| {
+            MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_ARCHIVE_REGISTRATION_EVIDENCE_INVALID",
+            )
+        })?;
+        self.registration.validate().map_err(|_| {
+            MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_ARCHIVE_REGISTRATION_EVIDENCE_INVALID",
+            )
+        })?;
+        let binding = &self.registration.staging_receipt.payload.binding;
+        if self.version != 1
+            || self.chain_id.as_str().is_empty()
+            || self.genesis_block_hash.iter().all(|byte| *byte == 0)
+            || self.transaction_hash.iter().all(|byte| *byte == 0)
+            || binding.chain_id != self.chain_id
+            || binding.genesis_block_hash != self.genesis_block_hash
+            || self.registration.registered_at_height > self.snapshot.finalized_height
+        {
+            return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_ARCHIVE_REGISTRATION_EVIDENCE_INVALID",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Exact archive and receipt inputs sent to the private storage coordinator.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiStorageCoordinationRequestV1 {
@@ -342,6 +395,10 @@ pub struct MusubiStorageCoordinationRequestV1 {
     pub version: u8,
     /// Stable idempotency key for the immutable publication request.
     pub operation_id: [u8; 32],
+    /// One-based append-only archive-location transaction generation.
+    pub generation: u8,
+    /// Sorted identities used by every earlier generation; none may be returned again.
+    pub prior_location_ids: Vec<MusubiArchiveLocationIdV1>,
     /// Deployment-selected chain identity.
     pub chain_id: ChainId,
     /// Exact committed genesis block hash.
@@ -350,10 +407,14 @@ pub struct MusubiStorageCoordinationRequestV1 {
     pub publisher: AccountId,
     /// Complete immutable archive commitment.
     pub commitment: MusubiArchiveCommitmentV1,
+    /// Verification-lock digest every provider must parse from the exact bundle.
+    pub verification_lock_digest: MusubiVerificationLockDigestV1,
     /// Authenticated receipt for the exact staged CAR body.
     pub staging_receipt: MusubiSeedIngressReceiptV1,
     /// Registry admission revision used by archive registration.
     pub expected_policy_revision: u64,
+    /// Finalized immutable registration evidence recovered before storage coordination.
+    pub finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1,
 }
 
 impl MusubiStorageCoordinationRequestV1 {
@@ -369,17 +430,40 @@ impl MusubiStorageCoordinationRequestV1 {
                 "MUSUBI_STORAGE_COORDINATION_REQUEST_INVALID",
             )
         })?;
+        self.finalized_registration.validate().map_err(|_| {
+            MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_STORAGE_COORDINATION_REQUEST_INVALID",
+            )
+        })?;
         let binding = &self.staging_receipt.payload.binding;
         if self.version != 1
             || self.operation_id.iter().all(|byte| *byte == 0)
+            || self.generation == 0
+            || usize::from(self.generation) > MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
+            || self.prior_location_ids.len() + 1 != usize::from(self.generation)
+            || self
+                .prior_location_ids
+                .iter()
+                .any(MusubiArchiveLocationIdV1::is_zero)
+            || self
+                .prior_location_ids
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
             || self.genesis_block_hash.iter().all(|byte| *byte == 0)
             || self.expected_policy_revision == 0
+            || self.verification_lock_digest.is_zero()
             || binding.chain_id != self.chain_id
             || binding.genesis_block_hash != self.genesis_block_hash
             || binding.publisher != self.publisher
             || binding.archive_id != self.commitment.archive_id()
             || binding.car_body_digest != self.commitment.car_digest
             || binding.car_body_length != self.commitment.car_size
+            || self.finalized_registration.chain_id != self.chain_id
+            || self.finalized_registration.genesis_block_hash != self.genesis_block_hash
+            || self.finalized_registration.registration.archive_id != self.commitment.archive_id()
+            || self.finalized_registration.registration.commitment != self.commitment
+            || self.finalized_registration.registration.staging_receipt != self.staging_receipt
+            || self.finalized_registration.registration.registered_by != self.publisher
         {
             return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
                 "MUSUBI_STORAGE_COORDINATION_REQUEST_INVALID",
@@ -410,7 +494,7 @@ pub enum MusubiStorageLocationDispositionV1 {
 pub struct MusubiStorageCoordinationResponseV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
-    /// Finalized authoritative archive record observed by the coordinator.
+    /// Current finalized authoritative archive record observed by the coordinator.
     pub archive: MusubiArchiveRecordV1,
     /// Stable location identity reserved for this archive.
     pub location_id: MusubiArchiveLocationIdV1,
@@ -432,6 +516,7 @@ impl MusubiStorageCoordinationResponseV1 {
         &self,
         request: &MusubiStorageCoordinationRequestV1,
     ) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
+        request.validate()?;
         self.archive.validate().map_err(|_| {
             MusubiPublicationRuntimeTransportErrorV1::permanent(
                 "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
@@ -450,10 +535,8 @@ impl MusubiStorageCoordinationResponseV1 {
                 )
             })?;
         if self.version != 1
-            || self.archive.archive_id != request.commitment.archive_id()
-            || self.archive.commitment != request.commitment
-            || registered_binding != &request.staging_receipt.payload.binding
-            || self.archive.registered_by != request.publisher
+            || self.archive.registration_projection()
+                != request.finalized_registration.registration.clone()
             || self.location_id.is_zero()
             || self.pin_manifest.as_bytes().iter().all(|byte| *byte == 0)
             || self
@@ -462,6 +545,14 @@ impl MusubiStorageCoordinationResponseV1 {
                 .iter()
                 .all(|byte| *byte == 0)
             || self.renew_after_epoch >= self.expires_at_epoch
+            || request
+                .prior_location_ids
+                .binary_search(&self.location_id)
+                .is_ok()
+            || request
+                .prior_location_ids
+                .iter()
+                .any(|location_id| self.archive.location_ids.binary_search(location_id).is_ok())
         {
             return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
                 "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
@@ -479,7 +570,7 @@ impl MusubiStorageCoordinationResponseV1 {
                         .location_ids
                         .binary_search(&self.location_id)
                         .is_ok()
-                    || provider_attestations.is_empty()
+                    || provider_attestations.len() < usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1)
                     || provider_attestations.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
                 {
                     return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
@@ -509,6 +600,7 @@ impl MusubiStorageCoordinationResponseV1 {
                                 .payload
                                 .binding
                                 .semantic_release_manifest_digest
+                        || binding.verification_lock_digest != request.verification_lock_digest
                         || previous.is_some_and(|provider| provider >= binding.provider_id)
                     {
                         return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
@@ -559,6 +651,7 @@ impl MusubiStorageCoordinationResponseV1 {
                                 .payload
                                 .binding
                                 .semantic_release_manifest_digest
+                        || binding.verification_lock_digest != request.verification_lock_digest
                     {
                         return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
                             "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
@@ -742,6 +835,20 @@ impl std::error::Error for MusubiPublicationRuntimeTransportErrorV1 {}
 
 /// Maximum future clock skew accepted by the private publication service.
 pub const MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1: u64 = 30_000;
+/// Maximum number of append-only location transaction generations in one publication operation.
+pub const MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1: usize = 8;
+
+fn storage_generation_target(generation: u8) -> [u8; 32] {
+    let mut target = [0_u8; 32];
+    target[0] = generation;
+    target
+}
+
+fn valid_storage_generation_target(target: [u8; 32]) -> bool {
+    target[0] > 0
+        && usize::from(target[0]) <= MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
+        && target[1..].iter().all(|byte| *byte == 0)
+}
 /// Exact private path for authenticated seed ingress.
 pub const MUSUBI_PUBLICATION_SEED_INGRESS_PATH_V1: &str = "/v1/musubi/publication/seed-ingress";
 /// Exact private path for permanent-pin and replication coordination.
@@ -1056,6 +1163,13 @@ pub trait MusubiSeedIngressBackendV1: Send {
 /// Backend coordinating permanent pins, replication, and finalized provider completions.
 pub trait MusubiStorageCoordinationBackendV1: Send {
     /// Coordinate or idempotently return evidence for one exact immutable request.
+    ///
+    /// The backend must independently retrieve the exact transaction, prove that its sole
+    /// instruction is the matching archive registration finalized by the named snapshot, then
+    /// match the immutable registration projection against a finalized archive read at that or a
+    /// later snapshot. The authenticated publisher request binds those bytes but is not itself a
+    /// finality proof. Mutable location fields are returned from the backend's current read and
+    /// are deliberately excluded from the historical registration evidence.
     fn coordinate_storage(
         &mut self,
         request: &MusubiStorageCoordinationRequestV1,
@@ -1127,7 +1241,8 @@ pub struct MusubiPublicationIdempotencyKeyV1 {
     pub operation: MusubiPublicationRuntimeOperationV1,
     /// Stable publisher-selected operation id.
     pub operation_id: [u8; 32],
-    /// Route-specific target: zero for ingress/coordination, provider id for readback.
+    /// Route-specific target: zero for ingress, one-based location generation for storage
+    /// coordination, or provider id for readback.
     pub target: [u8; 32],
 }
 
@@ -1270,7 +1385,8 @@ impl InMemoryMusubiPublicationServiceJournalV1 {
             .checked_mul(
                 MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
                     .saturating_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
-                    .saturating_add(2),
+                    .saturating_add(1)
+                    .saturating_add(MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1),
             )
             .ok_or(MusubiPublicationServiceJournalErrorV1::Invalid)?;
         Ok(Self {
@@ -1311,9 +1427,11 @@ impl InMemoryMusubiPublicationServiceJournalV1 {
                 MusubiPublicationRuntimeOperationV1::ProviderReadback => {
                     attempt.key.target.iter().all(|byte| *byte == 0)
                 }
-                MusubiPublicationRuntimeOperationV1::SeedIngress
-                | MusubiPublicationRuntimeOperationV1::StorageCoordination => {
+                MusubiPublicationRuntimeOperationV1::SeedIngress => {
                     attempt.key.target.iter().any(|byte| *byte != 0)
+                }
+                MusubiPublicationRuntimeOperationV1::StorageCoordination => {
+                    !valid_storage_generation_target(attempt.key.target)
                 }
             }
             || attempt.request_digest.iter().all(|byte| *byte == 0)
@@ -1423,6 +1541,20 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
                 })
                 .count()
                 >= MUSUBI_MAX_ARCHIVE_LOCATIONS_V1.saturating_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
+        {
+            return Err(MusubiPublicationServiceJournalErrorV1::Capacity);
+        }
+        if !retrying_aborted
+            && attempt.key.operation == MusubiPublicationRuntimeOperationV1::StorageCoordination
+            && self
+                .results
+                .keys()
+                .filter(|key| {
+                    key.operation_id == attempt.key.operation_id
+                        && key.operation == MusubiPublicationRuntimeOperationV1::StorageCoordination
+                })
+                .count()
+                >= MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
         {
             return Err(MusubiPublicationServiceJournalErrorV1::Capacity);
         }
@@ -2059,12 +2191,9 @@ impl MusubiPublicationPrivateServiceV1 {
                 )
                 .ingest_deadletter(MusubiIngestDeadletterReasonV1::ReceiptInvalid)
             })?;
-        if current_time_ms > decoded.value.staging_receipt.payload.expires_at_ms {
-            return Err(MusubiPublicationServiceErrorV1::permanent(
-                MusubiPublicationServiceErrorCodeV1::RequestInvalid,
-            )
-            .ingest_deadletter(MusubiIngestDeadletterReasonV1::ReceiptExpired));
-        }
+        // Registration admission already consumed receipt freshness. Storage coordination is
+        // authorized by the finalized immutable registration projection and transaction identity,
+        // so a crash after registration remains recoverable after the embedded receipt expires.
         if decoded.value.staging_receipt.payload.issued_at_ms
             > current_time_ms.saturating_add(self.config.max_future_clock_skew_ms)
         {
@@ -2076,7 +2205,7 @@ impl MusubiPublicationPrivateServiceV1 {
         let attempt = journal_attempt(
             MusubiPublicationRuntimeOperationV1::StorageCoordination,
             decoded.value.operation_id,
-            [0_u8; 32],
+            storage_generation_target(decoded.value.generation),
             &decoded.value.chain_id,
             decoded.value.genesis_block_hash,
             &decoded.value.publisher,
@@ -3962,17 +4091,64 @@ mod tests {
         )
         .expect("broker key");
         let broker = AccountId::new(broker_key.public_key().clone());
-        let provider_key = KeyPair::try_from_seed(
-            b"musubi-publication-control-provider".to_vec(),
-            Algorithm::Ed25519,
-        )
-        .expect("provider key");
-        let provider_owner = AccountId::new(provider_key.public_key().clone());
-        let provider = ProviderId::new([0x98; 32]);
         let genesis_block_hash = [0x99; 32];
         let commitment = control_commitment();
         let semantic_release_digest = MusubiSemanticReleaseDigestV1::new([0x9a; 32]);
         let verification_lock_digest = MusubiVerificationLockDigestV1::new([0x9b; 32]);
+        let replication_order = ReplicationOrderId::new([0x9e; 32]);
+        let provider_attestations = (0_u16..MUSUBI_MIN_HEALTHY_REPLICAS_V1)
+            .map(|index| {
+                let index = u8::try_from(index).expect("replica bound fits u8");
+                let provider_key =
+                    KeyPair::try_from_seed(vec![0xb0 + index; 32], Algorithm::Ed25519)
+                        .expect("provider key");
+                let provider_owner = AccountId::new(provider_key.public_key().clone());
+                let provider_binding = MusubiProviderBundleVerificationBindingV1 {
+                    chain_id: client.chain.clone(),
+                    genesis_block_hash,
+                    provider_id: ProviderId::new([0xb8 + index; 32]),
+                    completed_by: provider_owner.clone(),
+                    completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                        provider_owner,
+                        ProviderIngestCompletionSignerPolicyV1 {
+                            policy_id: [0xc0 + index; 32],
+                            revision: 1,
+                            predecessor_digest: None,
+                            policy_digest: [0xc8 + index; 32],
+                        },
+                    ),
+                    replication_order,
+                    assignment_revision: 1,
+                    completion_epoch: 12,
+                    finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                        height: 60,
+                        block_hash: [0xd0 + index; 32],
+                    },
+                    archive_id: commitment.archive_id(),
+                    bundle_digest: commitment.bundle_digest,
+                    descriptor_digest: commitment.descriptor_digest,
+                    semantic_release_manifest_digest: semantic_release_digest,
+                    verification_lock_digest,
+                    source_tree_digest: commitment.source_tree_digest,
+                };
+                let provider_payload = MusubiProviderBundleVerificationPayloadV1 {
+                    version: 1,
+                    binding: provider_binding,
+                };
+                MusubiProviderBundleVerificationAttestationV1 {
+                    approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+                        public_key: provider_key.public_key().clone(),
+                        signature: SignatureOf::try_from_hash(
+                            provider_key.private_key(),
+                            provider_payload.signing_hash(),
+                        )
+                        .expect("provider signature"),
+                    }],
+                    payload: provider_payload,
+                }
+            })
+            .collect::<Vec<_>>();
+        let provider = provider_attestations[0].payload.binding.provider_id;
         let binding = MusubiSeedIngressReceiptBindingV1 {
             chain_id: client.chain.clone(),
             genesis_block_hash,
@@ -4003,62 +4179,8 @@ mod tests {
             payload: receipt_payload,
         };
         let operation_id = [0x9d; 32];
-        let storage_request = MusubiStorageCoordinationRequestV1 {
-            version: 1,
-            operation_id,
-            chain_id: client.chain.clone(),
-            genesis_block_hash,
-            publisher: client.account.clone(),
-            commitment: commitment.clone(),
-            staging_receipt: receipt.clone(),
-            expected_policy_revision: 7,
-        };
-        let replication_order = ReplicationOrderId::new([0x9e; 32]);
         let location_id = MusubiArchiveLocationIdV1::new([0x9f; 32]);
         let pin_manifest = ManifestDigest::new([0xa0; 32]);
-        let provider_binding = MusubiProviderBundleVerificationBindingV1 {
-            chain_id: client.chain.clone(),
-            genesis_block_hash,
-            provider_id: provider,
-            completed_by: provider_owner.clone(),
-            completion_authority: ProviderIngestCompletionAuthorityV1::new(
-                provider_owner,
-                ProviderIngestCompletionSignerPolicyV1 {
-                    policy_id: [0xa1; 32],
-                    revision: 1,
-                    predecessor_digest: None,
-                    policy_digest: [0xa2; 32],
-                },
-            ),
-            replication_order,
-            assignment_revision: 1,
-            completion_epoch: 12,
-            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
-                height: 60,
-                block_hash: [0xa3; 32],
-            },
-            archive_id: commitment.archive_id(),
-            bundle_digest: commitment.bundle_digest,
-            descriptor_digest: commitment.descriptor_digest,
-            semantic_release_manifest_digest: semantic_release_digest,
-            verification_lock_digest,
-            source_tree_digest: commitment.source_tree_digest,
-        };
-        let provider_payload = MusubiProviderBundleVerificationPayloadV1 {
-            version: 1,
-            binding: provider_binding,
-        };
-        let attestation = MusubiProviderBundleVerificationAttestationV1 {
-            approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
-                public_key: provider_key.public_key().clone(),
-                signature: SignatureOf::try_from_hash(
-                    provider_key.private_key(),
-                    provider_payload.signing_hash(),
-                )
-                .expect("provider signature"),
-            }],
-            payload: provider_payload,
-        };
         let archive = MusubiArchiveRecordV1 {
             archive_id: commitment.archive_id(),
             commitment: commitment.clone(),
@@ -4067,6 +4189,31 @@ mod tests {
             registered_at_height: 50,
             location_revision: 1,
             location_ids: Vec::new(),
+        };
+        let storage_request = MusubiStorageCoordinationRequestV1 {
+            version: 1,
+            operation_id,
+            generation: 1,
+            prior_location_ids: Vec::new(),
+            chain_id: client.chain.clone(),
+            genesis_block_hash,
+            publisher: client.account.clone(),
+            commitment: commitment.clone(),
+            verification_lock_digest,
+            staging_receipt: archive.staging_receipt.clone(),
+            expected_policy_revision: 7,
+            finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
+                version: 1,
+                chain_id: client.chain.clone(),
+                genesis_block_hash,
+                transaction_hash: [0xa4; 32],
+                snapshot: MusubiRegistrySnapshotV1 {
+                    finalized_height: 55,
+                    finalized_block_hash: [0xa5; 32],
+                    index_revision: 2,
+                },
+                registration: archive.registration_projection(),
+            },
         };
         let storage_response = MusubiStorageCoordinationResponseV1 {
             version: 1,
@@ -4077,7 +4224,7 @@ mod tests {
             renew_after_epoch: 10,
             expires_at_epoch: 20,
             disposition: MusubiStorageLocationDispositionV1::NeedsRegistration {
-                provider_attestations: vec![attestation.clone()],
+                provider_attestations: provider_attestations.clone(),
                 expected_location_revision: 1,
             },
         };
@@ -4086,8 +4233,11 @@ mod tests {
             archive_id: commitment.archive_id(),
             pin_manifest,
             replication_order,
-            providers: vec![provider],
-            provider_attestations: vec![attestation],
+            providers: provider_attestations
+                .iter()
+                .map(|attestation| attestation.payload.binding.provider_id)
+                .collect(),
+            provider_attestations,
             renew_after_epoch: 10,
             expires_at_epoch: 20,
             finalized_height: 70,
@@ -5760,37 +5910,38 @@ mod tests {
                 MusubiIngestDeadletterReasonV1::ReceiptInvalid,
             ))
         );
+    }
 
-        let mut expired_fixture = control_service_fixture(false, false);
-        let expired_body = norito::encode_canonical(&expired_fixture.storage_request)
-            .expect("expired receipt request bytes");
-        let expired_authorization = control_authorization_header(
-            &expired_fixture.runtime,
+    #[test]
+    fn storage_coordination_accepts_an_expired_receipt_for_the_exact_finalized_archive() {
+        let mut fixture = control_service_fixture(false, false);
+        let body = norito::encode_canonical(&fixture.storage_request)
+            .expect("expired finalized archive request bytes");
+        let authorization = control_authorization_header(
+            &fixture.runtime,
             MusubiPublicationRuntimeOperationV1::StorageCoordination,
-            expired_fixture.storage_request.operation_id,
-            &expired_body,
+            fixture.storage_request.operation_id,
+            &body,
             120_000,
         );
-        let expired_error = expired_fixture
+        let response = fixture
             .service
             .handle_storage_coordination(
                 MusubiPublicationPrivateHttpRequestV1 {
                     method: "POST",
                     path: MUSUBI_PUBLICATION_STORAGE_COORDINATION_PATH_V1,
                     content_type: APPLICATION_NORITO,
-                    authorization: Some(&expired_authorization),
+                    authorization: Some(&authorization),
                     seed_ingress_metadata: None,
-                    body: &expired_body,
+                    body: &body,
                 },
                 120_001,
             )
-            .expect_err("authenticated expired staging receipt");
-        assert_eq!(
-            expired_error.telemetry,
-            Some(MusubiPublicationServiceTelemetryEventV1::IngestDeadletter(
-                MusubiIngestDeadletterReasonV1::ReceiptExpired,
-            ))
-        );
+            .expect("finalized archive outlives its registration receipt");
+        let decoded: MusubiStorageCoordinationResponseV1 =
+            norito::decode_canonical_with_limits(&response, RESPONSE_DECODE_LIMITS)
+                .expect("storage response");
+        assert_eq!(decoded, fixture.storage_response);
     }
 
     #[test]
@@ -5850,7 +6001,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_response_accepts_a_refreshed_receipt_for_the_registered_operation() {
+    fn storage_response_rejects_a_refreshed_receipt_after_registration() {
         let fixture = control_service_fixture(false, false);
         let broker_key = KeyPair::try_from_seed(
             b"musubi-publication-control-broker".to_vec(),
@@ -5879,10 +6030,7 @@ mod tests {
             fixture.storage_response.archive.staging_receipt,
             request.staging_receipt
         );
-        fixture
-            .storage_response
-            .validate_for(&request)
-            .expect("same-binding refreshed receipt must recover coordination");
+        assert!(fixture.storage_response.validate_for(&request).is_err());
 
         request.staging_receipt.payload.binding.nonce = [0xee; 32];
         request.staging_receipt.approvals[0].signature = SignatureOf::try_from_hash(
@@ -5891,6 +6039,166 @@ mod tests {
         )
         .expect("different-operation receipt signature");
         assert!(fixture.storage_response.validate_for(&request).is_err());
+    }
+
+    #[test]
+    fn storage_response_requires_replication_quorum_and_exact_lock_digest() {
+        let fixture = control_service_fixture(false, false);
+        let mut below_quorum = fixture.storage_response.clone();
+        let MusubiStorageLocationDispositionV1::NeedsRegistration {
+            provider_attestations,
+            ..
+        } = &mut below_quorum.disposition
+        else {
+            panic!("fixture requires location registration")
+        };
+        provider_attestations
+            .truncate(usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1).saturating_sub(1));
+        assert!(below_quorum.validate_for(&fixture.storage_request).is_err());
+
+        let mut wrong_lock = fixture.storage_request.clone();
+        wrong_lock.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xee; 32]);
+        assert!(fixture.storage_response.validate_for(&wrong_lock).is_err());
+    }
+
+    #[test]
+    fn storage_location_generations_have_distinct_bounded_journal_targets() {
+        let first = storage_generation_target(1);
+        let last = storage_generation_target(
+            u8::try_from(MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1)
+                .expect("location generation bound fits u8"),
+        );
+        assert_ne!(first, last);
+        assert!(valid_storage_generation_target(first));
+        assert!(valid_storage_generation_target(last));
+        assert!(!valid_storage_generation_target([0; 32]));
+        assert!(!valid_storage_generation_target(storage_generation_target(
+            u8::try_from(MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1 + 1)
+                .expect("one past the bound fits u8"),
+        )));
+        let mut malformed = first;
+        malformed[31] = 1;
+        assert!(!valid_storage_generation_target(malformed));
+    }
+
+    #[test]
+    fn storage_response_never_reuses_a_prior_location_generation() {
+        let fixture = control_service_fixture(false, false);
+        let retired_location_id = fixture.storage_response.location_id;
+        let mut replacement_request = fixture.storage_request.clone();
+        replacement_request.generation = 2;
+        replacement_request.prior_location_ids = vec![retired_location_id];
+        replacement_request
+            .validate()
+            .expect("a sorted second generation is structurally valid");
+        assert!(
+            fixture
+                .storage_response
+                .validate_for(&replacement_request)
+                .is_err(),
+            "the coordinator cannot return a retired stable identity"
+        );
+
+        let mut replacement = fixture.storage_response;
+        replacement.location_id = MusubiArchiveLocationIdV1::new([0xee; 32]);
+        replacement
+            .validate_for(&replacement_request)
+            .expect("a never-before-used replacement identity remains valid");
+
+        let mut unsorted_third = replacement_request;
+        unsorted_third.generation = 3;
+        unsorted_third.prior_location_ids = vec![
+            MusubiArchiveLocationIdV1::new([0xff; 32]),
+            retired_location_id,
+        ];
+        assert!(unsorted_third.validate().is_err());
+    }
+
+    #[test]
+    fn storage_request_binds_immutable_registration_without_freezing_location_state() {
+        let fixture = control_service_fixture(false, false);
+
+        let mut wrong_height = fixture.storage_request.clone();
+        wrong_height
+            .finalized_registration
+            .registration
+            .registered_at_height += 1;
+        wrong_height.validate().expect(
+            "a different internally valid projection is digest-bound but must be authorized upstream",
+        );
+        let exact = norito::encode_canonical(&fixture.storage_request).expect("exact request");
+        let substituted = norito::encode_canonical(&wrong_height).expect("substituted request");
+        assert_ne!(
+            request_digest(
+                MusubiPublicationRuntimeOperationV1::StorageCoordination,
+                &exact,
+            )
+            .expect("exact request digest"),
+            request_digest(
+                MusubiPublicationRuntimeOperationV1::StorageCoordination,
+                &substituted,
+            )
+            .expect("substituted request digest")
+        );
+        assert!(
+            fixture
+                .storage_response
+                .validate_for(&wrong_height)
+                .is_err()
+        );
+
+        let mut wrong_registrant = fixture.storage_request.clone();
+        let other = KeyPair::try_from_seed(
+            b"musubi-storage-authoritative-record-substitution".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("other registrant key");
+        wrong_registrant
+            .finalized_registration
+            .registration
+            .registered_by = AccountId::new(other.public_key().clone());
+        assert!(wrong_registrant.validate().is_err());
+
+        let mut missing_transaction = fixture.storage_request.clone();
+        missing_transaction.finalized_registration.transaction_hash = [0; 32];
+        assert!(missing_transaction.validate().is_err());
+
+        let mut wrong_lock = fixture.storage_request.clone();
+        wrong_lock.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xee; 32]);
+        wrong_lock
+            .validate()
+            .expect("a nonzero lock digest remains structurally valid");
+        assert!(fixture.storage_response.validate_for(&wrong_lock).is_err());
+        wrong_lock.verification_lock_digest = MusubiVerificationLockDigestV1::new([0; 32]);
+        assert!(wrong_lock.validate().is_err());
+
+        let mut pre_registration_snapshot = fixture.storage_request.clone();
+        pre_registration_snapshot
+            .finalized_registration
+            .snapshot
+            .finalized_height = pre_registration_snapshot
+            .finalized_registration
+            .registration
+            .registered_at_height
+            .saturating_sub(1);
+        assert!(pre_registration_snapshot.validate().is_err());
+
+        let mut later_current_archive = fixture.storage_response;
+        later_current_archive.archive.location_revision = 2;
+        later_current_archive.archive.location_ids = vec![MusubiArchiveLocationIdV1::new([
+            0xdd; 32,
+        ])];
+        let MusubiStorageLocationDispositionV1::NeedsRegistration {
+            expected_location_revision,
+            ..
+        } = &mut later_current_archive.disposition
+        else {
+            panic!("fixture requires location registration")
+        };
+        *expected_location_revision = 2;
+        later_current_archive
+            .validate_for(&fixture.storage_request)
+            .expect("a later finalized location directory preserves registration evidence");
     }
 
     #[test]

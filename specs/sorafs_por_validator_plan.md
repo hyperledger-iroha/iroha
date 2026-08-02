@@ -51,7 +51,7 @@ before promotion can report ready.
 ### Command Inventory
 | Command | Description | Output |
 |---------|-------------|--------|
-| `sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]` | List one bounded challenge-status page from Torii. | Table or JSON records; the next opaque cursor is printed separately when present. |
+| `sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]` | List one bounded challenge-status page from Torii. | Table or JSON records; the next opaque cursor is printed separately when present. |
 | `sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]` | Download one bounded coordinator status-export page. | Raw `PorStatusExportPageV1` bytes written to disk. |
 | `sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]` | Render a weekly coordinator report. | Markdown or JSON `PorWeeklyReportV1`. |
 | `sorafs-validate por --challenge <challenge.to> --proof <proof.to> --format json` | Validate a committed or downloaded challenge/proof pair offline. | `ValidationOutcomeV1`. |
@@ -71,7 +71,7 @@ struct PorChallengeStatusV1 {
     provider_id: Digest32,
     epoch_id: U64,
     drand_round: U64,
-    status: PorChallengeOutcome,      // pending|verified|failed|repaired|forced
+    status: PorChallengeOutcome,      // awaiting_proof|proof_submitted|verified|failed|repaired
     sample_count: U16,
     forced: Bool,
     issued_at: Timestamp,
@@ -146,8 +146,8 @@ cycle, and catches up one missing week at a time.
 ## Torii API Extensions
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/sorafs/por/status` | Query a record-and-byte-bounded `PorStatusPageV1`; its opaque cursor binds the normalized filters, coordinator generation, and last record. |
-| `GET` | `/v1/sorafs/por/export` | Return a bounded Norito `PorStatusExportPageV1`; its opaque cursor binds the optional epoch range, coordinator generation, and last record. |
+| `GET` | `/v1/sorafs/por/status` | Query a record-, byte-, and 512-candidate-bounded `PorStatusPageV1`; its opaque cursor binds the normalized filters, coordinator generation, and last consumed index candidate. Sparse intersections may return no records with an advancing cursor. |
+| `GET` | `/v1/sorafs/por/export` | Return a bounded Norito `PorStatusExportPageV1`; its opaque cursor binds the optional epoch range, coordinator generation, and last consumed index candidate. |
 | `GET` | `/v1/sorafs/por/report/{iso_week}` | Return a deterministic Norito `PorWeeklyReportV1`; when the cycle is currently prepared for governance publication, return those exact retained bytes. |
 | `GET` | `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N` | Return `limit`-bounded provider backlog and last verdict timestamps from `sorafs_node`, with total provider counts retained. |
 | `POST` | `/v1/sorafs/capacity/por-proof` | Record a provider `PorProofV1`; requires a fresh operator request signature whose Ed25519 key matches both the proof signer and the provider's current admitted advert key. |
@@ -157,17 +157,64 @@ The opaque status/export cursor's generation is a required non-zero field in
 the node's V5 auxiliary checkpoint, not a process-local counter. Every
 lifecycle mutation computes a checked next generation before changing state
 and persists the generation, complete bounded status history, and repair
-outbox state in one checkpoint. Torii then installs one immutable projection
-containing the matching generation, statuses, indexes, and forced-provider set
-with a single atomic swap. Startup rebuilds that projection from the node;
-Torii persistence retains only exact weekly-report publication state. Missing,
-zero, or record-inconsistent generations fail projection admission, and
-`u64::MAX` fails further status mutation instead of wrapping or saturating.
+outbox state in one checkpoint. Startup builds Torii's projection once from
+that complete checkpoint. Each later challenge, proof, or verdict returns one
+node-authoritative `(generation, status)` update while checkpoint serialization
+is still held; Torii accepts only an identical same-generation replay or the
+immediate next generation and updates its status map, indexes, and
+forced-provider set in place. Rollbacks, gaps, conflicting replays, or identity
+changes invalidate the projection so reads fail closed until restart
+reconciliation. The durable mutation and incremental projection update execute
+on one physically retained blocking worker, so cancellation cannot release the
+pipeline lock while full checkpoint persistence is still running on the async
+event loop. Torii persistence retains only exact weekly-report publication
+state. Missing, zero, or record-inconsistent generations fail projection
+admission, and `u64::MAX` fails further status mutation instead of wrapping or
+saturating.
+
+Mutation failures carry a typed durable disposition. Admission/validation
+failures and exact in-memory rollbacks preserve the installed Torii projection;
+only commit-uncertain or failed-rollback outcomes invalidate it. Thus a validly
+signed proof for an unknown or mismatched challenge cannot turn a routine 4xx
+rejection into a status-read outage.
+
+The first-release lifecycle is `awaiting_proof -> proof_submitted -> terminal`.
+A proofless timeout may advance directly from `awaiting_proof` to `failed`;
+other terminal states require an authenticated proof. `forced` is immutable
+challenge provenance and never substitutes for a lifecycle state. The read
+projection counts forced challenges per provider and epoch, so retiring one
+terminal cannot erase the provenance of a surviving same-epoch challenge.
+Once repair handoff, reputation delivery, and authenticated replay-archive
+append are all
+acknowledged, the oldest compacted terminal may be retired deterministically by
+`(issued_at, challenge_id)` in the same generation that admits a replacement.
+The node-authoritative update carries that exact removal so Torii applies the
+bounded rolling projection atomically.
 Until a valid node projection is installed, production status, export, and
 weekly-report reads fail closed with an authority-unavailable error; only unit
 tests retain the retired in-memory lifecycle path for focused transition tests.
 Consequently a cursor issued before a mutation remains stale across process
 restart and cannot become valid again when indexes are rebuilt.
+
+Filtered status traversal chooses the smallest deterministic one-dimensional
+index and materializes at most 512 candidate statuses per response. The cursor
+anchors the last safely consumed candidate even when it did not satisfy the
+remaining filters, so an empty sparse page still advances. A matching record
+that is examined only to discover a record or byte boundary is not consumed
+and is evaluated again on the next page; continuation therefore neither skips
+nor duplicates returned matches. `inspected_candidates` reports the exact
+number evaluated in the response.
+
+The Torii and Rust CLI surfaces share a 4 MiB ceiling for the sum of canonical
+status-record bytes. The CLI bounds each status or nested export-page field by
+that requested byte ceiling plus the fixed 64 KiB response envelope; the HTTP
+body uses the same bound before decoding. Sequence, cumulative-element,
+allocation, and nesting limits remain independently enforced, so pages larger
+than the former 64 KiB field cap decode without admitting an unbounded field.
+Opaque continuations use one shared bounded canonical Norito/base64url codec.
+The server validates the complete `(epoch, issued_at, challenge_id)` anchor
+against retained authority, while the CLI rejects non-canonical cursors and
+response cursors whose generation does not match their page.
 
 The proof and verdict mutation routes use the canonical `x-iroha-operator-*` request-signature
 envelope. Method, path, canonical query, exact body digest, timestamp, and nonce

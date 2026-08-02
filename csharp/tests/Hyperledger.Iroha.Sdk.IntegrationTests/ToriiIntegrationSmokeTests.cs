@@ -216,8 +216,7 @@ public sealed class ToriiIntegrationSmokeTests
                 MeteringPublicKeyHex = meteringPublicKeyHex,
             }, cancellationToken: TestContext.Current.CancellationToken);
             Assert.False(string.IsNullOrWhiteSpace(quote.QuoteId));
-            Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction?.WireId);
-            Assert.NotEmpty(quote.TxInstructions);
+            Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction.WireId);
         }
     }
 

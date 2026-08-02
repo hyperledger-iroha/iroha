@@ -605,7 +605,6 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -998,7 +997,6 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1081,7 +1079,6 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1200,7 +1197,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1345,7 +1341,6 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1472,7 +1467,6 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1599,7 +1593,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1735,7 +1728,6 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1865,7 +1857,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1999,7 +1990,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -2160,7 +2150,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,

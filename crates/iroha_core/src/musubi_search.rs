@@ -474,6 +474,7 @@ impl MusubiSearchIndexV1 {
             last_package,
         });
         let page = MusubiSearchPageV1 {
+            query: request.clone(),
             items: page.hits,
             next_cursor,
             snapshot,

@@ -48,6 +48,21 @@ pub const GOVERNANCE_DAG_CID_BYTES_V1: usize = blake3::OUT_LEN;
 /// Maximum byte length of a first-release Governance DAG publisher peer ID.
 pub const GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1: usize = 128;
 
+/// Maximum number of scalar labels attached to one filesystem publication.
+pub const GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1: usize = 64;
+
+/// Maximum UTF-8 byte length of one filesystem publication label key.
+pub const GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1: usize = 128;
+
+/// Maximum UTF-8 byte length of one string-valued filesystem publication label.
+pub const GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1: usize = 4 * 1024;
+
+/// Maximum compact-JSON bytes occupied by one filesystem publication label map.
+pub const GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1: usize = 64 * 1024;
+
+/// Maximum byte length of one retained filesystem CAR-segment manifest.
+pub const GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1: usize = 128 * 1024;
+
 /// Exact byte length of the authenticated account digest committed by a
 /// first-release Governance DAG node.
 pub const GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1: usize = blake3::OUT_LEN;
@@ -86,6 +101,8 @@ impl GovernanceDagSubmissionOriginV1 {
 
 const GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.governance_dag.submission_account.digest.v1";
+const GOVERNANCE_PUBLICATION_SOURCE_PAIR_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.governance.publication_source_pair.id.v1";
 
 /// Derive the authenticated-account commitment stored in signed DAG provenance.
 ///
@@ -106,6 +123,35 @@ pub fn governance_dag_submission_account_digest_v1(
             .to_le_bytes(),
     );
     hasher.update(canonical_account_bytes);
+    *hasher.finalize().as_bytes()
+}
+
+/// Derive the content identity for one filesystem publication source pair.
+///
+/// The identity binds the internal payload kind plus the exact encoded and JSON
+/// byte lengths and BLAKE3 digests. Filesystem publishers use it as the only
+/// variable path component, so presentation labels and model identifiers never
+/// become path authority.
+#[must_use]
+pub fn governance_publication_source_pair_id_v1(
+    payload_kind: &str,
+    encoded_len: u64,
+    encoded_blake3: [u8; blake3::OUT_LEN],
+    json_len: u64,
+    json_blake3: [u8; blake3::OUT_LEN],
+) -> [u8; blake3::OUT_LEN] {
+    let mut hasher = Hasher::new();
+    hasher.update(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ID_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(payload_kind.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(payload_kind.as_bytes());
+    hasher.update(&encoded_len.to_le_bytes());
+    hasher.update(&encoded_blake3);
+    hasher.update(&json_len.to_le_bytes());
+    hasher.update(&json_blake3);
     *hasher.finalize().as_bytes()
 }
 
@@ -5386,6 +5432,27 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
+
+    #[test]
+    fn governance_publication_source_pair_identity_binds_every_field() {
+        let baseline =
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 9, [0x22; 32]);
+        for changed in [
+            governance_publication_source_pair_id_v1(
+                "reputation_snapshot",
+                7,
+                [0x11; 32],
+                9,
+                [0x22; 32],
+            ),
+            governance_publication_source_pair_id_v1("repair_audit", 8, [0x11; 32], 9, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x12; 32], 9, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 10, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 9, [0x23; 32]),
+        ] {
+            assert_ne!(changed, baseline);
+        }
+    }
 
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);

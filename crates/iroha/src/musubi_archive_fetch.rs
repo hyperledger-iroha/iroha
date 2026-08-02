@@ -102,8 +102,8 @@ const TOKEN_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
 
 // TODO: Qualify the complete HTTP/TLS + JSON DOM + CAR/cache fetch process against the 64 MiB
 // peak-RSS gate in an isolated deployment-equivalent child. These allocation-free envelopes stop
-// hostile JSON structure before DOM allocation, but they are intentionally not presented as an
-// allocator or process-RSS measurement.
+// hostile JSON structure and oversized scalar literals before DOM allocation, but they are
+// intentionally not presented as an allocator or process-RSS measurement.
 
 // TODO: Replace the platform-configured provider-origin map with a finalized provider-advert
 // projection that binds each DNS answer and stream-token verifying key to its enacted advert.
@@ -1884,7 +1884,7 @@ fn enforce_plan_memory_bound(plan: &CarBuildPlan) -> Result<(), MusubiArchiveRun
         .unwrap_or(0);
     let fetch_specs = plan
         .chunks
-        .len()
+        .capacity()
         .checked_mul(std::mem::size_of::<ChunkFetchSpec>())
         .ok_or_else(|| permanent("MUSUBI_ARCHIVE_PLAN_MEMORY_LIMIT"))?;
     if estimated > MAX_RETAINED_PLAN_HEAP_BYTES
@@ -1901,12 +1901,7 @@ fn enforce_plan_memory_bound(plan: &CarBuildPlan) -> Result<(), MusubiArchiveRun
                     .checked_mul(3)
                     .and_then(|chunks| value.checked_add(chunks))
             })
-            .and_then(|value| {
-                value.checked_add(
-                    bounded_stream::STREAM_FRAME_BYTES
-                        .saturating_mul(bounded_stream::STREAM_FRAME_COUNT),
-                )
-            })
+            .and_then(|value| value.checked_add(bounded_stream::STREAM_MAX_OWNED_FRAME_BYTES))
             .is_none_or(|working| working > 64 * 1024 * 1024)
     {
         return Err(permanent("MUSUBI_ARCHIVE_PLAN_MEMORY_LIMIT"));
@@ -2219,26 +2214,6 @@ token = "must-not-be-inline"
             read_api_token(&path).is_err(),
             "multiply-linked token files must fail closed"
         );
-    }
-
-    #[test]
-    fn channel_reader_enforces_exact_committed_size() {
-        let (sender, receiver) = mpsc::sync_channel(2);
-        sender
-            .send(StreamMessageV1::Data(vec![1, 2, 3]))
-            .expect("data frame");
-        sender.send(StreamMessageV1::Done).expect("done frame");
-        drop(sender);
-        let mut reader = ChannelCarReaderV1 {
-            receiver,
-            current: Cursor::new(Vec::new()),
-            expected_car_size: 3,
-            received: 0,
-            finished: false,
-        };
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).expect("exact stream");
-        assert_eq!(bytes, [1, 2, 3]);
     }
 
     #[test]

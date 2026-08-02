@@ -289,10 +289,10 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
         )
     })?;
     handle
-        .record_por_challenge(&challenge)
+        .record_por_challenge_with_authority_update(&challenge)
         .map_err(|err| format!("failed to record challenge: {err}"))?;
     handle
-        .record_por_proof(&proof, &proof.signature.public_key)
+        .record_por_proof_with_authority_update(&proof, &proof.signature.public_key)
         .map_err(|err| format!("failed to record proof: {err}"))?;
 
     let verdict_snapshot = if let Some(verdict_path) = opts.verdict_path {
@@ -321,7 +321,8 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
             .map(|signature| signature.public_key.clone())
             .collect::<Vec<_>>();
         let outcome = handle
-            .record_por_verdict(&verdict, &embedded_auditor_keys, 1)
+            .record_por_verdict_with_authority_update(&verdict, &embedded_auditor_keys, 1)
+            .map(|(outcome, _update)| outcome)
             .map_err(|err| format!("failed to record verdict: {err}"))?;
         Some((verdict, outcome))
     } else {

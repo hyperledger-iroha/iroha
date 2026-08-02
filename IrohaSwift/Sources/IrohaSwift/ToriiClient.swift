@@ -6730,8 +6730,6 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
     public let mtuBytes: UInt64
     public let meterFamily: String
     public let displayBillingLabel: String
-    public let feeAssetId: String
-    public let escrowAccountId: String
     public let operatorAccountId: String
     public let leaseFee: String
     public let settlementGraceSeconds: UInt64
@@ -6758,8 +6756,6 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
         case mtuBytes = "mtu_bytes"
         case meterFamily = "meter_family"
         case displayBillingLabel = "display_billing_label"
-        case feeAssetId = "fee_asset_id"
-        case escrowAccountId = "escrow_account_id"
         case operatorAccountId = "operator_account_id"
         case leaseFee = "lease_fee"
         case settlementGraceSeconds = "settlement_grace_secs"
@@ -6835,16 +6831,6 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
             from: container,
             forKey: .displayBillingLabel,
             field: "vpn profile display_billing_label"
-        )
-        feeAssetId = try decodeNonEmptyVpnString(
-            from: container,
-            forKey: .feeAssetId,
-            field: "vpn profile fee_asset_id"
-        )
-        escrowAccountId = try decodeNonEmptyVpnString(
-            from: container,
-            forKey: .escrowAccountId,
-            field: "vpn profile escrow_account_id"
         )
         operatorAccountId = try decodeNonEmptyVpnString(
             from: container,
@@ -6994,8 +6980,7 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
     public let relayCertificateSha256Hex: String
     public let directorySnapshotDigestHex: String
     public let meteringPublicKeyHex: String
-    public let openLeaseInstruction: ToriiVpnTxInstruction?
-    public let txInstructions: [ToriiVpnTxInstruction]
+    public let openLeaseInstruction: ToriiVpnTxInstruction
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case quoteId = "quote_id"
@@ -7027,7 +7012,6 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
         case directorySnapshotDigestHex = "directory_snapshot_digest_hex"
         case meteringPublicKeyHex = "metering_public_key_hex"
         case openLeaseInstruction = "open_lease_instruction"
-        case txInstructions = "tx_instructions"
     }
 
     public init(from decoder: Decoder) throws {
@@ -7168,15 +7152,8 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
             byteCount: 32,
             field: "vpn quote metering_public_key_hex"
         )
-        openLeaseInstruction = try container.decodeIfPresent(ToriiVpnTxInstruction.self, forKey: .openLeaseInstruction)
-        txInstructions = try container.decode([ToriiVpnTxInstruction].self, forKey: .txInstructions)
-        guard txInstructions.count == 1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .txInstructions,
-                in: container,
-                debugDescription: "vpn quote tx_instructions must contain exactly one instruction."
-            )
-        }
+        openLeaseInstruction = try container.decode(ToriiVpnTxInstruction.self,
+                                                    forKey: .openLeaseInstruction)
     }
 }
 
@@ -7506,7 +7483,6 @@ public struct ToriiVpnReceipt: Decodable, Sendable, Equatable {
     public let refundedFee: String
     public let leaseIdHex: String
     public let settleLeaseInstruction: ToriiVpnTxInstruction?
-    public let txInstructions: [ToriiVpnTxInstruction]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case sessionId = "session_id"
@@ -7531,7 +7507,6 @@ public struct ToriiVpnReceipt: Decodable, Sendable, Equatable {
         case refundedFee = "refunded_fee"
         case leaseIdHex = "lease_id_hex"
         case settleLeaseInstruction = "settle_lease_instruction"
-        case txInstructions = "tx_instructions"
     }
 
     public init(from decoder: Decoder) throws {
@@ -7652,15 +7627,6 @@ public struct ToriiVpnReceipt: Decodable, Sendable, Equatable {
         )
         settleLeaseInstruction = try container.decodeIfPresent(ToriiVpnTxInstruction.self,
                                                                forKey: .settleLeaseInstruction)
-        txInstructions = try container.decode([ToriiVpnTxInstruction].self,
-                                              forKey: .txInstructions)
-        guard txInstructions.count <= 1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .txInstructions,
-                in: container,
-                debugDescription: "vpn receipt tx_instructions must contain at most one instruction."
-            )
-        }
     }
 }
 

@@ -468,8 +468,6 @@ function sampleVpnProfilePayload() {
     tunnel_addresses: ["10.208.0.2/32"],
     mtu_bytes: 1280,
     display_billing_label: "standard",
-    fee_asset_id: "xor#universal.universal",
-    escrow_account_id: SAMPLE_ACCOUNT_ID,
     operator_account_id: SAMPLE_ACCOUNT_ID,
     lease_fee: "1000000.25",
     settlement_grace_secs: 120,
@@ -529,8 +527,8 @@ function sampleVpnQuotePayload() {
     relay_endpoint: profile.relay_endpoint,
     lease_secs: profile.lease_secs,
     quote_expires_at_ms: 1_700_000_000_000,
-    fee_asset_id: profile.fee_asset_id,
-    escrow_account_id: profile.escrow_account_id,
+    fee_asset_id: "xor#universal.universal",
+    escrow_account_id: SAMPLE_ACCOUNT_ID,
     operator_account_id: profile.operator_account_id,
     lease_fee: profile.lease_fee,
     route_pushes: profile.route_pushes,
@@ -544,7 +542,6 @@ function sampleVpnQuotePayload() {
     ...sampleVpnTrustPayload(profile.relay_tls_spki_sha256_hex),
     metering_public_key_hex: "12".repeat(32),
     open_lease_instruction: instruction,
-    tx_instructions: [instruction],
   };
 }
 
@@ -573,7 +570,6 @@ function sampleVpnReceiptPayload() {
     refunded_fee: session.lease_fee,
     lease_id_hex: session.quote_id,
     settle_lease_instruction: null,
-    tx_instructions: [],
   };
 }
 
@@ -27090,8 +27086,6 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
           tunnel_addresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
           mtu_bytes: 1280,
           display_billing_label: "standard · soranet.vpn.standard · 1000000.25 XOR",
-          fee_asset_id: "xor#universal.universal",
-          escrow_account_id: "vpn_escrow",
           operator_account_id: SAMPLE_ACCOUNT_ID,
           lease_fee: "1000000.25",
           settlement_grace_secs: 120,
@@ -27125,8 +27119,6 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
     tunnelAddresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
     mtuBytes: 1280,
     displayBillingLabel: "standard · soranet.vpn.standard · 1000000.25 XOR",
-    feeAssetId: "xor#universal.universal",
-    escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
     leaseFee: "1000000.25",
     settlementGraceSecs: 120,
@@ -27226,8 +27218,6 @@ test("getVpnProfile rejects noncanonical exact fee quantities", async () => {
             tunnel_addresses: ["10.208.0.2/32"],
             mtu_bytes: 1280,
             display_billing_label: "standard",
-            fee_asset_id: "xor#universal.universal",
-            escrow_account_id: "vpn_escrow",
             operator_account_id: SAMPLE_ACCOUNT_ID,
             lease_fee: leaseFee,
             settlement_grace_secs: 120,
@@ -27472,8 +27462,6 @@ test("VPN response parsers reject empty minLength strings", async () => {
         "relay_endpoint",
         "meter_family",
         "display_billing_label",
-        "fee_asset_id",
-        "escrow_account_id",
         "operator_account_id",
       ],
     ],
@@ -27547,7 +27535,7 @@ test("VPN response parsers enforce OpenAPI enums and bounds", async () => {
     ["profile settlement", "profile", sampleVpnProfilePayload(), (payload) => {
       payload.settlement_grace_secs = 0;
     }, "settlement_grace_secs"],
-    ["quote instruction count", "quote", sampleVpnQuotePayload(), (payload) => {
+    ["retired quote instruction array", "quote", sampleVpnQuotePayload(), (payload) => {
       payload.tx_instructions = [];
     }, "tx_instructions"],
     ["quote exit", "quote", sampleVpnQuotePayload(), (payload) => {
@@ -27571,11 +27559,8 @@ test("VPN response parsers enforce OpenAPI enums and bounds", async () => {
     ["receipt source", "receipt", sampleVpnReceiptPayload(), (payload) => {
       payload.receipt_source = "client";
     }, "receipt_source"],
-    ["receipt instruction count", "receipt", sampleVpnReceiptPayload(), (payload) => {
-      payload.tx_instructions = [
-        { wire_id: "SettleVpnLease", payload_hex: "abcd" },
-        { wire_id: "SettleVpnLease", payload_hex: "abcd" },
-      ];
+    ["retired receipt instruction array", "receipt", sampleVpnReceiptPayload(), (payload) => {
+      payload.tx_instructions = [];
     }, "tx_instructions"],
     ["receipt list item count", "list", {
       items: Array.from({ length: 25 }, () => sampleVpnReceiptPayload()),
@@ -27643,7 +27628,6 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
         ...sampleVpnTrustPayload("55".repeat(32)),
         metering_public_key_hex: meteringPublicKeyHex,
         open_lease_instruction: openInstruction,
-        tx_instructions: [openInstruction],
       },
       headers: { "content-type": "application/json" },
     });
@@ -27683,7 +27667,6 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
     ...sampleVpnTrustModel("55".repeat(32)),
     meteringPublicKeyHex,
     openLeaseInstruction: { wireId: "OpenVpnLeaseEscrow", payloadHex: "abcd" },
-    txInstructions: [{ wireId: "OpenVpnLeaseEscrow", payloadHex: "abcd" }],
   });
 });
 
@@ -27939,7 +27922,6 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
             refunded_fee: "1000000.25",
             lease_id_hex: quoteId,
             settle_lease_instruction: null,
-            tx_instructions: [],
           },
         ],
         total: 1,
@@ -28005,7 +27987,6 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
       refundedFee: "1000000.25",
       leaseIdHex: quoteId,
       settleLeaseInstruction: null,
-      txInstructions: [],
     }],
     total: 1,
   });
@@ -28048,7 +28029,6 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
         refunded_fee: "1000000.25",
         lease_id_hex: quoteId,
         settle_lease_instruction: null,
-        tx_instructions: [],
       },
       headers: { "content-type": "application/json" },
     });
@@ -28078,7 +28058,6 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
     refundedFee: "1000000.25",
     leaseIdHex: quoteId,
     settleLeaseInstruction: null,
-    txInstructions: [],
   });
 });
 
@@ -28131,7 +28110,6 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
         refunded_fee: "500000.125",
         lease_id_hex: quoteId,
         settle_lease_instruction: settleInstruction,
-        tx_instructions: [settleInstruction],
       },
       headers: { "content-type": "application/json" },
     });
@@ -28170,7 +28148,6 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     refundedFee: "500000.125",
     leaseIdHex: quoteId,
     settleLeaseInstruction: { wireId: "SettleVpnLease", payloadHex: "cafe" },
-    txInstructions: [{ wireId: "SettleVpnLease", payloadHex: "cafe" }],
   });
 });
 

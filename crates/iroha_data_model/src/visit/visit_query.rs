@@ -961,7 +961,7 @@ mod tests {
             })
             .into(),
             query_mod::musubi::FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
-                prefix: MusubiOrderedPrefixV1::new("7/").expect("ordered prefix"),
+                prefix: MusubiOrderedPrefixV1::new("sora/").expect("ordered prefix"),
                 page: page(),
             })
             .into(),

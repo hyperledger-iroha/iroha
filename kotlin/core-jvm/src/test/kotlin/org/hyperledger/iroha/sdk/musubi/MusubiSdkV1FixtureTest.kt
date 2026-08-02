@@ -130,7 +130,23 @@ class MusubiSdkV1FixtureTest {
         )
         page.requireMatches(request)
         assertEquals(4, page.items.size)
+        assertEquals(java.math.BigInteger("1700000000000"), page.finalizedTimeMs)
         assertEquals(listOf(true, true, false, false), page.items.map { it.mustRetain() })
+
+        val zeroTime = objectValue(deepMutableCopy(route["response"]))
+        zeroTime["finalized_time_ms"] = 0L
+        MusubiJsonV1.parseArchiveRetentionPage(MusubiJsonV1.encode(zeroTime))
+            .requireMatches(request)
+        val negativeTime = objectValue(deepMutableCopy(route["response"]))
+        negativeTime["finalized_time_ms"] = -1L
+        assertFails {
+            MusubiJsonV1.parseArchiveRetentionPage(MusubiJsonV1.encode(negativeTime))
+        }
+        val missingTime = objectValue(deepMutableCopy(route["response"]))
+        missingTime.remove("finalized_time_ms")
+        assertFails {
+            MusubiJsonV1.parseArchiveRetentionPage(MusubiJsonV1.encode(missingTime))
+        }
 
         val mismatched = objectValue(deepMutableCopy(route["response"]))
         val first = objectValue(arrayValue(mismatched["items"])[0])
@@ -145,6 +161,63 @@ class MusubiSdkV1FixtureTest {
             .executor(executor)
             .build()
         assertFails { client.findArchiveRetention(request).join() }
+    }
+
+    @Test
+    fun archiveLocationPageRejectsNoncurrentOrUnorderedItems() {
+        val valid = populatedArchiveLocationResponse()
+        val page = MusubiJsonV1.decodeResponse(
+            MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH,
+            valid,
+        ) as MusubiArchiveLocationPageV1
+        assertEquals(2, page.items.size)
+        assertEquals(49L, page.items[0].finalizedHeight.toLong())
+
+        fun assertRejected(mutate: (MutableMap<String, Any?>) -> Unit) {
+            val response = objectValue(deepMutableCopy(valid))
+            mutate(response)
+            assertFails {
+                MusubiJsonV1.decodeResponse(
+                    MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH,
+                    response,
+                )
+            }
+        }
+
+        assertRejected { response ->
+            response["items"] = arrayValue(response["items"])
+                .reversed()
+                .map(::deepMutableCopy)
+                .toMutableList()
+        }
+        assertRejected { response ->
+            val first = arrayValue(response["items"])[0]
+            response["items"] = MutableList(2) { deepMutableCopy(first) }
+        }
+        assertRejected { response ->
+            val item = arrayValue(response["items"])[0]
+            response["items"] = MutableList(5) { deepMutableCopy(item) }
+        }
+        assertRejected { response ->
+            val archive = objectValue(response["archive"])
+            response["items"] = mutableListOf(
+                archiveLocationWire(3L, archive["archive_id"], 49L, 1L, "Healthy"),
+            )
+        }
+        assertRejected { response ->
+            val first = objectValue(arrayValue(response["items"])[0])
+            first["archive_id"] = digestWire(9L)
+        }
+        assertRejected { response ->
+            val first = objectValue(arrayValue(response["items"])[0])
+            objectValue(first["state"])["kind"] = "Retired"
+        }
+        assertRejected { response ->
+            objectValue(arrayValue(response["items"])[0])["finalized_height"] = 51L
+        }
+        assertRejected { response ->
+            objectValue(arrayValue(response["items"])[0])["revision"] = 3L
+        }
     }
 
     @Test
@@ -192,37 +265,347 @@ class MusubiSdkV1FixtureTest {
         routes.forEach { route ->
             val path = route["path"] as String
             val request = MusubiJsonV1.decodeQuery(path, route["request"])
-            when (path) {
-                MusubiToriiClientV1.EXACT_PACKAGE_PATH ->
-                    client.findExactPackage(request as MusubiExactPackageQueryV1).join()
-                MusubiToriiClientV1.EXACT_RELEASE_PATH ->
-                    client.findExactRelease(request as MusubiExactReleaseQueryV1).join()
-                MusubiToriiClientV1.RESOLVER_INDEX_PATH ->
-                    client.findResolverIndex(request as MusubiResolverIndexQueryV1).join()
-                MusubiToriiClientV1.VERSIONS_PATH ->
-                    client.findVersions(request as MusubiPackagePageQueryV1).join()
-                MusubiToriiClientV1.MAINTAINERS_PATH ->
-                    client.findMaintainers(request as MusubiPackagePageQueryV1).join()
-                MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH ->
-                    client.findArchiveLocations(request as MusubiArchiveLocationQueryV1).join()
-                MusubiToriiClientV1.ARCHIVE_RETENTION_PATH ->
-                    client.findArchiveRetention(request as MusubiArchiveRetentionQueryV1).join()
-                MusubiToriiClientV1.ALIAS_PATH ->
-                    client.findAlias(request as MusubiAliasQueryV1).join()
-                MusubiToriiClientV1.ALIAS_HISTORY_PATH ->
-                    client.findAliasHistory(request as MusubiAliasQueryV1).join()
-                MusubiToriiClientV1.ORDERED_PREFIX_PATH ->
-                    client.findOrderedPrefix(request as MusubiOrderedPrefixQueryV1).join()
-                MusubiToriiClientV1.SEARCH_PATH ->
-                    client.search(request as MusubiSearchQueryV1).join()
-                else -> error("unhandled fixture path $path")
-            }
+            invoke(client, path, request)
             val captured = executor.requests.last()
             assertEquals("POST", captured.method)
             assertEquals(path, captured.uri.path)
             assertEquals(route["request"], parseJson(captured.body))
         }
         assertEquals(EXPECTED_PATHS, executor.requests.map { it.uri.path }.toSet())
+    }
+
+    @Test
+    fun readOnlyClientRejectsResponsesThatDoNotMatchRequests() {
+        fun assertRejected(path: String, mutate: (MutableMap<String, Any?>) -> Unit) {
+            val route = routes().first { it["path"] == path }
+            val requestValue = objectValue(deepMutableCopy(route["request"]))
+            mutate(requestValue)
+            val request = MusubiJsonV1.decodeQuery(path, requestValue)
+            val executor = FixtureExecutor(mapOf(path to MusubiJsonV1.encode(route["response"])))
+            val client = MusubiToriiClientV1.builder()
+                .baseUri(URI.create("http://localhost:8080"))
+                .executor(executor)
+                .build()
+            assertFails { invoke(client, path, request) }
+        }
+
+        assertRejected(MusubiToriiClientV1.EXACT_PACKAGE_PATH) { request ->
+            objectValue(request["package"])["name"] = listOf("another-package")
+        }
+        assertRejected(MusubiToriiClientV1.EXACT_RELEASE_PATH) { request ->
+            objectValue(objectValue(request["release"])["package"])["name"] =
+                listOf("another-package")
+        }
+        for (path in listOf(
+            MusubiToriiClientV1.RESOLVER_INDEX_PATH,
+            MusubiToriiClientV1.VERSIONS_PATH,
+        )) {
+            assertRejected(path) { request ->
+                val snapshot = objectValue(
+                    deepMutableCopy(
+                        objectValue(routes().first { it["path"] == path }["response"])["snapshot"],
+                    ),
+                )
+                snapshot["finalized_height"] = 49L
+                objectValue(request["page"])["cursor"] = linkedMapOf(
+                    "snapshot" to snapshot,
+                    "query_hash" to digestWire(19L),
+                    "last_key" to "fixture-last-key",
+                    "caller" to null,
+                )
+            }
+        }
+        assertRejected(MusubiToriiClientV1.MAINTAINERS_PATH) { request ->
+            objectValue(request["package"])["name"] = listOf("another-package")
+        }
+        assertRejected(MusubiToriiClientV1.MAINTAINERS_PATH) { request ->
+            objectValue(request["page"])["limit"] = 1L
+        }
+        assertRejected(MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH) { request ->
+            request["archive_id"] = digestWire(9L)
+        }
+        assertRejected(MusubiToriiClientV1.ALIAS_PATH) { request ->
+            request["alias"] = listOf("another-alias")
+        }
+        assertRejected(MusubiToriiClientV1.ALIAS_HISTORY_PATH) { request ->
+            request["alias"] = listOf("another-alias")
+        }
+        assertRejected(MusubiToriiClientV1.ORDERED_PREFIX_PATH) { request ->
+            request["prefix"] = listOf("another/")
+        }
+        assertRejected(MusubiToriiClientV1.SEARCH_PATH) { request ->
+            val response = objectValue(
+                routes().first { it["path"] == MusubiToriiClientV1.SEARCH_PATH }["response"],
+            )
+            val firstPackage = objectValue(arrayValue(response["items"])[0])["package"]
+            objectValue(request["page"])["cursor"] = linkedMapOf(
+                "snapshot" to deepMutableCopy(response["snapshot"]),
+                "query_hash" to digestWire(20L),
+                "last_package" to deepMutableCopy(firstPackage),
+            )
+        }
+
+        val versionsRoute = routes().first { it["path"] == MusubiToriiClientV1.VERSIONS_PATH }
+        val requestValue = objectValue(deepMutableCopy(versionsRoute["request"]))
+        val responseValue = objectValue(deepMutableCopy(versionsRoute["response"]))
+        val snapshot = deepMutableCopy(responseValue["snapshot"])
+        objectValue(requestValue["page"])["cursor"] = linkedMapOf(
+            "snapshot" to deepMutableCopy(snapshot),
+            "query_hash" to digestWire(19L),
+            "last_key" to "1.0.0",
+            "caller" to null,
+        )
+        responseValue["next_cursor"] = linkedMapOf(
+            "snapshot" to deepMutableCopy(snapshot),
+            "query_hash" to digestWire(20L),
+            "last_key" to "1.2.3",
+            "caller" to null,
+        )
+        val executor = FixtureExecutor(
+            mapOf(MusubiToriiClientV1.VERSIONS_PATH to MusubiJsonV1.encode(responseValue)),
+        )
+        val client = MusubiToriiClientV1.builder()
+            .baseUri(URI.create("http://localhost:8080"))
+            .executor(executor)
+            .build()
+        assertFails {
+            invoke(
+                client,
+                MusubiToriiClientV1.VERSIONS_PATH,
+                MusubiJsonV1.decodeQuery(MusubiToriiClientV1.VERSIONS_PATH, requestValue),
+            )
+        }
+    }
+
+    @Test
+    fun pagedClientsBindEchoedQueriesOnEmptyFirstPages() {
+        val paths = listOf(
+            MusubiToriiClientV1.RESOLVER_INDEX_PATH,
+            MusubiToriiClientV1.VERSIONS_PATH,
+            MusubiToriiClientV1.MAINTAINERS_PATH,
+            MusubiToriiClientV1.ALIAS_HISTORY_PATH,
+            MusubiToriiClientV1.ORDERED_PREFIX_PATH,
+            MusubiToriiClientV1.SEARCH_PATH,
+        )
+        paths.forEach { path ->
+            val route = routes().first { it["path"] == path }
+            val request = MusubiJsonV1.decodeQuery(path, route["request"])
+            val response = objectValue(deepMutableCopy(route["response"]))
+            response["items"] = mutableListOf<Any?>()
+            response["next_cursor"] = null
+            objectValue(objectValue(response["query"])["page"])["limit"] = 49L
+            val executor = FixtureExecutor(mapOf(path to MusubiJsonV1.encode(response)))
+            val client = MusubiToriiClientV1.builder()
+                .baseUri(URI.create("http://localhost:8080"))
+                .executor(executor)
+                .build()
+            assertFails { invoke(client, path, request) }
+        }
+    }
+
+    @Test
+    fun echoedPagesRejectTamperedStructuredCursorBoundariesAndContinuations() {
+        fun assertRejected(path: String, response: MutableMap<String, Any?>) {
+            assertFails { MusubiJsonV1.decodeResponse(path, response) }
+        }
+
+        val versionsRoute = routes().first { it["path"] == MusubiToriiClientV1.VERSIONS_PATH }
+        val canonical = objectValue(deepMutableCopy(versionsRoute["response"]))
+        val snapshot = deepMutableCopy(canonical["snapshot"])
+        val versionQuery = objectValue(canonical["query"])
+        val versionControls = objectValue(versionQuery["page"])
+        versionControls["limit"] = 1L
+        versionControls["cursor"] = finalizedCursorWire(snapshot, "1.0.0", 19L)
+        canonical["next_cursor"] = finalizedCursorWire(snapshot, "1.2.3", 19L)
+        MusubiJsonV1.decodeResponse(MusubiToriiClientV1.VERSIONS_PATH, canonical)
+
+        val wrongTail = objectValue(deepMutableCopy(canonical))
+        objectValue(wrongTail["next_cursor"])["last_key"] = "9.9.9"
+        assertRejected(MusubiToriiClientV1.VERSIONS_PATH, wrongTail)
+
+        val shortPage = objectValue(deepMutableCopy(canonical))
+        objectValue(objectValue(shortPage["query"])["page"])["limit"] = 2L
+        assertRejected(MusubiToriiClientV1.VERSIONS_PATH, shortPage)
+
+        val wrongHash = objectValue(deepMutableCopy(canonical))
+        objectValue(wrongHash["next_cursor"])["query_hash"] = digestWire(20L)
+        assertRejected(MusubiToriiClientV1.VERSIONS_PATH, wrongHash)
+
+        val wrongSnapshot = objectValue(deepMutableCopy(canonical))
+        objectValue(objectValue(wrongSnapshot["next_cursor"])["snapshot"])["finalized_height"] = 49L
+        assertRejected(MusubiToriiClientV1.VERSIONS_PATH, wrongSnapshot)
+
+        for (cursorField in listOf("request", "next")) {
+            val callerBound = objectValue(deepMutableCopy(canonical))
+            val cursor = if (cursorField == "request") {
+                objectValue(objectValue(objectValue(callerBound["query"])["page"])["cursor"])
+            } else {
+                objectValue(callerBound["next_cursor"])
+            }
+            cursor["caller"] = "unexpected-caller"
+            assertRejected(MusubiToriiClientV1.VERSIONS_PATH, callerBound)
+        }
+
+        for (boundary in listOf("01.0.0", "1.2.3")) {
+            val badBoundary = objectValue(deepMutableCopy(canonical))
+            objectValue(
+                objectValue(objectValue(badBoundary["query"])["page"])["cursor"],
+            )["last_key"] = boundary
+            assertRejected(MusubiToriiClientV1.VERSIONS_PATH, badBoundary)
+        }
+
+        val malformedFinalizedBoundaries = mapOf(
+            MusubiToriiClientV1.RESOLVER_INDEX_PATH to "not-semver",
+            MusubiToriiClientV1.MAINTAINERS_PATH to "not-a-maintainer-key",
+            MusubiToriiClientV1.ALIAS_HISTORY_PATH to "math:1",
+            MusubiToriiClientV1.ORDERED_PREFIX_PATH to "sora/zzzz",
+        )
+        malformedFinalizedBoundaries.forEach { (path, lastKey) ->
+            val route = routes().first { it["path"] == path }
+            val response = objectValue(deepMutableCopy(route["response"]))
+            val controls = objectValue(objectValue(response["query"])["page"])
+            controls["cursor"] = finalizedCursorWire(response["snapshot"], lastKey, 19L)
+            assertRejected(path, response)
+        }
+
+        val searchRoute = routes().first { it["path"] == MusubiToriiClientV1.SEARCH_PATH }
+        val searchBoundary = objectValue(deepMutableCopy(searchRoute["response"]))
+        val firstSearchPackage = objectValue(arrayValue(searchBoundary["items"])[0])["package"]
+        objectValue(objectValue(searchBoundary["query"])["page"])["cursor"] = linkedMapOf(
+            "snapshot" to deepMutableCopy(searchBoundary["snapshot"]),
+            "query_hash" to digestWire(19L),
+            "last_package" to deepMutableCopy(firstSearchPackage),
+        )
+        assertRejected(MusubiToriiClientV1.SEARCH_PATH, searchBoundary)
+
+        val searchContinuation = objectValue(deepMutableCopy(searchRoute["response"]))
+        objectValue(objectValue(searchContinuation["query"])["page"])["limit"] = 1L
+        searchContinuation["next_cursor"] = linkedMapOf(
+            "snapshot" to deepMutableCopy(searchContinuation["snapshot"]),
+            "query_hash" to digestWire(19L),
+            "last_package" to deepMutableCopy(firstSearchPackage),
+        )
+        MusubiJsonV1.decodeResponse(MusubiToriiClientV1.SEARCH_PATH, searchContinuation)
+
+        val shortSearch = objectValue(deepMutableCopy(searchContinuation))
+        objectValue(objectValue(shortSearch["query"])["page"])["limit"] = 2L
+        assertRejected(MusubiToriiClientV1.SEARCH_PATH, shortSearch)
+
+        val wrongSearchTail = objectValue(deepMutableCopy(searchContinuation))
+        objectValue(objectValue(wrongSearchTail["next_cursor"])["last_package"])["name"] =
+            listOf("zzz")
+        assertRejected(MusubiToriiClientV1.SEARCH_PATH, wrongSearchTail)
+
+        val wrongSearchHash = objectValue(deepMutableCopy(searchContinuation))
+        val previousPackage = objectValue(deepMutableCopy(firstSearchPackage))
+        previousPackage["name"] = listOf("aaa")
+        objectValue(objectValue(wrongSearchHash["query"])["page"])["cursor"] = linkedMapOf(
+            "snapshot" to deepMutableCopy(wrongSearchHash["snapshot"]),
+            "query_hash" to digestWire(20L),
+            "last_package" to previousPackage,
+        )
+        assertRejected(MusubiToriiClientV1.SEARCH_PATH, wrongSearchHash)
+    }
+
+    @Test
+    fun versionMaintainerAliasHistoryAndResolverPagesRequireStrictOrder() {
+        val versionsRoute = routes().first { it["path"] == MusubiToriiClientV1.VERSIONS_PATH }
+        val ascending = objectValue(deepMutableCopy(versionsRoute["response"]))
+        val upper = objectValue(arrayValue(ascending["items"])[0])
+        val lower = objectValue(deepMutableCopy(upper))
+        lower["patch"] = 2L
+        ascending["items"] = mutableListOf(lower, upper)
+        objectValue(objectValue(ascending["query"])["page"])["limit"] = 0L
+        val zeroLimitRequest = MusubiJsonV1.decodeQuery(
+            MusubiToriiClientV1.VERSIONS_PATH,
+            ascending["query"],
+        ) as MusubiPackagePageQueryV1
+        MusubiJsonV1.parseVersionPage(MusubiJsonV1.encode(ascending))
+            .requireVersionMatches(zeroLimitRequest)
+        assertFails { MusubiPageRequestV1(101) }
+
+        for (items in listOf(
+            mutableListOf(deepMutableCopy(upper), deepMutableCopy(lower)),
+            MutableList(2) { deepMutableCopy(upper) },
+        )) {
+            val response = objectValue(deepMutableCopy(versionsRoute["response"]))
+            response["items"] = items
+            assertFails {
+                MusubiJsonV1.decodeResponse(MusubiToriiClientV1.VERSIONS_PATH, response)
+            }
+        }
+
+        for (path in listOf(
+            MusubiToriiClientV1.MAINTAINERS_PATH,
+            MusubiToriiClientV1.ALIAS_HISTORY_PATH,
+        )) {
+            val route = routes().first { it["path"] == path }
+            val original = arrayValue(objectValue(route["response"])["items"])
+            val malformed = objectValue(deepMutableCopy(route["response"]))
+            malformed["items"] = if (original.size > 1) {
+                original.reversed().map(::deepMutableCopy).toMutableList()
+            } else {
+                MutableList(2) { deepMutableCopy(original[0]) }
+            }
+            assertFails { MusubiJsonV1.decodeResponse(path, malformed) }
+        }
+
+        val resolverRequest = MusubiJsonV1.decodeQuery(
+            MusubiToriiClientV1.RESOLVER_INDEX_PATH,
+            routes().first { it["path"] == MusubiToriiClientV1.RESOLVER_INDEX_PATH }["request"],
+        ) as MusubiResolverIndexQueryV1
+        val snapshot = MusubiRegistrySnapshotV1(
+            java.math.BigInteger.ONE,
+            ByteArray(32) { 7 },
+            java.math.BigInteger.ONE,
+        )
+        val first = MusubiResolverReleaseRowV1(
+            MusubiReleaseIdV1(resolverRequest.packageId, MusubiVersionV1.parse("1.0.0")),
+            java.math.BigInteger.ONE,
+            emptyMap(),
+        )
+        val second = MusubiResolverReleaseRowV1(
+            MusubiReleaseIdV1(resolverRequest.packageId, MusubiVersionV1.parse("2.0.0")),
+            java.math.BigInteger.ONE,
+            emptyMap(),
+        )
+        assertFails {
+            MusubiResolverIndexPageV1(
+                resolverRequest,
+                "fixture-chain",
+                ByteArray(32) { 8 },
+                listOf(second, first),
+                null,
+                snapshot,
+            )
+        }
+        assertFails {
+            MusubiResolverIndexPageV1(
+                resolverRequest,
+                "fixture-chain",
+                ByteArray(32) { 8 },
+                listOf(first, first),
+                null,
+                snapshot,
+            )
+        }
+        val page = MusubiResolverIndexPageV1(
+            resolverRequest,
+            "fixture-chain",
+            ByteArray(32) { 8 },
+            listOf(first),
+            null,
+            snapshot,
+        )
+        assertFails { page.requireMatches(resolverRequest) }
+        val differentPackage = MusubiPackageIdV1(
+            resolverRequest.packageId.homeDataspace,
+            resolverRequest.packageId.scope,
+            MusubiPackageNameV1("another-package"),
+        )
+        assertFails {
+            page.requireMatches(MusubiResolverIndexQueryV1(differentPackage, null))
+        }
     }
 
     @Test
@@ -309,8 +692,91 @@ class MusubiSdkV1FixtureTest {
         }
     }
 
+    private fun invoke(
+        client: MusubiToriiClientV1,
+        path: String,
+        request: MusubiWireValueV1,
+    ) {
+        when (path) {
+            MusubiToriiClientV1.EXACT_PACKAGE_PATH ->
+                client.findExactPackage(request as MusubiExactPackageQueryV1).join()
+            MusubiToriiClientV1.EXACT_RELEASE_PATH ->
+                client.findExactRelease(request as MusubiExactReleaseQueryV1).join()
+            MusubiToriiClientV1.RESOLVER_INDEX_PATH ->
+                client.findResolverIndex(request as MusubiResolverIndexQueryV1).join()
+            MusubiToriiClientV1.VERSIONS_PATH ->
+                client.findVersions(request as MusubiPackagePageQueryV1).join()
+            MusubiToriiClientV1.MAINTAINERS_PATH ->
+                client.findMaintainers(request as MusubiPackagePageQueryV1).join()
+            MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH ->
+                client.findArchiveLocations(request as MusubiArchiveLocationQueryV1).join()
+            MusubiToriiClientV1.ARCHIVE_RETENTION_PATH ->
+                client.findArchiveRetention(request as MusubiArchiveRetentionQueryV1).join()
+            MusubiToriiClientV1.ALIAS_PATH ->
+                client.findAlias(request as MusubiAliasQueryV1).join()
+            MusubiToriiClientV1.ALIAS_HISTORY_PATH ->
+                client.findAliasHistory(request as MusubiAliasQueryV1).join()
+            MusubiToriiClientV1.ORDERED_PREFIX_PATH ->
+                client.findOrderedPrefix(request as MusubiOrderedPrefixQueryV1).join()
+            MusubiToriiClientV1.SEARCH_PATH ->
+                client.search(request as MusubiSearchQueryV1).join()
+            else -> error("unhandled fixture path $path")
+        }
+    }
+
     private fun routes(): List<MutableMap<String, Any?>> =
         arrayValue(fixture()["routes"]).map(::objectValue)
+
+    private fun populatedArchiveLocationResponse(): MutableMap<String, Any?> {
+        val route = routes().first {
+            it["path"] == MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH
+        }
+        val response = objectValue(deepMutableCopy(route["response"]))
+        val archive = objectValue(response["archive"])
+        val first = archiveLocationWire(1L, archive["archive_id"], 49L, 1L, "Healthy")
+        val second = archiveLocationWire(2L, archive["archive_id"], 50L, 2L, "Degraded")
+        archive["location_revision"] = 2L
+        archive["location_ids"] = mutableListOf(
+            deepMutableCopy(first["location_id"]),
+            deepMutableCopy(second["location_id"]),
+        )
+        response["items"] = mutableListOf(first, second)
+        return response
+    }
+
+    private fun archiveLocationWire(
+        locationByte: Long,
+        archiveId: Any?,
+        finalizedHeight: Long,
+        revision: Long,
+        state: String,
+    ): MutableMap<String, Any?> = linkedMapOf(
+        "location_id" to digestWire(locationByte),
+        "archive_id" to deepMutableCopy(archiveId),
+        "pin_manifest" to digestWire(61L),
+        "replication_order" to digestWire(62L),
+        "providers" to emptyList<Any?>(),
+        "provider_attestations" to emptyList<Any?>(),
+        "renew_after_epoch" to 1L,
+        "expires_at_epoch" to 2L,
+        "finalized_height" to finalizedHeight,
+        "revision" to revision,
+        "state" to linkedMapOf<String, Any?>("kind" to state, "value" to null),
+    )
+
+    private fun digestWire(fill: Long): MutableList<Any?> =
+        mutableListOf(MutableList<Any?>(32) { fill })
+
+    private fun finalizedCursorWire(
+        snapshot: Any?,
+        lastKey: String,
+        queryHashByte: Long,
+    ): MutableMap<String, Any?> = linkedMapOf(
+        "snapshot" to deepMutableCopy(snapshot),
+        "query_hash" to digestWire(queryHashByte),
+        "last_key" to lastKey,
+        "caller" to null,
+    )
 
     private fun fixture(): MutableMap<String, Any?> =
         objectValue(parseJson(Files.readAllBytes(findFixture())))

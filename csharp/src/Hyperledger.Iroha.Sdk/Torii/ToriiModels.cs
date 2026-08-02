@@ -568,8 +568,6 @@ public sealed record class ToriiVpnProfile
     private string[]? tunnelAddresses = Array.Empty<string>();
     private ulong mtuBytes;
     private string displayBillingLabel = string.Empty;
-    private string feeAssetId = string.Empty;
-    private string escrowAccountId = string.Empty;
     private string operatorAccountId = string.Empty;
     private string leaseFee = string.Empty;
     private string relayIdHex = string.Empty;
@@ -671,20 +669,6 @@ public sealed record class ToriiVpnProfile
         init => displayBillingLabel = ToriiVpnDirectMetadata.RequireExactNonEmptyText(
             value,
             nameof(DisplayBillingLabel));
-    }
-
-    [JsonPropertyName("fee_asset_id")]
-    public string FeeAssetId
-    {
-        get => feeAssetId;
-        init => feeAssetId = ToriiVpnDirectMetadata.RequireExactTokenText(value, nameof(FeeAssetId));
-    }
-
-    [JsonPropertyName("escrow_account_id")]
-    public string EscrowAccountId
-    {
-        get => escrowAccountId;
-        init => escrowAccountId = ToriiVpnDirectMetadata.RequireCanonicalAccountId(value, nameof(EscrowAccountId));
     }
 
     [JsonPropertyName("operator_account_id")]
@@ -813,8 +797,7 @@ public sealed record class ToriiVpnQuote
     private string relayCertificateSha256Hex = string.Empty;
     private string directorySnapshotDigestHex = string.Empty;
     private string meteringPublicKeyHex = string.Empty;
-    private ToriiVpnTxInstruction? openLeaseInstruction;
-    private ToriiVpnTxInstruction[] txInstructions = Array.Empty<ToriiVpnTxInstruction>();
+    private ToriiVpnTxInstruction openLeaseInstruction = null!;
 
     [JsonPropertyName("quote_id")]
     public string QuoteId
@@ -1010,19 +993,12 @@ public sealed record class ToriiVpnQuote
     }
 
     [JsonPropertyName("open_lease_instruction")]
-    public ToriiVpnTxInstruction? OpenLeaseInstruction
+    public ToriiVpnTxInstruction OpenLeaseInstruction
     {
         get => openLeaseInstruction;
-        init => openLeaseInstruction = ToriiVpnDirectMetadata.RequireOptionalVpnTxInstruction(
+        init => openLeaseInstruction = ToriiVpnDirectMetadata.RequireVpnTxInstruction(
             value,
             nameof(OpenLeaseInstruction));
-    }
-
-    [JsonPropertyName("tx_instructions")]
-    public IReadOnlyList<ToriiVpnTxInstruction> TxInstructions
-    {
-        get => ToriiListSnapshots.CopyRequired(txInstructions);
-        init => txInstructions = ToriiVpnDirectMetadata.CopyRequiredVpnTxInstructions(value, nameof(TxInstructions));
     }
 }
 
@@ -1326,7 +1302,6 @@ public sealed record class ToriiVpnReceipt
     private string refundedFee = string.Empty;
     private string leaseIdHex = string.Empty;
     private ToriiVpnTxInstruction? settleLeaseInstruction;
-    private ToriiVpnTxInstruction[] txInstructions = Array.Empty<ToriiVpnTxInstruction>();
 
     [JsonPropertyName("session_id")]
     public string SessionId
@@ -1478,13 +1453,6 @@ public sealed record class ToriiVpnReceipt
             value,
             nameof(SettleLeaseInstruction));
     }
-
-    [JsonPropertyName("tx_instructions")]
-    public IReadOnlyList<ToriiVpnTxInstruction> TxInstructions
-    {
-        get => ToriiListSnapshots.CopyRequired(txInstructions);
-        init => txInstructions = ToriiVpnDirectMetadata.CopyRequiredVpnTxInstructions(value, nameof(TxInstructions));
-    }
 }
 
 [JsonConverter(typeof(ToriiVpnReceiptListResponseJsonConverter))]
@@ -1632,30 +1600,6 @@ internal static class ToriiVpnDirectMetadata
         return value is null ? null : RequireVpnTxInstruction(value, paramName);
     }
 
-    internal static ToriiVpnTxInstruction[] CopyRequiredVpnTxInstructions(
-        IReadOnlyList<ToriiVpnTxInstruction>? values,
-        string paramName)
-    {
-        if (values is null)
-        {
-            return Array.Empty<ToriiVpnTxInstruction>();
-        }
-
-        var copy = new ToriiVpnTxInstruction[values.Count];
-        for (var index = 0; index < values.Count; index++)
-        {
-            var value = values[index];
-            if (value is null)
-            {
-                throw new ArgumentException("List elements must not be null.", $"{paramName}[{index}]");
-            }
-
-            copy[index] = RequireVpnTxInstruction(value, $"{paramName}[{index}]");
-        }
-
-        return copy;
-    }
-
     internal static ToriiVpnReceipt[] CopyRequiredVpnReceipts(
         IReadOnlyList<ToriiVpnReceipt>? values,
         string paramName)
@@ -1680,8 +1624,9 @@ internal static class ToriiVpnDirectMetadata
         return copy;
     }
 
-    private static ToriiVpnTxInstruction RequireVpnTxInstruction(ToriiVpnTxInstruction value, string paramName)
+    internal static ToriiVpnTxInstruction RequireVpnTxInstruction(ToriiVpnTxInstruction value, string paramName)
     {
+        ArgumentNullException.ThrowIfNull(value, paramName);
         RequireExactNonEmptyText(value.WireId, $"{paramName}.{nameof(ToriiVpnTxInstruction.WireId)}");
         RequireExactEvenLengthHex(value.PayloadHex, $"{paramName}.{nameof(ToriiVpnTxInstruction.PayloadHex)}");
         return value;
@@ -1705,7 +1650,6 @@ internal static class ToriiVpnDirectMetadata
         RequireCanonicalAccountId(value.OperatorAccountId, $"{paramName}.{nameof(ToriiVpnReceipt.OperatorAccountId)}");
         RequireExactSizedHex(value.LeaseIdHex, $"{paramName}.{nameof(ToriiVpnReceipt.LeaseIdHex)}", 32);
         RequireOptionalVpnTxInstruction(value.SettleLeaseInstruction, $"{paramName}.{nameof(ToriiVpnReceipt.SettleLeaseInstruction)}");
-        CopyRequiredVpnTxInstructions(value.TxInstructions, $"{paramName}.{nameof(ToriiVpnReceipt.TxInstructions)}");
         return value;
     }
 }

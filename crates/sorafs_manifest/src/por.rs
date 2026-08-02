@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use norito::core::NoritoSerialize as _;
@@ -74,6 +75,14 @@ pub const POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024;
 pub const POR_CHALLENGE_STATUS_FAILURE_REASON_MAX_BYTES_V1: usize = 2 * 1024;
 /// Maximum status records returned in one canonical V1 status page.
 pub const POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1: usize = 1_000;
+/// Maximum sum of canonical status-record bytes returned by one Torii V1 page.
+pub const POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1: usize = 4 * 1024 * 1024;
+/// Current opaque PoR status-page cursor schema version.
+pub const POR_STATUS_CURSOR_VERSION_V1: u8 = 1;
+/// Maximum canonical base64url bytes in one opaque PoR status-page cursor.
+pub const POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1: usize = 256;
+/// Maximum decoded canonical Norito bytes in one PoR status-page cursor.
+pub const POR_STATUS_CURSOR_MAX_CANONICAL_BYTES_V1: usize = 192;
 /// Maximum exact canonical size of one V1 status page.
 pub const POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1: usize =
     POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1 * POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1
@@ -273,7 +282,10 @@ pub enum ProviderVrfSubmissionValidationError {
     PayloadTooLarge { found: usize, maximum: usize },
     /// The submission version is unsupported.
     #[error("unsupported provider VRF submission version {found}")]
-    UnsupportedVersion { found: u8 },
+    UnsupportedVersion {
+        /// Version decoded from the cursor payload.
+        found: u8,
+    },
     /// Provider identifier is inert.
     #[error("provider VRF submission provider id must be non-zero")]
     InvalidProviderId,
@@ -1849,30 +1861,188 @@ fn verify_ed25519_signature(
         })
 }
 
+/// Canonical payload carried by opaque PoR status and export cursors.
+///
+/// The cursor binds one exact projection generation, normalized selection,
+/// and complete `(epoch, issued_at, challenge_id)` boundary. Both servers and
+/// clients use this codec so accepting a syntactically valid but structurally
+/// different base64 payload is impossible.
+#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct PorStatusCursorV1 {
+    /// Cursor schema version.
+    pub version: u8,
+    /// Exact authoritative projection generation.
+    pub snapshot_generation: u64,
+    /// Domain-separated digest of the normalized query selection.
+    pub selection_digest: [u8; 32],
+    /// Epoch component of the exact consumed boundary.
+    pub last_epoch_id: u64,
+    /// Issuance-time component of the exact consumed boundary.
+    pub last_issued_at: u64,
+    /// Challenge component of the exact consumed boundary.
+    pub last_challenge_id: [u8; 32],
+}
+
+impl PorStatusCursorV1 {
+    /// Validate the fixed first-release cursor shape.
+    pub fn validate(self) -> Result<(), PorStatusCursorValidationError> {
+        if self.version != POR_STATUS_CURSOR_VERSION_V1 {
+            return Err(PorStatusCursorValidationError::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        if self.snapshot_generation == 0 {
+            return Err(PorStatusCursorValidationError::InvalidGeneration);
+        }
+        if self.selection_digest == [0; 32] {
+            return Err(PorStatusCursorValidationError::InvalidSelectionDigest);
+        }
+        if self.last_epoch_id == 0 {
+            return Err(PorStatusCursorValidationError::InvalidEpoch);
+        }
+        if self.last_issued_at == 0 {
+            return Err(PorStatusCursorValidationError::InvalidIssuedAt);
+        }
+        if self.last_challenge_id == [0; 32] {
+            return Err(PorStatusCursorValidationError::InvalidChallengeId);
+        }
+        Ok(())
+    }
+
+    /// Encode this validated cursor as unique unpadded base64url.
+    pub fn encode_opaque(self) -> Result<String, PorStatusCursorCodecError> {
+        self.validate()?;
+        let bytes = norito::to_bytes(&self)
+            .map_err(|error| PorStatusCursorCodecError::Canonical(error.to_string()))?;
+        if bytes.len() > POR_STATUS_CURSOR_MAX_CANONICAL_BYTES_V1 {
+            return Err(PorStatusCursorCodecError::CanonicalTooLarge {
+                found: bytes.len(),
+                maximum: POR_STATUS_CURSOR_MAX_CANONICAL_BYTES_V1,
+            });
+        }
+        let opaque = URL_SAFE_NO_PAD.encode(bytes);
+        if opaque.len() > POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1 {
+            return Err(PorStatusCursorCodecError::EncodedTooLarge {
+                found: opaque.len(),
+                maximum: POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1,
+            });
+        }
+        Ok(opaque)
+    }
+
+    /// Decode one bounded, canonical unpadded-base64url cursor.
+    pub fn decode_opaque(cursor: &str) -> Result<Self, PorStatusCursorCodecError> {
+        if cursor.is_empty() || cursor.len() > POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1 {
+            return Err(PorStatusCursorCodecError::EncodedLength {
+                found: cursor.len(),
+                maximum: POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1,
+            });
+        }
+        let bytes = URL_SAFE_NO_PAD
+            .decode(cursor.as_bytes())
+            .map_err(|_| PorStatusCursorCodecError::Base64)?;
+        if URL_SAFE_NO_PAD.encode(&bytes) != cursor {
+            return Err(PorStatusCursorCodecError::Base64);
+        }
+        let value: Self = decode_bounded_canonical_por_payload(
+            "PoR status cursor",
+            &bytes,
+            POR_STATUS_CURSOR_MAX_CANONICAL_BYTES_V1,
+            norito::DecodeLimits::new(
+                1,
+                POR_STATUS_CURSOR_MAX_CANONICAL_BYTES_V1,
+                8,
+                POR_STATUS_CURSOR_MAX_CANONICAL_BYTES_V1 * 2,
+                8,
+            ),
+        )
+        .map_err(|error| PorStatusCursorCodecError::Canonical(error.to_string()))?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Validation failure for a decoded [`PorStatusCursorV1`].
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum PorStatusCursorValidationError {
+    /// The cursor version is not the first-release version.
+    #[error("unsupported PoR status cursor version {found}")]
+    UnsupportedVersion { found: u8 },
+    /// The authoritative generation must be non-zero.
+    #[error("PoR status cursor generation must be non-zero")]
+    InvalidGeneration,
+    /// The normalized selection digest must be non-zero.
+    #[error("PoR status cursor selection digest must be non-zero")]
+    InvalidSelectionDigest,
+    /// The boundary epoch must be non-zero.
+    #[error("PoR status cursor epoch must be non-zero")]
+    InvalidEpoch,
+    /// The boundary issuance time must be non-zero.
+    #[error("PoR status cursor issued_at must be non-zero")]
+    InvalidIssuedAt,
+    /// The boundary challenge identity must be non-zero.
+    #[error("PoR status cursor challenge id must be non-zero")]
+    InvalidChallengeId,
+}
+
+/// Bounded canonical cursor encoding or decoding failure.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PorStatusCursorCodecError {
+    /// The opaque cursor length is outside the admitted bound.
+    #[error("opaque PoR status cursor has {found} bytes; expected 1..={maximum}")]
+    EncodedLength {
+        /// Opaque bytes supplied by the caller.
+        found: usize,
+        /// First-release opaque-byte ceiling.
+        maximum: usize,
+    },
+    /// Encoding unexpectedly exceeded the advertised opaque bound.
+    #[error("encoded PoR status cursor has {found} bytes; maximum is {maximum}")]
+    EncodedTooLarge {
+        /// Opaque bytes produced by canonical encoding.
+        found: usize,
+        /// First-release opaque-byte ceiling.
+        maximum: usize,
+    },
+    /// The opaque representation is not unique unpadded base64url.
+    #[error("PoR status cursor is not canonical unpadded base64url")]
+    Base64,
+    /// The decoded Norito payload is malformed or non-canonical.
+    #[error("invalid canonical PoR status cursor payload: {0}")]
+    Canonical(String),
+    /// The canonical cursor payload unexpectedly exceeded its fixed bound.
+    #[error("canonical PoR status cursor has {found} bytes; maximum is {maximum}")]
+    CanonicalTooLarge {
+        /// Canonical bytes produced or decoded.
+        found: usize,
+        /// First-release canonical-byte ceiling.
+        maximum: usize,
+    },
+    /// The decoded fixed fields violate the first-release cursor contract.
+    #[error(transparent)]
+    Validation(#[from] PorStatusCursorValidationError),
+}
+
 /// Lifecycle states emitted by the PoR coordinator.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[norito(tag = "outcome")]
 #[repr(u8)]
 pub enum PorChallengeOutcome {
-    /// Proof has not yet been submitted or verified.
-    #[norito(rename = "pending")]
-    Pending = 1,
+    /// Challenge is awaiting its first provider proof.
+    #[norito(rename = "awaiting_proof")]
+    AwaitingProof = 1,
+    /// An authenticated provider proof was submitted and awaits a verdict.
+    #[norito(rename = "proof_submitted")]
+    ProofSubmitted = 2,
     /// Proof verified successfully.
     #[norito(rename = "verified")]
-    Verified = 2,
+    Verified = 3,
     /// Proof failed and awaits remediation.
     #[norito(rename = "failed")]
-    Failed = 3,
+    Failed = 4,
     /// Proof recovered after repair.
     #[norito(rename = "repaired")]
-    Repaired = 4,
-    /// Challenge was forced due to missing VRF and has not reached a verdict.
-    ///
-    /// A forced challenge may carry proof response material after provider
-    /// submission; `forced` records scheduling provenance rather than proof
-    /// absence.
-    #[norito(rename = "forced")]
-    Forced = 5,
+    Repaired = 5,
 }
 
 impl PorChallengeOutcome {
@@ -1880,22 +2050,22 @@ impl PorChallengeOutcome {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Pending => "pending",
+            Self::AwaitingProof => "awaiting_proof",
+            Self::ProofSubmitted => "proof_submitted",
             Self::Verified => "verified",
             Self::Failed => "failed",
             Self::Repaired => "repaired",
-            Self::Forced => "forced",
         }
     }
 
     /// Parses a label into an outcome.
     pub fn parse(label: &str) -> Result<Self, PorChallengeOutcomeParseError> {
         match label.trim().to_ascii_lowercase().as_str() {
-            "pending" => Ok(Self::Pending),
+            "awaiting_proof" => Ok(Self::AwaitingProof),
+            "proof_submitted" => Ok(Self::ProofSubmitted),
             "verified" => Ok(Self::Verified),
             "failed" => Ok(Self::Failed),
             "repaired" => Ok(Self::Repaired),
-            "forced" => Ok(Self::Forced),
             other => Err(PorChallengeOutcomeParseError {
                 label: other.to_string(),
             }),
@@ -1914,11 +2084,11 @@ impl TryFrom<u8> for PorChallengeOutcome {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            1 => Ok(Self::Pending),
-            2 => Ok(Self::Verified),
-            3 => Ok(Self::Failed),
-            4 => Ok(Self::Repaired),
-            5 => Ok(Self::Forced),
+            1 => Ok(Self::AwaitingProof),
+            2 => Ok(Self::ProofSubmitted),
+            3 => Ok(Self::Verified),
+            4 => Ok(Self::Failed),
+            5 => Ok(Self::Repaired),
             other => Err(PorChallengeOutcomeParseError {
                 label: other.to_string(),
             }),
@@ -2045,10 +2215,7 @@ impl PorChallengeStatusV1 {
             return Err(PorChallengeStatusValidationError::InvalidFailureReason);
         }
         match self.status {
-            PorChallengeOutcome::Pending => {
-                if self.forced {
-                    return Err(PorChallengeStatusValidationError::InvalidForcedState);
-                }
+            PorChallengeOutcome::AwaitingProof => {
                 if self.responded_at.is_some() {
                     return Err(PorChallengeStatusValidationError::UnexpectedProofMaterial);
                 }
@@ -2059,9 +2226,9 @@ impl PorChallengeStatusV1 {
                     return Err(PorChallengeStatusValidationError::UnexpectedOutcomeMaterial);
                 }
             }
-            PorChallengeOutcome::Forced => {
-                if !self.forced {
-                    return Err(PorChallengeStatusValidationError::InvalidForcedState);
+            PorChallengeOutcome::ProofSubmitted => {
+                if self.proof_digest.is_none() {
+                    return Err(PorChallengeStatusValidationError::MissingProofMaterial);
                 }
                 if self.failure_reason.is_some()
                     || self.repair_task_id.is_some()
@@ -2140,17 +2307,15 @@ pub enum PorChallengeStatusValidationError {
     MissingProofMaterial,
     #[error("proof digest must be non-zero")]
     InvalidProofDigest,
-    #[error("pending status must not claim proof response material")]
+    #[error("awaiting-proof status must not claim proof response material")]
     UnexpectedProofMaterial,
     #[error("verifier latency requires proof response material")]
     UnexpectedVerifierLatency,
     #[error("status contains material not admitted for its outcome")]
     UnexpectedOutcomeMaterial,
-    #[error("forced status and forced scheduling flag are inconsistent")]
-    InvalidForcedState,
     #[error("failure reason must be provided for failed/repaired outcomes")]
     MissingFailureReason,
-    #[error("failure reason must be absent for pending/forced/verified outcomes")]
+    #[error("failure reason must be absent for non-failure outcomes")]
     UnexpectedFailureReason,
     #[error("failure reason must not be empty")]
     InvalidFailureReason,
@@ -3989,11 +4154,11 @@ mod tests {
     #[test]
     fn challenge_outcome_parse_roundtrip() {
         for outcome in [
-            PorChallengeOutcome::Pending,
+            PorChallengeOutcome::AwaitingProof,
+            PorChallengeOutcome::ProofSubmitted,
             PorChallengeOutcome::Verified,
             PorChallengeOutcome::Failed,
             PorChallengeOutcome::Repaired,
-            PorChallengeOutcome::Forced,
         ] {
             let label = outcome.as_str();
             let parsed = PorChallengeOutcome::parse(label).expect("parse outcome");
@@ -4002,6 +4167,44 @@ mod tests {
             let from_numeric = PorChallengeOutcome::try_from(numeric).expect("from numeric");
             assert_eq!(outcome, from_numeric);
         }
+    }
+
+    #[test]
+    fn status_cursor_codec_is_bounded_canonical_and_complete() {
+        let cursor = PorStatusCursorV1 {
+            version: POR_STATUS_CURSOR_VERSION_V1,
+            snapshot_generation: 17,
+            selection_digest: [1; 32],
+            last_epoch_id: 42,
+            last_issued_at: 1_700_000_000,
+            last_challenge_id: [2; 32],
+        };
+        let opaque = cursor.encode_opaque().expect("encode canonical cursor");
+        assert!(opaque.len() <= POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1);
+        assert_eq!(PorStatusCursorV1::decode_opaque(&opaque).unwrap(), cursor);
+
+        let mut noncanonical = opaque.clone();
+        noncanonical.push('=');
+        assert!(matches!(
+            PorStatusCursorV1::decode_opaque(&noncanonical),
+            Err(PorStatusCursorCodecError::Base64)
+                | Err(PorStatusCursorCodecError::EncodedLength { .. })
+        ));
+        assert!(matches!(
+            PorStatusCursorV1::decode_opaque(
+                &"A".repeat(POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1 + 1)
+            ),
+            Err(PorStatusCursorCodecError::EncodedLength { .. })
+        ));
+
+        let invalid = PorStatusCursorV1 {
+            last_epoch_id: 0,
+            ..cursor
+        };
+        assert_eq!(
+            invalid.validate(),
+            Err(PorStatusCursorValidationError::InvalidEpoch)
+        );
     }
 
     #[test]
@@ -4073,7 +4276,7 @@ mod tests {
             provider_id: [3; 32],
             epoch_id: 10,
             drand_round: 99,
-            status: PorChallengeOutcome::Pending,
+            status: PorChallengeOutcome::AwaitingProof,
             sample_count: 64,
             forced: false,
             issued_at: 1_700_000_000,
@@ -4083,7 +4286,9 @@ mod tests {
             failure_reason: None,
             verifier_latency_ms: None,
         };
-        status.validate().expect("material-free pending status");
+        status
+            .validate()
+            .expect("material-free awaiting-proof status");
 
         status.responded_at = Some(1_700_000_100);
         status.proof_digest = Some([4; 32]);
@@ -4092,14 +4297,13 @@ mod tests {
             Err(PorChallengeStatusValidationError::UnexpectedProofMaterial)
         );
 
-        status.status = PorChallengeOutcome::Forced;
+        status.status = PorChallengeOutcome::ProofSubmitted;
         status.forced = true;
         status
             .validate()
-            .expect("forced-with-proof is an established pre-verdict state");
+            .expect("forced provenance is orthogonal to proof submission");
 
         status.status = PorChallengeOutcome::Verified;
-        status.forced = false;
         status
             .validate()
             .expect("verified status carries proof response material");

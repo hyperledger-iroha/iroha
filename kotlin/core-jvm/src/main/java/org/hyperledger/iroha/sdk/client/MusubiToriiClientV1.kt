@@ -44,31 +44,43 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     fun findExactPackage(
         request: MusubiExactPackageQueryV1,
     ): CompletableFuture<MusubiPackageRecordV1> =
-        executePost(EXACT_PACKAGE_PATH, request.toJsonBytes(), MusubiJsonV1::parseExactPackage)
+        executePost(EXACT_PACKAGE_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseExactPackage(payload).also { it.requireMatches(request) }
+        }
 
     /** Fetches one exact immutable release and its mutable projections. */
     fun findExactRelease(
         request: MusubiExactReleaseQueryV1,
     ): CompletableFuture<MusubiReleaseRecordV1> =
-        executePost(EXACT_RELEASE_PATH, request.toJsonBytes(), MusubiJsonV1::parseExactRelease)
+        executePost(EXACT_RELEASE_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseExactRelease(payload).also { it.requireMatches(request) }
+        }
 
     /** Reads the finalized universal sparse resolver index. */
     fun findResolverIndex(
         request: MusubiResolverIndexQueryV1,
     ): CompletableFuture<MusubiResolverIndexPageV1> =
-        executePost(RESOLVER_INDEX_PATH, request.toJsonBytes(), MusubiJsonV1::parseResolverPage)
+        executePost(RESOLVER_INDEX_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseResolverPage(payload).also { it.requireMatches(request) }
+        }
 
     /** Lists exact structured versions for a package. */
     fun findVersions(
         request: MusubiPackagePageQueryV1,
     ): CompletableFuture<MusubiPageV1<MusubiVersionV1>> =
-        executePost(VERSIONS_PATH, request.toJsonBytes(), MusubiJsonV1::parseVersionPage)
+        executePost(VERSIONS_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseVersionPage(payload).also { it.requireVersionMatches(request) }
+        }
 
     /** Lists accepted owners/maintainers and pending invitations for a package. */
     fun findMaintainers(
         request: MusubiPackagePageQueryV1,
     ): CompletableFuture<MusubiPageV1<MusubiMaintainerDirectoryEntryV1>> =
-        executePost(MAINTAINERS_PATH, request.toJsonBytes(), MusubiJsonV1::parseMaintainerPage)
+        executePost(MAINTAINERS_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseMaintainerPage(payload).also { page ->
+                page.requireMaintainerMatches(request)
+            }
+        }
 
     /** Lists renewable SoraFS locations for an archive. */
     fun findArchiveLocations(
@@ -77,8 +89,9 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
         executePost(
             ARCHIVE_LOCATIONS_PATH,
             request.toJsonBytes(),
-            MusubiJsonV1::parseArchiveLocationPage,
-        )
+        ) { payload ->
+            MusubiJsonV1.parseArchiveLocationPage(payload).also { it.requireMatches(request) }
+        }
 
     /** Classifies a bounded exact archive batch for fail-closed cache retention. */
     fun findArchiveRetention(
@@ -93,13 +106,19 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
 
     /** Resolves one paid permanent global alias. */
     fun findAlias(request: MusubiAliasQueryV1): CompletableFuture<MusubiAliasRecordV1> =
-        executePost(ALIAS_PATH, request.toJsonBytes(), MusubiJsonV1::parseAlias)
+        executePost(ALIAS_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseAlias(payload).also { it.requireMatches(request) }
+        }
 
     /** Lists immutable history for one permanent global alias. */
     fun findAliasHistory(
         request: MusubiAliasQueryV1,
     ): CompletableFuture<MusubiPageV1<MusubiAliasHistoryEntryV1>> =
-        executePost(ALIAS_HISTORY_PATH, request.toJsonBytes(), MusubiJsonV1::parseAliasHistoryPage)
+        executePost(ALIAS_HISTORY_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseAliasHistoryPage(payload).also { page ->
+                page.requireAliasHistoryMatches(request)
+            }
+        }
 
     /** Scans the deterministic public package directory by byte prefix. */
     fun findOrderedPrefix(
@@ -108,12 +127,15 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
         executePost(
             ORDERED_PREFIX_PATH,
             request.toJsonBytes(),
-            MusubiJsonV1::parseOrderedPackagePage,
-        )
+        ) { payload ->
+            MusubiJsonV1.parseOrderedPackagePage(payload).also { it.requireMatches(request) }
+        }
 
     /** Searches package metadata by bounded exact normalized terms. */
     fun search(request: MusubiSearchQueryV1): CompletableFuture<MusubiSearchPageV1> =
-        executePost(SEARCH_PATH, request.toJsonBytes(), MusubiJsonV1::parseSearchPage)
+        executePost(SEARCH_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseSearchPage(payload).also { it.requireMatches(request) }
+        }
 
     fun executor(): HttpTransportExecutor = executor
 

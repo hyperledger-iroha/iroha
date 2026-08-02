@@ -41,6 +41,37 @@ pub type Hash = [u8; 32];
 pub fn blake3_hash(bytes: &[u8]) -> Hash {
     blake3::hash(bytes).into()
 }
+/// Opaque incremental BLAKE3 state for bounded content-addressed readers.
+///
+/// This keeps the concrete hashing dependency inside Norito while allowing
+/// consumers to authenticate artifacts that cannot safely be materialized as
+/// one contiguous allocation.
+pub struct Blake3Hasher(blake3::Hasher);
+
+impl Blake3Hasher {
+    /// Start a canonical unkeyed BLAKE3 digest.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(blake3::Hasher::new())
+    }
+
+    /// Absorb the next exact byte range in canonical order.
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    /// Finish and return the canonical 32-byte digest.
+    #[must_use]
+    pub fn finalize(self) -> Hash {
+        self.0.finalize().into()
+    }
+}
+
+impl Default for Blake3Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 /// Ed25519 signature bytes as specified for manifests and control frames.
 pub type Signature = [u8; 64];
 /// Timestamp field used by manifests. The spec leaves the exact unit to deployments; NSC uses unix time.
@@ -10642,6 +10673,17 @@ mod tests {
             hex_encode(blake3_hash(b"abc")),
             "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
         );
+
+        let message = b"incremental content-addressed artifact verification";
+        let mut incremental = Blake3Hasher::new();
+        for chunk in message.chunks(3) {
+            incremental.update(chunk);
+        }
+        assert_eq!(incremental.finalize(), blake3_hash(message));
+
+        let mut empty = Blake3Hasher::default();
+        empty.update(&[]);
+        assert_eq!(empty.finalize(), blake3_hash(b""));
     }
 
     #[test]

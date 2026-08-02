@@ -1832,8 +1832,14 @@ pub(crate) fn is_sensitive_component(component: &str) -> bool {
                 | ".netrc"
                 | ".npmrc"
                 | ".pypirc"
+                | ".git-credentials"
+                | ".authinfo"
+                | ".authinfo.gpg"
                 | "credentials"
                 | "credentials.json"
+                | "application_default_credentials.json"
+                | "service-account.json"
+                | "service_account.json"
                 | "secrets"
                 | "secrets.toml"
                 | "private_key"
@@ -1937,21 +1943,90 @@ fn reject_consumer_only_lock_fields(value: &toml::Value) -> Result<(), PackageEr
 }
 
 fn sensitive_assignment(line: &[u8]) -> bool {
+    let input = trim_ascii(line);
+    if sensitive_assignment_at(input) {
+        return true;
+    }
+    // Retry only at object/statement boundaries. Each retry consumes at least one delimiter and
+    // `sensitive_assignment_at` never scans the remaining line tail, keeping a maximum-size
+    // single-line source bounded linearly rather than turning minified input into quadratic work.
+    input.iter().enumerate().any(|(index, byte)| {
+        matches!(*byte, b'{' | b'[' | b',' | b';' | b'#')
+            && sensitive_assignment_at(&input[index + 1..])
+    })
+}
+
+fn sensitive_assignment_at(line: &[u8]) -> bool {
     const KEYS: &[&[u8]] = &[
         b"private_key",
         b"private-key",
+        b"privateKey",
+        b"account_private_key",
+        b"accountPrivateKey",
+        b"iroha_private_key",
+        b"irohaPrivateKey",
         b"secret_key",
         b"secret-key",
+        b"secretKey",
         b"identity_private_key",
+        b"identityPrivateKey",
+        b"client_secret",
+        b"client-secret",
+        b"clientSecret",
+        b"api_key",
+        b"api-key",
+        b"apiKey",
+        b"access_token",
+        b"access-token",
+        b"accessToken",
+        b"refresh_token",
+        b"refresh-token",
+        b"refreshToken",
         b"bearer_token",
         b"bearer-token",
+        b"bearerToken",
         b"stream_token",
         b"stream-token",
+        b"streamToken",
         b"aws_secret_access_key",
+        b"awsSecretAccessKey",
         b"mnemonic",
+        b"password",
+        b"passphrase",
     ];
-    let mut input = trim_ascii(line);
-    if input.first() == Some(&b'"') {
+    let mut input = trim_ascii_start(line);
+    let mut allow_whitespace_separator = false;
+    for (prefix, whitespace_separator) in [
+        (b"export".as_slice(), false),
+        (b"set".as_slice(), false),
+        (b"setx".as_slice(), true),
+        (b"let".as_slice(), false),
+        (b"const".as_slice(), false),
+        (b"var".as_slice(), false),
+        (b"local".as_slice(), false),
+        (b"readonly".as_slice(), false),
+        (b"declare".as_slice(), false),
+    ] {
+        if input.len() > prefix.len()
+            && input[..prefix.len()].eq_ignore_ascii_case(prefix)
+            && input[prefix.len()].is_ascii_whitespace()
+        {
+            input = trim_ascii_start(&input[prefix.len()..]);
+            allow_whitespace_separator = whitespace_separator;
+            break;
+        }
+    }
+    const POWERSHELL_ENV_PREFIX: &[u8] = b"$env:";
+    if input.len() > POWERSHELL_ENV_PREFIX.len()
+        && input[..POWERSHELL_ENV_PREFIX.len()].eq_ignore_ascii_case(POWERSHELL_ENV_PREFIX)
+    {
+        input = &input[POWERSHELL_ENV_PREFIX.len()..];
+    }
+    let key_quote = input
+        .first()
+        .copied()
+        .filter(|byte| matches!(byte, b'"' | b'\''));
+    if key_quote.is_some() {
         input = &input[1..];
     }
     let Some(key) = KEYS
@@ -1961,24 +2036,74 @@ fn sensitive_assignment(line: &[u8]) -> bool {
         return false;
     };
     input = &input[key.len()..];
-    input = trim_ascii_start(input);
-    if input.first() == Some(&b'"') {
-        input = trim_ascii_start(&input[1..]);
-    }
-    if !matches!(input.first(), Some(b'=' | b':')) {
-        return false;
-    }
-    input = trim_ascii_start(&input[1..]);
-    if matches!(input.first(), Some(b'"' | b'\'')) {
+    if key_quote.is_some() && input.first().copied() == key_quote {
         input = &input[1..];
     }
-    let token_len = input
-        .iter()
-        .take_while(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'_' | b'-' | b'=' | b'.')
-        })
-        .count();
-    token_len >= 24
+    let separated_by_whitespace = input.first().is_some_and(u8::is_ascii_whitespace);
+    input = trim_ascii_start(input);
+    let separator = input.first().copied();
+    if matches!(separator, Some(b'=' | b':')) {
+        input = trim_ascii_start(&input[1..]);
+    } else if !(allow_whitespace_separator && separated_by_whitespace) {
+        return false;
+    }
+    let value = match input.first().copied() {
+        Some(quote @ (b'"' | b'\'')) => {
+            let rest = &input[1..];
+            let end = quoted_assignment_value_end(rest, quote);
+            &rest[..end]
+        }
+        _ if separator == Some(b':') => {
+            let end = input
+                .iter()
+                .position(|byte| matches!(byte, b',' | b';' | b'#' | b'}' | b']'))
+                .unwrap_or(input.len());
+            &input[..end]
+        }
+        _ => {
+            let end = input
+                .iter()
+                .position(|byte| {
+                    byte.is_ascii_whitespace() || matches!(byte, b',' | b';' | b'#' | b'}' | b']')
+                })
+                .unwrap_or(input.len());
+            &input[..end]
+        }
+    };
+    let value = trim_ascii(value);
+    value.len() >= 24 && !is_secret_placeholder_reference(value)
+}
+
+fn quoted_assignment_value_end(value: &[u8], quote: u8) -> usize {
+    let mut backslashes = 0_usize;
+    for (index, byte) in value.iter().copied().enumerate() {
+        if byte == quote && backslashes.is_multiple_of(2) {
+            return index;
+        }
+        if byte == b'\\' {
+            backslashes = backslashes.saturating_add(1);
+        } else {
+            backslashes = 0;
+        }
+    }
+    value.len()
+}
+
+fn is_secret_placeholder_reference(value: &[u8]) -> bool {
+    let identifier = |bytes: &[u8]| {
+        !bytes.is_empty()
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    };
+    (value.starts_with(b"${")
+        && value.ends_with(b"}")
+        && identifier(&value[2..value.len().saturating_sub(1)]))
+        || (value.starts_with(b"$") && identifier(&value[1..]))
+        || (value.starts_with(b"%")
+            && value.ends_with(b"%")
+            && value.len() > 2
+            && identifier(&value[1..value.len() - 1]))
 }
 
 fn contains_aws_access_key(bytes: &[u8]) -> bool {
@@ -2616,6 +2741,43 @@ exports = []
     }
 
     #[test]
+    fn rejects_every_portable_reserved_and_control_name_class() {
+        for component in [
+            "CON",
+            "con.txt",
+            "PRN.log",
+            "AUX",
+            "NUL.tar",
+            "CLOCK$.ko",
+            "CONIN$.txt",
+            "CONOUT$.txt",
+            "COM1.ko",
+            "com\u{b9}.ko",
+            "LPT9.ko",
+            "lpt\u{b2}.ko",
+            "trailing.",
+            "trailing ",
+            "colon:name",
+            "question?name",
+            "bidirectional\u{202e}name",
+        ] {
+            assert!(
+                matches!(
+                    canonical_portable_component(component),
+                    Err(PackageError::NonPortablePath(_))
+                ),
+                "portable reserved/control name was accepted: {component:?}"
+            );
+        }
+        for component in ["COM0.ko", "COM10.ko", "LPT0.ko", "console.ko"] {
+            assert!(
+                canonical_portable_component(component).is_ok(),
+                "non-reserved portable name was rejected: {component:?}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_case_and_unicode_equivalent_collisions() {
         // Exercise the logical-path index directly: common macOS filesystems collapse these
         // names before `read_dir`, while the portable package check must behave identically on
@@ -2669,7 +2831,11 @@ exports = []
     fn rejects_sensitive_paths_and_contents_without_echoing_secrets() {
         for path in [
             ".envrc",
+            ".git-credentials",
+            ".authinfo.gpg",
             "credentials.yaml",
+            "application_default_credentials.json",
+            "service-account.json",
             "secrets.json",
             "private_key",
             "secret-key",
@@ -2712,6 +2878,58 @@ exports = []
             sensitive_content_marker(b"-----BEGIN DSA PRIVATE KEY-----\nopaque"),
             Some("DSA private key")
         );
+        for assignment in [
+            b"export PRIVATE_KEY=0123456789abcdef0123456789abcdef".as_slice(),
+            b"set CLIENT_SECRET=0123456789abcdef0123456789abcdef".as_slice(),
+            b"setx API_KEY 0123456789abcdef0123456789abcdef".as_slice(),
+            b"setx \"API_KEY\" \"0123456789abcdef0123456789abcdef\"".as_slice(),
+            b"$env:ACCESS_TOKEN = '0123456789abcdef0123456789abcdef'".as_slice(),
+            b"\"refresh_token\": \"0123456789abcdef0123456789abcdef\"".as_slice(),
+            b"{'clientSecret':'0123456789abcdef0123456789abcdef'}".as_slice(),
+            b"{\"safe\":1,\"refreshToken\":\"0123456789abcdef0123456789abcdef\"}".as_slice(),
+            b"password = \"correct horse battery staple 1234\"".as_slice(),
+            b"passphrase='A!long:punc?tuation/value+0123456789'".as_slice(),
+            b"let apiKey = \"0123456789abcdef0123456789abcdef\"".as_slice(),
+            b"const clientSecret = '0123456789abcdef0123456789abcdef'".as_slice(),
+            b"password: correct horse battery staple 1234".as_slice(),
+            b"password = \"short\\\"0123456789abcdef0123456789abcdef\"".as_slice(),
+            b"password = 0123456789abcdef0123456789abcdef".as_slice(),
+        ] {
+            assert!(
+                sensitive_assignment(assignment),
+                "credential assignment was accepted"
+            );
+        }
+        assert!(!sensitive_assignment(b"export PRIVATE_KEY=${PRIVATE_KEY}"));
+        assert!(!sensitive_assignment(
+            b"export PRIVATE_KEY=${A_VERY_LONG_PRIVATE_KEY_PLACEHOLDER}"
+        ));
+        assert!(!sensitive_assignment(
+            b"set API_KEY=%A_VERY_LONG_API_KEY_NAME%"
+        ));
+        assert!(!sensitive_assignment(b"password = short-placeholder"));
+        assert!(!sensitive_assignment(
+            b"{\"apiKeySuffix\":\"0123456789abcdef0123456789abcdef\"}"
+        ));
+
+        let exported_secret = tempdir().expect("tempdir");
+        fs::create_dir(exported_secret.path().join("src")).expect("src");
+        fs::write(
+            exported_secret.path().join("src/lib.ko"),
+            b"export CLIENT_SECRET=0123456789abcdef0123456789abcdef",
+        )
+        .expect("credential-bearing source");
+        assert!(matches!(
+            plan_package(
+                &base_layout(exported_secret.path()),
+                MANIFEST,
+                &semantic_release().1
+            ),
+            Err(PackageError::SensitiveContent {
+                marker: "credential assignment",
+                ..
+            })
+        ));
     }
 
     #[cfg(unix)]
@@ -2733,6 +2951,33 @@ exports = []
                 &semantic_release().1
             ),
             Err(PackageError::Symlink(_))
+        ));
+
+        let ancestor = tempdir().expect("tempdir");
+        fs::create_dir(ancestor.path().join("src")).expect("src");
+        fs::create_dir(ancestor.path().join("outside")).expect("outside directory");
+        fs::write(ancestor.path().join("outside/secret.ko"), b"outside").expect("outside");
+        symlink("../outside", ancestor.path().join("src/linked"))
+            .expect("ancestor directory symlink");
+        let mut escaped_include = PackageLayout::new(ancestor.path());
+        escaped_include.add_include("src/linked/secret.ko");
+        assert!(matches!(
+            plan_package(&escaped_include, MANIFEST, &semantic_release().1),
+            Err(PackageError::Symlink(path)) if path == Path::new("src/linked")
+        ));
+
+        let linked_root_parent = tempdir().expect("tempdir");
+        let real_root = linked_root_parent.path().join("real-root");
+        fs::create_dir(&real_root).expect("real root");
+        let linked_root = linked_root_parent.path().join("linked-root");
+        symlink(&real_root, &linked_root).expect("linked package root");
+        assert!(matches!(
+            plan_package(
+                &PackageLayout::new(&linked_root),
+                MANIFEST,
+                &semantic_release().1
+            ),
+            Err(PackageError::InvalidRoot(path)) if path == linked_root
         ));
 
         let hardlinks = tempdir().expect("tempdir");
@@ -2766,6 +3011,14 @@ exports = []
 
         let non_utf8 = tempdir().expect("tempdir");
         fs::create_dir(non_utf8.path().join("src")).expect("src");
+        let mut non_utf8_selector = PackageLayout::new(non_utf8.path());
+        non_utf8_selector.add_include(PathBuf::from(OsString::from_vec(vec![
+            0xff, b'.', b'k', b'o',
+        ])));
+        assert!(matches!(
+            plan_package(&non_utf8_selector, MANIFEST, &semantic_release().1),
+            Err(PackageError::NonPortablePath(_))
+        ));
         if fs::write(
             non_utf8
                 .path()

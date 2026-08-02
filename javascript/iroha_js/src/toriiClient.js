@@ -7030,8 +7030,9 @@ export class ToriiClient {
 
   /**
    * Create a signed Sora VPN quote (`POST /v1/vpn/quotes`).
-   * The returned `txInstructions` contain the native `OpenVpnLeaseEscrow` instruction
-   * that the wallet must submit before creating the session.
+   * The returned required `openLeaseInstruction` is the native
+   * `OpenVpnLeaseEscrow` instruction that the wallet must submit before creating
+   * the session.
    * @param {{exitClass?: string, meteringPublicKeyHex: string}} request
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ToriiVpnQuote>}
@@ -19683,8 +19684,6 @@ const VPN_PROFILE_RESPONSE_FIELDS = new Set([
   "tunnel_addresses",
   "mtu_bytes",
   "display_billing_label",
-  "fee_asset_id",
-  "escrow_account_id",
   "operator_account_id",
   "lease_fee",
   "settlement_grace_secs",
@@ -19727,7 +19726,6 @@ const VPN_QUOTE_RESPONSE_FIELDS = new Set([
   "directory_snapshot_digest_hex",
   "metering_public_key_hex",
   "open_lease_instruction",
-  "tx_instructions",
 ]);
 const VPN_SESSION_RESPONSE_FIELDS = new Set([
   "session_id",
@@ -19786,7 +19784,6 @@ const VPN_RECEIPT_RESPONSE_FIELDS = new Set([
   "refunded_fee",
   "lease_id_hex",
   "settle_lease_instruction",
-  "tx_instructions",
 ]);
 const VPN_RECEIPT_LIST_RESPONSE_FIELDS = new Set(["items", "total"]);
 
@@ -19865,14 +19862,6 @@ function normalizeVpnProfileResponse(payload) {
     displayBillingLabel: requireNonEmptyString(
       record.display_billing_label,
       "vpn profile response.display_billing_label",
-    ),
-    feeAssetId: requireNonEmptyString(
-      record.fee_asset_id,
-      "vpn profile response.fee_asset_id",
-    ),
-    escrowAccountId: requireNonEmptyString(
-      record.escrow_account_id,
-      "vpn profile response.escrow_account_id",
     ),
     operatorAccountId: requireNonEmptyString(
       record.operator_account_id,
@@ -20207,32 +20196,10 @@ function normalizeVpnOptionalTxInstruction(payload, context) {
   return normalizeVpnTxInstruction(payload, context);
 }
 
-function normalizeVpnTxInstructionList(payload, context, { min = 0, max } = {}) {
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  if (payload.length < min || (max !== undefined && payload.length > max)) {
-    const expected = min === max ? `exactly ${min}` : `from ${min} to ${max}`;
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must contain ${expected} instruction${max === 1 ? "" : "s"}`,
-      context,
-    );
-  }
-  return payload.map((entry, index) =>
-    normalizeVpnTxInstruction(entry, `${context}[${index}]`),
-  );
-}
-
 function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_QUOTE_RESPONSE_FIELDS, context);
   const trust = normalizeVpnTrustTuple(record, context);
-  const txInstructions = normalizeVpnTxInstructionList(
-    record.tx_instructions,
-    `${context}.tx_instructions`,
-    { min: 1, max: 1 },
-  );
   return {
     quoteId: requireExactLowerHex32String(record.quote_id, `${context}.quote_id`),
     leaseIdHex: requireExactLowerHex32String(
@@ -20312,11 +20279,10 @@ function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
       record.metering_public_key_hex,
       `${context}.metering_public_key_hex`,
     ),
-    openLeaseInstruction: normalizeVpnOptionalTxInstruction(
+    openLeaseInstruction: normalizeVpnTxInstruction(
       record.open_lease_instruction,
       `${context}.open_lease_instruction`,
     ),
-    txInstructions,
   };
 }
 
@@ -20421,11 +20387,6 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
 function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") {
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_RECEIPT_RESPONSE_FIELDS, context);
-  const txInstructions = normalizeVpnTxInstructionList(
-    record.tx_instructions,
-    `${context}.tx_instructions`,
-    { max: 1 },
-  );
   return {
     sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
     accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
@@ -20504,7 +20465,6 @@ function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") 
       record.settle_lease_instruction,
       `${context}.settle_lease_instruction`,
     ),
-    txInstructions,
   };
 }
 

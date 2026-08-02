@@ -14,6 +14,10 @@ use super::{
         verify_zk_ams_mkhe_active_collective_public_key_v1,
         zk_ams_mkhe_active_collective_public_a_v1,
     },
+    active_exact_binding::{
+        PersistentWitnessConsumerV1, VerifiedPersistentWitnessBindingV1,
+        prove_and_mint_collective_secret_binding_v1,
+    },
     checked_coefficient_work, checked_ring_multiplication_work,
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_release_manifest_v1,
@@ -217,6 +221,7 @@ pub struct ZkAmsMkheCollectivePartyStateV1 {
     party_index: u8,
     party: ZkAmsMkhePartyIdV1,
     public_share_digest: [u8; 32],
+    persistent_secret_binding: Option<VerifiedPersistentWitnessBindingV1>,
     secret: SecretPolynomial,
     public_error: SecretPolynomial,
 }
@@ -238,6 +243,10 @@ impl core::fmt::Debug for ZkAmsMkheCollectivePartyStateV1 {
             .field(
                 "public_share_digest",
                 &hex::encode(self.public_share_digest),
+            )
+            .field(
+                "persistent_secret_binding_verified",
+                &self.persistent_secret_binding.is_some(),
             )
             .field("secret", &"[REDACTED]")
             .field("public_error", &"[REDACTED]")
@@ -306,6 +315,76 @@ impl ZkAmsMkheCollectivePartyStateV1 {
 
     pub(super) const fn key_material_digest_internal(&self) -> [u8; 32] {
         self.key_material_digest
+    }
+
+    /// Mint and retain the sole persistent commitment capability for this
+    /// state-owned `s_i`.  Callers cannot supply commitment points, proof
+    /// digests, or lineage identifiers.  Until the exact T256 membership
+    /// backend is implemented this boundary fails closed and leaves the state
+    /// unchanged.
+    #[allow(dead_code)]
+    pub(super) fn mint_persistent_secret_binding<R: MaskedRelaxedRandomSourceV1>(
+        &mut self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        random: &mut R,
+    ) -> Result<&VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
+        if self.profile_digest != roster.profile_digest()
+            || self.roster_digest != roster.roster_digest()
+            || self.key_material_digest != roster.key_material_digest()
+            || self.epoch != roster.epoch()
+            || usize::from(self.party_index) >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+            || self.party != roster.participants()[usize::from(self.party_index)].party()
+            || self.transcript_digest == [0; 32]
+            || self.public_share_digest == [0; 32]
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        if self.persistent_secret_binding.is_none() {
+            let binding = prove_and_mint_collective_secret_binding_v1(
+                roster,
+                self.security_certificate_digest,
+                self.transcript_digest,
+                usize::from(self.party_index),
+                self.public_share_digest,
+                &self.secret.coefficients,
+                random,
+            )?;
+            self.persistent_secret_binding = Some(binding);
+        }
+        let binding = self
+            .persistent_secret_binding
+            .as_ref()
+            .ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)?;
+        binding.validate_for(
+            roster,
+            self.transcript_digest,
+            usize::from(self.party_index),
+            self.public_share_digest,
+            PersistentWitnessConsumerV1::CollectivePublicKey,
+        )?;
+        Ok(binding)
+    }
+
+    /// Borrow the cached capability for a specific consumer.  Absence is a
+    /// release blocker, never a request to accept a raw digest fallback.
+    #[allow(dead_code)]
+    pub(super) fn persistent_secret_binding_for(
+        &self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        consumer: PersistentWitnessConsumerV1,
+    ) -> Result<&VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
+        let binding = self
+            .persistent_secret_binding
+            .as_ref()
+            .ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)?;
+        binding.validate_for(
+            roster,
+            self.transcript_digest,
+            usize::from(self.party_index),
+            self.public_share_digest,
+            consumer,
+        )?;
+        Ok(binding)
     }
 }
 
@@ -570,6 +649,7 @@ pub fn generate_zk_ams_mkhe_collective_party_state_v1<R: MaskedRelaxedRandomSour
         party_index: share.party_index,
         party: share.party,
         public_share_digest: share.digest,
+        persistent_secret_binding: None,
         secret,
         public_error,
     };
@@ -3126,6 +3206,7 @@ mod tests {
             party_index: 0,
             party: test_parties().parties[0],
             public_share_digest: [6; 32],
+            persistent_secret_binding: None,
             secret: SecretPolynomial {
                 coefficients: vec![1, -1, 0],
             },

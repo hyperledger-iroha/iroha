@@ -230,6 +230,18 @@
         "page": {"limit": 50, "cursor": null}
       },
       "response": {
+        "query": {
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "requirement": {
+            "kind": "Caret",
+            "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+          },
+          "page": {"limit": 50, "cursor": null}
+        },
         "chain_id": "musubi-fixture-chain",
         "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
         "items": [],
@@ -253,6 +265,14 @@
         "page": {"limit": 50, "cursor": null}
       },
       "response": {
+        "query": {
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "page": {"limit": 50, "cursor": null}
+        },
         "items": [{"major": 1, "minor": 2, "patch": 3, "prerelease": []}],
         "next_cursor": null,
         "snapshot": {
@@ -274,6 +294,14 @@
         "page": {"limit": 50, "cursor": null}
       },
       "response": {
+        "query": {
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "page": {"limit": 50, "cursor": null}
+        },
         "items": [
           {
             "kind": "Accepted",
@@ -462,7 +490,8 @@
           "finalized_height": 50,
           "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
           "index_revision": 9
-        }
+        },
+        "finalized_time_ms": 1700000000000
       }
     },
     {
@@ -488,6 +517,7 @@
       "path": "/v1/musubi/queries/alias-history",
       "request": {"alias": ["math"], "page": {"limit": 50, "cursor": null}},
       "response": {
+        "query": {"alias": ["math"], "page": {"limit": 50, "cursor": null}},
         "items": [{
           "alias": ["math"],
           "revision": 1,
@@ -514,6 +544,7 @@
       "path": "/v1/musubi/queries/ordered-prefix",
       "request": {"prefix": ["sora/"], "page": {"limit": 50, "cursor": null}},
       "response": {
+        "query": {"prefix": ["sora/"], "page": {"limit": 50, "cursor": null}},
         "chain_id": "musubi-fixture-chain",
         "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
         "namespace_binding": {
@@ -549,6 +580,10 @@
         "page": {"limit": 50, "cursor": null}
       },
       "response": {
+        "query": {
+          "query": "arithmetic math",
+          "page": {"limit": 50, "cursor": null}
+        },
         "items": [{
           "package": {
             "home_dataspace": 7,

@@ -34,7 +34,6 @@ public final class VpnQuote {
   private final String directorySnapshotDigestHex;
   private final String meteringPublicKeyHex;
   private final VpnTxInstruction openLeaseInstruction;
-  private final List<VpnTxInstruction> txInstructions;
 
   public VpnQuote(
       final String quoteId,
@@ -65,8 +64,7 @@ public final class VpnQuote {
       final String relayCertificateSha256Hex,
       final String directorySnapshotDigestHex,
       final String meteringPublicKeyHex,
-      final VpnTxInstruction openLeaseInstruction,
-      final List<VpnTxInstruction> txInstructions) {
+      final VpnTxInstruction openLeaseInstruction) {
     this.quoteId = Objects.requireNonNull(quoteId, "quoteId");
     this.leaseIdHex = Objects.requireNonNull(leaseIdHex, "leaseIdHex");
     this.sessionIdHex = Objects.requireNonNull(sessionIdHex, "sessionIdHex");
@@ -98,8 +96,8 @@ public final class VpnQuote {
     this.directorySnapshotDigestHex =
         Objects.requireNonNull(directorySnapshotDigestHex, "directorySnapshotDigestHex");
     this.meteringPublicKeyHex = Objects.requireNonNull(meteringPublicKeyHex, "meteringPublicKeyHex");
-    this.openLeaseInstruction = openLeaseInstruction;
-    this.txInstructions = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(Objects.requireNonNull(txInstructions, "txInstructions")));
+    this.openLeaseInstruction =
+        Objects.requireNonNull(openLeaseInstruction, "openLeaseInstruction");
   }
 
   public String quoteId() { return quoteId; }
@@ -131,5 +129,4 @@ public final class VpnQuote {
   public String directorySnapshotDigestHex() { return directorySnapshotDigestHex; }
   public String meteringPublicKeyHex() { return meteringPublicKeyHex; }
   public VpnTxInstruction openLeaseInstruction() { return openLeaseInstruction; }
-  public List<VpnTxInstruction> txInstructions() { return txInstructions; }
 }

@@ -594,7 +594,7 @@ let quote = try await torii.createVpnQuote(
     ToriiVpnQuoteCreateRequest(meteringPublicKeyHex: meteringPublicKeyHex),
     canonicalAuth: auth
 )
-// Submit quote.txInstructions as a signed transaction, then pass its hash:
+// Submit quote.openLeaseInstruction as a signed transaction, then pass its hash:
 let session = try await torii.createVpnSession(
     ToriiVpnSessionCreateRequest(
         quoteId: quote.quoteId,
@@ -606,8 +606,9 @@ let session = try await torii.createVpnSession(
 ```
 
 Relay operators submit cumulative receipt/voucher evidence with
-`submitVpnReceipt`; the response carries a `SettleVpnLease` instruction so the
-operator receives only earned XOR and the customer gets the refundable balance.
+`submitVpnReceipt`; the response's optional `settleLeaseInstruction` carries
+`SettleVpnLease` when a settlement transaction must be signed and submitted, so
+the operator receives only earned XOR and the customer gets the refundable balance.
 
 > **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 

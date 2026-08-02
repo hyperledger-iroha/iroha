@@ -1197,7 +1197,7 @@ fn musubi_paths() -> Map {
         (
             musubi_routes::ARCHIVE_RETENTION.path(),
             "Classify Musubi V1 archive cache retention.",
-            "Return bounded exact point-lookup decisions from finalized universal archive reverse references, release governance, and storage state. Unknown archives retain fail-closed.",
+            "Return bounded exact point-lookup decisions plus the consensus-committed finalized block time from universal archive reverse references, release governance, and storage state. Unknown archives retain fail-closed.",
             "MusubiArchiveRetentionQueryV1",
             "MusubiArchiveRetentionPageV1",
         ),
@@ -1230,12 +1230,14 @@ fn musubi_paths() -> Map {
             "MusubiSearchPageV1",
         ),
     ] {
+        let request_schema = format!("#/components/schemas/{request_type}");
+        let response_schema = format!("#/components/schemas/{response_type}");
         let mut methods = json_post_operation(
             "Musubi",
             summary,
             description,
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            &request_schema,
+            &response_schema,
             Vec::new(),
         );
         if let Some(operation) = methods.get_mut("post").and_then(Value::as_object_mut) {
@@ -1343,12 +1345,13 @@ fn musubi_paths() -> Map {
             "AssertMusubiReleaseDigestV1",
         ),
     ] {
+        let request_schema = format!("#/components/schemas/{request_type}");
         let mut methods = json_post_operation(
             "Musubi",
             summary,
             "Return one deterministic unsigned, versioned instruction envelope for local signing; Torii never accepts private keys.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            &request_schema,
+            "#/components/schemas/MusubiInstructionEnvelopeV1",
             Vec::new(),
         );
         if let Some(operation) = methods.get_mut("post").and_then(Value::as_object_mut) {
@@ -3178,7 +3181,7 @@ fn vpn_paths() -> Map {
         Value::Object(json_post_operation_with_success_status(
             "VPN",
             "Create a VPN quote.",
-            "Create a signed XOR escrow quote for a Sora VPN lease. The request must include `metering_public_key_hex`; successful responses include `tx_instructions` with a native `OpenVpnLeaseEscrow` skeleton for client signing/submission.",
+            "Create a signed XOR escrow quote for a Sora VPN lease. The request must include `metering_public_key_hex`; successful responses include the required `open_lease_instruction` native `OpenVpnLeaseEscrow` skeleton for client signing/submission.",
             "#/components/schemas/VpnQuoteCreateRequest",
             "#/components/schemas/VpnQuoteResponse",
             signed_parameters(Vec::new()),
@@ -3245,7 +3248,7 @@ fn vpn_paths() -> Map {
             let post_op = json_post_operation_with_success_status(
                 "VPN",
                 "Submit a VPN receipt.",
-                "Settle an active VPN lease from relay and client usage evidence. Successful responses include `tx_instructions` with a native `SettleVpnLease` skeleton for operator signing/submission.",
+                "Settle an active VPN lease from relay and client usage evidence. A successful settlement response includes the optional `settle_lease_instruction` native `SettleVpnLease` skeleton for operator signing/submission.",
                 "#/components/schemas/VpnReceiptSubmitRequest",
                 "#/components/schemas/VpnReceiptResponse",
                 signed_parameters(Vec::new()),
@@ -3662,21 +3665,14 @@ fn zk_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
         "/v1/zk/verify-batch".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Verify a batch of ZK proofs.",
-            "Verify a bounded batch of zero-knowledge proof envelopes. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof.",
-            "#/components/schemas/ZkVerifyBatchRequest",
-            "#/components/schemas/ZkVerifyBatchResponse",
-            Vec::new(),
-        )),
+        Value::Object(zk_verify_batch_operation()),
     );
     paths.insert(
         "/v1/zk/roots".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Fetch ZK roots.",
-            "Fetch roots for an asset bound to the canonical confidential-v2 transfer verifier and one exact committed snapshot.",
+            "Fetch roots for any asset with a validated persisted confidential tree profile, including unshield-only registration, from one exact committed snapshot.",
             "#/components/schemas/ZkRootsGetRequest",
             "#/components/schemas/ZkRootsGetResponse",
             Vec::new(),
@@ -3817,14 +3813,7 @@ fn zk_paths() -> Map {
     );
     paths.insert(
         "/v1/zk/vote/tally".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Read a ZK vote tally.",
-            "Read an existing ballot tally from one committed state snapshot. Unknown elections return 404; successful responses carry the exact block height and hash used for lookup.",
-            "#/components/schemas/ZkVoteGetTallyRequest",
-            "#/components/schemas/ZkVoteGetTallyResponse",
-            Vec::new(),
-        )),
+        Value::Object(zk_vote_tally_operation()),
     );
     paths.insert(
         "/v1/zk/vk/{backend}/{name}".to_owned(),
@@ -3896,6 +3885,85 @@ fn zk_paths() -> Map {
         )),
     );
     paths
+}
+
+fn zk_verify_batch_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("ZK".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Verify a batch of ZK proofs.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Verify a bounded batch of zero-knowledge proof envelopes supplied as JSON or canonical Norito. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(
+            "#/components/schemas/ZkVerifyBatchRequest",
+        )),
+    );
+    operation.insert(
+        "responses".into(),
+        Value::Object(single_json_response(
+            "#/components/schemas/ZkVerifyBatchResponse",
+        )),
+    );
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
+fn zk_vote_tally_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("ZK".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Read a ZK vote tally.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Read an existing ballot tally from one committed state snapshot. Requests accept JSON or canonical Norito, and successful responses negotiate the same two media types. Unknown elections return 404; successful responses carry the exact block height and hash used for lookup."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(
+            "#/components/schemas/ZkVoteGetTallyRequest",
+        )),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        typed_dual_format_response(
+            "Tally and committed-state evaluation anchor for the requested election.",
+            "#/components/schemas/ZkVoteGetTallyResponse",
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response(
+            "The requested election does not exist in the committed state snapshot.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
 }
 
 fn governance_paths() -> Map {
@@ -6644,7 +6712,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch PoR status.",
-            "Fetch one indexed PoR status page. `limit` and `max_bytes` are mandatory. Continue with the returned opaque `next_cursor`, which binds the exact normalized filters, coordinator generation, and last record; mutation or filter substitution is rejected.",
+            "Fetch one indexed PoR status page. `limit` and `max_bytes` are mandatory, and at most 512 candidate statuses are evaluated. `inspected_candidates` reports the exact work. Sparse intersections may return no statuses with an advancing `next_cursor`, which binds the exact normalized filters, coordinator generation, and last consumed index candidate; mutation or filter substitution is rejected.",
             "#/components/schemas/JsonValue",
             vec![
                 string_query_param("manifest", "Optional exact manifest digest (hex)."),
@@ -6677,7 +6745,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Page PoR history export.",
-            "Return a record-and-canonical-byte-bounded PoR history page. The retired synchronous full-history response no longer exists. Epoch bounds must be omitted together or supplied together. Continue with the opaque `next_cursor`, which binds the exact range, coordinator generation, and last record.",
+            "Return a record-, canonical-byte-, and 512-candidate-bounded PoR history page. The retired synchronous full-history response no longer exists. `inspected_candidates` reports the exact work. Epoch bounds must be omitted together or supplied together. Continue with the opaque `next_cursor`, which binds the exact range, coordinator generation, and last consumed index candidate.",
             "#/components/schemas/JsonValue",
             vec![
                 integer_query_param(
@@ -8471,20 +8539,53 @@ fn content_paths() -> Map {
                 "description".into(),
                 Value::String(
                     "Fetch content bundle bytes (path captures the remaining path segments). \
-Role- or sponsor-gated bundles require canonical request headers \
-(`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`)."
+Canonical request-authentication headers are optional for public bundles. Role- and \
+sponsor-gated bundles require either the complete account/signature/timestamp/nonce proof set \
+or a canonical witness. Public responses may use the manifest's configured public cache policy; \
+role- and sponsor-gated responses always return `Cache-Control: private, no-store` and vary over \
+all canonical authentication headers. Existing protected bundles authenticate and authorize \
+before file lookup: absent or invalid proof returns 401, authorization mismatch returns 403, \
+and a missing file returns 404 only after successful authorization. Unknown or expired bundles \
+also return 404."
                         .to_owned(),
                 ),
             );
+            let mut parameters = vec![
+                string_path_param("bundle", "Content bundle identifier."),
+                string_path_param("path", "Bundle-relative path."),
+            ];
+            parameters.extend(canonical_request_auth_header_parameters());
             operation.insert(
                 "parameters".into(),
-                Value::Array(vec![
-                    string_path_param("bundle", "Content bundle identifier."),
-                    string_path_param("path", "Bundle-relative path."),
-                ]),
+                Value::Array(parameters),
             );
             let mut responses = Map::new();
-            responses.insert("200".to_owned(), binary_response("Content payload."));
+            responses.insert(
+                "200".to_owned(),
+                content_binary_response(
+                    "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable.",
+                ),
+            );
+            responses.insert(
+                "401".to_owned(),
+                plain_text_response(
+                    "A protected bundle requires canonical request authentication, the supplied proof is invalid, or the configured proof-of-work token is absent.",
+                    None,
+                ),
+            );
+            responses.insert(
+                "403".to_owned(),
+                plain_text_response(
+                    "The authenticated account does not satisfy the bundle's role or sponsor policy, or the supplied proof-of-work token is invalid.",
+                    None,
+                ),
+            );
+            responses.insert(
+                "404".to_owned(),
+                description_response(
+                    "The bundle is unknown or expired, or the requested file does not exist. Existing protected bundles authenticate and authorize before revealing whether the file exists.",
+                ),
+            );
             operation.insert("responses".into(), Value::Object(responses));
             let mut methods = Map::new();
             methods.insert("get".to_owned(), Value::Object(operation));
@@ -8492,6 +8593,37 @@ Role- or sponsor-gated bundles require canonical request headers \
         }),
     );
     paths
+}
+
+fn content_binary_response(description: &str) -> Value {
+    let Value::Object(mut response) = binary_response(description) else {
+        unreachable!("binary responses are JSON objects");
+    };
+    response.insert(
+        "headers".into(),
+        norito::json!({
+            "Cache-Control": {
+                "description": "Manifest-conditional cache policy. Public bundles use the manifest's configured public policy; role- and sponsor-gated bundles always return `private, no-store`.",
+                "schema": {
+                    "type": "string"
+                }
+            },
+            "Vary": {
+                "description": "Present for role- and sponsor-gated bundles and absent for public bundles. The value covers every canonical authentication input.",
+                "schema": {
+                    "type": "string",
+                    "const": (crate::content::CANONICAL_CONTENT_AUTH_VARY)
+                }
+            }
+        }),
+    );
+    Value::Object(response)
+}
+
+fn description_response(description: &str) -> Value {
+    let mut response = Map::new();
+    response.insert("description".into(), Value::String(description.to_owned()));
+    Value::Object(response)
 }
 
 fn sns_paths() -> Map {
@@ -17953,8 +18085,8 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "available", "relay_endpoint", "supported_exit_classes", "default_exit_class",
                 "lease_secs", "dns_push_interval_secs", "meter_family", "route_pushes",
                 "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
-                "display_billing_label", "fee_asset_id", "escrow_account_id",
-                "operator_account_id", "lease_fee", "settlement_grace_secs", "flow_label_bits",
+                "display_billing_label", "operator_account_id", "lease_fee",
+                "settlement_grace_secs", "flow_label_bits",
                 "padding_budget_ms", "relay_id_hex", "descriptor_commit_hex",
                 "tls_server_name", "relay_tls_spki_sha256_hex",
                 "relay_certificate_sha256_hex", "directory_snapshot_digest_hex"
@@ -17980,8 +18112,6 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "tunnel_addresses": { "type": "array", "items": { "type": "string" } },
                 "mtu_bytes": { "type": "integer", "format": "uint64", "const": 1280 },
                 "display_billing_label": { "type": "string", "minLength": 1 },
-                "fee_asset_id": { "type": "string", "minLength": 1 },
-                "escrow_account_id": { "type": "string", "minLength": 1 },
                 "operator_account_id": { "type": "string", "minLength": 1 },
                 "lease_fee": { "$ref": "#/components/schemas/Quantity" },
                 "settlement_grace_secs": { "type": "integer", "format": "uint64", "minimum": 1 },
@@ -18055,7 +18185,7 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "meter_family", "flow_label_bits", "padding_budget_ms", "relay_id_hex",
                 "descriptor_commit_hex", "tls_server_name", "relay_tls_spki_sha256_hex",
                 "relay_certificate_sha256_hex", "directory_snapshot_digest_hex",
-                "metering_public_key_hex", "open_lease_instruction", "tx_instructions"
+                "metering_public_key_hex", "open_lease_instruction"
             ],
             "additionalProperties": false,
             "properties": {
@@ -18090,18 +18220,7 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "relay_certificate_sha256_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                 "directory_snapshot_digest_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                 "metering_public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                "open_lease_instruction": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/VpnTxInstruction" },
-                        { "type": "null" }
-                    ]
-                },
-                "tx_instructions": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 1,
-                    "items": { "$ref": "#/components/schemas/VpnTxInstruction" }
-                }
+                "open_lease_instruction": { "$ref": "#/components/schemas/VpnTxInstruction" }
             }
         }),
     );
@@ -18213,7 +18332,7 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "connected_at_ms", "disconnected_at_ms", "duration_ms", "bytes_in", "bytes_out",
                 "status", "receipt_source", "quote_id", "payment_tx_hash", "fee_asset_id",
                 "escrow_account_id", "operator_account_id", "lease_fee", "earned_fee",
-                "refunded_fee", "lease_id_hex", "settle_lease_instruction", "tx_instructions"
+                "refunded_fee", "lease_id_hex", "settle_lease_instruction"
             ],
             "additionalProperties": false,
             "properties": {
@@ -18243,11 +18362,6 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                         { "$ref": "#/components/schemas/VpnTxInstruction" },
                         { "type": "null" }
                     ]
-                },
-                "tx_instructions": {
-                    "type": "array",
-                    "maxItems": 1,
-                    "items": { "$ref": "#/components/schemas/VpnTxInstruction" }
                 }
             }
         }),
@@ -21210,6 +21324,2349 @@ fn insert_sorafs_hedging_billing_schemas(schemas: &mut Map) {
     );
 }
 
+fn musubi_closed_object(required: &[&str], properties: Vec<(&str, Value)>) -> Value {
+    let properties = properties
+        .into_iter()
+        .map(|(name, schema)| (name.to_owned(), schema))
+        .collect::<Map>();
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), Value::String("object".to_owned()));
+    schema.insert("additionalProperties".to_owned(), Value::Bool(false));
+    schema.insert("properties".to_owned(), Value::Object(properties));
+    if !required.is_empty() {
+        schema.insert(
+            "required".to_owned(),
+            Value::Array(
+                required
+                    .iter()
+                    .map(|name| Value::String((*name).to_owned()))
+                    .collect(),
+            ),
+        );
+    }
+    Value::Object(schema)
+}
+
+fn musubi_array(items: Value, minimum: usize, maximum: usize) -> Value {
+    norito::json!({
+        "type": "array",
+        "minItems": (minimum),
+        "maxItems": (maximum),
+        "items": (items)
+    })
+}
+
+fn musubi_nullable(schema: Value) -> Value {
+    norito::json!({ "oneOf": [(schema), { "type": "null" }] })
+}
+
+fn musubi_string_newtype(maximum: usize, pattern: Option<&str>) -> Value {
+    let mut item = Map::new();
+    item.insert("type".to_owned(), Value::String("string".to_owned()));
+    item.insert("minLength".to_owned(), Value::from(1_u64));
+    item.insert(
+        "maxLength".to_owned(),
+        Value::from(u64::try_from(maximum).expect("Musubi string bound fits u64")),
+    );
+    if let Some(pattern) = pattern {
+        item.insert("pattern".to_owned(), Value::String(pattern.to_owned()));
+    }
+    musubi_array(Value::Object(item), 1, 1)
+}
+
+fn musubi_tagged_variant(kind: &str, value: Value) -> Value {
+    musubi_closed_object(
+        &["kind", "value"],
+        vec![
+            ("kind", norito::json!({ "type": "string", "const": (kind) })),
+            ("value", value),
+        ],
+    )
+}
+
+fn musubi_tagged_union(variants: Vec<(&str, Value)>) -> Value {
+    Value::Object(Map::from([(
+        "oneOf".to_owned(),
+        Value::Array(
+            variants
+                .into_iter()
+                .map(|(kind, value)| musubi_tagged_variant(kind, value))
+                .collect(),
+        ),
+    )]))
+}
+
+fn musubi_tagged_units(kinds: &[&str]) -> Value {
+    musubi_tagged_union(
+        kinds
+            .iter()
+            .map(|kind| (*kind, norito::json!({ "type": "null" })))
+            .collect(),
+    )
+}
+
+fn musubi_page_schema(query: Value, item: Value) -> Value {
+    musubi_closed_object(
+        &["query", "items", "next_cursor", "snapshot"],
+        vec![
+            ("query", query),
+            (
+                "items",
+                musubi_array(item, 0, iroha_data_model::musubi::MUSUBI_MAX_PAGE_SIZE_V1),
+            ),
+            (
+                "next_cursor",
+                musubi_nullable(schema_ref("MusubiFinalizedCursorV1")),
+            ),
+            ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+        ],
+    )
+}
+
+fn insert_musubi_v1_schemas(schemas: &mut Map) {
+    use iroha_data_model::musubi::{
+        MUSUBI_MAX_ALIAS_BYTES_V1, MUSUBI_MAX_CURSOR_KEY_BYTES_V1, MUSUBI_MAX_NAMESPACE_BYTES_V1,
+        MUSUBI_MAX_PACKAGE_NAME_BYTES_V1, MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1,
+        MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1, MUSUBI_MAX_VERSION_COMPARATORS_V1,
+    };
+
+    let byte =
+        norito::json!({ "type": "integer", "format": "uint8", "minimum": 0, "maximum": 255 });
+    let fixed_32 = musubi_array(byte.clone(), 32, 32);
+    let digest_32 = musubi_array(schema_ref("MusubiFixed32BytesV1"), 1, 1);
+    let u64_schema = norito::json!({ "type": "integer", "format": "uint64", "minimum": 0 });
+    let positive_u64 = norito::json!({ "type": "integer", "format": "uint64", "minimum": 1 });
+    let account = norito::json!({
+        "type": "string",
+        "minLength": 1,
+        "description": "Canonical domainless I105 AccountId; native multisignature policies are bounded by the enclosing request or response body rather than a single-key text limit."
+    });
+
+    schemas.insert("MusubiByteV1".to_owned(), byte);
+    schemas.insert("MusubiFixed32BytesV1".to_owned(), fixed_32);
+    schemas.insert("MusubiDigest32V1".to_owned(), digest_32);
+    schemas.insert("MusubiU64V1".to_owned(), u64_schema.clone());
+    schemas.insert("MusubiPositiveU64V1".to_owned(), positive_u64.clone());
+    schemas.insert("MusubiAccountIdV1".to_owned(), account.clone());
+    schemas.insert(
+        "MusubiChainIdV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": (iroha_data_model::id::MAX_CHAIN_ID_BYTES),
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9])?$"
+        }),
+    );
+    schemas.insert(
+        "MusubiNamespaceV1".to_owned(),
+        musubi_string_newtype(MUSUBI_MAX_NAMESPACE_BYTES_V1, None),
+    );
+    schemas.insert(
+        "MusubiPackageNameV1".to_owned(),
+        musubi_string_newtype(
+            MUSUBI_MAX_PACKAGE_NAME_BYTES_V1,
+            Some("^[a-z0-9]+(?:-[a-z0-9]+)*$"),
+        ),
+    );
+    schemas.insert(
+        "MusubiAliasNameV1".to_owned(),
+        musubi_string_newtype(
+            MUSUBI_MAX_ALIAS_BYTES_V1,
+            Some("^[a-z0-9]+(?:-[a-z0-9]+)*$"),
+        ),
+    );
+    schemas.insert(
+        "MusubiReasonV1".to_owned(),
+        musubi_string_newtype(1_024, None),
+    );
+    schemas.insert(
+        "MusubiDescriptionV1".to_owned(),
+        musubi_string_newtype(4_096, None),
+    );
+    schemas.insert(
+        "MusubiDocumentRefV1".to_owned(),
+        musubi_string_newtype(2_048, None),
+    );
+    schemas.insert(
+        "MusubiKeywordV1".to_owned(),
+        musubi_string_newtype(64, Some("^[a-z0-9]+(?:-[a-z0-9]+)*$")),
+    );
+    schemas.insert(
+        "MusubiPackageScopeV1".to_owned(),
+        musubi_tagged_union(vec![
+            ("DataspaceRoot", norito::json!({ "type": "null" })),
+            (
+                "Domain",
+                norito::json!({ "type": "string", "minLength": 1, "maxLength": 255 }),
+            ),
+        ]),
+    );
+    schemas.insert(
+        "MusubiPackageIdV1".to_owned(),
+        musubi_closed_object(
+            &["home_dataspace", "scope", "name"],
+            vec![
+                ("home_dataspace", u64_schema.clone()),
+                ("scope", schema_ref("MusubiPackageScopeV1")),
+                ("name", schema_ref("MusubiPackageNameV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiPackageSelectorV1".to_owned(),
+        musubi_closed_object(
+            &["namespace", "name"],
+            vec![
+                ("namespace", schema_ref("MusubiNamespaceV1")),
+                ("name", schema_ref("MusubiPackageNameV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiNamespaceBindingV1".to_owned(),
+        musubi_closed_object(
+            &["namespace", "home_dataspace", "scope", "generation"],
+            vec![
+                ("namespace", schema_ref("MusubiNamespaceV1")),
+                ("home_dataspace", u64_schema.clone()),
+                ("scope", schema_ref("MusubiPackageScopeV1")),
+                ("generation", positive_u64.clone()),
+            ],
+        ),
+    );
+
+    let prerelease_identifier = musubi_tagged_union(vec![
+        ("Numeric", u64_schema.clone()),
+        (
+            "AlphaNumeric",
+            norito::json!({
+                "type": "string",
+                "minLength": 1,
+                "maxLength": (MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1),
+                "pattern": "^[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*$"
+            }),
+        ),
+    ]);
+    schemas.insert(
+        "MusubiPrereleaseIdentifierV1".to_owned(),
+        prerelease_identifier,
+    );
+    schemas.insert(
+        "MusubiVersionV1".to_owned(),
+        musubi_closed_object(
+            &["major", "minor", "patch", "prerelease"],
+            vec![
+                ("major", u64_schema.clone()),
+                ("minor", u64_schema.clone()),
+                ("patch", u64_schema.clone()),
+                (
+                    "prerelease",
+                    musubi_array(
+                        schema_ref("MusubiPrereleaseIdentifierV1"),
+                        0,
+                        MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1,
+                    ),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiReleaseIdV1".to_owned(),
+        musubi_closed_object(
+            &["package", "version"],
+            vec![
+                ("package", schema_ref("MusubiPackageIdV1")),
+                ("version", schema_ref("MusubiVersionV1")),
+            ],
+        ),
+    );
+    let comparator_operator =
+        musubi_tagged_units(&["Greater", "GreaterOrEqual", "Less", "LessOrEqual", "Equal"]);
+    schemas.insert("MusubiComparatorOpV1".to_owned(), comparator_operator);
+    schemas.insert(
+        "MusubiVersionComparatorV1".to_owned(),
+        musubi_closed_object(
+            &["op", "version"],
+            vec![
+                ("op", schema_ref("MusubiComparatorOpV1")),
+                ("version", schema_ref("MusubiVersionV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiMinorWildcardV1".to_owned(),
+        musubi_closed_object(
+            &["major", "minor"],
+            vec![("major", u64_schema.clone()), ("minor", u64_schema.clone())],
+        ),
+    );
+    schemas.insert(
+        "MusubiVersionReqV1".to_owned(),
+        musubi_tagged_union(vec![
+            ("Any", norito::json!({ "type": "null" })),
+            ("Caret", schema_ref("MusubiVersionV1")),
+            ("Tilde", schema_ref("MusubiVersionV1")),
+            ("MajorWildcard", u64_schema.clone()),
+            ("MinorWildcard", schema_ref("MusubiMinorWildcardV1")),
+            ("Exact", schema_ref("MusubiVersionV1")),
+            (
+                "Comparators",
+                musubi_array(
+                    schema_ref("MusubiVersionComparatorV1"),
+                    1,
+                    MUSUBI_MAX_VERSION_COMPARATORS_V1,
+                ),
+            ),
+        ]),
+    );
+
+    schemas.insert(
+        "MusubiRegistrySnapshotV1".to_owned(),
+        musubi_closed_object(
+            &["finalized_height", "finalized_block_hash", "index_revision"],
+            vec![
+                ("finalized_height", positive_u64.clone()),
+                ("finalized_block_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("index_revision", positive_u64.clone()),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiFinalizedCursorV1".to_owned(),
+        musubi_closed_object(
+            &["snapshot", "query_hash", "last_key", "caller"],
+            vec![
+                ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+                ("query_hash", schema_ref("MusubiDigest32V1")),
+                (
+                    "last_key",
+                    norito::json!({
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": (MUSUBI_MAX_CURSOR_KEY_BYTES_V1)
+                    }),
+                ),
+                ("caller", musubi_nullable(account.clone())),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiPageRequestV1".to_owned(),
+        musubi_closed_object(
+            &["limit", "cursor"],
+            vec![
+                (
+                    "limit",
+                    norito::json!({
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0,
+                        "maximum": (iroha_data_model::musubi::MUSUBI_MAX_PAGE_SIZE_V1)
+                    }),
+                ),
+                (
+                    "cursor",
+                    musubi_nullable(schema_ref("MusubiFinalizedCursorV1")),
+                ),
+            ],
+        ),
+    );
+
+    // The remaining schemas deliberately describe the canonical Norito JSON shape rather than
+    // treating a typed Musubi payload as an arbitrary JSON value. This also gives MCP a closed
+    // request-body root for every V1 query and unsigned instruction builder.
+    insert_musubi_release_and_archive_schemas(schemas);
+    insert_musubi_governance_and_route_schemas(schemas);
+}
+
+fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
+    use iroha_data_model::musubi::{
+        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1,
+        MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_FILES_V1,
+        MUSUBI_MAX_KEYWORDS_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
+        MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1,
+        MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
+        MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1,
+    };
+
+    schemas.insert(
+        "MusubiAbiBindingV1".to_owned(),
+        musubi_closed_object(
+            &["abi_version", "abi_hash"],
+            vec![
+                (
+                    "abi_version",
+                    norito::json!({ "type": "integer", "format": "uint16", "const": 1 }),
+                ),
+                ("abi_hash", schema_ref("MusubiFixed32BytesV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiKotodamaEditionV1".to_owned(),
+        musubi_tagged_units(&["V1"]),
+    );
+    schemas.insert(
+        "MusubiDependencyKindV1".to_owned(),
+        musubi_tagged_units(&["Normal", "Development"]),
+    );
+    schemas.insert(
+        "MusubiDependencyReqV1".to_owned(),
+        musubi_closed_object(
+            &["alias", "package", "requirement"],
+            vec![
+                (
+                    "alias",
+                    norito::json!({ "type": "string", "minLength": 1, "maxLength": 255 }),
+                ),
+                ("package", schema_ref("MusubiPackageIdV1")),
+                ("requirement", schema_ref("MusubiVersionReqV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiReleaseMetadataV1".to_owned(),
+        musubi_closed_object(
+            &["description", "readme", "license", "repository", "keywords"],
+            vec![
+                (
+                    "description",
+                    musubi_nullable(schema_ref("MusubiDescriptionV1")),
+                ),
+                ("readme", musubi_nullable(schema_ref("MusubiDocumentRefV1"))),
+                (
+                    "license",
+                    musubi_nullable(schema_ref("MusubiDocumentRefV1")),
+                ),
+                (
+                    "repository",
+                    musubi_nullable(schema_ref("MusubiDocumentRefV1")),
+                ),
+                (
+                    "keywords",
+                    musubi_array(schema_ref("MusubiKeywordV1"), 0, MUSUBI_MAX_KEYWORDS_V1),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiReleaseManifestV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "release",
+                "edition",
+                "abi",
+                "dependencies",
+                "exports",
+                "interface_digest",
+                "metadata",
+                "archive_id",
+                "verification_lock_digest",
+            ],
+            vec![
+                ("release", schema_ref("MusubiReleaseIdV1")),
+                ("edition", schema_ref("MusubiKotodamaEditionV1")),
+                ("abi", schema_ref("MusubiAbiBindingV1")),
+                (
+                    "dependencies",
+                    musubi_array(
+                        schema_ref("MusubiDependencyReqV1"),
+                        0,
+                        MUSUBI_MAX_DEPENDENCIES_V1,
+                    ),
+                ),
+                (
+                    "exports",
+                    musubi_array(
+                        norito::json!({ "type": "string", "minLength": 1, "maxLength": 255 }),
+                        0,
+                        MUSUBI_MAX_EXPORTS_V1,
+                    ),
+                ),
+                ("interface_digest", schema_ref("MusubiDigest32V1")),
+                ("metadata", schema_ref("MusubiReleaseMetadataV1")),
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("verification_lock_digest", schema_ref("MusubiDigest32V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiExactDependencyEdgeV1".to_owned(),
+        musubi_closed_object(
+            &["alias", "kind", "package", "requirement", "selected"],
+            vec![
+                (
+                    "alias",
+                    norito::json!({ "type": "string", "minLength": 1, "maxLength": 255 }),
+                ),
+                ("kind", schema_ref("MusubiDependencyKindV1")),
+                ("package", schema_ref("MusubiPackageIdV1")),
+                ("requirement", schema_ref("MusubiVersionReqV1")),
+                ("selected", schema_ref("MusubiReleaseIdV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiVerificationNodeV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "release",
+                "release_digest",
+                "archive_id",
+                "source_digest",
+                "interface_digest",
+                "abi",
+                "dependencies",
+            ],
+            vec![
+                ("release", schema_ref("MusubiReleaseIdV1")),
+                ("release_digest", schema_ref("MusubiDigest32V1")),
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("source_digest", schema_ref("MusubiDigest32V1")),
+                ("interface_digest", schema_ref("MusubiDigest32V1")),
+                ("abi", schema_ref("MusubiAbiBindingV1")),
+                (
+                    "dependencies",
+                    musubi_array(
+                        schema_ref("MusubiExactDependencyEdgeV1"),
+                        0,
+                        MUSUBI_MAX_DEPENDENCIES_V1,
+                    ),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiVerificationLockV1".to_owned(),
+        musubi_closed_object(
+            &["schema", "version", "root", "root_dependencies", "nodes"],
+            vec![
+                (
+                    "schema",
+                    norito::json!({ "type": "string", "const": "musubi-verification-lock" }),
+                ),
+                (
+                    "version",
+                    norito::json!({ "type": "integer", "format": "uint8", "const": 1 }),
+                ),
+                ("root", schema_ref("MusubiReleaseIdV1")),
+                (
+                    "root_dependencies",
+                    musubi_array(
+                        schema_ref("MusubiExactDependencyEdgeV1"),
+                        0,
+                        MUSUBI_MAX_DEPENDENCIES_V1,
+                    ),
+                ),
+                (
+                    "nodes",
+                    musubi_array(
+                        schema_ref("MusubiVerificationNodeV1"),
+                        0,
+                        MUSUBI_MAX_RESOLUTION_NODES_V1,
+                    ),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiResolutionProofV1".to_owned(),
+        musubi_closed_object(
+            &["snapshot", "lock"],
+            vec![
+                ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+                ("lock", schema_ref("MusubiVerificationLockV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiPublicationV1".to_owned(),
+        musubi_closed_object(
+            &["manifest", "resolution"],
+            vec![
+                ("manifest", schema_ref("MusubiReleaseManifestV1")),
+                ("resolution", schema_ref("MusubiResolutionProofV1")),
+            ],
+        ),
+    );
+
+    schemas.insert(
+        "MusubiManifestRootCidV1".to_owned(),
+        musubi_array(
+            schema_ref("MusubiByteV1"),
+            iroha_data_model::sorafs::pin_registry::MANIFEST_ROOT_CID_LENGTH,
+            iroha_data_model::sorafs::pin_registry::MANIFEST_ROOT_CID_LENGTH,
+        ),
+    );
+    schemas.insert(
+        "MusubiChunkerProfileHandleV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "profile_id",
+                "namespace",
+                "name",
+                "semver",
+                "multihash_code",
+            ],
+            vec![
+                (
+                    "profile_id",
+                    norito::json!({ "type": "integer", "format": "uint32", "minimum": 0 }),
+                ),
+                (
+                    "namespace",
+                    norito::json!({ "type": "string", "minLength": 1, "maxLength": 128 }),
+                ),
+                (
+                    "name",
+                    norito::json!({ "type": "string", "minLength": 1, "maxLength": 128 }),
+                ),
+                (
+                    "semver",
+                    norito::json!({ "type": "string", "minLength": 1, "maxLength": 128 }),
+                ),
+                (
+                    "multihash_code",
+                    norito::json!({ "type": "integer", "format": "uint64", "minimum": 0 }),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiArchiveCommitmentV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "root_cid",
+                "chunker",
+                "chunk_plan_digest",
+                "por_root",
+                "content_length",
+                "car_digest",
+                "car_size",
+                "bundle_digest",
+                "source_tree_digest",
+                "descriptor_digest",
+                "file_count",
+                "chunk_count",
+            ],
+            vec![
+                ("root_cid", schema_ref("MusubiManifestRootCidV1")),
+                ("chunker", schema_ref("MusubiChunkerProfileHandleV1")),
+                ("chunk_plan_digest", schema_ref("MusubiDigest32V1")),
+                ("por_root", schema_ref("MusubiDigest32V1")),
+                (
+                    "content_length",
+                    norito::json!({
+                        "type": "integer",
+                        "format": "uint64",
+                        "minimum": 1,
+                        "maximum": (MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1)
+                    }),
+                ),
+                ("car_digest", schema_ref("MusubiDigest32V1")),
+                (
+                    "car_size",
+                    norito::json!({
+                        "type": "integer",
+                        "format": "uint64",
+                        "minimum": 1,
+                        "maximum": (MUSUBI_MAX_CAR_BYTES_V1)
+                    }),
+                ),
+                ("bundle_digest", schema_ref("MusubiDigest32V1")),
+                ("source_tree_digest", schema_ref("MusubiDigest32V1")),
+                ("descriptor_digest", schema_ref("MusubiDigest32V1")),
+                (
+                    "file_count",
+                    norito::json!({
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 1,
+                        "maximum": (MUSUBI_MAX_FILES_V1)
+                    }),
+                ),
+                (
+                    "chunk_count",
+                    norito::json!({
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 1,
+                        "maximum": (MUSUBI_MAX_CHUNKS_V1)
+                    }),
+                ),
+            ],
+        ),
+    );
+
+    schemas.insert(
+        "MusubiProviderIdV1".to_owned(),
+        musubi_array(
+            norito::json!({
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": "^[0-9A-Fa-f]{64}$"
+            }),
+            1,
+            1,
+        ),
+    );
+    schemas.insert(
+        "MusubiControllerApprovalV1".to_owned(),
+        musubi_closed_object(
+            &["public_key", "signature"],
+            vec![
+                (
+                    "public_key",
+                    norito::json!({
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Canonical multihash public-key literal; native post-quantum keys are bounded by the enclosing body."
+                    }),
+                ),
+                (
+                    "signature",
+                    norito::json!({
+                        "type": "string",
+                        "minLength": 2,
+                        "pattern": "^(?:[0-9A-Fa-f]{2})+$",
+                        "description": "Canonical hexadecimal signature; native post-quantum signatures are bounded by the enclosing body."
+                    }),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiSeedIngressReceiptBindingV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "chain_id",
+                "genesis_block_hash",
+                "publisher",
+                "ingress_broker",
+                "seed_provider",
+                "semantic_release_manifest_digest",
+                "archive_id",
+                "car_body_digest",
+                "car_body_length",
+                "nonce",
+            ],
+            vec![
+                ("chain_id", schema_ref("MusubiChainIdV1")),
+                ("genesis_block_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("publisher", schema_ref("MusubiAccountIdV1")),
+                ("ingress_broker", schema_ref("MusubiAccountIdV1")),
+                ("seed_provider", schema_ref("MusubiProviderIdV1")),
+                (
+                    "semantic_release_manifest_digest",
+                    schema_ref("MusubiDigest32V1"),
+                ),
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("car_body_digest", schema_ref("MusubiDigest32V1")),
+                (
+                    "car_body_length",
+                    norito::json!({
+                        "type": "integer",
+                        "format": "uint64",
+                        "minimum": 1,
+                        "maximum": (MUSUBI_MAX_CAR_BYTES_V1)
+                    }),
+                ),
+                ("nonce", schema_ref("MusubiFixed32BytesV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiSeedIngressReceiptPayloadV1".to_owned(),
+        musubi_closed_object(
+            &["version", "binding", "issued_at_ms", "expires_at_ms"],
+            vec![
+                (
+                    "version",
+                    norito::json!({ "type": "integer", "format": "uint8", "const": 1 }),
+                ),
+                ("binding", schema_ref("MusubiSeedIngressReceiptBindingV1")),
+                ("issued_at_ms", schema_ref("MusubiPositiveU64V1")),
+                ("expires_at_ms", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiSeedIngressReceiptV1".to_owned(),
+        musubi_closed_object(
+            &["payload", "approvals"],
+            vec![
+                ("payload", schema_ref("MusubiSeedIngressReceiptPayloadV1")),
+                (
+                    "approvals",
+                    musubi_array(
+                        schema_ref("MusubiControllerApprovalV1"),
+                        1,
+                        MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1,
+                    ),
+                ),
+            ],
+        ),
+    );
+
+    schemas.insert(
+        "MusubiNamespaceDelegationPayloadV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "version",
+                "namespace_binding",
+                "owner_generation",
+                "owner",
+                "delegate",
+                "expires_at_height",
+            ],
+            vec![
+                (
+                    "version",
+                    norito::json!({ "type": "integer", "format": "uint8", "const": 1 }),
+                ),
+                ("namespace_binding", schema_ref("MusubiDigest32V1")),
+                ("owner_generation", schema_ref("MusubiPositiveU64V1")),
+                ("owner", schema_ref("MusubiAccountIdV1")),
+                ("delegate", schema_ref("MusubiAccountIdV1")),
+                ("expires_at_height", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiNamespaceDelegationV1".to_owned(),
+        musubi_closed_object(
+            &["payload", "approvals"],
+            vec![
+                ("payload", schema_ref("MusubiNamespaceDelegationPayloadV1")),
+                (
+                    "approvals",
+                    musubi_array(
+                        schema_ref("MusubiControllerApprovalV1"),
+                        1,
+                        MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1,
+                    ),
+                ),
+            ],
+        ),
+    );
+
+    schemas.insert(
+        "MusubiProviderCompletionSignerPolicyV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "policy_id",
+                "revision",
+                "predecessor_digest",
+                "policy_digest",
+            ],
+            vec![
+                ("policy_id", schema_ref("MusubiFixed32BytesV1")),
+                ("revision", schema_ref("MusubiPositiveU64V1")),
+                (
+                    "predecessor_digest",
+                    musubi_nullable(schema_ref("MusubiFixed32BytesV1")),
+                ),
+                ("policy_digest", schema_ref("MusubiFixed32BytesV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiProviderCompletionAuthorityV1".to_owned(),
+        musubi_closed_object(
+            &["provider_owner", "signer_policy"],
+            vec![
+                ("provider_owner", schema_ref("MusubiAccountIdV1")),
+                (
+                    "signer_policy",
+                    schema_ref("MusubiProviderCompletionSignerPolicyV1"),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiProviderFinalizedAnchorV1".to_owned(),
+        musubi_closed_object(
+            &["height", "block_hash"],
+            vec![
+                ("height", schema_ref("MusubiPositiveU64V1")),
+                ("block_hash", schema_ref("MusubiFixed32BytesV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiProviderBundleVerificationBindingV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "chain_id",
+                "genesis_block_hash",
+                "provider_id",
+                "completed_by",
+                "completion_authority",
+                "replication_order",
+                "assignment_revision",
+                "completion_epoch",
+                "finalized_anchor",
+                "archive_id",
+                "bundle_digest",
+                "descriptor_digest",
+                "semantic_release_manifest_digest",
+                "verification_lock_digest",
+                "source_tree_digest",
+            ],
+            vec![
+                ("chain_id", schema_ref("MusubiChainIdV1")),
+                ("genesis_block_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("provider_id", schema_ref("MusubiProviderIdV1")),
+                ("completed_by", schema_ref("MusubiAccountIdV1")),
+                (
+                    "completion_authority",
+                    schema_ref("MusubiProviderCompletionAuthorityV1"),
+                ),
+                ("replication_order", schema_ref("MusubiDigest32V1")),
+                ("assignment_revision", schema_ref("MusubiPositiveU64V1")),
+                ("completion_epoch", schema_ref("MusubiPositiveU64V1")),
+                (
+                    "finalized_anchor",
+                    schema_ref("MusubiProviderFinalizedAnchorV1"),
+                ),
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("bundle_digest", schema_ref("MusubiDigest32V1")),
+                ("descriptor_digest", schema_ref("MusubiDigest32V1")),
+                (
+                    "semantic_release_manifest_digest",
+                    schema_ref("MusubiDigest32V1"),
+                ),
+                ("verification_lock_digest", schema_ref("MusubiDigest32V1")),
+                ("source_tree_digest", schema_ref("MusubiDigest32V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiProviderBundleVerificationPayloadV1".to_owned(),
+        musubi_closed_object(
+            &["version", "binding"],
+            vec![
+                (
+                    "version",
+                    norito::json!({ "type": "integer", "format": "uint8", "const": 1 }),
+                ),
+                (
+                    "binding",
+                    schema_ref("MusubiProviderBundleVerificationBindingV1"),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiProviderBundleVerificationAttestationV1".to_owned(),
+        musubi_closed_object(
+            &["payload", "approvals"],
+            vec![
+                (
+                    "payload",
+                    schema_ref("MusubiProviderBundleVerificationPayloadV1"),
+                ),
+                (
+                    "approvals",
+                    musubi_array(
+                        schema_ref("MusubiControllerApprovalV1"),
+                        1,
+                        MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1,
+                    ),
+                ),
+            ],
+        ),
+    );
+
+    schemas.insert(
+        "MusubiArchiveLocationStateV1".to_owned(),
+        musubi_tagged_units(&["Pending", "Healthy", "Degraded", "Retired"]),
+    );
+    schemas.insert(
+        "MusubiStorageAvailabilityV1".to_owned(),
+        musubi_tagged_units(&["Selectable", "BelowQuorum", "Unavailable"]),
+    );
+    schemas.insert(
+        "MusubiArchiveAvailabilityV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "archive_id",
+                "availability",
+                "healthy_replicas",
+                "active_locations",
+                "finalized_height",
+                "finalized_block_hash",
+                "index_revision",
+            ],
+            vec![
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("availability", schema_ref("MusubiStorageAvailabilityV1")),
+                (
+                    "healthy_replicas",
+                    norito::json!({ "type": "integer", "format": "uint16", "minimum": 0 }),
+                ),
+                (
+                    "active_locations",
+                    norito::json!({
+                        "type": "integer",
+                        "format": "uint8",
+                        "minimum": 0,
+                        "maximum": (MUSUBI_MAX_ARCHIVE_LOCATIONS_V1)
+                    }),
+                ),
+                ("finalized_height", schema_ref("MusubiPositiveU64V1")),
+                ("finalized_block_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("index_revision", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiArchiveRecordV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "archive_id",
+                "commitment",
+                "staging_receipt",
+                "registered_by",
+                "registered_at_height",
+                "location_revision",
+                "location_ids",
+            ],
+            vec![
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("commitment", schema_ref("MusubiArchiveCommitmentV1")),
+                ("staging_receipt", schema_ref("MusubiSeedIngressReceiptV1")),
+                ("registered_by", schema_ref("MusubiAccountIdV1")),
+                ("registered_at_height", schema_ref("MusubiPositiveU64V1")),
+                ("location_revision", schema_ref("MusubiPositiveU64V1")),
+                (
+                    "location_ids",
+                    musubi_array(
+                        schema_ref("MusubiDigest32V1"),
+                        0,
+                        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1,
+                    ),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiArchiveLocationV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "location_id",
+                "archive_id",
+                "pin_manifest",
+                "replication_order",
+                "providers",
+                "provider_attestations",
+                "renew_after_epoch",
+                "expires_at_epoch",
+                "finalized_height",
+                "revision",
+                "state",
+            ],
+            vec![
+                ("location_id", schema_ref("MusubiDigest32V1")),
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("pin_manifest", schema_ref("MusubiDigest32V1")),
+                ("replication_order", schema_ref("MusubiDigest32V1")),
+                (
+                    "providers",
+                    musubi_array(
+                        schema_ref("MusubiProviderIdV1"),
+                        1,
+                        MUSUBI_MAX_LOCATION_PROVIDERS_V1,
+                    ),
+                ),
+                (
+                    "provider_attestations",
+                    musubi_array(
+                        schema_ref("MusubiProviderBundleVerificationAttestationV1"),
+                        1,
+                        MUSUBI_MAX_LOCATION_PROVIDERS_V1,
+                    ),
+                ),
+                ("renew_after_epoch", schema_ref("MusubiU64V1")),
+                ("expires_at_epoch", schema_ref("MusubiPositiveU64V1")),
+                ("finalized_height", schema_ref("MusubiPositiveU64V1")),
+                ("revision", schema_ref("MusubiPositiveU64V1")),
+                ("state", schema_ref("MusubiArchiveLocationStateV1")),
+            ],
+        ),
+    );
+
+    schemas.insert(
+        "MusubiReleaseYankV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "release",
+                "yanked",
+                "reason",
+                "changed_by",
+                "changed_at_height",
+                "revision",
+            ],
+            vec![
+                ("release", schema_ref("MusubiReleaseIdV1")),
+                ("yanked", norito::json!({ "type": "boolean" })),
+                ("reason", schema_ref("MusubiReasonV1")),
+                ("changed_by", schema_ref("MusubiAccountIdV1")),
+                ("changed_at_height", schema_ref("MusubiPositiveU64V1")),
+                ("revision", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiArtifactTakedownV1".to_owned(),
+        musubi_closed_object(
+            &["action_digest", "reason", "applied_at_height"],
+            vec![
+                ("action_digest", schema_ref("MusubiDigest32V1")),
+                ("reason", schema_ref("MusubiReasonV1")),
+                ("applied_at_height", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiArtifactGovernanceStateV1".to_owned(),
+        musubi_tagged_union(vec![
+            ("Available", norito::json!({ "type": "null" })),
+            ("TakenDown", schema_ref("MusubiArtifactTakedownV1")),
+        ]),
+    );
+    schemas.insert(
+        "MusubiReleaseSelectionStateV1".to_owned(),
+        musubi_closed_object(
+            &["yank", "storage", "governance"],
+            vec![
+                ("yank", schema_ref("MusubiReleaseYankV1")),
+                ("storage", schema_ref("MusubiArchiveAvailabilityV1")),
+                ("governance", schema_ref("MusubiArtifactGovernanceStateV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiResolverReleaseRowV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "release",
+                "release_digest",
+                "archive_id",
+                "source_digest",
+                "interface_digest",
+                "abi",
+                "dependencies",
+                "selection",
+                "index_revision",
+            ],
+            vec![
+                ("release", schema_ref("MusubiReleaseIdV1")),
+                ("release_digest", schema_ref("MusubiDigest32V1")),
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("source_digest", schema_ref("MusubiDigest32V1")),
+                ("interface_digest", schema_ref("MusubiDigest32V1")),
+                ("abi", schema_ref("MusubiAbiBindingV1")),
+                (
+                    "dependencies",
+                    musubi_array(
+                        schema_ref("MusubiDependencyReqV1"),
+                        0,
+                        MUSUBI_MAX_DEPENDENCIES_V1,
+                    ),
+                ),
+                ("selection", schema_ref("MusubiReleaseSelectionStateV1")),
+                ("index_revision", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiReleaseRecordV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "manifest",
+                "release_digest",
+                "published_by",
+                "published_at_height",
+                "yank",
+                "artifact_governance",
+                "revisions",
+            ],
+            vec![
+                ("manifest", schema_ref("MusubiReleaseManifestV1")),
+                ("release_digest", schema_ref("MusubiDigest32V1")),
+                ("published_by", schema_ref("MusubiAccountIdV1")),
+                ("published_at_height", schema_ref("MusubiPositiveU64V1")),
+                ("yank", schema_ref("MusubiReleaseYankV1")),
+                (
+                    "artifact_governance",
+                    schema_ref("MusubiArtifactGovernanceStateV1"),
+                ),
+                (
+                    "revisions",
+                    musubi_closed_object(
+                        &["yank", "artifact_governance"],
+                        vec![
+                            ("yank", schema_ref("MusubiPositiveU64V1")),
+                            ("artifact_governance", schema_ref("MusubiPositiveU64V1")),
+                        ],
+                    ),
+                ),
+            ],
+        ),
+    );
+}
+
+fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
+    use iroha_data_model::musubi::{
+        MUSUBI_MAX_PACKAGE_MEMBERS_V1, MUSUBI_MAX_PACKAGE_OWNERS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
+    };
+
+    schemas.insert(
+        "MusubiMaintainerPermissionsV1".to_owned(),
+        musubi_closed_object(
+            &["publish", "yank", "metadata", "archive_locations"],
+            vec![
+                ("publish", norito::json!({ "type": "boolean" })),
+                ("yank", norito::json!({ "type": "boolean" })),
+                ("metadata", norito::json!({ "type": "boolean" })),
+                ("archive_locations", norito::json!({ "type": "boolean" })),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiPackageRoleV1".to_owned(),
+        musubi_tagged_union(vec![
+            ("Owner", norito::json!({ "type": "null" })),
+            ("Maintainer", schema_ref("MusubiMaintainerPermissionsV1")),
+        ]),
+    );
+    schemas.insert(
+        "MusubiInvitationStateV1".to_owned(),
+        musubi_tagged_units(&["Pending", "Accepted", "Revoked", "Expired"]),
+    );
+    schemas.insert(
+        "MusubiPackageMemberV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "package",
+                "account",
+                "role",
+                "accepted_at_height",
+                "governance_revision",
+            ],
+            vec![
+                ("package", schema_ref("MusubiPackageIdV1")),
+                ("account", schema_ref("MusubiAccountIdV1")),
+                ("role", schema_ref("MusubiPackageRoleV1")),
+                ("accepted_at_height", schema_ref("MusubiPositiveU64V1")),
+                ("governance_revision", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiMaintainerInvitationV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "invite_id",
+                "package",
+                "invited_by",
+                "invited_account",
+                "role",
+                "expected_governance_revision",
+                "expires_at_height",
+                "state",
+            ],
+            vec![
+                ("invite_id", schema_ref("MusubiDigest32V1")),
+                ("package", schema_ref("MusubiPackageIdV1")),
+                ("invited_by", schema_ref("MusubiAccountIdV1")),
+                ("invited_account", schema_ref("MusubiAccountIdV1")),
+                ("role", schema_ref("MusubiPackageRoleV1")),
+                (
+                    "expected_governance_revision",
+                    schema_ref("MusubiPositiveU64V1"),
+                ),
+                ("expires_at_height", schema_ref("MusubiPositiveU64V1")),
+                ("state", schema_ref("MusubiInvitationStateV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiMaintainerDirectoryEntryV1".to_owned(),
+        musubi_tagged_union(vec![
+            ("Accepted", schema_ref("MusubiPackageMemberV1")),
+            (
+                "PendingInvitation",
+                schema_ref("MusubiMaintainerInvitationV1"),
+            ),
+        ]),
+    );
+    schemas.insert(
+        "MusubiPackageRevisionsV1".to_owned(),
+        musubi_closed_object(
+            &["governance", "metadata", "archive_locations"],
+            vec![
+                ("governance", schema_ref("MusubiPositiveU64V1")),
+                ("metadata", schema_ref("MusubiPositiveU64V1")),
+                ("archive_locations", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiPackageRecordV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "package",
+                "claimed_namespace",
+                "claimed_namespace_binding",
+                "owners",
+                "member_accounts",
+                "claimed_at_height",
+                "revisions",
+            ],
+            vec![
+                ("package", schema_ref("MusubiPackageIdV1")),
+                ("claimed_namespace", schema_ref("MusubiNamespaceV1")),
+                ("claimed_namespace_binding", schema_ref("MusubiDigest32V1")),
+                (
+                    "owners",
+                    musubi_array(
+                        schema_ref("MusubiAccountIdV1"),
+                        1,
+                        MUSUBI_MAX_PACKAGE_OWNERS_V1,
+                    ),
+                ),
+                (
+                    "member_accounts",
+                    musubi_array(
+                        schema_ref("MusubiAccountIdV1"),
+                        1,
+                        MUSUBI_MAX_PACKAGE_MEMBERS_V1,
+                    ),
+                ),
+                ("claimed_at_height", schema_ref("MusubiPositiveU64V1")),
+                ("revisions", schema_ref("MusubiPackageRevisionsV1")),
+            ],
+        ),
+    );
+
+    schemas.insert(
+        "MusubiAliasPricingPolicyV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "revision",
+                "length_1_xor",
+                "length_2_xor",
+                "length_3_xor",
+                "length_4_xor",
+                "length_5_to_32_xor",
+            ],
+            vec![
+                ("revision", schema_ref("MusubiPositiveU64V1")),
+                ("length_1_xor", schema_ref("MusubiPositiveU64V1")),
+                ("length_2_xor", schema_ref("MusubiPositiveU64V1")),
+                ("length_3_xor", schema_ref("MusubiPositiveU64V1")),
+                ("length_4_xor", schema_ref("MusubiPositiveU64V1")),
+                ("length_5_to_32_xor", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiRegistryAdmissionModeV1".to_owned(),
+        musubi_tagged_units(&["Closed", "Allowlisted", "Open"]),
+    );
+    schemas.insert(
+        "MusubiRegistryPolicyV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "version",
+                "revision",
+                "mode",
+                "allowlisted_dataspaces",
+                "alias_pricing",
+            ],
+            vec![
+                (
+                    "version",
+                    norito::json!({ "type": "integer", "format": "uint8", "const": 1 }),
+                ),
+                ("revision", schema_ref("MusubiPositiveU64V1")),
+                ("mode", schema_ref("MusubiRegistryAdmissionModeV1")),
+                (
+                    "allowlisted_dataspaces",
+                    musubi_array(schema_ref("MusubiU64V1"), 0, MUSUBI_MAX_RESOLUTION_NODES_V1),
+                ),
+                ("alias_pricing", schema_ref("MusubiAliasPricingPolicyV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiGovernanceDecisionV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "decision_id",
+                "action_digest",
+                "enacted_at_height",
+                "execute_after_height",
+            ],
+            vec![
+                ("decision_id", schema_ref("MusubiFixed32BytesV1")),
+                ("action_digest", schema_ref("MusubiDigest32V1")),
+                ("enacted_at_height", schema_ref("MusubiPositiveU64V1")),
+                ("execute_after_height", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiAliasRecordV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "alias",
+                "target",
+                "registered_by",
+                "pricing_revision",
+                "paid_xor",
+                "registered_at_height",
+                "history_revision",
+            ],
+            vec![
+                ("alias", schema_ref("MusubiAliasNameV1")),
+                ("target", schema_ref("MusubiPackageIdV1")),
+                ("registered_by", schema_ref("MusubiAccountIdV1")),
+                ("pricing_revision", schema_ref("MusubiPositiveU64V1")),
+                ("paid_xor", schema_ref("MusubiPositiveU64V1")),
+                ("registered_at_height", schema_ref("MusubiPositiveU64V1")),
+                ("history_revision", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiAliasHistoryActionV1".to_owned(),
+        musubi_tagged_units(&["Registered", "ParliamentRetarget"]),
+    );
+    schemas.insert(
+        "MusubiAliasHistoryEntryV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "alias",
+                "revision",
+                "action",
+                "previous_target",
+                "target",
+                "governance_action",
+                "finalized_height",
+            ],
+            vec![
+                ("alias", schema_ref("MusubiAliasNameV1")),
+                ("revision", schema_ref("MusubiPositiveU64V1")),
+                ("action", schema_ref("MusubiAliasHistoryActionV1")),
+                (
+                    "previous_target",
+                    musubi_nullable(schema_ref("MusubiPackageIdV1")),
+                ),
+                ("target", schema_ref("MusubiPackageIdV1")),
+                (
+                    "governance_action",
+                    musubi_nullable(schema_ref("MusubiDigest32V1")),
+                ),
+                ("finalized_height", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+
+    schemas.insert(
+        "MusubiArchiveRetentionDispositionV1".to_owned(),
+        musubi_tagged_units(&[
+            "RetainUnknown",
+            "RetainReferenced",
+            "PruneUnreferenced",
+            "PruneGovernedTakedown",
+        ]),
+    );
+    schemas.insert(
+        "MusubiArchiveRetentionDecisionV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "archive_id",
+                "disposition",
+                "active_releases",
+                "yanked_releases",
+                "taken_down_releases",
+                "storage",
+            ],
+            vec![
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                (
+                    "disposition",
+                    schema_ref("MusubiArchiveRetentionDispositionV1"),
+                ),
+                (
+                    "active_releases",
+                    norito::json!({ "type": "integer", "format": "uint16", "minimum": 0 }),
+                ),
+                (
+                    "yanked_releases",
+                    norito::json!({ "type": "integer", "format": "uint16", "minimum": 0 }),
+                ),
+                (
+                    "taken_down_releases",
+                    norito::json!({ "type": "integer", "format": "uint16", "minimum": 0 }),
+                ),
+                (
+                    "storage",
+                    musubi_nullable(schema_ref("MusubiArchiveAvailabilityV1")),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiOrderedPrefixV1".to_owned(),
+        musubi_string_newtype(
+            iroha_data_model::musubi::MUSUBI_MAX_CURSOR_KEY_BYTES_V1,
+            None,
+        ),
+    );
+    schemas.insert(
+        "MusubiOrderedPackageEntryV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "selector",
+                "package",
+                "latest_selectable",
+                "metadata_revision",
+                "index_revision",
+            ],
+            vec![
+                ("selector", schema_ref("MusubiPackageSelectorV1")),
+                ("package", schema_ref("MusubiPackageIdV1")),
+                (
+                    "latest_selectable",
+                    musubi_nullable(schema_ref("MusubiVersionV1")),
+                ),
+                ("metadata_revision", schema_ref("MusubiPositiveU64V1")),
+                ("index_revision", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiSearchSnapshotV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "finalized_height",
+                "finalized_block_hash",
+                "projection_revision",
+            ],
+            vec![
+                ("finalized_height", schema_ref("MusubiPositiveU64V1")),
+                ("finalized_block_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("projection_revision", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiSearchCursorV1".to_owned(),
+        musubi_closed_object(
+            &["snapshot", "query_hash", "last_package"],
+            vec![
+                ("snapshot", schema_ref("MusubiSearchSnapshotV1")),
+                ("query_hash", schema_ref("MusubiDigest32V1")),
+                ("last_package", schema_ref("MusubiPackageIdV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiSearchPageRequestV1".to_owned(),
+        musubi_closed_object(
+            &["limit", "cursor"],
+            vec![
+                (
+                    "limit",
+                    norito::json!({
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0,
+                        "maximum": (iroha_data_model::musubi::MUSUBI_MAX_PAGE_SIZE_V1)
+                    }),
+                ),
+                (
+                    "cursor",
+                    musubi_nullable(schema_ref("MusubiSearchCursorV1")),
+                ),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiSearchHitV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "package",
+                "claimed_namespace",
+                "description",
+                "keywords",
+                "metadata_revision",
+            ],
+            vec![
+                ("package", schema_ref("MusubiPackageIdV1")),
+                ("claimed_namespace", schema_ref("MusubiNamespaceV1")),
+                (
+                    "description",
+                    musubi_nullable(schema_ref("MusubiDescriptionV1")),
+                ),
+                (
+                    "keywords",
+                    musubi_array(
+                        schema_ref("MusubiKeywordV1"),
+                        0,
+                        iroha_data_model::musubi::MUSUBI_MAX_KEYWORDS_V1,
+                    ),
+                ),
+                ("metadata_revision", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
+
+    insert_musubi_instruction_request_schemas(schemas);
+    insert_musubi_query_request_and_response_schemas(schemas);
+    insert_musubi_instruction_envelope_schema(schemas);
+}
+
+fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
+    use iroha_data_model::musubi::{
+        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_PACKAGE_OWNERS_V1,
+    };
+
+    for (name, schema) in [
+        (
+            "RegisterMusubiNamespaceBindingV1",
+            musubi_closed_object(
+                &["binding", "expected_policy_revision"],
+                vec![
+                    ("binding", schema_ref("MusubiNamespaceBindingV1")),
+                    (
+                        "expected_policy_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "RegisterMusubiArchiveV1",
+            musubi_closed_object(
+                &["commitment", "staging_receipt", "expected_policy_revision"],
+                vec![
+                    ("commitment", schema_ref("MusubiArchiveCommitmentV1")),
+                    ("staging_receipt", schema_ref("MusubiSeedIngressReceiptV1")),
+                    (
+                        "expected_policy_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "AddMusubiArchiveLocationV1",
+            musubi_closed_object(
+                &[
+                    "archive_id",
+                    "location_id",
+                    "pin_manifest",
+                    "replication_order",
+                    "provider_attestations",
+                    "renew_after_epoch",
+                    "expires_at_epoch",
+                    "expected_location_revision",
+                ],
+                vec![
+                    ("archive_id", schema_ref("MusubiDigest32V1")),
+                    ("location_id", schema_ref("MusubiDigest32V1")),
+                    ("pin_manifest", schema_ref("MusubiDigest32V1")),
+                    ("replication_order", schema_ref("MusubiDigest32V1")),
+                    (
+                        "provider_attestations",
+                        musubi_array(
+                            schema_ref("MusubiProviderBundleVerificationAttestationV1"),
+                            1,
+                            MUSUBI_MAX_LOCATION_PROVIDERS_V1,
+                        ),
+                    ),
+                    ("renew_after_epoch", schema_ref("MusubiU64V1")),
+                    ("expires_at_epoch", schema_ref("MusubiPositiveU64V1")),
+                    (
+                        "expected_location_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "RetireMusubiArchiveLocationV1",
+            musubi_closed_object(
+                &[
+                    "archive_id",
+                    "location_id",
+                    "expected_location_revision",
+                    "reason",
+                ],
+                vec![
+                    ("archive_id", schema_ref("MusubiDigest32V1")),
+                    ("location_id", schema_ref("MusubiDigest32V1")),
+                    (
+                        "expected_location_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                    ("reason", schema_ref("MusubiReasonV1")),
+                ],
+            ),
+        ),
+        (
+            "PublishMusubiReleaseV1",
+            musubi_closed_object(
+                &[
+                    "namespace",
+                    "publication",
+                    "namespace_delegation",
+                    "expected_policy_revision",
+                    "expected_governance_revision",
+                ],
+                vec![
+                    ("namespace", schema_ref("MusubiNamespaceV1")),
+                    ("publication", schema_ref("MusubiPublicationV1")),
+                    (
+                        "namespace_delegation",
+                        musubi_nullable(schema_ref("MusubiNamespaceDelegationV1")),
+                    ),
+                    (
+                        "expected_policy_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                    (
+                        "expected_governance_revision",
+                        musubi_nullable(schema_ref("MusubiPositiveU64V1")),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "SetMusubiReleaseYankV1",
+            musubi_closed_object(
+                &["release", "yanked", "reason", "expected_yank_revision"],
+                vec![
+                    ("release", schema_ref("MusubiReleaseIdV1")),
+                    ("yanked", norito::json!({ "type": "boolean" })),
+                    ("reason", schema_ref("MusubiReasonV1")),
+                    ("expected_yank_revision", schema_ref("MusubiPositiveU64V1")),
+                ],
+            ),
+        ),
+        (
+            "SetMusubiPackageMetadataV1",
+            musubi_closed_object(
+                &["package", "metadata", "expected_metadata_revision"],
+                vec![
+                    ("package", schema_ref("MusubiPackageIdV1")),
+                    ("metadata", schema_ref("MusubiReleaseMetadataV1")),
+                    (
+                        "expected_metadata_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "InviteMusubiPackageMaintainerV1",
+            musubi_closed_object(
+                &[
+                    "package",
+                    "invite_id",
+                    "invited_account",
+                    "role",
+                    "expires_at_height",
+                    "expected_governance_revision",
+                ],
+                vec![
+                    ("package", schema_ref("MusubiPackageIdV1")),
+                    ("invite_id", schema_ref("MusubiDigest32V1")),
+                    ("invited_account", schema_ref("MusubiAccountIdV1")),
+                    ("role", schema_ref("MusubiPackageRoleV1")),
+                    ("expires_at_height", schema_ref("MusubiPositiveU64V1")),
+                    (
+                        "expected_governance_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "AcceptMusubiPackageMaintainerV1",
+            musubi_package_invitation_revision_schema(),
+        ),
+        (
+            "RevokeMusubiPackageMaintainerInvitationV1",
+            musubi_package_invitation_revision_schema(),
+        ),
+        (
+            "SetMusubiPackageMaintainerRoleV1",
+            musubi_closed_object(
+                &["package", "account", "role", "expected_governance_revision"],
+                vec![
+                    ("package", schema_ref("MusubiPackageIdV1")),
+                    ("account", schema_ref("MusubiAccountIdV1")),
+                    ("role", schema_ref("MusubiPackageRoleV1")),
+                    (
+                        "expected_governance_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "RemoveMusubiPackageMaintainerV1",
+            musubi_closed_object(
+                &["package", "account", "expected_governance_revision"],
+                vec![
+                    ("package", schema_ref("MusubiPackageIdV1")),
+                    ("account", schema_ref("MusubiAccountIdV1")),
+                    (
+                        "expected_governance_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "RegisterMusubiAliasV1",
+            musubi_closed_object(
+                &["alias", "target", "expected_pricing_revision"],
+                vec![
+                    ("alias", schema_ref("MusubiAliasNameV1")),
+                    ("target", schema_ref("MusubiPackageIdV1")),
+                    (
+                        "expected_pricing_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "RecoverMusubiPackageV1",
+            musubi_closed_object(
+                &[
+                    "decision",
+                    "package",
+                    "owners",
+                    "expected_governance_revision",
+                ],
+                vec![
+                    ("decision", schema_ref("MusubiGovernanceDecisionV1")),
+                    ("package", schema_ref("MusubiPackageIdV1")),
+                    (
+                        "owners",
+                        musubi_array(
+                            schema_ref("MusubiAccountIdV1"),
+                            1,
+                            MUSUBI_MAX_PACKAGE_OWNERS_V1,
+                        ),
+                    ),
+                    (
+                        "expected_governance_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "RetargetMusubiAliasV1",
+            musubi_closed_object(
+                &["decision", "alias", "target", "expected_history_revision"],
+                vec![
+                    ("decision", schema_ref("MusubiGovernanceDecisionV1")),
+                    ("alias", schema_ref("MusubiAliasNameV1")),
+                    ("target", schema_ref("MusubiPackageIdV1")),
+                    (
+                        "expected_history_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "SetMusubiArtifactTakedownV1",
+            musubi_closed_object(
+                &[
+                    "decision",
+                    "release",
+                    "reason",
+                    "expected_artifact_governance_revision",
+                ],
+                vec![
+                    ("decision", schema_ref("MusubiGovernanceDecisionV1")),
+                    ("release", schema_ref("MusubiReleaseIdV1")),
+                    ("reason", schema_ref("MusubiReasonV1")),
+                    (
+                        "expected_artifact_governance_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "SetMusubiRegistryPolicyV1",
+            musubi_closed_object(
+                &["decision", "policy", "expected_policy_revision"],
+                vec![
+                    ("decision", schema_ref("MusubiGovernanceDecisionV1")),
+                    ("policy", schema_ref("MusubiRegistryPolicyV1")),
+                    (
+                        "expected_policy_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "AssertMusubiReleaseDigestV1",
+            musubi_closed_object(
+                &["release", "expected_digest"],
+                vec![
+                    ("release", schema_ref("MusubiReleaseIdV1")),
+                    ("expected_digest", schema_ref("MusubiDigest32V1")),
+                ],
+            ),
+        ),
+    ] {
+        schemas.insert(name.to_owned(), schema);
+    }
+}
+
+fn musubi_package_invitation_revision_schema() -> Value {
+    musubi_closed_object(
+        &["package", "invite_id", "expected_governance_revision"],
+        vec![
+            ("package", schema_ref("MusubiPackageIdV1")),
+            ("invite_id", schema_ref("MusubiDigest32V1")),
+            (
+                "expected_governance_revision",
+                schema_ref("MusubiPositiveU64V1"),
+            ),
+        ],
+    )
+}
+
+fn insert_musubi_query_request_and_response_schemas(schemas: &mut Map) {
+    use iroha_data_model::musubi::{
+        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1,
+        MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MAX_SEARCH_QUERY_BYTES_V1,
+    };
+
+    for (name, schema) in [
+        (
+            "MusubiExactPackageQueryV1",
+            musubi_closed_object(
+                &["package"],
+                vec![("package", schema_ref("MusubiPackageIdV1"))],
+            ),
+        ),
+        (
+            "MusubiExactReleaseQueryV1",
+            musubi_closed_object(
+                &["release"],
+                vec![("release", schema_ref("MusubiReleaseIdV1"))],
+            ),
+        ),
+        (
+            "MusubiResolverIndexQueryV1",
+            musubi_closed_object(
+                &["package", "requirement", "page"],
+                vec![
+                    ("package", schema_ref("MusubiPackageIdV1")),
+                    (
+                        "requirement",
+                        musubi_nullable(schema_ref("MusubiVersionReqV1")),
+                    ),
+                    ("page", schema_ref("MusubiPageRequestV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiPackagePageQueryV1",
+            musubi_closed_object(
+                &["package", "page"],
+                vec![
+                    ("package", schema_ref("MusubiPackageIdV1")),
+                    ("page", schema_ref("MusubiPageRequestV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiArchiveLocationQueryV1",
+            musubi_closed_object(
+                &["archive_id", "page"],
+                vec![
+                    ("archive_id", schema_ref("MusubiDigest32V1")),
+                    ("page", schema_ref("MusubiPageRequestV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiArchiveRetentionQueryV1",
+            musubi_closed_object(
+                &["archive_ids", "expected_snapshot"],
+                vec![
+                    (
+                        "archive_ids",
+                        musubi_array(
+                            schema_ref("MusubiDigest32V1"),
+                            1,
+                            MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1,
+                        ),
+                    ),
+                    (
+                        "expected_snapshot",
+                        musubi_nullable(schema_ref("MusubiRegistrySnapshotV1")),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "MusubiAliasQueryV1",
+            musubi_closed_object(
+                &["alias", "page"],
+                vec![
+                    ("alias", schema_ref("MusubiAliasNameV1")),
+                    ("page", schema_ref("MusubiPageRequestV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiOrderedPrefixQueryV1",
+            musubi_closed_object(
+                &["prefix", "page"],
+                vec![
+                    ("prefix", schema_ref("MusubiOrderedPrefixV1")),
+                    ("page", schema_ref("MusubiPageRequestV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiSearchQueryV1",
+            musubi_closed_object(
+                &["query", "page"],
+                vec![
+                    (
+                        "query",
+                        norito::json!({
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": (MUSUBI_MAX_SEARCH_QUERY_BYTES_V1)
+                        }),
+                    ),
+                    ("page", schema_ref("MusubiSearchPageRequestV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiResolverIndexPageV1",
+            musubi_closed_object(
+                &[
+                    "query",
+                    "chain_id",
+                    "genesis_hash",
+                    "items",
+                    "next_cursor",
+                    "snapshot",
+                ],
+                vec![
+                    ("query", schema_ref("MusubiResolverIndexQueryV1")),
+                    ("chain_id", schema_ref("MusubiChainIdV1")),
+                    ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                    (
+                        "items",
+                        musubi_array(
+                            schema_ref("MusubiResolverReleaseRowV1"),
+                            0,
+                            MUSUBI_MAX_PAGE_SIZE_V1,
+                        ),
+                    ),
+                    (
+                        "next_cursor",
+                        musubi_nullable(schema_ref("MusubiFinalizedCursorV1")),
+                    ),
+                    ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiVersionPageV1",
+            musubi_page_schema(
+                schema_ref("MusubiPackagePageQueryV1"),
+                schema_ref("MusubiVersionV1"),
+            ),
+        ),
+        (
+            "MusubiMaintainerPageV1",
+            musubi_page_schema(
+                schema_ref("MusubiPackagePageQueryV1"),
+                schema_ref("MusubiMaintainerDirectoryEntryV1"),
+            ),
+        ),
+        (
+            "MusubiArchiveLocationPageV1",
+            musubi_closed_object(
+                &[
+                    "chain_id",
+                    "genesis_hash",
+                    "archive",
+                    "items",
+                    "next_cursor",
+                    "snapshot",
+                ],
+                vec![
+                    ("chain_id", schema_ref("MusubiChainIdV1")),
+                    ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                    ("archive", schema_ref("MusubiArchiveRecordV1")),
+                    (
+                        "items",
+                        musubi_array(
+                            schema_ref("MusubiArchiveLocationV1"),
+                            0,
+                            MUSUBI_MAX_ARCHIVE_LOCATIONS_V1,
+                        ),
+                    ),
+                    (
+                        "next_cursor",
+                        musubi_nullable(schema_ref("MusubiFinalizedCursorV1")),
+                    ),
+                    ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiArchiveRetentionPageV1",
+            musubi_closed_object(
+                &[
+                    "chain_id",
+                    "genesis_hash",
+                    "items",
+                    "snapshot",
+                    "finalized_time_ms",
+                ],
+                vec![
+                    ("chain_id", schema_ref("MusubiChainIdV1")),
+                    ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                    (
+                        "items",
+                        musubi_array(
+                            schema_ref("MusubiArchiveRetentionDecisionV1"),
+                            1,
+                            MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1,
+                        ),
+                    ),
+                    ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+                    ("finalized_time_ms", schema_ref("MusubiU64V1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiAliasHistoryPageV1",
+            musubi_page_schema(
+                schema_ref("MusubiAliasQueryV1"),
+                schema_ref("MusubiAliasHistoryEntryV1"),
+            ),
+        ),
+        (
+            "MusubiOrderedPackagePageV1",
+            musubi_closed_object(
+                &[
+                    "query",
+                    "chain_id",
+                    "genesis_hash",
+                    "namespace_binding",
+                    "items",
+                    "next_cursor",
+                    "snapshot",
+                ],
+                vec![
+                    ("query", schema_ref("MusubiOrderedPrefixQueryV1")),
+                    ("chain_id", schema_ref("MusubiChainIdV1")),
+                    ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                    ("namespace_binding", schema_ref("MusubiNamespaceBindingV1")),
+                    (
+                        "items",
+                        musubi_array(
+                            schema_ref("MusubiOrderedPackageEntryV1"),
+                            0,
+                            MUSUBI_MAX_PAGE_SIZE_V1,
+                        ),
+                    ),
+                    (
+                        "next_cursor",
+                        musubi_nullable(schema_ref("MusubiFinalizedCursorV1")),
+                    ),
+                    ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+                ],
+            ),
+        ),
+        (
+            "MusubiSearchPageV1",
+            musubi_closed_object(
+                &["query", "items", "next_cursor", "snapshot"],
+                vec![
+                    ("query", schema_ref("MusubiSearchQueryV1")),
+                    (
+                        "items",
+                        musubi_array(schema_ref("MusubiSearchHitV1"), 0, MUSUBI_MAX_PAGE_SIZE_V1),
+                    ),
+                    (
+                        "next_cursor",
+                        musubi_nullable(schema_ref("MusubiSearchCursorV1")),
+                    ),
+                    ("snapshot", schema_ref("MusubiSearchSnapshotV1")),
+                ],
+            ),
+        ),
+    ] {
+        schemas.insert(name.to_owned(), schema);
+    }
+}
+
+fn insert_musubi_instruction_envelope_schema(schemas: &mut Map) {
+    use iroha_data_model::isi::musubi::{
+        AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1, AssertMusubiReleaseDigestV1,
+        InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1, RecoverMusubiPackageV1,
+        RegisterMusubiAliasV1, RegisterMusubiArchiveV1, RegisterMusubiNamespaceBindingV1,
+        RemoveMusubiPackageMaintainerV1, RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+        RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
+        SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1, SetMusubiRegistryPolicyV1,
+        SetMusubiReleaseYankV1,
+    };
+
+    let payload_variants = [
+        (
+            RegisterMusubiNamespaceBindingV1::WIRE_ID,
+            "RegisterMusubiNamespaceBindingV1",
+        ),
+        (RegisterMusubiArchiveV1::WIRE_ID, "RegisterMusubiArchiveV1"),
+        (
+            AddMusubiArchiveLocationV1::WIRE_ID,
+            "AddMusubiArchiveLocationV1",
+        ),
+        (
+            RetireMusubiArchiveLocationV1::WIRE_ID,
+            "RetireMusubiArchiveLocationV1",
+        ),
+        (PublishMusubiReleaseV1::WIRE_ID, "PublishMusubiReleaseV1"),
+        (SetMusubiReleaseYankV1::WIRE_ID, "SetMusubiReleaseYankV1"),
+        (
+            SetMusubiPackageMetadataV1::WIRE_ID,
+            "SetMusubiPackageMetadataV1",
+        ),
+        (
+            InviteMusubiPackageMaintainerV1::WIRE_ID,
+            "InviteMusubiPackageMaintainerV1",
+        ),
+        (
+            AcceptMusubiPackageMaintainerV1::WIRE_ID,
+            "AcceptMusubiPackageMaintainerV1",
+        ),
+        (
+            RevokeMusubiPackageMaintainerInvitationV1::WIRE_ID,
+            "RevokeMusubiPackageMaintainerInvitationV1",
+        ),
+        (
+            SetMusubiPackageMaintainerRoleV1::WIRE_ID,
+            "SetMusubiPackageMaintainerRoleV1",
+        ),
+        (
+            RemoveMusubiPackageMaintainerV1::WIRE_ID,
+            "RemoveMusubiPackageMaintainerV1",
+        ),
+        (RegisterMusubiAliasV1::WIRE_ID, "RegisterMusubiAliasV1"),
+        (RecoverMusubiPackageV1::WIRE_ID, "RecoverMusubiPackageV1"),
+        (RetargetMusubiAliasV1::WIRE_ID, "RetargetMusubiAliasV1"),
+        (
+            SetMusubiArtifactTakedownV1::WIRE_ID,
+            "SetMusubiArtifactTakedownV1",
+        ),
+        (
+            SetMusubiRegistryPolicyV1::WIRE_ID,
+            "SetMusubiRegistryPolicyV1",
+        ),
+        (
+            AssertMusubiReleaseDigestV1::WIRE_ID,
+            "AssertMusubiReleaseDigestV1",
+        ),
+    ];
+    let preview_variants = payload_variants
+        .iter()
+        .map(|(wire_id, payload_schema)| {
+            musubi_closed_object(
+                &["wire_id", "payload"],
+                vec![
+                    (
+                        "wire_id",
+                        norito::json!({ "type": "string", "const": (*wire_id) }),
+                    ),
+                    ("payload", schema_ref(payload_schema)),
+                ],
+            )
+        })
+        .collect::<Vec<_>>();
+    let wire_ids = payload_variants
+        .iter()
+        .map(|(wire_id, _)| Value::String((*wire_id).to_owned()))
+        .collect::<Vec<_>>();
+    schemas.insert(
+        "MusubiInstructionPreviewV1".to_owned(),
+        norito::json!({ "oneOf": (preview_variants) }),
+    );
+    schemas.insert(
+        "MusubiInstructionEnvelopeV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "schema",
+                "version",
+                "wire_id",
+                "instruction_base64",
+                "instruction_hex",
+                "instruction_json",
+            ],
+            vec![
+                (
+                    "schema",
+                    norito::json!({ "type": "string", "const": "musubi-instruction-envelope" }),
+                ),
+                (
+                    "version",
+                    norito::json!({ "type": "integer", "format": "uint8", "const": 1 }),
+                ),
+                (
+                    "wire_id",
+                    norito::json!({ "type": "string", "enum": (wire_ids) }),
+                ),
+                (
+                    "instruction_base64",
+                    norito::json!({
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+                    }),
+                ),
+                (
+                    "instruction_hex",
+                    norito::json!({
+                        "type": "string",
+                        "minLength": 2,
+                        "pattern": "^(?:[0-9a-f]{2})+$"
+                    }),
+                ),
+                ("instruction_json", schema_ref("MusubiInstructionPreviewV1")),
+            ],
+        ),
+    );
+}
+
 fn openapi_schemas() -> Map {
     let max_sumeragi_validators =
         u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
@@ -21223,6 +23680,7 @@ fn openapi_schemas() -> Map {
     validation_fee_schemas(&mut schemas);
     app_api_local_signing_schemas(&mut schemas);
     subscription_schemas(&mut schemas);
+    insert_musubi_v1_schemas(&mut schemas);
     schemas.insert(
         "ZkSnapshotBlockHash".to_owned(),
         norito::json!({
@@ -35468,6 +37926,231 @@ mod tests {
     }
 
     #[test]
+    fn content_route_documents_conditional_cache_and_auth_contract() {
+        const PATH: &str = "/v1/content/{bundle}/{path}";
+
+        let document = generate_spec();
+        let operation = openapi_operation(&document, PATH, "get");
+        let description = operation
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("content operation description");
+        for phrase in [
+            "optional for public bundles",
+            "Cache-Control: private, no-store",
+            "authenticate and authorize before file lookup",
+            "absent or invalid proof returns 401",
+            "missing file returns 404 only after successful authorization",
+        ] {
+            assert!(
+                description.contains(phrase),
+                "content operation must document `{phrase}`"
+            );
+        }
+
+        let parameters = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("content parameters");
+        let auth_headers = parameters
+            .iter()
+            .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+            .map(|parameter| {
+                (
+                    parameter
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .expect("content auth header"),
+                    parameter.get("required").and_then(Value::as_bool),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            auth_headers,
+            BTreeSet::from([
+                ("X-Iroha-Account", Some(false)),
+                ("X-Iroha-Nonce", Some(false)),
+                ("X-Iroha-Signature", Some(false)),
+                ("X-Iroha-Timestamp-Ms", Some(false)),
+                ("X-Iroha-Witness", Some(false)),
+            ])
+        );
+
+        let responses = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("content responses");
+        let success_headers = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .expect("content success cache headers");
+        let cache_description = success_headers
+            .get("Cache-Control")
+            .and_then(Value::as_object)
+            .and_then(|header| header.get("description"))
+            .and_then(Value::as_str)
+            .expect("content cache-control description");
+        assert!(cache_description.contains("Public bundles"));
+        assert!(cache_description.contains("private, no-store"));
+        assert_eq!(
+            success_headers
+                .get("Vary")
+                .and_then(Value::as_object)
+                .and_then(|header| header.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some(crate::content::CANONICAL_CONTENT_AUTH_VARY)
+        );
+
+        let unauthorized = responses
+            .get("401")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("description"))
+            .and_then(Value::as_str)
+            .expect("content unauthorized description");
+        assert!(unauthorized.contains("canonical request authentication"));
+        let not_found = responses
+            .get("404")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("description"))
+            .and_then(Value::as_str)
+            .expect("content not-found description");
+        assert!(not_found.contains("unknown or expired"));
+        assert!(not_found.contains("authenticate and authorize before revealing"));
+    }
+
+    #[test]
+    fn zk_batch_and_tally_openapi_match_runtime_media_and_status_contracts() {
+        fn content_types(container: &Map) -> BTreeSet<&str> {
+            container
+                .get("content")
+                .and_then(Value::as_object)
+                .expect("media content")
+                .keys()
+                .map(String::as_str)
+                .collect()
+        }
+
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        for name in [
+            "ZkVerifyBatchRequest",
+            "ZkVerifyBatchOutcome",
+            "ZkVerifyBatchResponse",
+            "ZkVoteGetTallyRequest",
+            "ZkVoteGetTallyResponse",
+        ] {
+            assert!(schemas.contains_key(name), "missing typed ZK schema {name}");
+        }
+
+        let verify = openapi_operation(&document, "/v1/zk/verify-batch", "post");
+        let verify_request = verify
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .expect("verify-batch request body");
+        assert_eq!(
+            content_types(verify_request),
+            BTreeSet::from(["application/json", "application/x-norito"])
+        );
+        assert_eq!(
+            verify
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .and_then(|body| body.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ZkVerifyBatchRequest")
+        );
+        let verify_success = verify
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .expect("verify-batch success response");
+        assert_eq!(
+            content_types(verify_success),
+            BTreeSet::from(["application/json"])
+        );
+        assert_eq!(
+            verify_success
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ZkVerifyBatchResponse")
+        );
+
+        let tally = openapi_operation(&document, "/v1/zk/vote/tally", "post");
+        let tally_request = tally
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .expect("tally request body");
+        assert_eq!(
+            content_types(tally_request),
+            BTreeSet::from(["application/json", "application/x-norito"])
+        );
+        assert_eq!(
+            tally_request
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ZkVoteGetTallyRequest")
+        );
+        let tally_responses = tally
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("tally responses");
+        assert!(tally_responses.contains_key("404"));
+        assert!(tally_responses.contains_key("406"));
+        let tally_success = tally_responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("tally success response");
+        assert_eq!(
+            content_types(tally_success),
+            BTreeSet::from(["application/json", "application/x-norito"])
+        );
+        assert_eq!(
+            tally_success
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ZkVoteGetTallyResponse")
+        );
+
+        let roots = openapi_operation(&document, "/v1/zk/roots", "post");
+        let roots_description = roots
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("roots description");
+        assert!(roots_description.contains("validated persisted confidential tree profile"));
+        assert!(roots_description.contains("unshield-only registration"));
+        assert!(!roots_description.contains("transfer verifier"));
+    }
+
+    #[test]
     fn ledger_executed_block_wire_cached_generation_is_safe_from_256_kib_callers() {
         const SMALL_CALLER_STACK_BYTES: usize = 256 * 1024;
 
@@ -35855,7 +38538,7 @@ mod tests {
             .and_then(|post| post.get("description"))
             .and_then(Value::as_str)
             .expect("vpn receipt submit description");
-        assert!(vpn_receipts_post_description.contains("tx_instructions"));
+        assert!(vpn_receipts_post_description.contains("settle_lease_instruction"));
         assert!(vpn_receipts_post_description.contains("SettleVpnLease"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
@@ -38393,6 +41076,7 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("OpenAPI paths");
+        let schemas = component_schemas(&document);
         let actual = paths
             .keys()
             .map(String::as_str)
@@ -38405,6 +41089,7 @@ mod tests {
         assert_eq!(musubi_routes::ROUTES.len(), 29);
         assert_eq!(actual, expected);
 
+        let mut schema_roots = BTreeSet::new();
         for route in musubi_routes::ROUTES {
             let path = route.path();
             let path_item = paths
@@ -38420,17 +41105,45 @@ mod tests {
                 .get("post")
                 .and_then(Value::as_object)
                 .expect("Musubi POST operation");
-            for extension in [
-                "x-iroha-norito-request-type",
-                "x-iroha-norito-response-type",
-            ] {
-                assert!(
+            let request_type = operation
+                .get("x-iroha-norito-request-type")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{path} exact request type"));
+            let response_type = operation
+                .get("x-iroha-norito-response-type")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{path} exact response type"));
+            for (model_type, schema_reference) in [
+                (
+                    request_type,
                     operation
-                        .get(extension)
-                        .and_then(Value::as_str)
-                        .is_some_and(|name| name.ends_with("V1")),
-                    "{path} must declare an exact V1 model through {extension}"
+                        .pointer("/requestBody/content/application~1json/schema/$ref")
+                        .and_then(Value::as_str),
+                ),
+                (
+                    response_type,
+                    operation
+                        .pointer("/responses/200/content/application~1json/schema/$ref")
+                        .and_then(Value::as_str),
+                ),
+            ] {
+                assert!(model_type.ends_with("V1"), "{path} exact V1 model");
+                assert_eq!(
+                    schema_reference,
+                    Some(format!("{COMPONENT_SCHEMA_REF_PREFIX}{model_type}").as_str()),
+                    "{path} must reference its declared exact model"
                 );
+                let schema = schemas
+                    .get(model_type)
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("{path} component schema {model_type}"));
+                assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+                assert_eq!(
+                    schema.get("additionalProperties").and_then(Value::as_bool),
+                    Some(false),
+                    "{path} component schema {model_type} must reject unknown fields"
+                );
+                schema_roots.insert(model_type.to_owned());
             }
             assert_eq!(
                 operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
@@ -38440,6 +41153,217 @@ mod tests {
                     "build_instruction"
                 }),
                 "{path} tool effect"
+            );
+        }
+
+        let mut pending = schema_roots.into_iter().collect::<VecDeque<_>>();
+        let mut visited = BTreeSet::new();
+        while let Some(schema_name) = pending.pop_front() {
+            if !visited.insert(schema_name.clone()) {
+                continue;
+            }
+            assert_ne!(schema_name, "JsonValue", "Musubi schemas must stay typed");
+            let schema = schemas
+                .get(&schema_name)
+                .unwrap_or_else(|| panic!("missing Musubi component schema {schema_name}"));
+            let mut values = vec![schema];
+            while let Some(value) = values.pop() {
+                match value {
+                    Value::Object(object) => {
+                        if object.get("type").and_then(Value::as_str) == Some("object")
+                            || object.contains_key("properties")
+                        {
+                            assert_eq!(
+                                object.get("additionalProperties").and_then(Value::as_bool),
+                                Some(false),
+                                "Musubi schema {schema_name} contains an open object"
+                            );
+                        }
+                        if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+                            let referenced_name = reference
+                                .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "Musubi schema {schema_name} uses a non-local reference {reference}"
+                                    )
+                                });
+                            assert!(
+                                schemas.contains_key(referenced_name),
+                                "Musubi schema {schema_name} references missing component {referenced_name}"
+                            );
+                            pending.push_back(referenced_name.to_owned());
+                        }
+                        values.extend(object.values());
+                    }
+                    Value::Array(items) => values.extend(items),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn musubi_instruction_previews_discriminate_equal_payload_shapes_by_wire_id() {
+        use iroha_data_model::isi::musubi::{
+            AcceptMusubiPackageMaintainerV1, RevokeMusubiPackageMaintainerInvitationV1,
+        };
+
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let variants = schemas
+            .get("MusubiInstructionPreviewV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("Musubi instruction preview variants");
+        assert_eq!(variants.len(), 18);
+
+        let mut bindings = BTreeSet::new();
+        let mut wire_ids = BTreeSet::new();
+        for variant in variants {
+            let variant = variant.as_object().expect("closed preview variant");
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+            let properties = variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("preview variant properties");
+            let wire_id = properties
+                .get("wire_id")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str)
+                .expect("preview variant wire id");
+            let payload = properties
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                .expect("preview variant payload reference");
+            assert!(
+                bindings.insert((wire_id.to_owned(), payload.to_owned())),
+                "preview variants must not repeat a wire-id/payload binding"
+            );
+            assert!(
+                wire_ids.insert(wire_id.to_owned()),
+                "preview variants must use distinct wire ids"
+            );
+        }
+
+        assert!(bindings.contains(&(
+            AcceptMusubiPackageMaintainerV1::WIRE_ID.to_owned(),
+            format!("{COMPONENT_SCHEMA_REF_PREFIX}AcceptMusubiPackageMaintainerV1"),
+        )));
+        assert!(bindings.contains(&(
+            RevokeMusubiPackageMaintainerInvitationV1::WIRE_ID.to_owned(),
+            format!("{COMPONENT_SCHEMA_REF_PREFIX}RevokeMusubiPackageMaintainerInvitationV1"),
+        )));
+        assert_ne!(
+            AcceptMusubiPackageMaintainerV1::WIRE_ID,
+            RevokeMusubiPackageMaintainerInvitationV1::WIRE_ID
+        );
+        let envelope_wire_ids = schemas
+            .get("MusubiInstructionEnvelopeV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("wire_id"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("Musubi instruction envelope wire ids")
+            .iter()
+            .map(|wire_id| wire_id.as_str().expect("wire id").to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(envelope_wire_ids, wire_ids);
+    }
+
+    #[test]
+    fn musubi_crypto_text_schemas_do_not_impose_single_key_size_limits() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let account = schemas
+            .get("MusubiAccountIdV1")
+            .and_then(Value::as_object)
+            .expect("Musubi account schema");
+        assert!(
+            !account.contains_key("maxLength"),
+            "native multisignature AccountIds are bounded by their enclosing body"
+        );
+
+        let approval = schemas
+            .get("MusubiControllerApprovalV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("Musubi controller approval properties");
+        for field in ["public_key", "signature"] {
+            assert!(
+                approval
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .is_some_and(|schema| !schema.contains_key("maxLength")),
+                "Musubi approval {field} must admit native post-quantum text encodings"
+            );
+        }
+        assert_eq!(
+            approval
+                .get("signature")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^(?:[0-9A-Fa-f]{2})+$")
+        );
+
+        let provider_id = schemas
+            .get("MusubiProviderIdV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("items"))
+            .and_then(Value::as_object)
+            .expect("Musubi provider-id hex item");
+        assert_eq!(
+            provider_id.get("pattern").and_then(Value::as_str),
+            Some("^[0-9A-Fa-f]{64}$")
+        );
+    }
+
+    #[test]
+    fn musubi_chain_and_chunker_text_bounds_match_the_wire_types() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let chain_id = schemas
+            .get("MusubiChainIdV1")
+            .and_then(Value::as_object)
+            .expect("Musubi chain-id schema");
+        assert_eq!(
+            chain_id.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(iroha_data_model::id::MAX_CHAIN_ID_BYTES)
+                    .expect("chain-id bound fits u64")
+            )
+        );
+        assert_eq!(
+            chain_id.get("pattern").and_then(Value::as_str),
+            Some("^[A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9])?$")
+        );
+
+        let chunker = schemas
+            .get("MusubiChunkerProfileHandleV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("Musubi chunker-handle properties");
+        for field in ["namespace", "name", "semver"] {
+            assert_eq!(
+                chunker
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maxLength"))
+                    .and_then(Value::as_u64),
+                Some(128),
+                "the per-field bound must not exclude a valid 128-byte total handle"
             );
         }
     }
@@ -43380,8 +46304,6 @@ mod tests {
             "tunnel_addresses",
             "mtu_bytes",
             "display_billing_label",
-            "fee_asset_id",
-            "escrow_account_id",
             "operator_account_id",
             "lease_fee",
             "settlement_grace_secs",
@@ -43426,7 +46348,6 @@ mod tests {
             "directory_snapshot_digest_hex",
             "metering_public_key_hex",
             "open_lease_instruction",
-            "tx_instructions",
         ];
         assert_strict_object_schema(schemas, "VpnQuoteResponse", &quote_fields, &[]);
 
@@ -43556,7 +46477,6 @@ mod tests {
             "refunded_fee",
             "lease_id_hex",
             "settle_lease_instruction",
-            "tx_instructions",
         ];
         assert_strict_object_schema(schemas, "VpnReceiptResponse", &receipt_fields, &[]);
         assert_strict_object_schema(schemas, "VpnReceiptListResponse", &["items", "total"], &[]);
@@ -43566,8 +46486,6 @@ mod tests {
             ("VpnProfileResponse", "relay_endpoint"),
             ("VpnProfileResponse", "meter_family"),
             ("VpnProfileResponse", "display_billing_label"),
-            ("VpnProfileResponse", "fee_asset_id"),
-            ("VpnProfileResponse", "escrow_account_id"),
             ("VpnProfileResponse", "operator_account_id"),
             ("VpnQuoteResponse", "payment_reference"),
             ("VpnQuoteResponse", "account_id"),

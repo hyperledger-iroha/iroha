@@ -4720,6 +4720,22 @@ mod tests {
         let decoded = ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&encoded).unwrap();
         assert_eq!(decoded, evidence);
         assert_eq!(decoded.encode_evidence().unwrap(), encoded);
+        let mut streamed = Vec::with_capacity(encoded.len());
+        evidence
+            .write_evidence_chunks(|chunk| {
+                streamed.extend_from_slice(chunk);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(streamed, encoded);
+        let mut reader = encoded.as_slice();
+        let decoded_from_reader = ZkAmsMkheActiveRkgProofV1::decode_evidence_from_reader(
+            &mut reader,
+            encoded.len() as u64,
+        )
+        .unwrap();
+        assert_eq!(decoded_from_reader, evidence);
+        assert!(reader.is_empty());
 
         let proof_start = ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1;
         let contribution_start = proof_start + evidence.proof_bytes.len();

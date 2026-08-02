@@ -21,8 +21,6 @@ class VpnProfile(
     @JvmField val tunnelAddresses: List<String>,
     @JvmField val mtuBytes: Long,
     @JvmField val displayBillingLabel: String,
-    @JvmField val feeAssetId: String,
-    @JvmField val escrowAccountId: String,
     @JvmField val operatorAccountId: String,
     @JvmField val leaseFee: String,
     @JvmField val settlementGraceSecs: Long,
@@ -74,8 +72,7 @@ class VpnQuote(
     @JvmField val relayCertificateSha256Hex: String,
     @JvmField val directorySnapshotDigestHex: String,
     @JvmField val meteringPublicKeyHex: String,
-    @JvmField val openLeaseInstruction: VpnTxInstruction?,
-    @JvmField val txInstructions: List<VpnTxInstruction>,
+    @JvmField val openLeaseInstruction: VpnTxInstruction,
 )
 
 /** Request body for `POST /v1/vpn/sessions`. */
@@ -159,7 +156,6 @@ class VpnReceipt(
     @JvmField val refundedFee: String,
     @JvmField val leaseIdHex: String,
     @JvmField val settleLeaseInstruction: VpnTxInstruction?,
-    @JvmField val txInstructions: List<VpnTxInstruction>,
 )
 
 /** Response emitted by `GET /v1/vpn/receipts`. */

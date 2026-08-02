@@ -94,6 +94,7 @@ use iroha_smart_contract::data_model::{
             RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
             UploadSmartContractCodeChunk,
         },
+        vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     },
     prelude::*,
     query::error::{FindError, QueryExecutionFail},
@@ -1056,6 +1057,19 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<SetOfflineDeviceAttestationPolicy>() {
+            execute!(executor, isi);
+        }
+        // Core owns the signature, chain/client binding, canonical policy,
+        // active-account, address-slot, escrow, and lifecycle invariants. The
+        // three VPN instructions form one indivisible native surface and must
+        // all reach those consensus checks.
+        if let Some(isi) = any.downcast_ref::<OpenVpnLeaseEscrow>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SettleVpnLease>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RefundExpiredVpnLease>() {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
@@ -3409,6 +3423,8 @@ pub mod domain {
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
+            | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
+            | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
             | AnyPermission::CanRegisterOracleFeed(_)
             | AnyPermission::CanProposeOracleChange(_)
@@ -3730,6 +3746,8 @@ pub mod account {
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
+            | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
+            | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
             | AnyPermission::CanRegisterOracleFeed(_)
             | AnyPermission::CanProposeOracleChange(_)
@@ -4046,6 +4064,8 @@ pub mod asset_definition {
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
+            | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
+            | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
             | AnyPermission::CanRegisterOracleFeed(_)
             | AnyPermission::CanProposeOracleChange(_)
@@ -5557,6 +5577,8 @@ pub mod trigger {
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
+            | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
+            | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
             | AnyPermission::CanRegisterOracleFeed(_)
             | AnyPermission::CanProposeOracleChange(_)
@@ -5604,7 +5626,9 @@ pub mod trigger {
                 CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
                 CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
             },
-            soranet::CanIngestSoranetPrivacy,
+            soranet::{
+                CanIngestSoranetPrivacy, CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers,
+            },
         };
 
         use super::*;
@@ -5653,6 +5677,8 @@ pub mod trigger {
                 AnyPermission::CanUpsertSorafsProviderCredit(CanUpsertSorafsProviderCredit),
                 AnyPermission::CanRegisterSorafsProviderOwner(CanRegisterSorafsProviderOwner),
                 AnyPermission::CanUnregisterSorafsProviderOwner(CanUnregisterSorafsProviderOwner),
+                AnyPermission::CanManageSoranetVpnQuoteIssuers(CanManageSoranetVpnQuoteIssuers),
+                AnyPermission::CanIssueSoranetVpnQuote(CanIssueSoranetVpnQuote),
                 AnyPermission::CanIngestSoranetPrivacy(CanIngestSoranetPrivacy),
                 AnyPermission::CanManageSccpGovernance(CanManageSccpGovernance),
             ]
@@ -5700,6 +5726,30 @@ pub mod trigger {
                 assert!(
                     !is_permission_trigger_associated(&permission, &trigger_id),
                     "Sora-specific permissions must not bind to triggers"
+                );
+            }
+        }
+
+        #[test]
+        fn default_executor_forwards_the_complete_vpn_lifecycle() {
+            let source = include_str!("mod.rs");
+            let start = source
+                .find("// Core owns the signature, chain/client binding, canonical policy,")
+                .expect("VPN lifecycle dispatch marker");
+            let tail = &source[start..];
+            let end = tail
+                .find("if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>()")
+                .expect("VPN lifecycle dispatch terminator");
+            let dispatch = &tail[..end];
+
+            for instruction in [
+                "OpenVpnLeaseEscrow",
+                "SettleVpnLease",
+                "RefundExpiredVpnLease",
+            ] {
+                assert!(
+                    dispatch.contains(instruction),
+                    "default executor VPN lifecycle dispatch omitted {instruction}"
                 );
             }
         }

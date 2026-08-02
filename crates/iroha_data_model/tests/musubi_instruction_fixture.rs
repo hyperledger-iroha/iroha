@@ -546,7 +546,7 @@ fn shared_musubi_instruction_fixture_locks_every_wire_layer() {
         owners: recovery_owners,
         expected_governance_revision: u64::MAX - 6,
     };
-    let retarget_alias = "x".parse::<MusubiAliasNameV1>().expect("short alias");
+    let retarget_alias = "x".parse::<MusubiAliasNameV1>().expect("global alias");
     let retarget_target = package(
         0,
         MusubiPackageScopeV1::Domain("parliament".parse::<Name>().expect("domain name")),

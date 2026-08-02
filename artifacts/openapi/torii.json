@@ -22217,6 +22217,16 @@
           "default_exit_class": {
             "$ref": "#/components/schemas/VpnExitClass"
           },
+          "descriptor_commit_hex": {
+            "description": "Signed relay descriptor commitment; empty only when available is false.",
+            "pattern": "^(?:|[0-9a-f]{64})$",
+            "type": "string"
+          },
+          "directory_snapshot_digest_hex": {
+            "description": "Externally authenticated guard-directory snapshot digest; empty only when available is false.",
+            "pattern": "^(?:|[0-9a-f]{64})$",
+            "type": "string"
+          },
           "display_billing_label": {
             "minLength": 1,
             "type": "string"
@@ -22232,19 +22242,11 @@
             },
             "type": "array"
           },
-          "escrow_account_id": {
-            "minLength": 1,
-            "type": "string"
-          },
           "excluded_routes": {
             "items": {
               "type": "string"
             },
             "type": "array"
-          },
-          "fee_asset_id": {
-            "minLength": 1,
-            "type": "string"
           },
           "flow_label_bits": {
             "const": 24,
@@ -22279,20 +22281,24 @@
             "minimum": 1,
             "type": "integer"
           },
+          "relay_certificate_sha256_hex": {
+            "description": "Canonical signed relay-certificate digest; empty only when available is false.",
+            "pattern": "^(?:|[0-9a-f]{64})$",
+            "type": "string"
+          },
           "relay_endpoint": {
             "minLength": 1,
             "type": "string"
           },
+          "relay_id_hex": {
+            "description": "Authenticated-directory Ed25519 relay identity; empty only when available is false.",
+            "pattern": "^(?:|[0-9a-f]{64})$",
+            "type": "string"
+          },
           "relay_tls_spki_sha256_hex": {
-            "anyOf": [
-              {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "description": "Exact TLS leaf SPKI SHA-256 pin; empty only when available is false.",
+            "pattern": "^(?:|[0-9a-f]{64})$",
+            "type": "string"
           },
           "route_pushes": {
             "items": {
@@ -22313,6 +22319,11 @@
             "minItems": 3,
             "type": "array",
             "uniqueItems": true
+          },
+          "tls_server_name": {
+            "description": "Exact TLS DNS identity; empty only when available is false.",
+            "pattern": "^(?:|[a-z0-9.-]+)$",
+            "type": "string"
           },
           "tunnel_addresses": {
             "items": {
@@ -22335,14 +22346,17 @@
           "tunnel_addresses",
           "mtu_bytes",
           "display_billing_label",
-          "fee_asset_id",
-          "escrow_account_id",
           "operator_account_id",
           "lease_fee",
           "settlement_grace_secs",
           "flow_label_bits",
           "padding_budget_ms",
-          "relay_tls_spki_sha256_hex"
+          "relay_id_hex",
+          "descriptor_commit_hex",
+          "tls_server_name",
+          "relay_tls_spki_sha256_hex",
+          "relay_certificate_sha256_hex",
+          "directory_snapshot_digest_hex"
         ],
         "type": "object"
       },
@@ -22377,6 +22391,14 @@
         "properties": {
           "account_id": {
             "minLength": 1,
+            "type": "string"
+          },
+          "descriptor_commit_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "directory_snapshot_digest_hex": {
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
           "dns_servers": {
@@ -22434,14 +22456,7 @@
             "type": "integer"
           },
           "open_lease_instruction": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/VpnTxInstruction"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/VpnTxInstruction"
           },
           "operator_account_id": {
             "minLength": 1,
@@ -22466,20 +22481,21 @@
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
+          "relay_certificate_sha256_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
           "relay_endpoint": {
             "minLength": 1,
             "type": "string"
           },
+          "relay_id_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
           "relay_tls_spki_sha256_hex": {
-            "anyOf": [
-              {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
           },
           "route_pushes": {
             "items": {
@@ -22491,18 +22507,16 @@
             "pattern": "^[0-9a-f]{32}$",
             "type": "string"
           },
+          "tls_server_name": {
+            "maxLength": 253,
+            "minLength": 1,
+            "pattern": "^[a-z0-9.-]+$",
+            "type": "string"
+          },
           "tunnel_addresses": {
             "items": {
               "type": "string"
             },
-            "type": "array"
-          },
-          "tx_instructions": {
-            "items": {
-              "$ref": "#/components/schemas/VpnTxInstruction"
-            },
-            "maxItems": 1,
-            "minItems": 1,
             "type": "array"
           }
         },
@@ -22528,10 +22542,14 @@
           "meter_family",
           "flow_label_bits",
           "padding_budget_ms",
+          "relay_id_hex",
+          "descriptor_commit_hex",
+          "tls_server_name",
           "relay_tls_spki_sha256_hex",
+          "relay_certificate_sha256_hex",
+          "directory_snapshot_digest_hex",
           "metering_public_key_hex",
-          "open_lease_instruction",
-          "tx_instructions"
+          "open_lease_instruction"
         ],
         "type": "object"
       },
@@ -22664,13 +22682,6 @@
               "settled"
             ],
             "type": "string"
-          },
-          "tx_instructions": {
-            "items": {
-              "$ref": "#/components/schemas/VpnTxInstruction"
-            },
-            "maxItems": 1,
-            "type": "array"
           }
         },
         "required": [
@@ -22695,8 +22706,7 @@
           "earned_fee",
           "refunded_fee",
           "lease_id_hex",
-          "settle_lease_instruction",
-          "tx_instructions"
+          "settle_lease_instruction"
         ],
         "type": "object"
       },
@@ -22781,6 +22791,14 @@
             "minimum": 0,
             "type": "integer"
           },
+          "descriptor_commit_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "directory_snapshot_digest_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
           "dns_servers": {
             "items": {
               "type": "string"
@@ -22861,20 +22879,21 @@
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
+          "relay_certificate_sha256_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
           "relay_endpoint": {
             "minLength": 1,
             "type": "string"
           },
+          "relay_id_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
           "relay_tls_spki_sha256_hex": {
-            "anyOf": [
-              {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
           },
           "route_pushes": {
             "items": {
@@ -22888,6 +22907,12 @@
           },
           "status": {
             "const": "active",
+            "type": "string"
+          },
+          "tls_server_name": {
+            "maxLength": 253,
+            "minLength": 1,
+            "pattern": "^[a-z0-9.-]+$",
             "type": "string"
           },
           "tunnel_addresses": {
@@ -22915,7 +22940,12 @@
           "lease_fee",
           "flow_label_bits",
           "padding_budget_ms",
+          "relay_id_hex",
+          "descriptor_commit_hex",
+          "tls_server_name",
           "relay_tls_spki_sha256_hex",
+          "relay_certificate_sha256_hex",
+          "directory_snapshot_digest_hex",
           "route_pushes",
           "excluded_routes",
           "dns_servers",
@@ -23444,6 +23474,155 @@
         "minLength": 64,
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
+      },
+      "ZkVerifyBatchOutcome": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "verified"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_entry_type",
+                  "invalid_base64",
+                  "invalid_envelope",
+                  "envelope_too_large",
+                  "non_ascii_transcript_label",
+                  "verification_limit_exceeded",
+                  "unsupported_backend",
+                  "unsupported_version",
+                  "verification_error"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ZkVerifyBatchRequest": {
+        "description": "For application/json, standard-base64 canonical Norito OpenVerifyEnvelope values. application/x-norito carries the canonical Norito vector directly.",
+        "items": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "ZkVerifyBatchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "actual": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "enum": [
+              "body_too_large",
+              "batch_too_large"
+            ],
+            "type": "string"
+          },
+          "max": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ok": {
+            "description": "True only when the outer batch decoded and each input received an outcome.",
+            "type": "boolean"
+          },
+          "statuses": {
+            "items": {
+              "$ref": "#/components/schemas/ZkVerifyBatchOutcome"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok",
+          "statuses"
+        ],
+        "type": "object"
+      },
+      "ZkVoteGetTallyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "election_id": {
+            "description": "Exact on-chain election identifier.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "election_id"
+        ],
+        "type": "object"
+      },
+      "ZkVoteGetTallyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "evaluated_block_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "evaluated_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized": {
+            "type": "boolean"
+          },
+          "tally": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "evaluated_block_height",
+          "evaluated_block_hash",
+          "finalized",
+          "tally"
+        ],
+        "type": "object"
       }
     }
   },
@@ -26962,7 +27141,7 @@
     },
     "/v1/content/{bundle}/{path}": {
       "get": {
-        "description": "Fetch content bundle bytes (path captures the remaining path segments). Role- or sponsor-gated bundles require canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`).",
+        "description": "Fetch content bundle bytes (path captures the remaining path segments). Canonical request-authentication headers are optional for public bundles. Role- and sponsor-gated bundles require either the complete account/signature/timestamp/nonce proof set or a canonical witness. Public responses may use the manifest's configured public cache policy; role- and sponsor-gated responses always return `Cache-Control: private, no-store` and vary over all canonical authentication headers. Existing protected bundles authenticate and authorize before file lookup: absent or invalid proof returns 401, authorization mismatch returns 403, and a missing file returns 404 only after successful authorization. Unknown or expired bundles also return 404.",
         "parameters": [
           {
             "description": "Content bundle identifier.",
@@ -26981,6 +27160,51 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -26993,7 +27217,45 @@
                 }
               }
             },
-            "description": "Content payload."
+            "description": "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Manifest-conditional cache policy. Public bundles use the manifest's configured public policy; role- and sponsor-gated bundles always return `private, no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Present for role- and sponsor-gated bundles and absent for public bundles. The value covers every canonical authentication input.",
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A protected bundle requires canonical request authentication, the supplied proof is invalid, or the configured proof-of-work token is absent."
+          },
+          "403": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The authenticated account does not satisfy the bundle's role or sponsor policy, or the supplied proof-of-work token is invalid."
+          },
+          "404": {
+            "description": "The bundle is unknown or expired, or the requested file does not exist. Existing protected bundles authenticate and authorize before revealing whether the file exists."
           }
         },
         "summary": "Fetch content bundle bytes.",
@@ -53234,7 +53496,7 @@
     },
     "/v1/vpn/quotes": {
       "post": {
-        "description": "Create a signed XOR escrow quote for a Sora VPN lease. The request must include `metering_public_key_hex`; successful responses include `tx_instructions` with a native `OpenVpnLeaseEscrow` skeleton for client signing/submission.",
+        "description": "Create a signed XOR escrow quote for a Sora VPN lease. The request must include `metering_public_key_hex`; successful responses include the required `open_lease_instruction` native `OpenVpnLeaseEscrow` skeleton for client signing/submission.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -53380,7 +53642,7 @@
         "x-iroha-tool-effect": "read"
       },
       "post": {
-        "description": "Settle an active VPN lease from relay and client usage evidence. Successful responses include `tx_instructions` with a native `SettleVpnLease` skeleton for operator signing/submission.",
+        "description": "Settle an active VPN lease from relay and client usage evidence. A successful settlement response includes the optional `settle_lease_instruction` native `SettleVpnLease` skeleton for operator signing/submission.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -54207,7 +54469,7 @@
     },
     "/v1/zk/roots": {
       "post": {
-        "description": "Fetch zero-knowledge roots bound to one exact committed snapshot.",
+        "description": "Fetch roots for any asset with a validated persisted confidential tree profile, including unshield-only registration, from one exact committed snapshot.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -54239,12 +54501,18 @@
     },
     "/v1/zk/verify-batch": {
       "post": {
-        "description": "Verify a bounded batch of zero-knowledge proof envelopes.",
+        "description": "Verify a bounded batch of zero-knowledge proof envelopes supplied as JSON or canonical Norito. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/ZkVerifyBatchRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
               }
             }
           },
@@ -54255,7 +54523,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ZkVerifyBatchResponse"
                 }
               }
             },
@@ -54335,12 +54603,18 @@
     },
     "/v1/zk/vote/tally": {
       "post": {
-        "description": "Compute a ZK ballot tally from the provided payload.",
+        "description": "Read an existing ballot tally from one committed state snapshot. Requests accept JSON or canonical Norito, and successful responses negotiate the same two media types. Unknown elections return 404; successful responses carry the exact block height and hash used for lookup.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/ZkVoteGetTallyRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
               }
             }
           },
@@ -54351,14 +54625,41 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ZkVoteGetTallyResponse"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Tally and committed-state evaluation anchor for the requested election."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested election does not exist in the committed state snapshot."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
           }
         },
-        "summary": "Compute ZK vote tally.",
+        "summary": "Read a ZK vote tally.",
         "tags": [
           "ZK"
         ],

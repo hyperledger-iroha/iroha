@@ -196,8 +196,6 @@ _VPN_PROFILE_RESPONSE_FIELDS = frozenset(
         "tunnel_addresses",
         "mtu_bytes",
         "display_billing_label",
-        "fee_asset_id",
-        "escrow_account_id",
         "operator_account_id",
         "lease_fee",
         "settlement_grace_secs",
@@ -242,7 +240,6 @@ _VPN_QUOTE_RESPONSE_FIELDS = frozenset(
         "directory_snapshot_digest_hex",
         "metering_public_key_hex",
         "open_lease_instruction",
-        "tx_instructions",
     }
 )
 _VPN_SESSION_RESPONSE_FIELDS = frozenset(
@@ -305,7 +302,6 @@ _VPN_RECEIPT_RESPONSE_FIELDS = frozenset(
         "refunded_fee",
         "lease_id_hex",
         "settle_lease_instruction",
-        "tx_instructions",
     }
 )
 _VPN_RECEIPT_LIST_RESPONSE_FIELDS = frozenset({"items", "total"})
@@ -6560,8 +6556,6 @@ class VpnProfile:
     tunnel_addresses: List[str]
     mtu_bytes: int
     display_billing_label: str
-    fee_asset_id: str
-    escrow_account_id: str
     operator_account_id: str
     lease_fee: str
     settlement_grace_secs: int
@@ -6607,8 +6601,7 @@ class VpnQuote:
     relay_certificate_sha256_hex: str
     directory_snapshot_digest_hex: str
     metering_public_key_hex: str
-    open_lease_instruction: Optional[TransactionInstruction]
-    tx_instructions: List[TransactionInstruction]
+    open_lease_instruction: TransactionInstruction
 
 
 @dataclass(frozen=True)
@@ -6675,7 +6668,6 @@ class VpnReceipt:
     refunded_fee: str
     lease_id_hex: str
     settle_lease_instruction: Optional[TransactionInstruction]
-    tx_instructions: List[TransactionInstruction]
 
 
 @dataclass(frozen=True)
@@ -14284,26 +14276,6 @@ class ToriiClient:
             return None
         return cls._parse_vpn_tx_instruction(value, context=context)
 
-    @classmethod
-    def _parse_vpn_tx_instructions(
-        cls,
-        value: Any,
-        *,
-        context: str,
-        minimum: int = 0,
-        maximum: Optional[int] = None,
-    ) -> List[TransactionInstruction]:
-        if not isinstance(value, list):
-            raise RuntimeError(f"{context} must be a list")
-        if len(value) < minimum:
-            raise RuntimeError(f"{context} must contain at least {minimum} instruction")
-        if maximum is not None and len(value) > maximum:
-            raise RuntimeError(f"{context} must contain at most {maximum} instruction")
-        return [
-            cls._parse_vpn_tx_instruction(entry, context=f"{context}[{index}]")
-            for index, entry in enumerate(value)
-        ]
-
     @staticmethod
     def _parse_vpn_string_list(value: Any, *, context: str) -> List[str]:
         if not isinstance(value, list):
@@ -14438,11 +14410,6 @@ class ToriiClient:
                 record.get("display_billing_label"),
                 f"{context}.display_billing_label",
             ),
-            fee_asset_id=cls._require_string(record.get("fee_asset_id"), f"{context}.fee_asset_id"),
-            escrow_account_id=cls._require_string(
-                record.get("escrow_account_id"),
-                f"{context}.escrow_account_id",
-            ),
             operator_account_id=cls._require_string(
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
@@ -14480,12 +14447,6 @@ class ToriiClient:
             f"{context}.padding_budget_ms",
             minimum=1,
             maximum=65535,
-        )
-        tx_instructions = cls._parse_vpn_tx_instructions(
-            record.get("tx_instructions"),
-            context=f"{context}.tx_instructions",
-            minimum=1,
-            maximum=1,
         )
         return VpnQuote(
             quote_id=cls._require_exact_lower_hex_string(
@@ -14552,11 +14513,10 @@ class ToriiClient:
                 context=f"{context}.metering_public_key_hex",
                 expected_length=64,
             ),
-            open_lease_instruction=cls._parse_optional_vpn_tx_instruction(
+            open_lease_instruction=cls._parse_vpn_tx_instruction(
                 record.get("open_lease_instruction"),
                 context=f"{context}.open_lease_instruction",
             ),
-            tx_instructions=tx_instructions,
         )
 
     @classmethod
@@ -14664,11 +14624,6 @@ class ToriiClient:
     def _parse_vpn_receipt(cls, payload: Mapping[str, Any], *, context: str) -> VpnReceipt:
         record = cls._ensure_mapping(payload, context)
         cls._validate_exact_fields(record, _VPN_RECEIPT_RESPONSE_FIELDS, context)
-        tx_instructions = cls._parse_vpn_tx_instructions(
-            record.get("tx_instructions"),
-            context=f"{context}.tx_instructions",
-            maximum=1,
-        )
         return VpnReceipt(
             session_id=cls._require_exact_lower_hex_string(
                 record.get("session_id"),
@@ -14738,7 +14693,6 @@ class ToriiClient:
                 record.get("settle_lease_instruction"),
                 context=f"{context}.settle_lease_instruction",
             ),
-            tx_instructions=tx_instructions,
         )
 
     @classmethod

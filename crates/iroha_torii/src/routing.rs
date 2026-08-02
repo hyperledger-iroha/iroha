@@ -33549,15 +33549,21 @@ pub(crate) async fn handle_post_sorafs_record_por_proof(
         match node_for_worker
             .record_por_proof_with_authority_update(&proof_for_worker, &admitted_provider_key)
         {
-            Ok(update) => (Ok(()), coordinator_for_worker.apply_authoritative_update(update)),
+            Ok(update) => (
+                Ok(()),
+                coordinator_for_worker.apply_authoritative_update(update),
+            ),
             Err(error) => {
-                coordinator_for_worker.invalidate_authoritative_projection();
-                (Err(error), Ok(()))
+                if error.disposition().invalidates_projection() {
+                    coordinator_for_worker.invalidate_authoritative_projection();
+                }
+                (Err(error.into_tracker_error()), Ok(()))
             }
         }
     })
     .await
     .map_err(|error| {
+        por_coordinator.invalidate_authoritative_projection();
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
             "PoR proof persistence worker failed: {error}"
         )))
@@ -33626,13 +33632,16 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
                 coordinator_for_worker.apply_authoritative_update(update),
             ),
             Err(error) => {
-                coordinator_for_worker.invalidate_authoritative_projection();
-                (Err(error), Ok(()))
+                if error.disposition().invalidates_projection() {
+                    coordinator_for_worker.invalidate_authoritative_projection();
+                }
+                (Err(error.into_tracker_error()), Ok(()))
             }
         }
     })
     .await
     .map_err(|error| {
+        por_coordinator.invalidate_authoritative_projection();
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
             "PoR verdict persistence worker failed: {error}"
         )))
@@ -33719,7 +33728,7 @@ pub fn handle_get_sorafs_por_export(
         (None, None) => None,
         _ => {
             return Err(conversion_error(
-                "`start_epoch` and `end_epoch` must be supplied together",
+                "`start_epoch` and `end_epoch` must be supplied together".to_owned(),
             ));
         }
     };
@@ -34014,7 +34023,6 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
         | PorCoordinatorError::InvalidAuthoritativeProjection(_)
         | PorCoordinatorError::RetentionExhausted { .. }
         | PorCoordinatorError::StatusGenerationExhausted
-        | PorCoordinatorError::PageCursorEncoding(_)
         | PorCoordinatorError::StatusIndexCorrupt { .. }
         | PorCoordinatorError::StatusPageEncoding(_)
         | PorCoordinatorError::StatusPageByteOverflow
@@ -35804,7 +35812,7 @@ mod sorafs_capacity_tests {
         .expect("auditor signer public key");
         let trusted_auditor_keys = vec![verdict.auditor_signatures[0].public_key.clone()];
 
-        node.record_por_challenge(&challenge)
+        node.record_por_challenge_with_authority_update(&challenge)
             .expect("scheduler challenge accepted by node");
         por_coordinator
             .install_authoritative_projection(
@@ -35855,6 +35863,22 @@ mod sorafs_capacity_tests {
         let snapshot = node.metering_snapshot();
         assert_eq!(snapshot.por_samples_success, 1);
         assert_eq!(snapshot.por_samples_total, 1);
+
+        let page = por_coordinator
+            .query_status_page(
+                &sorafs::PorStatusFilter::default(),
+                sorafs::PorStatusPageLimits::new(1, sorafs::POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("valid status-page limits"),
+                sorafs::PorStatusPageCursor::First,
+            )
+            .expect("proof and verdict handlers update the authoritative projection");
+        assert_eq!(page.snapshot_generation, 4);
+        assert_eq!(page.statuses.len(), 1);
+        assert_eq!(page.statuses[0].challenge_id, challenge.challenge_id);
+        assert_eq!(
+            page.statuses[0].status,
+            sorafs_manifest::por::PorChallengeOutcome::Verified
+        );
     }
 
     fn expect_por_forbidden_code(error: Error, expected: &str) {

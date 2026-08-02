@@ -1249,11 +1249,10 @@ impl MockWorldStateView {
                 "mock WSV balances must have scale=0"
             );
             let subject = Self::account_subject(account);
-            wsv.domains.entry(asset.domain().clone()).or_default();
             wsv.accounts.entry(subject.clone()).or_default();
             wsv.asset_definitions
                 .entry(asset.clone())
-                .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely, None));
+                .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely));
             wsv.balances
                 .insert((subject, asset.clone()), amount.clone());
             if let Some(def) = wsv.asset_definitions.get_mut(asset) {
@@ -1328,17 +1327,14 @@ impl MockWorldStateView {
 
     /// Unregister a domain if it exists and has no accounts, assets, or NFTs.
     pub fn unregister_domain(&mut self, id: &DomainId) -> bool {
-        // deny removal if any account or asset belongs to the domain
+        // Asset-definition identifiers are opaque and do not imply domain
+        // ownership. Only explicit domain-owned records may pin this row.
         let has_accounts = self
             .domain_accounts
             .get(id)
             .is_some_and(|subjects| !subjects.is_empty());
-        let has_assets = self
-            .asset_definitions
-            .values()
-            .any(|definition| definition.owning_domain().as_ref() == Some(id));
         let has_nfts = self.nfts.keys().any(|nft_id| nft_id.domain() == id);
-        if has_accounts || has_assets || has_nfts {
+        if has_accounts || has_nfts {
             return false;
         }
         self.domain_accounts.remove(id);
@@ -1397,8 +1393,7 @@ impl MockWorldStateView {
     /// Register a new asset definition with given mintability.
     ///
     /// The mock matches the core host and accepts canonical opaque asset
-    /// definition identifiers without requiring a first-class domain row for
-    /// `id.domain()`.
+    /// definition identifiers without projecting domain ownership from the ID.
     ///
     /// Returns `true` if the definition was added.
     pub fn register_asset_definition(
@@ -1411,7 +1406,7 @@ impl MockWorldStateView {
             return false;
         }
         self.asset_definitions
-            .insert(id, AssetDefinition::new(mintable, None))
+            .insert(id, AssetDefinition::new(mintable))
             .is_none()
     }
 

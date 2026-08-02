@@ -2061,7 +2061,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         vpn_used_payments: Arc::new(DashMap::new()),
         vpn_sessions: Arc::new(DashMap::new()),
         vpn_receipts: Arc::new(DashMap::new()),
-        vpn_state_lock: Arc::new(tokio::sync::Mutex::new(())),
+        vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
         soracloud_runtime: None,
         #[cfg(feature = "app_api")]
         soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),

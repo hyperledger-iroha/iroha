@@ -641,6 +641,18 @@ impl Solver {
                 );
                 continue;
             }
+            if state.selected.contains(&candidate)
+                && let Some(chain) = self.selected_subtree_depth_conflict(&state, &task, &candidate)
+            {
+                select_better_conflict(
+                    &mut best_conflict,
+                    ResolutionConflictV1 {
+                        chain,
+                        reason: ConflictReasonV1::DepthLimit,
+                    },
+                );
+                continue;
+            }
             let mut next = state.clone();
             let is_new = next.selected.insert(candidate.clone());
             if is_new && next.selected.len() > self.limits.nodes {
@@ -1132,6 +1144,45 @@ impl Solver {
             }
         }
         false
+    }
+
+    fn selected_subtree_depth_conflict(
+        &self,
+        state: &SearchState,
+        task: &PendingEdge,
+        candidate: &MusubiReleaseIdV1,
+    ) -> Option<Vec<ConflictStepV1>> {
+        let mut paths = BTreeMap::new();
+        paths.insert((candidate.clone(), task.depth), task.chain.clone());
+        let mut pending = BTreeSet::from([(task.depth, task.chain.clone(), candidate.clone())]);
+
+        while let Some((depth, chain, release)) = pending.pop_first() {
+            if paths.get(&(release.clone(), depth)) != Some(&chain) {
+                continue;
+            }
+            let parent = ParentKey::Release(release);
+            let Some(edges) = state.edges.get(&parent) else {
+                continue;
+            };
+            for edge in edges.values() {
+                let next_depth = depth.saturating_add(1);
+                let mut next_chain = chain.clone();
+                next_chain.push(PendingEdge::step(
+                    &parent,
+                    &edge.alias,
+                    &edge.package,
+                    &edge.requirement,
+                ));
+                if next_depth > self.limits.depth {
+                    return Some(next_chain);
+                }
+                let key = (edge.selected.clone(), next_depth);
+                if insert_better_chain(&mut paths, key, next_chain.clone()) {
+                    pending.insert((next_depth, next_chain, edge.selected.clone()));
+                }
+            }
+        }
+        None
     }
 
     fn build_lock(&self, state: &SearchState) -> Result<LockfileV1, ResolverError> {
@@ -2245,6 +2296,52 @@ mod tests {
             panic!("expected node conflict");
         };
         assert_eq!(nodes.reason, ConflictReasonV1::NodeLimit);
+    }
+
+    #[test]
+    fn reused_selected_subtree_still_enforces_the_deeper_path_limit() {
+        let snap = snapshot(24);
+        let parent = package("parent");
+        let shared = package("shared");
+        let leaf = package("leaf");
+        let request = request(
+            vec![root(vec![
+                root_dependency("a-anchor", MusubiDependencyKindV1::Normal, &shared, "*"),
+                root_dependency("z-parent", MusubiDependencyKindV1::Normal, &parent, "*"),
+            ])],
+            vec![
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("shared", &shared, "*")],
+                    snap,
+                ),
+                row(&shared, "1.0.0", vec![dependency("leaf", &leaf, "*")], snap),
+                row(&leaf, "1.0.0", vec![], snap),
+            ],
+            snap,
+        );
+
+        let mut with_fallback = request.clone();
+        with_fallback.rows.push(row(&parent, "0.9.0", vec![], snap));
+
+        let error = resolve_with_limits(request, Limits { nodes: 8, depth: 2 })
+            .expect_err("reused subtree creates a three-edge path");
+        let ResolverError::Conflict(conflict) = error else {
+            panic!("expected depth conflict");
+        };
+        assert_eq!(conflict.reason, ConflictReasonV1::DepthLimit);
+        assert_eq!(conflict.chain.len(), 3);
+        assert_eq!(conflict.chain[0].alias.as_ref(), "z-parent");
+        assert_eq!(conflict.chain[1].alias.as_ref(), "shared");
+        assert_eq!(conflict.chain[2].alias.as_ref(), "leaf");
+
+        let resolved = resolve_with_limits(with_fallback, Limits { nodes: 8, depth: 2 })
+            .expect("depth failure backtracks to the older parent");
+        assert_eq!(
+            root_selection(&resolved.lockfile, "z-parent").version,
+            version("0.9.0")
+        );
     }
 
     #[test]

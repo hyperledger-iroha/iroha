@@ -235,7 +235,7 @@ static KAGEMUSHA_GENERATION_MEMORY_GUARD_STARTED_V4: std::sync::atomic::AtomicBo
 ///
 /// The effective limit is derived inside Core from physical RAM and the fixed
 /// 64-GiB ceiling. A caller may lower it, but cannot raise or disable it.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct KagemushaGenerationMemoryGuardV4 {
     effective_memory_limit_bytes: u64,
     _private: (),
@@ -1155,92 +1155,154 @@ fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
+const KAGEMUSHA_MACOS_SYSCTL_V4: &str = "/usr/sbin/sysctl";
+#[cfg(any(target_os = "macos", test))]
+const KAGEMUSHA_MACOS_FOOTPRINT_V4: &str = "/usr/bin/footprint";
 #[cfg(target_os = "macos")]
-fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
-    use std::{ffi::CString, os::raw::c_void};
+const KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4: usize = 4 * 1024;
+#[cfg(target_os = "macos")]
+const KAGEMUSHA_MACOS_RESOURCE_PROBE_TIMEOUT_V4: std::time::Duration =
+    std::time::Duration::from_secs(2);
 
-    unsafe extern "C" {
-        fn sysctlbyname(
-            name: *const std::os::raw::c_char,
-            old_value: *mut c_void,
-            old_length: *mut usize,
-            new_value: *mut c_void,
-            new_length: usize,
-        ) -> std::os::raw::c_int;
+// Core denies unsafe code, so macOS resource sampling delegates only to the
+// sealed operating-system probes by absolute path. Reauthenticate each tool,
+// clear the child environment, and bound both execution time and stdout before
+// trusting its strictly parsed numeric result.
+#[cfg(target_os = "macos")]
+fn run_kagemusha_macos_resource_probe_v4(
+    program: &str,
+    arguments: &[&str],
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    use std::{
+        io::Read as _,
+        os::unix::fs::MetadataExt as _,
+        process::{Command, Stdio},
+    };
+
+    let path = std::path::Path::new(program);
+    if !path.is_absolute() {
+        return Err(format!("macOS {label} probe path is not absolute"));
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect macOS {label} probe: {error}"))?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(format!(
+            "macOS {label} probe is not a root-owned, non-writable regular file"
+        ));
     }
 
-    let name = CString::new("hw.memsize").map_err(|_| "invalid macOS sysctl name".to_owned())?;
-    let mut value = 0_u64;
-    let mut length = std::mem::size_of::<u64>();
-    // SAFETY: `name` is NUL terminated, the output points to a live `u64`, and
-    // `length` advertises exactly that allocation. No input buffer is supplied.
-    let status = unsafe {
-        sysctlbyname(
-            name.as_ptr(),
-            std::ptr::addr_of_mut!(value).cast(),
-            std::ptr::addr_of_mut!(length),
-            std::ptr::null_mut(),
-            0,
-        )
+    let mut child = Command::new(path)
+        .args(arguments)
+        .env_clear()
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("failed to start macOS {label} probe: {error}"))?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("failed to poll macOS {label} probe: {error}"))?
+        {
+            Some(status) => break status,
+            None if started.elapsed() >= KAGEMUSHA_MACOS_RESOURCE_PROBE_TIMEOUT_V4 => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("macOS {label} probe timed out"));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(5)),
+        }
     };
-    if status != 0 || length != std::mem::size_of::<u64>() || value == 0 {
-        return Err("macOS physical-memory introspection failed".to_owned());
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("macOS {label} probe stdout was not captured"))?;
+    let output_limit = u64::try_from(KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4)
+        .map_err(|_| "macOS resource-probe output bound does not fit u64".to_owned())?;
+    let mut output = Vec::new();
+    stdout
+        .by_ref()
+        .take(output_limit.saturating_add(1))
+        .read_to_end(&mut output)
+        .map_err(|error| format!("failed to read macOS {label} probe: {error}"))?;
+    if !status.success() {
+        return Err(format!("macOS {label} probe failed"));
+    }
+    if output.len() > KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4 {
+        return Err(format!("macOS {label} probe output exceeded its bound"));
+    }
+    Ok(output)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_kagemusha_macos_physical_memory_bytes_v4(output: &[u8]) -> Result<u64, String> {
+    let text = std::str::from_utf8(output)
+        .map_err(|_| "macOS physical-memory probe returned non-UTF-8 output".to_owned())?;
+    let value = text
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| "macOS physical-memory probe returned a malformed byte count".to_owned())?;
+    if value == 0 {
+        return Err("macOS physical-memory probe returned zero".to_owned());
     }
     Ok(value)
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn parse_kagemusha_macos_physical_footprint_bytes_v4(output: &[u8]) -> Result<u64, String> {
+    let text = std::str::from_utf8(output)
+        .map_err(|_| "macOS physical-footprint probe returned non-UTF-8 output".to_owned())?;
+    let mut footprint = None;
+    for line in text.lines().map(str::trim) {
+        let Some(value) = line.strip_prefix("phys_footprint:") else {
+            continue;
+        };
+        if footprint.is_some() {
+            return Err("macOS physical-footprint probe returned duplicate samples".to_owned());
+        }
+        let mut fields = value.split_whitespace();
+        let bytes = fields
+            .next()
+            .ok_or_else(|| "macOS physical-footprint probe omitted its byte count".to_owned())?
+            .parse::<u64>()
+            .map_err(|_| {
+                "macOS physical-footprint probe returned a malformed byte count".to_owned()
+            })?;
+        if fields.next() != Some("B") || fields.next().is_some() || bytes == 0 {
+            return Err("macOS physical-footprint probe returned a malformed sample".to_owned());
+        }
+        footprint = Some(bytes);
+    }
+    footprint.ok_or_else(|| "macOS physical-footprint probe returned no sample".to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
+    let output = run_kagemusha_macos_resource_probe_v4(
+        KAGEMUSHA_MACOS_SYSCTL_V4,
+        &["-n", "hw.memsize"],
+        "physical-memory",
+    )?;
+    parse_kagemusha_macos_physical_memory_bytes_v4(&output)
+}
+
 #[cfg(target_os = "macos")]
 fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct TaskVmInfoRev1 {
-        virtual_size: u64,
-        region_count: i32,
-        page_size: i32,
-        resident_size: u64,
-        resident_size_peak: u64,
-        device: u64,
-        device_peak: u64,
-        internal: u64,
-        internal_peak: u64,
-        external: u64,
-        external_peak: u64,
-        reusable: u64,
-        reusable_peak: u64,
-        purgeable_volatile_pmap: u64,
-        purgeable_volatile_resident: u64,
-        purgeable_volatile_virtual: u64,
-        compressed: u64,
-        compressed_peak: u64,
-        compressed_lifetime: u64,
-        phys_footprint: u64,
-    }
-
-    unsafe extern "C" {
-        static mach_task_self_: u32;
-        fn task_info(task: u32, flavor: i32, info: *mut i32, count: *mut u32) -> i32;
-    }
-
-    const TASK_VM_INFO: i32 = 22;
-    let mut info = TaskVmInfoRev1::default();
-    let required_count =
-        u32::try_from(std::mem::size_of::<TaskVmInfoRev1>() / std::mem::size_of::<i32>())
-            .map_err(|_| "macOS task-info size does not fit Mach message count".to_owned())?;
-    let mut count = required_count;
-    // SAFETY: `mach_task_self_` names this task, `info` is a live C-layout
-    // buffer, and `count` is its exact size in Mach integer units.
-    let status = unsafe {
-        task_info(
-            mach_task_self_,
-            TASK_VM_INFO,
-            std::ptr::addr_of_mut!(info).cast(),
-            std::ptr::addr_of_mut!(count),
-        )
-    };
-    if status != 0 || count < required_count || info.phys_footprint == 0 {
-        return Err("macOS physical-footprint introspection failed".to_owned());
-    }
-    Ok(info.phys_footprint)
+    let process_id = std::process::id().to_string();
+    let output = run_kagemusha_macos_resource_probe_v4(
+        KAGEMUSHA_MACOS_FOOTPRINT_V4,
+        &["-p", &process_id, "-f", "bytes", "--noCategories"],
+        "physical-footprint",
+    )?;
+    parse_kagemusha_macos_physical_footprint_bytes_v4(&output)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
@@ -18503,6 +18565,53 @@ mod tests {
         let error = start_kagemusha_generation_memory_monitor_v4(1_024, oversized_footprint)
             .expect_err("an already-oversized process must not receive a memory guard");
         assert!(error.contains("already exceeds"));
+    }
+
+    #[test]
+    fn macos_resource_probe_parsers_are_strict_and_bounded() {
+        assert!(std::path::Path::new(KAGEMUSHA_MACOS_SYSCTL_V4).is_absolute());
+        assert!(std::path::Path::new(KAGEMUSHA_MACOS_FOOTPRINT_V4).is_absolute());
+        assert_eq!(
+            parse_kagemusha_macos_physical_memory_bytes_v4(b"137438953472\n")
+                .expect("canonical macOS physical memory"),
+            137_438_953_472
+        );
+        for malformed in [b"0\n".as_slice(), b"128 GiB\n", b"not-a-number\n"] {
+            assert!(
+                parse_kagemusha_macos_physical_memory_bytes_v4(malformed).is_err(),
+                "malformed physical-memory sample must fail closed"
+            );
+        }
+
+        let sample =
+            b"Auxiliary data:\n    phys_footprint: 1802600 B\n    phys_footprint_peak: 1900000 B\n";
+        assert_eq!(
+            parse_kagemusha_macos_physical_footprint_bytes_v4(sample)
+                .expect("canonical macOS physical footprint"),
+            1_802_600
+        );
+        for malformed in [
+            b"Auxiliary data:\n".as_slice(),
+            b"phys_footprint: 0 B\n",
+            b"phys_footprint: 1.8 MiB\n",
+            b"phys_footprint: 1 B\nphys_footprint: 2 B\n",
+        ] {
+            assert!(
+                parse_kagemusha_macos_physical_footprint_bytes_v4(malformed).is_err(),
+                "malformed physical-footprint sample must fail closed"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_resource_probes_use_pinned_system_tools() {
+        assert!(kagemusha_physical_memory_bytes_v4().expect("macOS physical-memory probe") > 0);
+        assert!(
+            kagemusha_process_physical_footprint_bytes_v4()
+                .expect("macOS physical-footprint probe")
+                > 0
+        );
     }
 
     static POST_HANDSHAKE_OVER_CAP_SAMPLES_V4: std::sync::atomic::AtomicUsize =

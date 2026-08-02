@@ -4651,12 +4651,12 @@ mod tests {
             iroha_zkp_halo2::vega::zk_ams_mkhe_readiness_v1().expect("candidate readiness derives");
         assert!(readiness.parameter_gate);
         assert!(readiness.noise_gate);
-        assert!(!readiness.security_gate);
+        assert!(readiness.security_gate);
         assert!(!readiness.resource_gate);
         assert!(!readiness.wire_gate);
         assert!(!readiness.malicious_party_gate);
         assert!(!readiness.decryption_share_gate);
-        assert!(!readiness.packing_gate);
+        assert!(readiness.packing_gate);
         assert!(!readiness.phase23_gate);
         assert!(!readiness.release_kat_gate);
         assert!(!readiness.is_ready());

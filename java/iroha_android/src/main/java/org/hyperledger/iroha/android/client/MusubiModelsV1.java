@@ -13,8 +13,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
@@ -943,8 +945,8 @@ public final class MusubiModelsV1 {
     public PageRequest() { this(50L, null); }
 
     public PageRequest(final long limit, final FinalizedCursor cursor) {
-      if (limit < 0 || limit > 4_294_967_295L) {
-        throw new IllegalArgumentException("Musubi page limit must fit u32");
+      if (limit < 0 || limit > 100L) {
+        throw new IllegalArgumentException("Musubi page limit exceeds 100");
       }
       this.limit = limit;
       this.cursor = cursor;
@@ -1445,6 +1447,15 @@ public final class MusubiModelsV1 {
     public List<String> memberAccounts() { return memberAccounts; }
     public BigInteger claimedAtHeight() { return claimedAtHeight; }
     public PackageRevisions revisions() { return revisions; }
+
+    /** Rejects an exact-package response for a different structural package. */
+    public void requireMatches(final ExactPackageQuery request) {
+      if (!packageId.equals(Objects.requireNonNull(request, "request").packageId())) {
+        throw new IllegalArgumentException(
+            "Musubi exact-package response does not match the request");
+      }
+    }
+
     @Override Object toJsonValue() {
       return object(
           "package", packageId.toJsonValue(),
@@ -1479,6 +1490,14 @@ public final class MusubiModelsV1 {
     public ReleaseId release() { return release; }
     public String publishedBy() { return publishedBy; }
     public BigInteger publishedAtHeight() { return publishedAtHeight; }
+
+    /** Rejects an exact-release response for a different immutable release. */
+    public void requireMatches(final ExactReleaseQuery request) {
+      if (!release.equals(Objects.requireNonNull(request, "request").release())) {
+        throw new IllegalArgumentException(
+            "Musubi exact-release response does not match the request");
+      }
+    }
   }
 
   /** Compact resolver row response. */
@@ -1498,16 +1517,32 @@ public final class MusubiModelsV1 {
     private final PackageId packageId;
     private final String account;
     private final String roleKind;
+    private final BigInteger acceptedAtHeight;
+    private final BigInteger governanceRevision;
     PackageMember(
         final PackageId packageId,
         final String account,
         final String roleKind,
+        final BigInteger acceptedAtHeight,
+        final BigInteger governanceRevision,
         final Map<String, Object> raw) {
-      super(raw); this.packageId = packageId; this.account = account; this.roleKind = roleKind;
+      super(raw);
+      this.packageId = packageId;
+      this.account = AccountIdLiteral.requireCanonicalI105Address(account, "member account");
+      this.roleKind = roleKind;
+      requireU64(acceptedAtHeight, "member.acceptedAtHeight");
+      requireU64(governanceRevision, "member.governanceRevision");
+      if (acceptedAtHeight.signum() == 0 || governanceRevision.signum() == 0) {
+        throw new IllegalArgumentException("Musubi package member heights must be non-zero");
+      }
+      this.acceptedAtHeight = acceptedAtHeight;
+      this.governanceRevision = governanceRevision;
     }
     public PackageId packageId() { return packageId; }
     public String account() { return account; }
     public String roleKind() { return roleKind; }
+    public BigInteger acceptedAtHeight() { return acceptedAtHeight; }
+    public BigInteger governanceRevision() { return governanceRevision; }
   }
 
   /** Pending package-governance invitation that has not created authority. */
@@ -1534,8 +1569,10 @@ public final class MusubiModelsV1 {
       super(raw);
       this.inviteId = inviteId;
       this.packageId = packageId;
-      this.invitedBy = invitedBy;
-      this.invitedAccount = invitedAccount;
+      this.invitedBy =
+          AccountIdLiteral.requireCanonicalI105Address(invitedBy, "invitation inviter");
+      this.invitedAccount =
+          AccountIdLiteral.requireCanonicalI105Address(invitedAccount, "invited account");
       this.roleKind = roleKind;
       this.expectedGovernanceRevision = expectedGovernanceRevision;
       this.expiresAtHeight = expiresAtHeight;
@@ -1597,19 +1634,23 @@ public final class MusubiModelsV1 {
   public static final class ArchiveLocation extends StrictRecord {
     private final Digest32 locationId;
     private final Digest32 archiveId;
+    private final BigInteger finalizedHeight;
     private final BigInteger revision;
     private final String stateKind;
     ArchiveLocation(
         final Digest32 locationId,
         final Digest32 archiveId,
+        final BigInteger finalizedHeight,
         final BigInteger revision,
         final String stateKind,
         final Map<String, Object> raw) {
       super(raw); this.locationId = locationId; this.archiveId = archiveId;
+      this.finalizedHeight = finalizedHeight;
       this.revision = revision; this.stateKind = stateKind;
     }
     public Digest32 locationId() { return locationId; }
     public Digest32 archiveId() { return archiveId; }
+    public BigInteger finalizedHeight() { return finalizedHeight; }
     public BigInteger revision() { return revision; }
     public String stateKind() { return stateKind; }
   }
@@ -2918,6 +2959,14 @@ public final class MusubiModelsV1 {
         final BigInteger registeredAtHeight,
         final BigInteger historyRevision) {
       requireAsciiKebab(alias, 32, "alias");
+      AccountIdLiteral.requireCanonicalI105Address(registeredBy, "alias registrant");
+      for (final BigInteger value :
+          Arrays.asList(pricingRevision, paidXor, registeredAtHeight, historyRevision)) {
+        requireU64(value, "alias record counter");
+        if (value.signum() == 0) {
+          throw new IllegalArgumentException("Musubi alias record counters must be non-zero");
+        }
+      }
       this.alias = alias; this.target = target; this.registeredBy = registeredBy;
       this.pricingRevision = pricingRevision; this.paidXor = paidXor;
       this.registeredAtHeight = registeredAtHeight; this.historyRevision = historyRevision;
@@ -2929,6 +2978,14 @@ public final class MusubiModelsV1 {
     public BigInteger paidXor() { return paidXor; }
     public BigInteger registeredAtHeight() { return registeredAtHeight; }
     public BigInteger historyRevision() { return historyRevision; }
+
+    /** Rejects an exact-alias response for another permanent alias. */
+    public void requireMatches(final AliasQuery request) {
+      if (!alias.equals(Objects.requireNonNull(request, "request").alias())) {
+        throw new IllegalArgumentException("Musubi alias response does not match the request");
+      }
+    }
+
     @Override Object toJsonValue() {
       return object(
           "alias", Collections.singletonList(alias), "target", target.toJsonValue(),
@@ -2955,6 +3012,22 @@ public final class MusubiModelsV1 {
         final PackageId target,
         final Digest32 governanceAction,
         final BigInteger finalizedHeight) {
+      requireAsciiKebab(alias, 32, "alias history alias");
+      requireU64(revision, "alias history revision");
+      requireU64(finalizedHeight, "alias history finalized height");
+      final boolean validAction =
+          ("Registered".equals(actionKind)
+                  && revision.equals(BigInteger.ONE)
+                  && previousTarget == null
+                  && governanceAction == null)
+              || ("ParliamentRetarget".equals(actionKind)
+                  && revision.compareTo(BigInteger.ONE) > 0
+                  && previousTarget != null
+                  && governanceAction != null
+                  && !allZero(governanceAction.bytes()));
+      if (!validAction || finalizedHeight.signum() == 0) {
+        throw new IllegalArgumentException("Musubi alias-history entry is invalid");
+      }
       this.alias = alias; this.revision = revision; this.actionKind = actionKind;
       this.previousTarget = previousTarget; this.target = target;
       this.governanceAction = governanceAction; this.finalizedHeight = finalizedHeight;
@@ -3015,10 +3088,16 @@ public final class MusubiModelsV1 {
 
   /** Typed finalized response page. */
   public static final class Page<T extends WireValue> extends WireValue {
+    private final WireValue query;
     private final List<T> items;
     private final FinalizedCursor nextCursor;
     private final RegistrySnapshot snapshot;
-    Page(final List<T> items, final FinalizedCursor nextCursor, final RegistrySnapshot snapshot) {
+    Page(
+        final WireValue query,
+        final List<T> items,
+        final FinalizedCursor nextCursor,
+        final RegistrySnapshot snapshot) {
+      this.query = Objects.requireNonNull(query, "query");
       this.items = immutableList(items);
       if (this.items.size() > 100) throw new IllegalArgumentException("Musubi page exceeds 100 items");
       if (nextCursor != null && !nextCursor.snapshot().equals(snapshot)) {
@@ -3026,13 +3105,95 @@ public final class MusubiModelsV1 {
       }
       this.nextCursor = nextCursor; this.snapshot = snapshot;
     }
+    public WireValue query() { return query; }
     public List<T> items() { return items; }
     public FinalizedCursor nextCursor() { return nextCursor; }
     public RegistrySnapshot snapshot() { return snapshot; }
+
+    void requireVersionMatches(final PackagePageQuery request) {
+      final List<Version> versions = new ArrayList<>();
+      for (final T item : items) {
+        if (!(item instanceof Version)) {
+          throw new IllegalArgumentException("Musubi version page contains another item type");
+        }
+        versions.add((Version) item);
+      }
+      if (!query.equals(request)
+          || !semVerPageAdvances(request.page(), versions.isEmpty() ? null : versions.get(0))) {
+        throw new IllegalArgumentException(
+            "Musubi version response does not match its structured request cursor");
+      }
+      requireFinalizedPageMatches(
+          request.page(),
+          versions.size(),
+          versions.isEmpty() ? null : versions.get(0).canonicalText(),
+          versions.isEmpty() ? null : versions.get(versions.size() - 1).canonicalText(),
+          snapshot,
+          nextCursor);
+    }
+
+    void requireMaintainerMatches(final PackagePageQuery request) {
+      final List<MaintainerDirectoryEntry> maintainers = new ArrayList<>();
+      for (final T item : items) {
+        if (!(item instanceof MaintainerDirectoryEntry)) {
+          throw new IllegalArgumentException("Musubi maintainer page contains another item type");
+        }
+        final MaintainerDirectoryEntry entry = (MaintainerDirectoryEntry) item;
+        if (!maintainerPackageId(entry).equals(request.packageId())) {
+          throw new IllegalArgumentException(
+              "Musubi maintainer response contains another package");
+        }
+        maintainers.add(entry);
+      }
+      if (!query.equals(request)
+          || !maintainerPageAdvances(
+              request.page(), maintainers.isEmpty() ? null : maintainers.get(0))) {
+        throw new IllegalArgumentException(
+            "Musubi maintainer response does not match its structured request cursor");
+      }
+      requireFinalizedPageMatches(
+          request.page(),
+          maintainers.size(),
+          maintainers.isEmpty() ? null : maintainerCursorKey(maintainers.get(0)),
+          maintainers.isEmpty()
+              ? null : maintainerCursorKey(maintainers.get(maintainers.size() - 1)),
+          snapshot,
+          nextCursor);
+    }
+
+    void requireAliasHistoryMatches(final AliasQuery request) {
+      final List<AliasHistoryEntry> history = new ArrayList<>();
+      for (final T item : items) {
+        if (!(item instanceof AliasHistoryEntry)) {
+          throw new IllegalArgumentException(
+              "Musubi alias-history page contains another item type");
+        }
+        final AliasHistoryEntry entry = (AliasHistoryEntry) item;
+        if (!entry.alias().equals(request.alias())) {
+          throw new IllegalArgumentException(
+              "Musubi alias-history response contains another alias");
+        }
+        history.add(entry);
+      }
+      if (!query.equals(request)
+          || !aliasHistoryPageAdvances(
+              request, history.isEmpty() ? null : history.get(0))) {
+        throw new IllegalArgumentException(
+            "Musubi alias-history response does not match its structured request cursor");
+      }
+      requireFinalizedPageMatches(
+          request.page(),
+          history.size(),
+          history.isEmpty() ? null : aliasHistoryCursorKey(history.get(0)),
+          history.isEmpty() ? null : aliasHistoryCursorKey(history.get(history.size() - 1)),
+          snapshot,
+          nextCursor);
+    }
     @Override Object toJsonValue() {
       final List<Object> values = new ArrayList<>();
       for (final T item : items) values.add(item.toJsonValue());
       return object(
+          "query", query.toJsonValue(),
           "items", values,
           "next_cursor", nextCursor == null ? null : nextCursor.toJsonValue(),
           "snapshot", snapshot.toJsonValue());
@@ -3041,6 +3202,7 @@ public final class MusubiModelsV1 {
 
   /** Resolver page carrying the exact chain/genesis identity required by lockfiles. */
   public static final class ResolverIndexPage extends WireValue {
+    private final ResolverIndexQuery query;
     private final String chainId;
     private final byte[] genesisHash;
     private final List<ResolverReleaseRow> items;
@@ -3048,11 +3210,13 @@ public final class MusubiModelsV1 {
     private final RegistrySnapshot snapshot;
 
     ResolverIndexPage(
+        final ResolverIndexQuery query,
         final String chainId,
         final byte[] genesisHash,
         final List<ResolverReleaseRow> items,
         final FinalizedCursor nextCursor,
         final RegistrySnapshot snapshot) {
+      this.query = Objects.requireNonNull(query, "query");
       requireExactText(chainId, "Musubi resolver chain ID");
       if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)) {
         throw new IllegalArgumentException("Musubi genesis hash must contain 32 bytes");
@@ -3063,6 +3227,13 @@ public final class MusubiModelsV1 {
       if (this.items.size() > 100) {
         throw new IllegalArgumentException("Musubi resolver page exceeds 100 items");
       }
+      for (int index = 1; index < this.items.size(); index++) {
+        if (compareReleaseIds(
+                this.items.get(index - 1).release(), this.items.get(index).release()) >= 0) {
+          throw new IllegalArgumentException(
+              "Musubi resolver page rows must be sorted and distinct");
+        }
+      }
       if (nextCursor != null && !nextCursor.snapshot().equals(snapshot)) {
         throw new IllegalArgumentException("Musubi resolver cursor uses another snapshot");
       }
@@ -3070,11 +3241,42 @@ public final class MusubiModelsV1 {
       this.snapshot = snapshot;
     }
 
+    public ResolverIndexQuery query() { return query; }
     public String chainId() { return chainId; }
     public byte[] genesisHash() { return genesisHash.clone(); }
     public List<ResolverReleaseRow> items() { return items; }
     public FinalizedCursor nextCursor() { return nextCursor; }
     public RegistrySnapshot snapshot() { return snapshot; }
+
+    /** Binds every resolver row and any continuation snapshot to the exact request. */
+    public void requireMatches(final ResolverIndexQuery request) {
+      Objects.requireNonNull(request, "request");
+      if (!query.equals(request)) {
+        throw new IllegalArgumentException(
+            "Musubi resolver response query does not match the request");
+      }
+      for (final ResolverReleaseRow item : items) {
+        if (!item.release().packageId().equals(request.packageId())
+            || (request.requirement() != null
+                && !request.requirement().matches(item.release().version()))) {
+          throw new IllegalArgumentException(
+              "Musubi resolver response contains another package or an excluded version");
+        }
+      }
+      final Version firstVersion = items.isEmpty() ? null : items.get(0).release().version();
+      if (!semVerPageAdvances(request.page(), firstVersion)) {
+        throw new IllegalArgumentException(
+            "Musubi resolver response does not advance its structured cursor");
+      }
+      requireFinalizedPageMatches(
+          request.page(),
+          items.size(),
+          firstVersion == null ? null : firstVersion.canonicalText(),
+          items.isEmpty()
+              ? null : items.get(items.size() - 1).release().version().canonicalText(),
+          snapshot,
+          nextCursor);
+    }
 
     @Override Object toJsonValue() {
       final List<Object> values = new ArrayList<>();
@@ -3082,6 +3284,7 @@ public final class MusubiModelsV1 {
       final List<Integer> genesis = new ArrayList<>();
       for (final byte value : genesisHash) genesis.add(Integer.valueOf(value & 0xff));
       return object(
+          "query", query.toJsonValue(),
           "chain_id", chainId,
           "genesis_hash", genesis,
           "items", values,
@@ -3121,9 +3324,17 @@ public final class MusubiModelsV1 {
       if (this.items.size() > 4) {
         throw new IllegalArgumentException("Musubi archive-location page has too many items");
       }
-      for (final ArchiveLocation item : this.items) {
-        if (!item.archiveId().equals(archive.archiveId())) {
-          throw new IllegalArgumentException("Musubi archive-location item targets another archive");
+      for (int index = 0; index < this.items.size(); index++) {
+        final ArchiveLocation item = this.items.get(index);
+        if (!item.archiveId().equals(archive.archiveId())
+            || !archive.locationIds().contains(item.locationId())
+            || "Retired".equals(item.stateKind())
+            || item.finalizedHeight().compareTo(snapshot.finalizedHeight()) > 0
+            || item.revision().compareTo(archive.locationRevision()) > 0
+            || (index > 0 && compareUnsignedBytes(
+                this.items.get(index - 1).locationId().bytes(), item.locationId().bytes()) >= 0)) {
+          throw new IllegalArgumentException(
+              "Musubi archive-location page item is not a current archive location");
         }
       }
       if (nextCursor != null && !nextCursor.snapshot().equals(snapshot)) {
@@ -3139,6 +3350,16 @@ public final class MusubiModelsV1 {
     public List<ArchiveLocation> items() { return items; }
     public FinalizedCursor nextCursor() { return nextCursor; }
     public RegistrySnapshot snapshot() { return snapshot; }
+
+    /** Binds the archive record and any continuation snapshot to the exact request. */
+    public void requireMatches(final ArchiveLocationQuery request) {
+      Objects.requireNonNull(request, "request");
+      if (!archive.archiveId().equals(request.archiveId())) {
+        throw new IllegalArgumentException(
+            "Musubi archive-location response does not match the request");
+      }
+      requirePageMatches(request.page(), snapshot, nextCursor, items.size());
+    }
 
     @Override Object toJsonValue() {
       final List<Object> values = new ArrayList<>();
@@ -3158,20 +3379,24 @@ public final class MusubiModelsV1 {
     private final String chainId;
     private final byte[] genesisHash;
     private final List<ArchiveRetentionDecision> items;
+    private final BigInteger finalizedTimeMs;
     private final RegistrySnapshot snapshot;
 
     ArchiveRetentionPage(
         final String chainId,
         final byte[] genesisHash,
         final List<ArchiveRetentionDecision> items,
+        final BigInteger finalizedTimeMs,
         final RegistrySnapshot snapshot) {
       requireExactText(chainId, "Musubi archive-retention chain ID");
+      requireU64(finalizedTimeMs, "archiveRetention.finalizedTimeMs");
       if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)) {
         throw new IllegalArgumentException("Musubi archive-retention genesis hash is invalid");
       }
       this.chainId = chainId;
       this.genesisHash = genesisHash.clone();
       this.items = immutableList(items);
+      this.finalizedTimeMs = finalizedTimeMs;
       this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
       if (this.items.isEmpty() || this.items.size() > 100) {
         throw new IllegalArgumentException(
@@ -3201,6 +3426,7 @@ public final class MusubiModelsV1 {
     public String chainId() { return chainId; }
     public byte[] genesisHash() { return genesisHash.clone(); }
     public List<ArchiveRetentionDecision> items() { return items; }
+    public BigInteger finalizedTimeMs() { return finalizedTimeMs; }
     public RegistrySnapshot snapshot() { return snapshot; }
 
     /** Enforces the exact request identity order and optional snapshot binding. */
@@ -3227,12 +3453,14 @@ public final class MusubiModelsV1 {
           "chain_id", chainId,
           "genesis_hash", unsignedBytes(genesisHash),
           "items", values,
+          "finalized_time_ms", finalizedTimeMs,
           "snapshot", snapshot.toJsonValue());
     }
   }
 
   /** Ordered-directory page carrying exact chain/genesis identity for lock creation. */
   public static final class OrderedPrefixPage extends WireValue {
+    private final OrderedPrefixQuery query;
     private final String chainId;
     private final byte[] genesisHash;
     private final NamespaceBinding namespaceBinding;
@@ -3241,12 +3469,14 @@ public final class MusubiModelsV1 {
     private final RegistrySnapshot snapshot;
 
     OrderedPrefixPage(
+        final OrderedPrefixQuery query,
         final String chainId,
         final byte[] genesisHash,
         final NamespaceBinding namespaceBinding,
         final List<OrderedPackageEntry> items,
         final FinalizedCursor nextCursor,
         final RegistrySnapshot snapshot) {
+      this.query = Objects.requireNonNull(query, "query");
       requireExactText(chainId, "Musubi directory chain ID");
       if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)) {
         throw new IllegalArgumentException("Musubi genesis hash must contain 32 bytes");
@@ -3287,6 +3517,7 @@ public final class MusubiModelsV1 {
       this.snapshot = snapshot;
     }
 
+    public OrderedPrefixQuery query() { return query; }
     public String chainId() { return chainId; }
     public byte[] genesisHash() { return genesisHash.clone(); }
     public NamespaceBinding namespaceBinding() { return namespaceBinding; }
@@ -3294,12 +3525,47 @@ public final class MusubiModelsV1 {
     public FinalizedCursor nextCursor() { return nextCursor; }
     public RegistrySnapshot snapshot() { return snapshot; }
 
+    /** Binds directory rows and any continuation snapshot to the requested prefix. */
+    public void requireMatches(final OrderedPrefixQuery request) {
+      Objects.requireNonNull(request, "request");
+      if (!query.equals(request)) {
+        throw new IllegalArgumentException(
+            "Musubi ordered-prefix response query does not match the request");
+      }
+      final int separator = request.prefix().indexOf('/');
+      if (separator <= 0
+          || !namespaceBinding.namespace().value().equals(request.prefix().substring(0, separator))) {
+        throw new IllegalArgumentException(
+            "Musubi ordered-prefix namespace binding does not match the request");
+      }
+      for (final OrderedPackageEntry item : items) {
+        final String selector =
+            item.selector().namespace().value() + "/" + item.selector().name().value();
+        if (!selector.startsWith(request.prefix())) {
+          throw new IllegalArgumentException(
+              "Musubi ordered-prefix response contains a selector outside the request");
+        }
+      }
+      if (!orderedPrefixPageAdvances(request, items.isEmpty() ? null : items.get(0))) {
+        throw new IllegalArgumentException(
+            "Musubi ordered-prefix response does not advance its structured cursor");
+      }
+      requireFinalizedPageMatches(
+          request.page(),
+          items.size(),
+          items.isEmpty() ? null : orderedSelectorCursorKey(items.get(0)),
+          items.isEmpty() ? null : orderedSelectorCursorKey(items.get(items.size() - 1)),
+          snapshot,
+          nextCursor);
+    }
+
     @Override Object toJsonValue() {
       final List<Object> values = new ArrayList<>();
       for (final OrderedPackageEntry item : items) values.add(item.toJsonValue());
       final List<Integer> genesis = new ArrayList<>();
       for (final byte value : genesisHash) genesis.add(Integer.valueOf(value & 0xff));
       return object(
+          "query", query.toJsonValue(),
           "chain_id", chainId,
           "genesis_hash", genesis,
           "namespace_binding", namespaceBinding.toJsonValue(),
@@ -3369,14 +3635,17 @@ public final class MusubiModelsV1 {
 
   /** Bounded page from the finalized-event package-search projection. */
   public static final class SearchPage extends WireValue {
+    private final SearchQuery query;
     private final List<SearchHit> items;
     private final SearchCursor nextCursor;
     private final SearchSnapshot snapshot;
 
     SearchPage(
+        final SearchQuery query,
         final List<SearchHit> items,
         final SearchCursor nextCursor,
         final SearchSnapshot snapshot) {
+      this.query = Objects.requireNonNull(query, "query");
       this.items = immutableList(items);
       this.nextCursor = nextCursor;
       this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
@@ -3397,14 +3666,43 @@ public final class MusubiModelsV1 {
       }
     }
 
+    public SearchQuery query() { return query; }
     public List<SearchHit> items() { return items; }
     public SearchCursor nextCursor() { return nextCursor; }
     public SearchSnapshot snapshot() { return snapshot; }
+
+    /** Binds the echoed query and any continuation to the exact request. */
+    public void requireMatches(final SearchQuery request) {
+      Objects.requireNonNull(request, "request");
+      if (!query.equals(request)) {
+        throw new IllegalArgumentException(
+            "Musubi search response query does not match the request");
+      }
+      final int effectiveLimit = effectivePageLimit(request.page().limit());
+      final SearchCursor cursor = request.page().cursor();
+      if (items.size() > effectiveLimit
+          || (cursor != null
+              && (!snapshot.equals(cursor.snapshot())
+                  || (!items.isEmpty()
+                      && comparePackageIds(cursor.lastPackage(), items.get(0).packageId()) >= 0)
+                  || (nextCursor != null
+                      && !nextCursor.queryHash().equals(cursor.queryHash()))))
+          || (nextCursor != null
+              && (!nextCursor.snapshot().equals(snapshot)
+                  || items.size() != effectiveLimit
+                  || items.isEmpty()
+                  || !nextCursor.lastPackage().equals(
+                      items.get(items.size() - 1).packageId())))) {
+        throw new IllegalArgumentException(
+            "Musubi search response has an invalid structured cursor or page boundary");
+      }
+    }
 
     @Override Object toJsonValue() {
       final List<Object> values = new ArrayList<>();
       for (final SearchHit item : items) values.add(item.toJsonValue());
       return object(
+          "query", query.toJsonValue(),
           "items", values,
           "next_cursor", nextCursor == null ? null : nextCursor.toJsonValue(),
           "snapshot", snapshot.toJsonValue());
@@ -3676,11 +3974,340 @@ public final class MusubiModelsV1 {
         right.name().value().getBytes(StandardCharsets.UTF_8));
   }
 
-  private static int compareReleaseIds(final ReleaseId left, final ReleaseId right) {
+  static int compareReleaseIds(final ReleaseId left, final ReleaseId right) {
     final int packageComparison = comparePackageIds(left.packageId(), right.packageId());
     return packageComparison != 0
         ? packageComparison
         : left.version().compareTo(right.version());
+  }
+
+  static int compareMaintainerEntries(
+      final MaintainerDirectoryEntry left, final MaintainerDirectoryEntry right) {
+    int comparison = comparePackageIds(maintainerPackageId(left), maintainerPackageId(right));
+    if (comparison != 0) return comparison;
+    comparison = compareAccountIds(maintainerAccount(left), maintainerAccount(right));
+    if (comparison != 0) return comparison;
+    final Digest32 leftInvitation = maintainerInvitation(left);
+    final Digest32 rightInvitation = maintainerInvitation(right);
+    if (leftInvitation == null) return rightInvitation == null ? 0 : -1;
+    if (rightInvitation == null) return 1;
+    return compareUnsignedBytes(leftInvitation.bytes(), rightInvitation.bytes());
+  }
+
+  static PackageId maintainerPackageId(final MaintainerDirectoryEntry entry) {
+    return entry.kind() == MaintainerDirectoryEntry.Kind.ACCEPTED
+        ? entry.acceptedMember().packageId()
+        : entry.pendingInvitation().packageId();
+  }
+
+  private static String maintainerAccount(final MaintainerDirectoryEntry entry) {
+    return entry.kind() == MaintainerDirectoryEntry.Kind.ACCEPTED
+        ? entry.acceptedMember().account()
+        : entry.pendingInvitation().invitedAccount();
+  }
+
+  private static Digest32 maintainerInvitation(final MaintainerDirectoryEntry entry) {
+    return entry.kind() == MaintainerDirectoryEntry.Kind.ACCEPTED
+        ? null : entry.pendingInvitation().inviteId();
+  }
+
+  static String maintainerCursorKey(final MaintainerDirectoryEntry entry) {
+    final String account = lowerHex(
+        TransferWirePayloadEncoder.encodeAccountIdPayload(
+            AccountIdLiteral.requireCanonicalI105Address(
+                maintainerAccount(entry), "maintainer cursor account")));
+    final Digest32 invitation = maintainerInvitation(entry);
+    return account + "|" + (invitation == null
+        ? "accepted" : "pending-" + lowerHex(invitation.bytes()));
+  }
+
+  private static boolean maintainerPageAdvances(
+      final PageRequest request, final MaintainerDirectoryEntry first) {
+    final FinalizedCursor cursor = request.cursor();
+    if (cursor == null) return true;
+    final MaintainerCursorBoundary previous =
+        parseMaintainerCursorBoundary(cursor.lastKey());
+    if (previous == null) return false;
+    if (first == null) return true;
+    final byte[] firstAccount =
+        TransferWirePayloadEncoder.encodeAccountIdPayload(
+            AccountIdLiteral.requireCanonicalI105Address(
+                maintainerAccount(first), "maintainer cursor account"));
+    final int accountOrder = compareUnsignedBytes(previous.account, firstAccount);
+    if (accountOrder != 0) return accountOrder < 0;
+    final Digest32 invitation = maintainerInvitation(first);
+    final byte[] firstInvitation = invitation == null ? null : invitation.bytes();
+    if (previous.invitation == null && firstInvitation != null) return true;
+    if (previous.invitation == null || firstInvitation == null) return false;
+    return compareUnsignedBytes(previous.invitation, firstInvitation) < 0;
+  }
+
+  private static final class MaintainerCursorBoundary {
+    private final byte[] account;
+    private final byte[] invitation;
+
+    private MaintainerCursorBoundary(final byte[] account, final byte[] invitation) {
+      this.account = account;
+      this.invitation = invitation;
+    }
+  }
+
+  private static MaintainerCursorBoundary parseMaintainerCursorBoundary(
+      final String value) {
+    final int separator = value.indexOf('|');
+    if (separator <= 0 || separator != value.lastIndexOf('|')) return null;
+    final byte[] account = decodeLowerHex(value.substring(0, separator));
+    if (account == null) return null;
+    final String invitation = value.substring(separator + 1);
+    if ("accepted".equals(invitation)) {
+      return new MaintainerCursorBoundary(account, null);
+    }
+    if (!invitation.startsWith("pending-")) return null;
+    final byte[] invitationBytes = decodeLowerHex(invitation.substring("pending-".length()));
+    return invitationBytes != null && invitationBytes.length == 32
+        ? new MaintainerCursorBoundary(account, invitationBytes) : null;
+  }
+
+  private static String lowerHex(final byte[] bytes) {
+    final char[] alphabet = "0123456789abcdef".toCharArray();
+    final char[] encoded = new char[bytes.length * 2];
+    for (int index = 0; index < bytes.length; index++) {
+      final int value = bytes[index] & 0xff;
+      encoded[index * 2] = alphabet[value >>> 4];
+      encoded[index * 2 + 1] = alphabet[value & 0x0f];
+    }
+    return new String(encoded);
+  }
+
+  private static byte[] decodeLowerHex(final String value) {
+    if (value == null || value.isEmpty() || (value.length() & 1) != 0) return null;
+    final byte[] decoded = new byte[value.length() / 2];
+    for (int index = 0; index < decoded.length; index++) {
+      final int high = lowerHexNibble(value.charAt(index * 2));
+      final int low = lowerHexNibble(value.charAt(index * 2 + 1));
+      if (high < 0 || low < 0) return null;
+      decoded[index] = (byte) ((high << 4) | low);
+    }
+    return decoded;
+  }
+
+  private static int lowerHexNibble(final char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    return -1;
+  }
+
+  private static boolean semVerPageAdvances(
+      final PageRequest request, final Version first) {
+    final FinalizedCursor cursor = request.cursor();
+    if (cursor == null) return true;
+    final Version previous;
+    try {
+      previous = Version.parse(cursor.lastKey());
+    } catch (final IllegalArgumentException error) {
+      return false;
+    }
+    return first == null || previous.compareTo(first) < 0;
+  }
+
+  static String aliasHistoryCursorKey(final AliasHistoryEntry entry) {
+    return entry.alias() + ":" + padU64Revision(entry.revision());
+  }
+
+  private static boolean aliasHistoryPageAdvances(
+      final AliasQuery request, final AliasHistoryEntry first) {
+    final FinalizedCursor cursor = request.page().cursor();
+    if (cursor == null) return true;
+    final int separator = cursor.lastKey().lastIndexOf(':');
+    if (separator <= 0) return false;
+    final String alias = cursor.lastKey().substring(0, separator);
+    final String revisionText = cursor.lastKey().substring(separator + 1);
+    if (!alias.equals(request.alias())
+        || revisionText.length() != 20
+        || !revisionText.matches("[0-9]{20}")) {
+      return false;
+    }
+    final BigInteger revision;
+    try {
+      revision = new BigInteger(revisionText);
+      requireU64(revision, "alias-history cursor revision");
+    } catch (final IllegalArgumentException error) {
+      return false;
+    }
+    if (!padU64Revision(revision).equals(revisionText)) return false;
+    return first == null
+        || first.alias().equals(alias) && first.revision().compareTo(revision) > 0;
+  }
+
+  private static String padU64Revision(final BigInteger revision) {
+    final String text = revision.toString();
+    final StringBuilder padded = new StringBuilder(20);
+    for (int index = text.length(); index < 20; index++) padded.append('0');
+    return padded.append(text).toString();
+  }
+
+  static String orderedSelectorCursorKey(final OrderedPackageEntry entry) {
+    return entry.selector().namespace().value() + "/" + entry.selector().name().value();
+  }
+
+  private static boolean orderedPrefixPageAdvances(
+      final OrderedPrefixQuery request, final OrderedPackageEntry first) {
+    final FinalizedCursor cursor = request.page().cursor();
+    if (cursor == null) return true;
+    final PackageSelector previous = parseSelectorCursor(cursor.lastKey());
+    final int separator = request.prefix().indexOf('/');
+    if (previous == null
+        || separator <= 0
+        || separator != request.prefix().lastIndexOf('/')
+        || !previous.namespace().value().equals(request.prefix().substring(0, separator))
+        || !cursor.lastKey().startsWith(request.prefix())) {
+      return false;
+    }
+    return first == null || compareSelectors(previous, first.selector()) < 0;
+  }
+
+  private static PackageSelector parseSelectorCursor(final String value) {
+    final int separator = value.indexOf('/');
+    if (separator <= 0 || separator != value.lastIndexOf('/')
+        || separator == value.length() - 1) {
+      return null;
+    }
+    try {
+      final PackageSelector selector = new PackageSelector(
+          new Namespace(value.substring(0, separator)),
+          new PackageName(value.substring(separator + 1)));
+      return orderedSelectorText(selector).equals(value) ? selector : null;
+    } catch (final IllegalArgumentException error) {
+      return null;
+    }
+  }
+
+  private static String orderedSelectorText(final PackageSelector selector) {
+    return selector.namespace().value() + "/" + selector.name().value();
+  }
+
+  private static int compareSelectors(
+      final PackageSelector left, final PackageSelector right) {
+    final int namespaceOrder = compareUtf8Strings(
+        left.namespace().value(), right.namespace().value());
+    return namespaceOrder != 0
+        ? namespaceOrder : compareUtf8Strings(left.name().value(), right.name().value());
+  }
+
+  private static int compareAccountIds(final String left, final String right) {
+    AccountIdLiteral.requireCanonicalI105Address(left, "maintainer account");
+    AccountIdLiteral.requireCanonicalI105Address(right, "maintainer account");
+    final AccountAddress leftAddress;
+    final AccountAddress rightAddress;
+    try {
+      leftAddress = AccountAddress.parseEncodedIgnoringCurveSupport(left, null).address;
+      rightAddress = AccountAddress.parseEncodedIgnoringCurveSupport(right, null).address;
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new IllegalArgumentException("maintainer account must be canonical I105", error);
+    }
+
+    try {
+      final Optional<AccountAddress.SingleKeyPayload> leftSingle =
+          leftAddress.singleKeyPayloadIgnoringCurveSupport();
+      final Optional<AccountAddress.SingleKeyPayload> rightSingle =
+          rightAddress.singleKeyPayloadIgnoringCurveSupport();
+      if (leftSingle.isPresent() || rightSingle.isPresent()) {
+        if (!leftSingle.isPresent()) return 1;
+        if (!rightSingle.isPresent()) return -1;
+        return compareUnsignedBytes(
+            PublicKeyCodec.compactPublicKeyPayload(
+                leftSingle.get().curveId(), leftSingle.get().publicKey()),
+            PublicKeyCodec.compactPublicKeyPayload(
+                rightSingle.get().curveId(), rightSingle.get().publicKey()));
+      }
+
+      final AccountAddress.MultisigPolicyPayload leftPolicy =
+          leftAddress.multisigPolicyPayloadIgnoringCurveSupport().get();
+      final AccountAddress.MultisigPolicyPayload rightPolicy =
+          rightAddress.multisigPolicyPayloadIgnoringCurveSupport().get();
+      int comparison = Integer.compare(leftPolicy.version(), rightPolicy.version());
+      if (comparison != 0) return comparison;
+      comparison = Integer.compare(leftPolicy.threshold(), rightPolicy.threshold());
+      if (comparison != 0) return comparison;
+      final int common = Math.min(leftPolicy.members().size(), rightPolicy.members().size());
+      for (int index = 0; index < common; index++) {
+        final AccountAddress.MultisigMemberPayload leftMember = leftPolicy.members().get(index);
+        final AccountAddress.MultisigMemberPayload rightMember = rightPolicy.members().get(index);
+        comparison = compareUnsignedBytes(
+            PublicKeyCodec.compactPublicKeyPayload(
+                leftMember.curveId(), leftMember.publicKey()),
+            PublicKeyCodec.compactPublicKeyPayload(
+                rightMember.curveId(), rightMember.publicKey()));
+        if (comparison != 0) return comparison;
+        comparison = Integer.compare(leftMember.weight(), rightMember.weight());
+        if (comparison != 0) return comparison;
+      }
+      return Integer.compare(leftPolicy.members().size(), rightPolicy.members().size());
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new IllegalArgumentException("maintainer account must be canonical I105", error);
+    }
+  }
+
+  static int compareAliasHistoryEntries(
+      final AliasHistoryEntry left, final AliasHistoryEntry right) {
+    final int aliasComparison = compareUtf8Strings(left.alias(), right.alias());
+    return aliasComparison != 0
+        ? aliasComparison : left.revision().compareTo(right.revision());
+  }
+
+  private static int effectivePageLimit(final long limit) {
+    return limit == 0L ? 50 : (int) Math.min(limit, 100L);
+  }
+
+  private static void requirePageMatches(
+      final PageRequest request,
+      final RegistrySnapshot snapshot,
+      final FinalizedCursor nextCursor,
+      final int itemCount) {
+    // Typed page carriers validate their echoed query identity before this shared page check.
+    Objects.requireNonNull(request, "request");
+    final FinalizedCursor cursor = request.cursor();
+    if (itemCount > effectivePageLimit(request.limit())
+        || (cursor != null
+            && (!cursor.snapshot().equals(snapshot)
+                || (nextCursor != null
+                    && (!nextCursor.queryHash().equals(cursor.queryHash())
+                        || !Objects.equals(nextCursor.caller(), cursor.caller())))))) {
+      throw new IllegalArgumentException(
+          "Musubi response does not use the requested page limit or cursor binding");
+    }
+  }
+
+  private static void requireFinalizedPageMatches(
+      final PageRequest request,
+      final int itemCount,
+      final String firstKey,
+      final String lastKey,
+      final RegistrySnapshot snapshot,
+      final FinalizedCursor nextCursor) {
+    final int effectiveLimit = effectivePageLimit(request.limit());
+    if (itemCount > effectiveLimit
+        || (itemCount == 0 && (firstKey != null || lastKey != null))
+        || (itemCount > 0 && (firstKey == null || lastKey == null))) {
+      throw new IllegalArgumentException(
+          "Musubi response exceeds its requested bound or has invalid cursor keys");
+    }
+    final FinalizedCursor requestCursor = request.cursor();
+    if (requestCursor != null
+        && (!requestCursor.snapshot().equals(snapshot) || requestCursor.caller() != null)) {
+      throw new IllegalArgumentException(
+          "Musubi response does not continue its public finalized cursor");
+    }
+    if (nextCursor != null
+        && (!nextCursor.snapshot().equals(snapshot)
+            || nextCursor.caller() != null
+            || itemCount != effectiveLimit
+            || !nextCursor.lastKey().equals(lastKey)
+            || (requestCursor != null
+                && !requestCursor.queryHash().equals(nextCursor.queryHash())))) {
+      throw new IllegalArgumentException(
+          "Musubi next cursor does not bind its exact full page");
+    }
   }
 
   private static int compareVersionRequirements(final VersionReq left, final VersionReq right) {

@@ -1552,14 +1552,13 @@ signature_threshold = 1
     }
 
     #[test]
-    fn soranet_vpn_defaults_construct_with_canonical_accounts() {
+    fn soranet_vpn_defaults_construct_with_canonical_operator_account() {
         let config = SoranetVpn::default();
         assert!(!config.enabled);
         assert_eq!(
-            config.escrow_account_id,
+            config.operator_account_id,
             defaults::governance::bond_escrow_account_id()
         );
-        assert_eq!(config.operator_account_id, config.escrow_account_id);
     }
 }
 
@@ -1759,10 +1758,6 @@ pub struct SoranetVpn {
     pub meter_family: String,
     /// Optional 32-byte shared secret used to mint helper-authenticated VPN tickets.
     pub helper_ticket_secret: Option<[u8; 32]>,
-    /// XOR asset definition used for escrowed VPN fees.
-    pub fee_asset_id: String,
-    /// Account that receives escrowed VPN lease fees.
-    pub escrow_account_id: AccountId,
     /// Relay operator account eligible for receipt settlement.
     pub operator_account_id: AccountId,
     /// Fixed prepaid XOR lease fee.
@@ -1800,12 +1795,6 @@ impl Default for SoranetVpn {
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
             helper_ticket_secret: None,
-            fee_asset_id: defaults::soranet::vpn::fee_asset_id(),
-            escrow_account_id: AccountId::parse_encoded(
-                &defaults::soranet::vpn::escrow_account_id(),
-            )
-            .expect("default vpn escrow account id")
-            .into_account_id(),
             operator_account_id: AccountId::parse_encoded(
                 &defaults::soranet::vpn::operator_account_id(),
             )

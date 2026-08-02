@@ -621,6 +621,40 @@ The persisted storage boundary is fail-closed in v1:
 - index, manifest, and metadata reads open regular files without following the
   leaf symlink and enforce structural byte ceilings before allocation (64 MiB
   for the index and per-manifest metadata, 16 MiB for a manifest envelope);
+- the filesystem Governance DAG publisher fully qualifies bounded encoded and
+  JSON sources (64 MiB each), digest sidecars, canonical chunk plans, and CAR
+  archives before publishing one authoritative
+  `governance-publication-state-v1.json` envelope. The publish index and
+  assembled-CAR queue are one-to-one sections of that envelope and become
+  visible through one atomic rename; the retired separate `publish-index.json`
+  and `car-queue.json` authorities are rejected instead of migrated or guessed.
+  Sources use
+  `publication-sources/<payload_kind>/<source_pair_id>/payload.{to,json}` and
+  CAR artifacts use
+  `car-segments/<position>_<source_pair_id>.{car,plan.json,json}`; validators
+  require a lowercase ASCII kind, derive those paths from the exact two-source
+  identity, and reject aliases across case-sensitive or case-folding hosts;
+  the CAR-segment manifest shares an exact 128 KiB producer/readback ceiling.
+  The complete serialized successor is bounded before any immutable write. A
+  failure before the envelope rename can leave at most one bounded batch of
+  unreferenced full-identity-addressed objects. Failure handling and startup
+  reread the actually visible envelope through the pinned root, delete only
+  canonical unreferenced objects and bounded exact-target atomic temporaries,
+  remove their empty directories, and reject excess/unknown objects or missing
+  committed files. A pristine root first persists an explicit generation-zero
+  authority and then an initialization marker, so later authority loss fails
+  before orphan cleanup and cannot erase retained history. Startup rebuilds
+  each canonical segment and exact-compares every authority-bound source,
+  sidecar, plan, manifest, and CAR, detecting in-place substitution even when a
+  sidecar was changed to match. JSON sidecars never duplicate `payload.to` as
+  base64; full-size reputation snapshots use a bounded metadata projection. A
+  retry reuses only
+  byte-exact objects and refuses to overwrite divergent files. An exact
+  duplicate does not advance the envelope generation. Retained archive lookup
+  reopens every source, sidecar, plan,
+  manifest, and CAR through the pinned no-follow governance root, enforces the
+  160 MiB archive/state ceilings, and reconstructs the canonical CAR from its
+  plan before returning metadata or honoring conditional cache validation;
 - byte accounting and chunk reference counts are recomputed with checked
   arithmetic during recovery rather than trusting stale persisted totals, and
   in-memory layout indices must fit their exact on-disk `u32` representation

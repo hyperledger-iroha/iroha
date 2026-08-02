@@ -896,6 +896,17 @@ Publication phase age, cache corruption/capacity, selected-root storage usage,
 and consumer-fetch integrity still require their authoritative long-lived host
 producers. The one-shot Musubi CLI deliberately does not install a Prometheus
 producer, and absent series for those signals mean unknown rather than healthy.
+The private publication-service journal is not a phase-age source: it owns
+route replay for seed ingress, storage coordination, and provider readback, not
+the seven publisher-journal phases. Phase-age production additionally requires
+an atomically persisted phase-entry time, a bounded complete active-journal
+snapshot, a deployment-qualified non-regressing clock, and a long-lived owner
+of both that publisher state root and the exporting metrics registry. The final
+seven-value projection and withdrawal must be serialized with Prometheus
+exposition; the existing reset/set calls are only label-level sinks. Partial
+scans, clock rollback, or ownership loss must not initialize or reset the seven
+series to zero. The exact integration and restart test contract is specified
+in `specs/musubi_operations_runbook.md`.
 
 ### Torii Norito-RPC Observability
 

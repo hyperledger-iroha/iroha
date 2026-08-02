@@ -93,7 +93,6 @@ impl Read for ChannelCarReaderV1 {
             if read != 0 {
                 let received = self
                     .received
-                    .received
                     .checked_add(u64::try_from(read).unwrap_or(u64::MAX))
                     .ok_or_else(|| io::Error::other("CAR stream byte count overflow"));
                 let received = match received {
@@ -155,9 +154,10 @@ impl Read for ChannelCarReaderV1 {
 
 /// Spawn one bounded CAR producer and return its exact-size consumer.
 ///
-/// The producer may retain at most four 32 KiB frames ahead of the consumer.
-/// Terminal reads join the worker before returning, so successful callers do
-/// not retain detached worker allocations after observing EOF.
+/// The producer may queue at most four 32 KiB frames ahead of the consumer;
+/// total ownership also accounts for the consumer's current frame and a
+/// producer frame blocked on a full queue. Terminal reads and reader drop join
+/// the worker, so callers do not retain detached worker allocations.
 pub(crate) fn bounded_car_reader<F>(
     expected_car_size: u64,
     worker: F,
@@ -197,6 +197,12 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn owned_frame_reserve_includes_queue_producer_and_consumer() {
+        assert_eq!(STREAM_FRAME_COUNT, 4);
+        assert_eq!(STREAM_MAX_OWNED_FRAME_BYTES, STREAM_FRAME_BYTES * 6);
+    }
 
     #[test]
     fn exact_stream_joins_worker_before_eof() {
@@ -298,7 +304,9 @@ mod tests {
         let reader = bounded_car_reader(u64::MAX, move |output| {
             let _completion = Completion(completion);
             loop {
-                output.write_all(&[0_u8; STREAM_FRAME_BYTES])?;
+                if output.write_all(&[0_u8; STREAM_FRAME_BYTES]).is_err() {
+                    return Err("WRITE_FAILED");
+                }
             }
         })
         .expect("spawn bounded stream");

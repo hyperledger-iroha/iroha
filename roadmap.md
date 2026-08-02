@@ -15,19 +15,41 @@ Remaining release gates, in order, are:
 
 - Finish focused validation of the occurrence-bound targeted resolver,
   supplied-source test runner, package-invitation rebasing, exact archive
-  projection preflight, and runtime publication authorization, signer-clock,
-  retry, and dead-letter hardening after the concurrent Halo2/data-model
-  dirty-tree work and shared build lane are coherent. Regenerate the checked
+  projection preflight, and runtime publication authorization, signer-clock, retry,
+  and dead-letter hardening after the concurrent Halo2/data-model dirty-tree
+  work and shared build lane are coherent. Regenerate the checked
   exact 29-route OpenAPI surface only from a clean dependency graph whose
   ignored `Cargo.lock` matches the committed exact pin; do not bless the
   present unrelated uncommitted dependency work by changing that pin in
   isolation.
-- Split archive registration and permanent-pin coordination into separately
-  journaled idempotent substeps. A crash after the registry accepts the exact
-  staging receipt but before the client records the coordinator result must
-  recover that receipt instead of refreshing it after expiry and colliding with
-  the immutable archive record. Add the corresponding crash/expiry/retry
-  regression before calling phase three resumable.
+- Qualify the remaining phase-three deployment and long-detach boundaries.
+  Archive registration now retains at most eight append-only exact signed
+  attempts and rotates only after finalized archive absence plus either
+  authoritative `Expired` status or a consensus-committed finalized block time
+  strictly beyond the exact transaction/receipt deadline; local or cache-only
+  expiry, pending, absent, transport-unknown, and generic rejection do not
+  rotate. Applied transaction height must be covered by the authoritative
+  archive page. Storage coordination binds the transaction, chain/genesis,
+  snapshot, immutable archive-registration projection, verification-lock
+  digest, and at least three attestations; the coordinator returns its current
+  mutable archive record separately for location CAS.
+  Location Add retries use exact Core no-op replay and a complete finalized
+  pre/post-query rebase. A bounded eight-generation append-only journal now
+  persists each exact signed CAS before submission, retains its applied and
+  terminal finalized pages, never reuses a retired stable ID, and recovers a
+  replacement after authoritative rejection/rebase, expiry, applied-then-
+  retired, or later retirement evidence. Replication, readback, and release
+  submission recheck the active finalized location, including a typed
+  post-rejection check. Native AMX evidence retains its applied height and final
+  verification must cover it.
+  Retain as a release blocker the absent deployment-owned storage/finality
+  backend. The latest exact archive query can now reproduce the immutable
+  registration projection without a historical mutable WSV. Same-ID renewal
+  follows the current finalized pin, order, epochs, and exact provider
+  evidence. Exercise the real fee-quote/submission transport and crash
+  boundaries before send, after registry commit, after authoritative-record
+  persistence, after coordinator response, and after location commit, including
+  concurrent resumes and receipt expiry.
 
 - Supply and qualify the deployment-owned private HTTPS/TLS runner, concrete
   HSM/KMS or threshold implementations of the completed publisher-request and
@@ -51,12 +73,25 @@ Remaining release gates, in order, are:
   rename/replacement primitive. Until then Windows cache reads and verification
   remain supported while cache publication/quarantine/prune and atomic project
   state mutation fail closed.
+- Replace package collection's path-based ancestor pre/post checks with retained,
+  handle-relative no-follow/open-beneath traversal. The opened final-file
+  identity is already pinned, but a deliberately timed ancestor ABA replacement
+  remains an OS-specific packaging race gate; qualify it with rename-only,
+  symlink, and reparse race fuzzing on every supported host before release.
 - Wire the remaining metrics only at their authoritative long-lived producers:
   journal phase age, cache corruption/capacity, and selected-root storage
   pressure, plus the injected consumer-fetch integrity observer. The fetch
   adapter now supplies a typed exact-once attempt boundary but the one-shot CLI
-  intentionally has no Prometheus producer. Core governance rejection
-  telemetry is already emitted once at each tracked mutation's authoritative
+  intentionally has no Prometheus producer. For journal phase age, first add an
+  atomically persisted phase-entry timestamp supplied by a qualified
+  non-regressing clock and a bounded complete active-journal snapshot API; then
+  deploy one long-lived owner of both the publisher journal root and exporting
+  registry. Pending retries must not reset age, completed operations must be
+  excluded, restart must project before exposing any series, and partial scans,
+  clock rollback, or ownership loss must never publish healthy zeros. Project
+  all seven values atomically with respect to exposition and refresh them at a
+  bounded cadence. Core governance rejection telemetry is already emitted once
+  at each tracked mutation's authoritative
   error boundary with bounded typed action/reason labels. The persisted
   replication-shortfall aggregate and post-commit gauge synchronization are in
   place; retain alert/rule soak validation as a release gate. The six paged
@@ -75,13 +110,18 @@ Remaining release gates, in order, are:
   deterministic snapshot fault-cut regressions. The feature-isolated daemon
   now provides source-bound, one-shot aborts after PrepareQC, after CommitQC,
   and immediately before world commit, with a durable canonical acknowledgement
-  before each process cut. Drive a selectable three-replica publication through
-  all three cuts on four peers and prove exact home/universal visibility before
-  closing the no-half-visible release gate.
+  before each process cut. The real-ISI gate now drives a selectable
+  three-replica publication through all three cuts in isolated four-peer
+  networks, restarts the faulted peer from persistent storage, and checks the
+  exact all-peer home/universal tuple plus one publication occurrence after a
+  finalized barrier. Execute and archive that gate once the unrelated MKHE
+  compilation failure is cleared before closing the no-half-visible release
+  gate.
   Qualify the one-million-package/twenty-million-row lookup, search, resolver,
   and 64-MiB fetch-memory scale targets. The bounded production CAR bridge now
-  has an isolated logical-heap regression plus JSON structural envelopes and
-  cache plan/ingest accounting; the remaining fetch gate is a
+  has six-frame ownership accounting, terminal worker joins, an isolated
+  logical-heap regression, JSON structural/scalar envelopes, and cache
+  plan/ingest accounting; the remaining fetch gate is a
   deployment-equivalent HTTP/TLS + JSON-DOM + cache process-RSS or cgroup
   measurement.
 - Run the four-peer devnet, five-to-ten-namespace Taira allowlist/two-week soak,
@@ -7169,8 +7209,8 @@ excluded from the first release.
   Announcement intake requires a confirmed native asset-lock appeal deposit
   bound to the same case, round, and evidence bundle. Local moderation ballot
   lifecycle and challenge submit/resolve events now publish into the SoraFS
-  Governance DAG filesystem publisher, `publish-index.json`, CAR queue, and
-  optional signed runtime DAG.
+  Governance DAG filesystem publisher's single authoritative publication
+  envelope, assembled CAR queue, and optional signed runtime DAG.
   The SFM-4b moderation-panel rollout
   evidence gate now validates payload-free appeal intake, sortition roster,
   evidence viewer, operator workflow, juror notifications, commit/reveal,
@@ -7788,9 +7828,11 @@ excluded from the first release.
   CARv2 segment emission for signed snapshots, local checkpoint metadata
   packaging, verification, and local recovery for verified heads/CAR/mirror
   indexes, local mirror index build/query commands, filesystem-publisher
-  `publish-index.json` maintenance for runtime-local artifact feeds, Torii
+  single-envelope `publish_index` maintenance for runtime-local artifact feeds,
+  Torii
   read-only publish-index top-level/lookup endpoints with `limit`-bounded
-  returned entry arrays, runtime-local `car-queue.json` maintenance and CARv2 segment assembly
+  returned entry arrays, the same envelope's runtime-local `car_queue` section
+  and CARv2 segment assembly
   for filesystem-published governance artifacts, config-backed local signed
   runtime block/head assembly for supported filesystem-published payloads,
   Torii read-only CAR queue lookup endpoints with `limit`-bounded returned

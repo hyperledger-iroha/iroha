@@ -222,6 +222,8 @@ declare_permissions! {
     iroha_executor_data_model::permission::sorafs::{CanUpsertSorafsProviderCredit},
     iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsProviderOwner},
     iroha_executor_data_model::permission::sorafs::{CanUnregisterSorafsProviderOwner},
+    iroha_executor_data_model::permission::soranet::{CanManageSoranetVpnQuoteIssuers},
+    iroha_executor_data_model::permission::soranet::{CanIssueSoranetVpnQuote},
     iroha_executor_data_model::permission::soranet::{CanIngestSoranetPrivacy},
     iroha_executor_data_model::permission::oracle::{CanRegisterOracleFeed},
     iroha_executor_data_model::permission::oracle::{CanProposeOracleChange},
@@ -269,6 +271,7 @@ impl AnyPermission {
             && !matches!(
                 self,
                 Self::CanReadAccountData(_)
+                    | Self::CanIssueSoranetVpnQuote(_)
                     | Self::CanManageAssetDefinitionAlias(CanManageAssetDefinitionAlias {
                         scope: iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(_),
                     })
@@ -916,11 +919,44 @@ mod sorafs {
 }
 
 mod soranet {
-    use iroha_executor_data_model::permission::soranet::CanIngestSoranetPrivacy;
+    use iroha_executor_data_model::permission::soranet::{
+        CanIngestSoranetPrivacy, CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers,
+    };
 
     use super::*;
 
-    impl_owned_permission!(CanIngestSoranetPrivacy);
+    impl_owned_permission!(CanManageSoranetVpnQuoteIssuers, CanIngestSoranetPrivacy);
+
+    fn validate_quote_issuer_delegation(
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        if context.curr_block.is_genesis()
+            || CanManageSoranetVpnQuoteIssuers.is_owned_by(authority, host)
+        {
+            return Ok(());
+        }
+        Err(ValidationFail::NotPermitted(
+            "CanManageSoranetVpnQuoteIssuers is required to grant or revoke VPN quote issuer authority"
+                .to_owned(),
+        ))
+    }
+
+    impl ValidateGrantRevoke for CanIssueSoranetVpnQuote {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            validate_quote_issuer_delegation(authority, context, host)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            validate_quote_issuer_delegation(authority, context, host)
+        }
+    }
 }
 
 mod oracle {
@@ -2417,6 +2453,7 @@ mod tests {
         query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace},
         settlement::CanExecuteSettlement,
         smart_contract::CanInvokeContractEntrypoint,
+        soranet::{CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers},
     };
 
     use super::{
@@ -2638,6 +2675,34 @@ mod tests {
                 .expect_err("unrelated authority must not grant consent"),
             ValidationFail::NotPermitted(_)
         ));
+    }
+
+    #[test]
+    fn vpn_quote_issuer_leaf_requires_manager_delegation() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let leaf = AnyPermission::CanIssueSoranetVpnQuote(CanIssueSoranetVpnQuote);
+
+        let previous = test_override::replace_permissions(Vec::new());
+        assert!(matches!(
+            leaf.validate_grant(&authority, &context, &Iroha)
+                .expect_err("an unrelated account must not appoint a VPN quote issuer"),
+            ValidationFail::NotPermitted(_)
+        ));
+
+        test_override::replace_permissions(vec![CanIssueSoranetVpnQuote.into()]);
+        assert!(matches!(
+            leaf.validate_grant(&authority, &context, &Iroha)
+                .expect_err("an issuer leaf must not propagate itself"),
+            ValidationFail::NotPermitted(_)
+        ));
+
+        test_override::replace_permissions(vec![CanManageSoranetVpnQuoteIssuers.into()]);
+        leaf.validate_grant(&authority, &context, &Iroha)
+            .expect("the issuer manager may grant the leaf");
+        leaf.validate_revoke(&authority, &context, &Iroha)
+            .expect("the issuer manager may revoke the leaf");
+        test_override::replace_permissions(previous);
     }
 
     #[test]

@@ -160,6 +160,30 @@ final class MusubiSdkV1Tests: XCTestCase {
         try page.requireMatches(request)
         XCTAssertEqual(page.items.count, 4)
         XCTAssertEqual(page.items.map(\.mustRetain), [true, true, false, false])
+        XCTAssertEqual(
+            page.finalizedTimeMs,
+            try XCTUnwrap(
+                try object(fixtureRoute["response"])["finalized_time_ms"] as? NSNumber
+            ).uint64Value
+        )
+
+        var zeroFinalizedTime = try object(deepMutableCopy(fixtureRoute["response"]))
+        zeroFinalizedTime["finalized_time_ms"] = UInt64(0)
+        let zeroFinalizedTimePage = try decoder.decode(
+            MusubiArchiveRetentionPageV1.self,
+            from: jsonData(zeroFinalizedTime)
+        )
+        XCTAssertEqual(zeroFinalizedTimePage.finalizedTimeMs, 0)
+        try zeroFinalizedTimePage.requireMatches(request)
+
+        var missingFinalizedTime = try object(deepMutableCopy(fixtureRoute["response"]))
+        missingFinalizedTime.removeValue(forKey: "finalized_time_ms")
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiArchiveRetentionPageV1.self,
+                from: jsonData(missingFinalizedTime)
+            )
+        )
 
         var mismatched = try object(deepMutableCopy(fixtureRoute["response"]))
         var items = try array(mismatched["items"])
@@ -172,6 +196,110 @@ final class MusubiSdkV1Tests: XCTestCase {
             from: jsonData(mismatched)
         )
         XCTAssertThrowsError(try mismatchedPage.requireMatches(request))
+    }
+
+    func testArchiveLocationPageDecodesCurrentSortedLocations() throws {
+        let response = try populatedArchiveLocationResponse(locationFills: [1, 2])
+        let page = try JSONDecoder().decode(
+            MusubiArchiveLocationPageV1.self,
+            from: jsonData(response)
+        )
+
+        XCTAssertEqual(page.items.map { $0.locationId.bytes[0] }, [1, 2])
+        XCTAssertEqual(page.items.map(\.finalizedHeight), [50, 50])
+        XCTAssertEqual(page.items.map(\.revision), [1, 1])
+    }
+
+    func testArchiveLocationPageRejectsExcessUnorderedAndDuplicateItems() throws {
+        var tooMany = try populatedArchiveLocationResponse(locationFills: [1, 2, 3, 4])
+        var items = try array(tooMany["items"])
+        items.append(deepMutableCopy(items[3]))
+        tooMany["items"] = items
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiArchiveLocationPageV1.self,
+                from: jsonData(tooMany)
+            )
+        )
+
+        var unordered = try populatedArchiveLocationResponse(locationFills: [1, 2])
+        items = try array(unordered["items"])
+        items.swapAt(0, 1)
+        unordered["items"] = items
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiArchiveLocationPageV1.self,
+                from: jsonData(unordered)
+            )
+        )
+
+        var duplicate = try populatedArchiveLocationResponse(locationFills: [1, 2])
+        items = try array(duplicate["items"])
+        items[1] = deepMutableCopy(items[0])
+        duplicate["items"] = items
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiArchiveLocationPageV1.self,
+                from: jsonData(duplicate)
+            )
+        )
+    }
+
+    func testArchiveLocationPageRejectsNoncurrentItems() throws {
+        let decoder = JSONDecoder()
+
+        var wrongArchive = try populatedArchiveLocationResponse(locationFills: [1])
+        var items = try array(wrongArchive["items"])
+        var item = try object(items[0])
+        item["archive_id"] = [Array(repeating: 9, count: 32)]
+        items[0] = item
+        wrongArchive["items"] = items
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiArchiveLocationPageV1.self, from: jsonData(wrongArchive))
+        )
+
+        var nonmember = try populatedArchiveLocationResponse(locationFills: [1])
+        items = try array(nonmember["items"])
+        item = try object(items[0])
+        item["location_id"] = [Array(repeating: 2, count: 32)]
+        items[0] = item
+        nonmember["items"] = items
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiArchiveLocationPageV1.self, from: jsonData(nonmember))
+        )
+
+        var retired = try populatedArchiveLocationResponse(locationFills: [1])
+        items = try array(retired["items"])
+        item = try object(items[0])
+        item["state"] = ["kind": "Retired", "value": NSNull()] as [String: Any]
+        items[0] = item
+        retired["items"] = items
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiArchiveLocationPageV1.self, from: jsonData(retired))
+        )
+
+        var future = try populatedArchiveLocationResponse(locationFills: [1])
+        items = try array(future["items"])
+        item = try object(items[0])
+        item["finalized_height"] = 51
+        items[0] = item
+        future["items"] = items
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiArchiveLocationPageV1.self, from: jsonData(future))
+        )
+
+        var futureRevision = try populatedArchiveLocationResponse(locationFills: [1])
+        items = try array(futureRevision["items"])
+        item = try object(items[0])
+        item["revision"] = 2
+        items[0] = item
+        futureRevision["items"] = items
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiArchiveLocationPageV1.self,
+                from: jsonData(futureRevision)
+            )
+        )
     }
 
     func testMaintainerDirectoryDecodesAcceptedAndPendingInvitationVariants() throws {
@@ -210,6 +338,622 @@ final class MusubiSdkV1Tests: XCTestCase {
             try JSONDecoder().decode(
                 MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
                 from: jsonData(malformed)
+            )
+        )
+    }
+
+    func testQueryResponsesBindExactRequestIdentityAndSelectors() throws {
+        let decoder = JSONDecoder()
+
+        let packageRoute = try route(MusubiToriiClientV1.exactPackagePath)
+        let packageRequest = try decoder.decode(
+            MusubiExactPackageQueryV1.self,
+            from: jsonData(packageRoute["request"])
+        )
+        let packageRecord = try decoder.decode(
+            MusubiPackageRecordV1.self,
+            from: jsonData(packageRoute["response"])
+        )
+        try packageRecord.requireMatches(packageRequest)
+        var wrongPackageRequest = try object(deepMutableCopy(packageRoute["request"]))
+        var wrongPackage = try object(wrongPackageRequest["package"])
+        wrongPackage["name"] = ["other-package"]
+        wrongPackageRequest["package"] = wrongPackage
+        XCTAssertThrowsError(
+            try packageRecord.requireMatches(
+                decoder.decode(
+                    MusubiExactPackageQueryV1.self,
+                    from: jsonData(wrongPackageRequest)
+                )
+            )
+        )
+
+        let releaseRoute = try route(MusubiToriiClientV1.exactReleasePath)
+        let releaseRequest = try decoder.decode(
+            MusubiExactReleaseQueryV1.self,
+            from: jsonData(releaseRoute["request"])
+        )
+        let releaseRecord = try decoder.decode(
+            MusubiReleaseRecordV1.self,
+            from: jsonData(releaseRoute["response"])
+        )
+        try releaseRecord.requireMatches(releaseRequest)
+        var wrongReleaseRequest = try object(deepMutableCopy(releaseRoute["request"]))
+        var wrongRelease = try object(wrongReleaseRequest["release"])
+        var wrongVersion = try object(wrongRelease["version"])
+        wrongVersion["patch"] = 4
+        wrongRelease["version"] = wrongVersion
+        wrongReleaseRequest["release"] = wrongRelease
+        XCTAssertThrowsError(
+            try releaseRecord.requireMatches(
+                decoder.decode(
+                    MusubiExactReleaseQueryV1.self,
+                    from: jsonData(wrongReleaseRequest)
+                )
+            )
+        )
+
+        let maintainerRoute = try route(MusubiToriiClientV1.maintainersPath)
+        let maintainerPage = try decoder.decode(
+            MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+            from: jsonData(maintainerRoute["response"])
+        )
+        var wrongMaintainerRequest = try object(deepMutableCopy(maintainerRoute["request"]))
+        var wrongMaintainerPackage = try object(wrongMaintainerRequest["package"])
+        wrongMaintainerPackage["name"] = ["other-package"]
+        wrongMaintainerRequest["package"] = wrongMaintainerPackage
+        XCTAssertThrowsError(
+            try maintainerPage.requireMatches(
+                decoder.decode(
+                    MusubiPackagePageQueryV1.self,
+                    from: jsonData(wrongMaintainerRequest)
+                )
+            )
+        )
+
+        let archiveRoute = try route(MusubiToriiClientV1.archiveLocationsPath)
+        let archivePage = try decoder.decode(
+            MusubiArchiveLocationPageV1.self,
+            from: jsonData(archiveRoute["response"])
+        )
+        var wrongArchiveRequest = try object(deepMutableCopy(archiveRoute["request"]))
+        wrongArchiveRequest["archive_id"] = [Array(repeating: 99, count: 32)]
+        XCTAssertThrowsError(
+            try archivePage.requireMatches(
+                decoder.decode(
+                    MusubiArchiveLocationQueryV1.self,
+                    from: jsonData(wrongArchiveRequest)
+                )
+            )
+        )
+
+        let aliasRoute = try route(MusubiToriiClientV1.aliasPath)
+        let aliasRecord = try decoder.decode(
+            MusubiAliasRecordV1.self,
+            from: jsonData(aliasRoute["response"])
+        )
+        var wrongAliasRequest = try object(deepMutableCopy(aliasRoute["request"]))
+        wrongAliasRequest["alias"] = ["other-alias"]
+        let mismatchedAlias = try decoder.decode(
+            MusubiAliasQueryV1.self,
+            from: jsonData(wrongAliasRequest)
+        )
+        XCTAssertThrowsError(try aliasRecord.requireMatches(mismatchedAlias))
+
+        let historyRoute = try route(MusubiToriiClientV1.aliasHistoryPath)
+        let historyPage = try decoder.decode(
+            MusubiPageV1<MusubiAliasHistoryEntryV1>.self,
+            from: jsonData(historyRoute["response"])
+        )
+        XCTAssertThrowsError(try historyPage.requireMatches(mismatchedAlias))
+
+        let prefixRoute = try route(MusubiToriiClientV1.orderedPrefixPath)
+        let prefixPage = try decoder.decode(
+            MusubiOrderedPrefixPageV1.self,
+            from: jsonData(prefixRoute["response"])
+        )
+        var wrongPrefixRequest = try object(deepMutableCopy(prefixRoute["request"]))
+        wrongPrefixRequest["prefix"] = ["unrelated/"]
+        XCTAssertThrowsError(
+            try prefixPage.requireMatches(
+                decoder.decode(
+                    MusubiOrderedPrefixQueryV1.self,
+                    from: jsonData(wrongPrefixRequest)
+                )
+            )
+        )
+    }
+
+    func testEveryEchoedPageQueryBindsEmptyFirstPagesToTheOriginatingRequest() throws {
+        let decoder = JSONDecoder()
+
+        let resolverRoute = try route(MusubiToriiClientV1.resolverIndexPath)
+        let resolverRequest = try decoder.decode(
+            MusubiResolverIndexQueryV1.self,
+            from: jsonData(resolverRoute["request"])
+        )
+        var resolverResponse = try emptyFirstPage(resolverRoute["response"])
+        let resolverPage = try decoder.decode(
+            MusubiResolverIndexPageV1.self,
+            from: jsonData(resolverResponse)
+        )
+        XCTAssertNoThrow(try resolverPage.requireMatches(resolverRequest))
+        resolverResponse["query"] = try packageQueryWithOtherName(resolverResponse["query"])
+        let otherResolverPage = try decoder.decode(
+            MusubiResolverIndexPageV1.self,
+            from: jsonData(resolverResponse)
+        )
+        XCTAssertThrowsError(try otherResolverPage.requireMatches(resolverRequest))
+
+        for routePath in [MusubiToriiClientV1.versionsPath, MusubiToriiClientV1.maintainersPath] {
+            let fixtureRoute = try route(routePath)
+            let request = try decoder.decode(
+                MusubiPackagePageQueryV1.self,
+                from: jsonData(fixtureRoute["request"])
+            )
+            var response = try emptyFirstPage(fixtureRoute["response"])
+            if routePath == MusubiToriiClientV1.versionsPath {
+                let page = try decoder.decode(
+                    MusubiPageV1<MusubiVersionV1>.self,
+                    from: jsonData(response)
+                )
+                XCTAssertNoThrow(try page.requireMatches(request))
+                response["query"] = try packageQueryWithOtherName(response["query"])
+                let otherPage = try decoder.decode(
+                    MusubiPageV1<MusubiVersionV1>.self,
+                    from: jsonData(response)
+                )
+                XCTAssertThrowsError(try otherPage.requireMatches(request))
+            } else {
+                let page = try decoder.decode(
+                    MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                    from: jsonData(response)
+                )
+                XCTAssertNoThrow(try page.requireMatches(request))
+                response["query"] = try packageQueryWithOtherName(response["query"])
+                let otherPage = try decoder.decode(
+                    MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                    from: jsonData(response)
+                )
+                XCTAssertThrowsError(try otherPage.requireMatches(request))
+            }
+        }
+
+        let historyRoute = try route(MusubiToriiClientV1.aliasHistoryPath)
+        let historyRequest = try decoder.decode(
+            MusubiAliasQueryV1.self,
+            from: jsonData(historyRoute["request"])
+        )
+        var historyResponse = try emptyFirstPage(historyRoute["response"])
+        let historyPage = try decoder.decode(
+            MusubiPageV1<MusubiAliasHistoryEntryV1>.self,
+            from: jsonData(historyResponse)
+        )
+        XCTAssertNoThrow(try historyPage.requireMatches(historyRequest))
+        var otherAliasQuery = try object(historyResponse["query"])
+        otherAliasQuery["alias"] = ["other"]
+        historyResponse["query"] = otherAliasQuery
+        let otherHistoryPage = try decoder.decode(
+            MusubiPageV1<MusubiAliasHistoryEntryV1>.self,
+            from: jsonData(historyResponse)
+        )
+        XCTAssertThrowsError(try otherHistoryPage.requireMatches(historyRequest))
+
+        let prefixRoute = try route(MusubiToriiClientV1.orderedPrefixPath)
+        let prefixRequest = try decoder.decode(
+            MusubiOrderedPrefixQueryV1.self,
+            from: jsonData(prefixRoute["request"])
+        )
+        var prefixResponse = try emptyFirstPage(prefixRoute["response"])
+        let prefixPage = try decoder.decode(
+            MusubiOrderedPrefixPageV1.self,
+            from: jsonData(prefixResponse)
+        )
+        XCTAssertNoThrow(try prefixPage.requireMatches(prefixRequest))
+        var otherPrefixQuery = try object(prefixResponse["query"])
+        otherPrefixQuery["prefix"] = ["sora/other"]
+        prefixResponse["query"] = otherPrefixQuery
+        let otherPrefixPage = try decoder.decode(
+            MusubiOrderedPrefixPageV1.self,
+            from: jsonData(prefixResponse)
+        )
+        XCTAssertThrowsError(try otherPrefixPage.requireMatches(prefixRequest))
+
+        let searchRoute = try route(MusubiToriiClientV1.searchPath)
+        let searchRequest = try decoder.decode(
+            MusubiSearchQueryV1.self,
+            from: jsonData(searchRoute["request"])
+        )
+        var searchResponse = try emptyFirstPage(searchRoute["response"])
+        let searchPage = try decoder.decode(
+            MusubiSearchPageV1.self,
+            from: jsonData(searchResponse)
+        )
+        XCTAssertNoThrow(try searchPage.requireMatches(searchRequest))
+        var otherSearchQuery = try object(searchResponse["query"])
+        otherSearchQuery["query"] = "different search"
+        searchResponse["query"] = otherSearchQuery
+        let otherSearchPage = try decoder.decode(
+            MusubiSearchPageV1.self,
+            from: jsonData(searchResponse)
+        )
+        XCTAssertThrowsError(try otherSearchPage.requireMatches(searchRequest))
+
+        for routePath in [
+            MusubiToriiClientV1.resolverIndexPath,
+            MusubiToriiClientV1.versionsPath,
+            MusubiToriiClientV1.maintainersPath,
+            MusubiToriiClientV1.aliasHistoryPath,
+            MusubiToriiClientV1.orderedPrefixPath,
+            MusubiToriiClientV1.searchPath,
+        ] {
+            let fixtureRoute = try route(routePath)
+            var response = try object(deepMutableCopy(fixtureRoute["response"]))
+            response.removeValue(forKey: "query")
+            XCTAssertThrowsError(try roundTripResponse(routePath, data: jsonData(response)))
+        }
+    }
+
+    func testGenericAndResolverPagesRejectNoncanonicalOrdering() throws {
+        let decoder = JSONDecoder()
+
+        let versionsRoute = try route(MusubiToriiClientV1.versionsPath)
+        var duplicateVersions = try object(deepMutableCopy(versionsRoute["response"]))
+        let versionItems = try array(duplicateVersions["items"])
+        duplicateVersions["items"] = versionItems + versionItems
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiVersionV1>.self,
+                from: jsonData(duplicateVersions)
+            )
+        )
+
+        let maintainersRoute = try route(MusubiToriiClientV1.maintainersPath)
+        var reversedMaintainers = try object(deepMutableCopy(maintainersRoute["response"]))
+        reversedMaintainers["items"] = Array(
+            try array(reversedMaintainers["items"]).reversed()
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(reversedMaintainers)
+            )
+        )
+
+        let historyRoute = try route(MusubiToriiClientV1.aliasHistoryPath)
+        var duplicateHistory = try object(deepMutableCopy(historyRoute["response"]))
+        let historyItems = try array(duplicateHistory["items"])
+        duplicateHistory["items"] = historyItems + historyItems
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiAliasHistoryEntryV1>.self,
+                from: jsonData(duplicateHistory)
+            )
+        )
+
+        let resolverRoute = try route(MusubiToriiClientV1.resolverIndexPath)
+        var duplicateResolver = try object(deepMutableCopy(resolverRoute["response"]))
+        let releaseRoute = try route(MusubiToriiClientV1.exactReleasePath)
+        let release = try object(releaseRoute["response"])
+        let manifest = try object(release["manifest"])
+        let resolverRow: [String: Any] = [
+            "release": try XCTUnwrap(manifest["release"]),
+            "release_digest": try XCTUnwrap(release["release_digest"]),
+            "archive_id": try XCTUnwrap(manifest["archive_id"]),
+            "source_digest": [Array(repeating: 6, count: 32)],
+            "interface_digest": try XCTUnwrap(manifest["interface_digest"]),
+            "abi": try XCTUnwrap(manifest["abi"]),
+            "dependencies": [Any](),
+            "selection": ["kind": "Selectable", "value": NSNull()] as [String: Any],
+            "index_revision": 9,
+        ]
+        duplicateResolver["items"] = [resolverRow, resolverRow]
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiResolverIndexPageV1.self, from: jsonData(duplicateResolver))
+        )
+    }
+
+    func testPageResponseBindingUsesDefaultLimitAndRejectsCursorSnapshotMismatch() throws {
+        let decoder = JSONDecoder()
+        let versionsRoute = try route(MusubiToriiClientV1.versionsPath)
+        let page = try decoder.decode(
+            MusubiPageV1<MusubiVersionV1>.self,
+            from: jsonData(versionsRoute["response"])
+        )
+        let canonicalVersionRequest = try decoder.decode(
+            MusubiPackagePageQueryV1.self,
+            from: jsonData(versionsRoute["request"])
+        )
+        XCTAssertNoThrow(try page.requireMatches(canonicalVersionRequest))
+
+        var zeroLimit = try object(deepMutableCopy(versionsRoute["request"]))
+        var zeroLimitPage = try object(zeroLimit["page"])
+        zeroLimitPage["limit"] = 0
+        zeroLimit["page"] = zeroLimitPage
+        var zeroLimitResponse = try object(deepMutableCopy(versionsRoute["response"]))
+        zeroLimitResponse["query"] = zeroLimit
+        let zeroLimitResponsePage = try decoder.decode(
+            MusubiPageV1<MusubiVersionV1>.self,
+            from: jsonData(zeroLimitResponse)
+        )
+        XCTAssertNoThrow(
+            try zeroLimitResponsePage.requireMatches(
+                decoder.decode(MusubiPackagePageQueryV1.self, from: jsonData(zeroLimit))
+            )
+        )
+        XCTAssertThrowsError(try page.requireMatches(
+            decoder.decode(MusubiPackagePageQueryV1.self, from: jsonData(zeroLimit))
+        ))
+
+        var oversizedDefaultPageResponse = try object(
+            deepMutableCopy(zeroLimitResponse)
+        )
+        oversizedDefaultPageResponse["items"] = (0..<51).map { patch in
+            [
+                "major": 1,
+                "minor": 0,
+                "patch": patch,
+                "prerelease": [Any](),
+            ] as [String: Any]
+        }
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiVersionV1>.self,
+                from: jsonData(oversizedDefaultPageResponse)
+            )
+        )
+
+        let searchRoute = try route(MusubiToriiClientV1.searchPath)
+        let searchPage = try decoder.decode(
+            MusubiSearchPageV1.self,
+            from: jsonData(searchRoute["response"])
+        )
+        var zeroSearchLimit = try object(deepMutableCopy(searchRoute["request"]))
+        var zeroSearchPage = try object(zeroSearchLimit["page"])
+        zeroSearchPage["limit"] = 0
+        zeroSearchLimit["page"] = zeroSearchPage
+        var zeroSearchResponse = try object(deepMutableCopy(searchRoute["response"]))
+        zeroSearchResponse["query"] = zeroSearchLimit
+        let zeroSearchResponsePage = try decoder.decode(
+            MusubiSearchPageV1.self,
+            from: jsonData(zeroSearchResponse)
+        )
+        XCTAssertNoThrow(
+            try zeroSearchResponsePage.requireMatches(
+                decoder.decode(MusubiSearchQueryV1.self, from: jsonData(zeroSearchLimit))
+            )
+        )
+        XCTAssertThrowsError(try searchPage.requireMatches(
+            decoder.decode(MusubiSearchQueryV1.self, from: jsonData(zeroSearchLimit))
+        ))
+
+        var oversizedDefaultSearchResponse = try object(
+            deepMutableCopy(zeroSearchResponse)
+        )
+        let baseSearchHit = try XCTUnwrap(
+            try array(oversizedDefaultSearchResponse["items"]).first
+        )
+        oversizedDefaultSearchResponse["items"] = try (0..<51).map { index -> Any in
+            var hit = try object(deepMutableCopy(baseSearchHit))
+            var package = try object(hit["package"])
+            package["name"] = [String(format: "package-%02d", index)]
+            hit["package"] = package
+            return hit
+        }
+        oversizedDefaultSearchResponse["next_cursor"] = NSNull()
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiSearchPageV1.self,
+                from: jsonData(oversizedDefaultSearchResponse)
+            )
+        )
+
+        var staleCursor = try object(deepMutableCopy(versionsRoute["request"]))
+        var staleCursorPage = try object(staleCursor["page"])
+        var staleSnapshot = try object(
+            try object(versionsRoute["response"])["snapshot"]
+        )
+        staleSnapshot["finalized_height"] = 49
+        staleCursorPage["cursor"] = [
+            "snapshot": staleSnapshot,
+            "query_hash": [Array(repeating: 1, count: 32)],
+            "last_key": "1.0.0",
+            "caller": NSNull(),
+        ] as [String: Any]
+        staleCursor["page"] = staleCursorPage
+        var staleCursorResponse = try object(deepMutableCopy(versionsRoute["response"]))
+        staleCursorResponse["query"] = staleCursor
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiVersionV1>.self,
+                from: jsonData(staleCursorResponse)
+            )
+        )
+    }
+
+    func testEchoedPagesRejectTamperedStructuredCursorBoundariesAndContinuations() throws {
+        let decoder = JSONDecoder()
+        let versionsRoute = try route(MusubiToriiClientV1.versionsPath)
+        var versionResponse = try object(deepMutableCopy(versionsRoute["response"]))
+        let snapshot = try object(versionResponse["snapshot"])
+        let versionItems = try array(versionResponse["items"])
+        let tailVersion = try decoder.decode(
+            MusubiVersionV1.self,
+            from: jsonData(try XCTUnwrap(versionItems.last))
+        ).canonicalText
+        var versionQuery = try object(versionResponse["query"])
+        var versionPage = try object(versionQuery["page"])
+        versionPage["limit"] = 1
+        versionPage["cursor"] = finalizedCursor(snapshot: snapshot, lastKey: "1.0.0")
+        versionQuery["page"] = versionPage
+        versionResponse["query"] = versionQuery
+        versionResponse["next_cursor"] = finalizedCursor(
+            snapshot: snapshot,
+            lastKey: tailVersion
+        )
+        XCTAssertNoThrow(
+            try decoder.decode(
+                MusubiPageV1<MusubiVersionV1>.self,
+                from: jsonData(versionResponse)
+            )
+        )
+
+        var wrongTail = try object(deepMutableCopy(versionResponse))
+        var wrongTailCursor = try object(wrongTail["next_cursor"])
+        wrongTailCursor["last_key"] = "9.9.9"
+        wrongTail["next_cursor"] = wrongTailCursor
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiPageV1<MusubiVersionV1>.self, from: jsonData(wrongTail))
+        )
+
+        var shortPage = try object(deepMutableCopy(versionResponse))
+        var shortQuery = try object(shortPage["query"])
+        var shortControls = try object(shortQuery["page"])
+        shortControls["limit"] = 2
+        shortQuery["page"] = shortControls
+        shortPage["query"] = shortQuery
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiPageV1<MusubiVersionV1>.self, from: jsonData(shortPage))
+        )
+
+        var wrongHash = try object(deepMutableCopy(versionResponse))
+        var wrongHashCursor = try object(wrongHash["next_cursor"])
+        wrongHashCursor["query_hash"] = [Array(repeating: 2, count: 32)]
+        wrongHash["next_cursor"] = wrongHashCursor
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiPageV1<MusubiVersionV1>.self, from: jsonData(wrongHash))
+        )
+
+        var wrongNextSnapshot = try object(deepMutableCopy(versionResponse))
+        var wrongSnapshotCursor = try object(wrongNextSnapshot["next_cursor"])
+        var wrongSnapshot = try object(wrongSnapshotCursor["snapshot"])
+        wrongSnapshot["finalized_height"] = 49
+        wrongSnapshotCursor["snapshot"] = wrongSnapshot
+        wrongNextSnapshot["next_cursor"] = wrongSnapshotCursor
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiVersionV1>.self,
+                from: jsonData(wrongNextSnapshot)
+            )
+        )
+
+        var nextCallerBound = try object(deepMutableCopy(versionResponse))
+        var nextCallerCursor = try object(nextCallerBound["next_cursor"])
+        nextCallerCursor["caller"] = "unexpected-caller"
+        nextCallerBound["next_cursor"] = nextCallerCursor
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiVersionV1>.self,
+                from: jsonData(nextCallerBound)
+            )
+        )
+
+        var callerBound = try object(deepMutableCopy(versionResponse))
+        var callerQuery = try object(callerBound["query"])
+        var callerControls = try object(callerQuery["page"])
+        var callerCursor = try object(callerControls["cursor"])
+        callerCursor["caller"] = "unexpected-caller"
+        callerControls["cursor"] = callerCursor
+        callerQuery["page"] = callerControls
+        callerBound["query"] = callerQuery
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiPageV1<MusubiVersionV1>.self, from: jsonData(callerBound))
+        )
+
+        let resolverRoute = try route(MusubiToriiClientV1.resolverIndexPath)
+        var badResolver = try object(deepMutableCopy(resolverRoute["response"]))
+        var resolverQuery = try object(badResolver["query"])
+        var resolverControls = try object(resolverQuery["page"])
+        resolverControls["cursor"] = finalizedCursor(
+            snapshot: try object(badResolver["snapshot"]),
+            lastKey: "not-semver"
+        )
+        resolverQuery["page"] = resolverControls
+        badResolver["query"] = resolverQuery
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiResolverIndexPageV1.self, from: jsonData(badResolver))
+        )
+
+        let maintainersRoute = try route(MusubiToriiClientV1.maintainersPath)
+        var badMaintainers = try object(deepMutableCopy(maintainersRoute["response"]))
+        var maintainerQuery = try object(badMaintainers["query"])
+        var maintainerControls = try object(maintainerQuery["page"])
+        maintainerControls["cursor"] = finalizedCursor(
+            snapshot: try object(badMaintainers["snapshot"]),
+            lastKey: "not-a-maintainer-key"
+        )
+        maintainerQuery["page"] = maintainerControls
+        badMaintainers["query"] = maintainerQuery
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(badMaintainers)
+            )
+        )
+
+        let historyRoute = try route(MusubiToriiClientV1.aliasHistoryPath)
+        var badHistory = try object(deepMutableCopy(historyRoute["response"]))
+        var historyQuery = try object(badHistory["query"])
+        var historyControls = try object(historyQuery["page"])
+        historyControls["cursor"] = finalizedCursor(
+            snapshot: try object(badHistory["snapshot"]),
+            lastKey: "math:1"
+        )
+        historyQuery["page"] = historyControls
+        badHistory["query"] = historyQuery
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiPageV1<MusubiAliasHistoryEntryV1>.self,
+                from: jsonData(badHistory)
+            )
+        )
+
+        let prefixRoute = try route(MusubiToriiClientV1.orderedPrefixPath)
+        var badPrefix = try object(deepMutableCopy(prefixRoute["response"]))
+        var prefixQuery = try object(badPrefix["query"])
+        var prefixControls = try object(prefixQuery["page"])
+        prefixControls["cursor"] = finalizedCursor(
+            snapshot: try object(badPrefix["snapshot"]),
+            lastKey: "sora/zzzz"
+        )
+        prefixQuery["page"] = prefixControls
+        badPrefix["query"] = prefixQuery
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiOrderedPrefixPageV1.self, from: jsonData(badPrefix))
+        )
+
+        let searchRoute = try route(MusubiToriiClientV1.searchPath)
+        var badSearch = try object(deepMutableCopy(searchRoute["response"]))
+        var searchQuery = try object(badSearch["query"])
+        var searchControls = try object(searchQuery["page"])
+        let firstSearchItem = try object(
+            try XCTUnwrap(try array(badSearch["items"]).first)
+        )
+        searchControls["cursor"] = [
+            "snapshot": try XCTUnwrap(badSearch["snapshot"]),
+            "query_hash": [Array(repeating: 1, count: 32)],
+            "last_package": try XCTUnwrap(firstSearchItem["package"]),
+        ] as [String: Any]
+        searchQuery["page"] = searchControls
+        badSearch["query"] = searchQuery
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiSearchPageV1.self, from: jsonData(badSearch))
+        )
+    }
+
+    func testGenericPageRequestRejectsAboveMaximumAndPreservesZeroDefault() throws {
+        XCTAssertEqual(try MusubiPageRequestV1(limit: 0).limit, 0)
+        XCTAssertThrowsError(try MusubiPageRequestV1(limit: 101))
+
+        let versionsRoute = try route(MusubiToriiClientV1.versionsPath)
+        var oversizedRequest = try object(deepMutableCopy(versionsRoute["request"]))
+        var page = try object(oversizedRequest["page"])
+        page["limit"] = 101
+        oversizedRequest["page"] = page
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiPackagePageQueryV1.self,
+                from: jsonData(oversizedRequest)
             )
         )
     }
@@ -538,6 +1282,38 @@ final class MusubiSdkV1Tests: XCTestCase {
         return try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
     }
 
+    private func populatedArchiveLocationResponse(locationFills: [Int]) throws -> [String: Any] {
+        let fixtureRoute = try route(MusubiToriiClientV1.archiveLocationsPath)
+        var response = try object(deepMutableCopy(fixtureRoute["response"]))
+        var archive = try object(response["archive"])
+        let archiveID = try XCTUnwrap(archive["archive_id"])
+        let locationIDs: [Any] = locationFills.map {
+            [Array(repeating: $0, count: 32)]
+        }
+        archive["location_ids"] = locationIDs
+        response["archive"] = archive
+        response["items"] = locationIDs.map {
+            archiveLocationItem(locationID: $0, archiveID: archiveID)
+        }
+        return response
+    }
+
+    private func archiveLocationItem(locationID: Any, archiveID: Any) -> [String: Any] {
+        [
+            "location_id": locationID,
+            "archive_id": archiveID,
+            "pin_manifest": [Array(repeating: 21, count: 32)],
+            "replication_order": [Array(repeating: 22, count: 32)],
+            "providers": [Any](),
+            "provider_attestations": [Any](),
+            "renew_after_epoch": 60,
+            "expires_at_epoch": 120,
+            "finalized_height": 50,
+            "revision": 1,
+            "state": ["kind": "Healthy", "value": NSNull()] as [String: Any],
+        ]
+    }
+
     private func object(_ value: Any?) throws -> [String: Any] {
         try XCTUnwrap(value as? [String: Any])
     }
@@ -552,6 +1328,34 @@ final class MusubiSdkV1Tests: XCTestCase {
         }
         if let array = value as? [Any] { return array.map(deepMutableCopy) }
         return value as Any
+    }
+
+    private func emptyFirstPage(_ value: Any?) throws -> [String: Any] {
+        var response = try object(deepMutableCopy(value))
+        response["items"] = [Any]()
+        response["next_cursor"] = NSNull()
+        return response
+    }
+
+    private func packageQueryWithOtherName(_ value: Any?) throws -> [String: Any] {
+        var query = try object(deepMutableCopy(value))
+        var package = try object(query["package"])
+        package["name"] = ["other-package"]
+        query["package"] = package
+        return query
+    }
+
+    private func finalizedCursor(
+        snapshot: [String: Any],
+        lastKey: String,
+        queryHashFill: Int = 1
+    ) -> [String: Any] {
+        [
+            "snapshot": snapshot,
+            "query_hash": [Array(repeating: queryHashFill, count: 32)],
+            "last_key": lastKey,
+            "caller": NSNull(),
+        ]
     }
 
     private var expectedPaths: Set<String> {

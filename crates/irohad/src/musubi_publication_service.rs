@@ -6,11 +6,28 @@
 //! HTTPS ingress here. This module never routes through Torii or the daemon-private runtime
 //! provider broker.
 
-// TODO: Supply a deployment-qualified runner outside the stock tree that combines a private TLS
-// listener, HSM-backed broker signer, admitted SoraFS adapters, and the concrete durable Unix
-// clock and replay journal exported by `iroha::musubi_runtime`. The protocol core, durable local
-// persistence primitives, and typed supervisor dependency are complete; deployment assembly,
-// rollback-resistant storage, credential handling, and platform qualification remain open.
+// TODO: Supply a deployment-qualified runner only after the production boundaries below exist.
+// The stock tree deliberately cannot assemble one from the current SoraFS/Torii primitives:
+//
+// 1. seed ingress needs authenticated bounded canonical plan metadata (the current stage request
+//    carries only the raw CAR and its digest/length), plus durable opaque staging whose readback
+//    proves the complete `MusubiArchiveCommitmentV1`;
+// 2. providers need a reusable full-bundle verifier and a runtime-only completion-authority
+//    signer that produces `MusubiProviderBundleVerificationAttestationV1`; an ordinary SoraFS
+//    storage completion is not that attestation;
+// 3. storage coordination needs its own crash-safe idempotency journal and an authoritative
+//    finalized-chain reader which verifies the exact committed registration transaction and
+//    immutable archive projection before submitting/reconciling pin and replication mutations;
+// 4. readback needs admitted-provider authentication, redirect and DNS-rebinding defenses, and
+//    full plan/CAR/bundle verification; and
+// 5. daemon assembly needs non-secret public configuration, runtime credential/signer resolution,
+//    and a private TLS listener constructed around daemon-owned finalized-state/SoraFS handles.
+//
+// The protocol core, durable clock and service replay journal, and typed supervisor dependency are
+// complete. Until every boundary above is implemented and deployment-qualified, stock `irohad`
+// must keep the routes absent. In particular, do not substitute an in-memory backend, treat a
+// public query response or publisher-supplied bytes as finality evidence, or revive the retired
+// public Torii upload path.
 
 use std::{future::Future, pin::Pin, time::Duration};
 

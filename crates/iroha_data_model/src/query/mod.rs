@@ -7164,7 +7164,7 @@ pub mod musubi {
                 })
                 .into(),
                 FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
-                    prefix: MusubiOrderedPrefixV1::new("7/").expect("ordered prefix"),
+                    prefix: MusubiOrderedPrefixV1::new("sora/").expect("ordered prefix"),
                     page: page(),
                 })
                 .into(),

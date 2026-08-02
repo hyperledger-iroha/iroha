@@ -2153,3 +2153,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_release_kat.rs"]
+mod release_kat_tests;

@@ -3,6 +3,7 @@
 use super::{
     BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1, modulus_product_bit_len,
     noise::{ZkAmsMkheNoiseCertificateV1, derive_noise_certificate_v1},
+    packing::zk_ams_t256_release_packing_certificate_v1,
     phase23::{
         zk_ams_phase23_equation_certificate_digest_v1, zk_ams_phase23_equation_certificate_v1,
     },
@@ -195,6 +196,8 @@ pub struct ZkAmsMkheReleaseManifestV1 {
     pub security_candidate_input_digest: [u8; 32],
     /// Digest of exact static resource accounting and its open evidence bits.
     pub resource_certificate_digest: [u8; 32],
+    /// Digest of the exact release-degree positive and adversarial packing KAT.
+    pub packing_certificate_digest: [u8; 32],
     /// Digest of Equations (6)--(11), finalization semantics, and closure bits.
     pub phase23_equation_certificate_digest: [u8; 32],
     /// Release-size execution KAT digest; zero means absent.
@@ -325,6 +328,9 @@ pub fn zk_ams_mkhe_resource_certificate_digest_v1() -> Result<[u8; 32], ZkAmsMkh
         certificate.max_decryption_share_proof_bytes,
         certificate.streamed_hybrid_workspace_bytes,
         certificate.ring_multiplication_work_units,
+        certificate.hybrid_key_switch_decomposition_work_units,
+        certificate.hybrid_key_switch_ntt_work_units,
+        certificate.hybrid_key_switch_accumulator_work_units,
         certificate.hybrid_key_switch_work_units,
         certificate.max_composed_rotation_work_units,
     ] {
@@ -441,6 +447,7 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
         security_certificate_digest: security_certificate.certificate_digest(),
         security_candidate_input_digest: zk_ams_mkhe_security_candidate_input_digest_v1()?,
         resource_certificate_digest: zk_ams_mkhe_resource_certificate_digest_v1()?,
+        packing_certificate_digest: zk_ams_t256_release_packing_certificate_v1()?.digest,
         phase23_equation_certificate_digest: zk_ams_phase23_equation_certificate_digest_v1(),
         release_kat_digest: [0; 32],
     })
@@ -499,6 +506,7 @@ fn release_manifest_digest_v1(manifest: ZkAmsMkheReleaseManifestV1) -> [u8; 32] 
     frame.extend_from_slice(&manifest.security_certificate_digest);
     frame.extend_from_slice(&manifest.security_candidate_input_digest);
     frame.extend_from_slice(&manifest.resource_certificate_digest);
+    frame.extend_from_slice(&manifest.packing_certificate_digest);
     frame.extend_from_slice(&manifest.phase23_equation_certificate_digest);
     frame.extend_from_slice(&manifest.release_kat_digest);
     keccak256(&frame)
@@ -509,6 +517,7 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
     let manifest = zk_ams_mkhe_release_manifest_v1()?;
     let noise = zk_ams_mkhe_noise_certificate_v1()?;
     let resource = zk_ams_mkhe_resource_certificate_v1()?;
+    let packing = zk_ams_t256_release_packing_certificate_v1()?;
     let phase23 = zk_ams_phase23_equation_certificate_v1();
     let security = zk_ams_mkhe_security_certificate_v1()?;
     Ok(ZkAmsMkheReadinessV1 {
@@ -554,7 +563,10 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
         wire_gate: false,
         malicious_party_gate: false,
         decryption_share_gate: false,
-        packing_gate: false,
+        packing_gate: packing.profile_digest == release_profile_v1().digest()?
+            && packing.ring_degree == manifest.ring_degree
+            && packing.slot_count == manifest.slot_count
+            && packing.digest == manifest.packing_certificate_digest,
         phase23_gate: phase23.is_complete()
             && manifest.phase23_equation_certificate_digest
                 == zk_ams_phase23_equation_certificate_digest_v1(),
@@ -615,7 +627,9 @@ mod tests {
         );
         assert_eq!(manifest.final_decryption_bound_bits, 2_115);
         assert_eq!(manifest.correctness_margin_bits, 164);
-        assert!(zk_ams_mkhe_readiness_v1().unwrap().noise_gate);
+        let readiness = zk_ams_mkhe_readiness_v1().unwrap();
+        assert!(readiness.noise_gate);
+        assert!(readiness.packing_gate);
     }
 
     #[test]
@@ -727,6 +741,10 @@ mod tests {
             },
             ZkAmsMkheReleaseManifestV1 {
                 construction_digest: [0; 32],
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                packing_certificate_digest: [0; 32],
                 ..manifest
             },
         ] {

@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets
 import java.text.Normalizer
 import java.util.Collections
 import java.util.LinkedHashMap
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
@@ -1151,7 +1152,7 @@ class MusubiPageRequestV1(
     @JvmField val cursor: MusubiFinalizedCursorV1? = null,
 ) : MusubiWireValueV1() {
     init {
-        require(limit in 0..4_294_967_295L) { "Musubi page limit must fit u32" }
+        require(limit in 0..100) { "Musubi page limit exceeds 100" }
     }
 
     override fun wireValue(): Any = linkedMapOf(
@@ -1513,6 +1514,13 @@ class MusubiPackageRecordV1(
         require(claimedAtHeight > BigInteger.ZERO) { "Musubi claim height must be non-zero" }
     }
 
+    /** Rejects an exact-package response for a different structural package. */
+    fun requireMatches(request: MusubiExactPackageQueryV1) {
+        require(packageId == request.packageId) {
+            "Musubi exact-package response does not match the request"
+        }
+    }
+
     override fun wireValue(): Any = linkedMapOf(
         "package" to packageId.wireValue(),
         "claimed_namespace" to claimedNamespace.wireValue(),
@@ -1532,6 +1540,14 @@ class MusubiReleaseRecordV1 internal constructor(
     raw: Map<String, Any?>,
 ) : MusubiWireValueV1() {
     private val rawValue = MusubiJsonV1.immutableObject(raw)
+
+    /** Rejects an exact-release response for a different immutable release. */
+    fun requireMatches(request: MusubiExactReleaseQueryV1) {
+        require(release == request.release) {
+            "Musubi exact-release response does not match the request"
+        }
+    }
+
     override fun wireValue(): Any = rawValue
 }
 
@@ -1609,6 +1625,7 @@ sealed class MusubiMaintainerDirectoryEntryV1 : MusubiWireValueV1() {
 class MusubiArchiveLocationV1 internal constructor(
     @JvmField val locationId: MusubiDigest32V1,
     @JvmField val archiveId: MusubiDigest32V1,
+    @JvmField val finalizedHeight: BigInteger,
     @JvmField val revision: BigInteger,
     @JvmField val stateKind: String,
     raw: Map<String, Any?>,
@@ -2196,6 +2213,16 @@ class MusubiAliasRecordV1(
 ) : MusubiWireValueV1() {
     init {
         MusubiValidationV1.requireAsciiKebab(alias, 32, "alias")
+        MusubiValidationV1.canonicalAccountPayload(registeredBy, "alias registrant")
+        listOf(pricingRevision, paidXor, registeredAtHeight, historyRevision).forEach {
+            MusubiValidationV1.requireU64(it, "alias record counter")
+            require(it > BigInteger.ZERO) { "Musubi alias record counters must be non-zero" }
+        }
+    }
+
+    /** Rejects an exact-alias response for another permanent alias. */
+    fun requireMatches(request: MusubiAliasQueryV1) {
+        require(alias == request.alias) { "Musubi alias response does not match the request" }
     }
 
     override fun wireValue(): Any = linkedMapOf(
@@ -2219,6 +2246,23 @@ class MusubiAliasHistoryEntryV1 internal constructor(
     @JvmField val governanceAction: MusubiDigest32V1?,
     @JvmField val finalizedHeight: BigInteger,
 ) : MusubiWireValueV1() {
+    init {
+        MusubiValidationV1.requireAsciiKebab(alias, 32, "alias history alias")
+        MusubiValidationV1.requireU64(revision, "alias history revision")
+        MusubiValidationV1.requireU64(finalizedHeight, "alias history finalized height")
+        val actionIsValid = when (actionKind) {
+            "Registered" -> revision == BigInteger.ONE &&
+                previousTarget == null && governanceAction == null
+            "ParliamentRetarget" -> revision > BigInteger.ONE &&
+                previousTarget != null && governanceAction != null &&
+                governanceAction.bytes().any { it.toInt() != 0 }
+            else -> false
+        }
+        require(actionIsValid && finalizedHeight > BigInteger.ZERO) {
+            "Musubi alias-history entry is invalid"
+        }
+    }
+
     override fun wireValue(): Any = linkedMapOf(
         "alias" to listOf(alias),
         "revision" to revision,
@@ -2258,6 +2302,7 @@ class MusubiOrderedPackageEntryV1(
 
 /** Typed bounded page shared by all finalized Musubi list responses. */
 class MusubiPageV1<T : MusubiWireValueV1> internal constructor(
+    @JvmField val query: MusubiWireValueV1,
     items: List<T>,
     @JvmField val nextCursor: MusubiFinalizedCursorV1?,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
@@ -2271,7 +2316,73 @@ class MusubiPageV1<T : MusubiWireValueV1> internal constructor(
         }
     }
 
+    internal fun requireVersionMatches(request: MusubiPackagePageQueryV1) {
+        val versions = items.map { item ->
+            require(item is MusubiVersionV1) { "Musubi version page contains another item type" }
+            item
+        }
+        require(query == request) { "Musubi version response query does not match the request" }
+        require(MusubiValidationV1.semVerPageAdvances(request.page, versions.firstOrNull())) {
+            "Musubi version response does not advance its structured cursor"
+        }
+        MusubiValidationV1.requireFinalizedPageMatches(
+            request.page,
+            versions.size,
+            versions.firstOrNull()?.canonicalText(),
+            versions.lastOrNull()?.canonicalText(),
+            snapshot,
+            nextCursor,
+        )
+    }
+
+    internal fun requireMaintainerMatches(request: MusubiPackagePageQueryV1) {
+        val maintainers = items.map { item ->
+            require(item is MusubiMaintainerDirectoryEntryV1) {
+                "Musubi maintainer page contains another item type"
+            }
+            item
+        }
+        require(query == request) { "Musubi maintainer response query does not match the request" }
+        require(maintainers.all { MusubiValidationV1.maintainerPackageId(it) == request.packageId }) {
+            "Musubi maintainer response contains another package"
+        }
+        require(MusubiValidationV1.maintainerPageAdvances(request.page, maintainers.firstOrNull())) {
+            "Musubi maintainer response does not advance its structured cursor"
+        }
+        MusubiValidationV1.requireFinalizedPageMatches(
+            request.page,
+            maintainers.size,
+            maintainers.firstOrNull()?.let(MusubiValidationV1::maintainerCursorKey),
+            maintainers.lastOrNull()?.let(MusubiValidationV1::maintainerCursorKey),
+            snapshot,
+            nextCursor,
+        )
+    }
+
+    internal fun requireAliasHistoryMatches(request: MusubiAliasQueryV1) {
+        val history = items.map { item ->
+            require(item is MusubiAliasHistoryEntryV1) {
+                "Musubi alias-history page contains another item type"
+            }
+            item
+        }
+        require(query == request) { "Musubi alias-history response query does not match the request" }
+        require(history.all { it.alias == request.alias } &&
+            MusubiValidationV1.aliasHistoryPageAdvances(request, history.firstOrNull())) {
+            "Musubi alias-history response does not advance its structured cursor"
+        }
+        MusubiValidationV1.requireFinalizedPageMatches(
+            request.page,
+            history.size,
+            history.firstOrNull()?.let(MusubiValidationV1::aliasHistoryCursorKey),
+            history.lastOrNull()?.let(MusubiValidationV1::aliasHistoryCursorKey),
+            snapshot,
+            nextCursor,
+        )
+    }
+
     override fun wireValue(): Any = linkedMapOf(
+        "query" to query.wireValue(),
         "items" to items.map { it.wireValue() },
         "next_cursor" to nextCursor?.wireValue(),
         "snapshot" to snapshot.wireValue(),
@@ -2280,6 +2391,7 @@ class MusubiPageV1<T : MusubiWireValueV1> internal constructor(
 
 /** Resolver page carrying the exact chain/genesis identity required by lockfiles. */
 class MusubiResolverIndexPageV1 internal constructor(
+    @JvmField val query: MusubiResolverIndexQueryV1,
     @JvmField val chainId: String,
     genesisHash: ByteArray,
     items: List<MusubiResolverReleaseRowV1>,
@@ -2294,7 +2406,10 @@ class MusubiResolverIndexPageV1 internal constructor(
         require(genesisHashValue.size == 32 && genesisHashValue.any { it.toInt() != 0 }) {
             "Musubi genesis hash must contain a non-inert 32-byte value"
         }
-        require(this.items.size <= 100) { "Musubi resolver page exceeds 100 items" }
+        require(this.items.size <= 100 &&
+            this.items.zipWithNext().all { (left, right) -> left.release < right.release }) {
+            "Musubi resolver page exceeds 100 items or is not strictly ordered"
+        }
         require(nextCursor == null || nextCursor.snapshot == snapshot) {
             "Musubi resolver cursor must use the page snapshot"
         }
@@ -2302,7 +2417,31 @@ class MusubiResolverIndexPageV1 internal constructor(
 
     fun genesisHash(): ByteArray = genesisHashValue.copyOf()
 
+    /** Binds every resolver row and any continuation snapshot to the exact request. */
+    fun requireMatches(request: MusubiResolverIndexQueryV1) {
+        require(query == request) { "Musubi resolver response query does not match the request" }
+        require(items.all { row ->
+            row.release.packageId == request.packageId &&
+                request.requirement?.matches(row.release.version) != false
+        }) {
+            "Musubi resolver response contains another package or an excluded version"
+        }
+        require(MusubiValidationV1.semVerPageAdvances(
+            request.page,
+            items.firstOrNull()?.release?.version,
+        )) { "Musubi resolver response does not advance its structured cursor" }
+        MusubiValidationV1.requireFinalizedPageMatches(
+            request.page,
+            items.size,
+            items.firstOrNull()?.release?.version?.canonicalText(),
+            items.lastOrNull()?.release?.version?.canonicalText(),
+            snapshot,
+            nextCursor,
+        )
+    }
+
     override fun wireValue(): Any = linkedMapOf(
+        "query" to query.wireValue(),
         "chain_id" to chainId,
         "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
         "items" to items.map { it.wireValue() },
@@ -2335,7 +2474,20 @@ class MusubiArchiveLocationPageV1 internal constructor(
         require(archive.registeredAtHeight <= snapshot.finalizedHeight) {
             "Musubi archive registration is newer than the page snapshot"
         }
-        require(this.items.size <= 4 && this.items.all { it.archiveId == archive.archiveId }) {
+        require(this.items.size <= 4 &&
+            this.items.zipWithNext().all { (left, right) ->
+                MusubiValidationV1.compareUnsignedBytes(
+                    left.locationId.bytes(),
+                    right.locationId.bytes(),
+                ) < 0
+            } &&
+            this.items.all { item ->
+                item.archiveId == archive.archiveId &&
+                    archive.locationIds.any { it == item.locationId } &&
+                    item.stateKind != "Retired" &&
+                    item.finalizedHeight <= snapshot.finalizedHeight &&
+                    item.revision <= archive.locationRevision
+            }) {
             "Musubi archive-location page has an invalid item set"
         }
         require(nextCursor == null || nextCursor.snapshot == snapshot) {
@@ -2344,6 +2496,14 @@ class MusubiArchiveLocationPageV1 internal constructor(
     }
 
     fun genesisHash(): ByteArray = genesisHashValue.copyOf()
+
+    /** Binds the archive record and any continuation snapshot to the exact request. */
+    fun requireMatches(request: MusubiArchiveLocationQueryV1) {
+        require(archive.archiveId == request.archiveId) {
+            "Musubi archive-location response does not match the request"
+        }
+        MusubiValidationV1.requirePageMatches(request.page, snapshot, nextCursor, items.size)
+    }
 
     override fun wireValue(): Any = linkedMapOf(
         "chain_id" to chainId,
@@ -2360,12 +2520,14 @@ class MusubiArchiveRetentionPageV1 internal constructor(
     @JvmField val chainId: String,
     genesisHash: ByteArray,
     items: List<MusubiArchiveRetentionDecisionV1>,
+    @JvmField val finalizedTimeMs: BigInteger,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
     private val genesisHashValue = genesisHash.copyOf()
     @JvmField val items: List<MusubiArchiveRetentionDecisionV1> = items.toList()
 
     init {
+        MusubiValidationV1.requireU64(finalizedTimeMs, "archiveRetention.finalizedTimeMs")
         MusubiValidationV1.requireExactText(chainId, "Musubi archive-retention chain ID")
         require(genesisHashValue.size == 32 && genesisHashValue.any { it.toInt() != 0 } &&
             this.items.isNotEmpty() && this.items.size <= 100 &&
@@ -2404,12 +2566,14 @@ class MusubiArchiveRetentionPageV1 internal constructor(
         "chain_id" to chainId,
         "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
         "items" to items.map { it.wireValue() },
+        "finalized_time_ms" to finalizedTimeMs,
         "snapshot" to snapshot.wireValue(),
     )
 }
 
 /** Ordered-directory page carrying the exact chain/genesis identity for lock creation. */
 class MusubiOrderedPrefixPageV1 internal constructor(
+    @JvmField val query: MusubiOrderedPrefixQueryV1,
     @JvmField val chainId: String,
     genesisHash: ByteArray,
     @JvmField val namespaceBinding: MusubiNamespaceBindingV1,
@@ -2449,7 +2613,31 @@ class MusubiOrderedPrefixPageV1 internal constructor(
 
     fun genesisHash(): ByteArray = genesisHashValue.copyOf()
 
+    /** Binds directory rows and any continuation snapshot to the requested prefix. */
+    fun requireMatches(request: MusubiOrderedPrefixQueryV1) {
+        require(query == request) {
+            "Musubi ordered-prefix response query does not match the request"
+        }
+        val requestedNamespace = request.prefix.substringBefore('/', missingDelimiterValue = "")
+        require(requestedNamespace == namespaceBinding.namespace.value && items.all { item ->
+            "${item.selector.namespace.value}/${item.selector.name.value}"
+                .startsWith(request.prefix)
+        }) { "Musubi ordered-prefix response contains a selector outside the request" }
+        require(MusubiValidationV1.orderedPrefixPageAdvances(request, items.firstOrNull())) {
+            "Musubi ordered-prefix response does not advance its structured cursor"
+        }
+        MusubiValidationV1.requireFinalizedPageMatches(
+            request.page,
+            items.size,
+            items.firstOrNull()?.let(MusubiValidationV1::orderedSelectorCursorKey),
+            items.lastOrNull()?.let(MusubiValidationV1::orderedSelectorCursorKey),
+            snapshot,
+            nextCursor,
+        )
+    }
+
     override fun wireValue(): Any = linkedMapOf(
+        "query" to query.wireValue(),
         "chain_id" to chainId,
         "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
         "namespace_binding" to namespaceBinding.wireValue(),
@@ -2501,6 +2689,7 @@ class MusubiSearchHitV1(
 
 /** Bounded page from the finalized-event package-search projection. */
 class MusubiSearchPageV1 internal constructor(
+    @JvmField val query: MusubiSearchQueryV1,
     items: List<MusubiSearchHitV1>,
     @JvmField val nextCursor: MusubiSearchCursorV1?,
     @JvmField val snapshot: MusubiSearchSnapshotV1,
@@ -2520,7 +2709,26 @@ class MusubiSearchPageV1 internal constructor(
         }
     }
 
+    /** Binds the echoed query and any continuation to the exact request. */
+    fun requireMatches(request: MusubiSearchQueryV1) {
+        require(query == request) { "Musubi search response query does not match the request" }
+        val effectiveLimit = MusubiValidationV1.effectivePageLimit(request.page.limit)
+        val cursor = request.page.cursor
+        require(items.size <= effectiveLimit &&
+            (cursor == null || snapshot == cursor.snapshot &&
+                items.firstOrNull()?.let {
+                    MusubiValidationV1.comparePackageIds(cursor.lastPackage, it.packageId) < 0
+                } != false &&
+                (nextCursor == null || nextCursor.queryHash == cursor.queryHash)) &&
+            (nextCursor == null || nextCursor.snapshot == snapshot &&
+                items.size == effectiveLimit &&
+                nextCursor.lastPackage == items.lastOrNull()?.packageId)) {
+            "Musubi search response has an invalid structured cursor or page boundary"
+        }
+    }
+
     override fun wireValue(): Any = linkedMapOf(
+        "query" to query.wireValue(),
         "items" to items.map { it.wireValue() },
         "next_cursor" to nextCursor?.wireValue(),
         "snapshot" to snapshot.wireValue(),
@@ -2549,6 +2757,277 @@ internal object MusubiValidationV1 {
 
     fun compareDigests(left: MusubiDigest32V1, right: MusubiDigest32V1): Int =
         compareUnsignedBytes(left.bytes(), right.bytes())
+
+    fun compareMaintainerEntries(
+        left: MusubiMaintainerDirectoryEntryV1,
+        right: MusubiMaintainerDirectoryEntryV1,
+    ): Int {
+        comparePackageIds(maintainerPackageId(left), maintainerPackageId(right))
+            .let { if (it != 0) return it }
+        compareAccountIds(maintainerAccount(left), maintainerAccount(right))
+            .let { if (it != 0) return it }
+        val leftInvitation = maintainerInvitation(left)
+        val rightInvitation = maintainerInvitation(right)
+        if (leftInvitation == null) return if (rightInvitation == null) 0 else -1
+        if (rightInvitation == null) return 1
+        return compareDigests(leftInvitation, rightInvitation)
+    }
+
+    fun maintainerPackageId(
+        entry: MusubiMaintainerDirectoryEntryV1,
+    ): MusubiPackageIdV1 = when (entry) {
+        is MusubiMaintainerDirectoryEntryV1.Accepted -> entry.member.packageId
+        is MusubiMaintainerDirectoryEntryV1.PendingInvitation -> entry.invitation.packageId
+    }
+
+    private fun maintainerAccount(entry: MusubiMaintainerDirectoryEntryV1): String = when (entry) {
+        is MusubiMaintainerDirectoryEntryV1.Accepted -> entry.member.account
+        is MusubiMaintainerDirectoryEntryV1.PendingInvitation -> entry.invitation.invitedAccount
+    }
+
+    private fun maintainerInvitation(
+        entry: MusubiMaintainerDirectoryEntryV1,
+    ): MusubiDigest32V1? = when (entry) {
+        is MusubiMaintainerDirectoryEntryV1.Accepted -> null
+        is MusubiMaintainerDirectoryEntryV1.PendingInvitation -> entry.invitation.inviteId
+    }
+
+    fun maintainerCursorKey(entry: MusubiMaintainerDirectoryEntryV1): String {
+        val account = lowerHex(canonicalAccountPayload(
+            maintainerAccount(entry),
+            "maintainer cursor account",
+        ))
+        val invitation = maintainerInvitation(entry)?.let { "pending-${lowerHex(it.bytes())}" }
+            ?: "accepted"
+        return "$account|$invitation"
+    }
+
+    fun maintainerPageAdvances(
+        request: MusubiPageRequestV1,
+        first: MusubiMaintainerDirectoryEntryV1?,
+    ): Boolean {
+        val cursor = request.cursor ?: return true
+        val previous = parseMaintainerCursorBoundary(cursor.lastKey) ?: return false
+        first ?: return true
+        val firstAccount = canonicalAccountPayload(
+            maintainerAccount(first),
+            "maintainer cursor account",
+        )
+        val accountOrder = compareUnsignedBytes(previous.account, firstAccount)
+        if (accountOrder != 0) return accountOrder < 0
+        val firstInvitation = maintainerInvitation(first)?.bytes()
+        return when {
+            previous.invitation == null && firstInvitation != null -> true
+            previous.invitation == null || firstInvitation == null -> false
+            else -> compareUnsignedBytes(previous.invitation, firstInvitation) < 0
+        }
+    }
+
+    private class MaintainerCursorBoundary(
+        val account: ByteArray,
+        val invitation: ByteArray?,
+    )
+
+    private fun parseMaintainerCursorBoundary(value: String): MaintainerCursorBoundary? {
+        val separator = value.indexOf('|')
+        if (separator <= 0 || separator != value.lastIndexOf('|')) return null
+        val account = decodeLowerHex(value.substring(0, separator)) ?: return null
+        val invitation = value.substring(separator + 1)
+        if (invitation == "accepted") return MaintainerCursorBoundary(account, null)
+        if (!invitation.startsWith("pending-")) return null
+        val invitationBytes = decodeLowerHex(invitation.substring("pending-".length)) ?: return null
+        return if (invitationBytes.size == 32) {
+            MaintainerCursorBoundary(account, invitationBytes)
+        } else {
+            null
+        }
+    }
+
+    private fun lowerHex(bytes: ByteArray): String {
+        val alphabet = "0123456789abcdef"
+        val encoded = CharArray(bytes.size * 2)
+        bytes.forEachIndexed { index, byte ->
+            val value = byte.toInt() and 0xff
+            encoded[index * 2] = alphabet[value ushr 4]
+            encoded[index * 2 + 1] = alphabet[value and 0x0f]
+        }
+        return String(encoded)
+    }
+
+    private fun decodeLowerHex(value: String): ByteArray? {
+        if (value.isEmpty() || value.length % 2 != 0 ||
+            value.any { it !in '0'..'9' && it !in 'a'..'f' }) {
+            return null
+        }
+        return ByteArray(value.length / 2) { index ->
+            value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+    }
+
+    fun semVerPageAdvances(
+        request: MusubiPageRequestV1,
+        first: MusubiVersionV1?,
+    ): Boolean {
+        val cursor = request.cursor ?: return true
+        val previous = try {
+            MusubiVersionV1.parse(cursor.lastKey)
+        } catch (_: IllegalArgumentException) {
+            return false
+        }
+        return first == null || previous < first
+    }
+
+    fun aliasHistoryCursorKey(entry: MusubiAliasHistoryEntryV1): String =
+        "${entry.alias}:${entry.revision.toString().padStart(20, '0')}"
+
+    fun aliasHistoryPageAdvances(
+        request: MusubiAliasQueryV1,
+        first: MusubiAliasHistoryEntryV1?,
+    ): Boolean {
+        val cursor = request.page.cursor ?: return true
+        val separator = cursor.lastKey.lastIndexOf(':')
+        if (separator <= 0) return false
+        val alias = cursor.lastKey.substring(0, separator)
+        val revisionText = cursor.lastKey.substring(separator + 1)
+        if (alias != request.alias || revisionText.length != 20 ||
+            revisionText.any { it !in '0'..'9' }) {
+            return false
+        }
+        val revision = try {
+            parseU64(revisionText, "alias-history cursor revision")
+        } catch (_: IllegalArgumentException) {
+            return false
+        }
+        if (revision.toString().padStart(20, '0') != revisionText) return false
+        return first == null || first.alias == alias && first.revision > revision
+    }
+
+    fun orderedSelectorCursorKey(entry: MusubiOrderedPackageEntryV1): String =
+        "${entry.selector.namespace.value}/${entry.selector.name.value}"
+
+    fun orderedPrefixPageAdvances(
+        request: MusubiOrderedPrefixQueryV1,
+        first: MusubiOrderedPackageEntryV1?,
+    ): Boolean {
+        val cursor = request.page.cursor ?: return true
+        val previous = parseSelectorCursor(cursor.lastKey) ?: return false
+        val separator = request.prefix.indexOf('/')
+        if (separator <= 0 || separator != request.prefix.lastIndexOf('/') ||
+            previous.namespace.value != request.prefix.substring(0, separator) ||
+            !cursor.lastKey.startsWith(request.prefix)) {
+            return false
+        }
+        return first == null || compareSelectors(previous, first.selector) < 0
+    }
+
+    private fun parseSelectorCursor(value: String): MusubiPackageSelectorV1? {
+        val separator = value.indexOf('/')
+        if (separator <= 0 || separator != value.lastIndexOf('/') || separator == value.lastIndex) {
+            return null
+        }
+        return try {
+            val selector = MusubiPackageSelectorV1(
+                MusubiNamespaceV1(value.substring(0, separator)),
+                MusubiPackageNameV1(value.substring(separator + 1)),
+            )
+            if ("${selector.namespace.value}/${selector.name.value}" == value) selector else null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+
+    private fun compareSelectors(
+        left: MusubiPackageSelectorV1,
+        right: MusubiPackageSelectorV1,
+    ): Int {
+        compareUtf8(left.namespace.value, right.namespace.value).let { if (it != 0) return it }
+        return compareUtf8(left.name.value, right.name.value)
+    }
+
+    private fun compareAccountIds(left: String, right: String): Int {
+        val leftAddress = canonicalAccountAddress(left)
+        val rightAddress = canonicalAccountAddress(right)
+        val leftSingle = leftAddress.singleKeyPayloadIgnoringCurveSupport()
+        val rightSingle = rightAddress.singleKeyPayloadIgnoringCurveSupport()
+        if (leftSingle != null || rightSingle != null) {
+            if (leftSingle == null) return 1
+            if (rightSingle == null) return -1
+            return compareUnsignedBytes(
+                compactPublicKeyPayload(leftSingle.curveId, leftSingle.publicKey),
+                compactPublicKeyPayload(rightSingle.curveId, rightSingle.publicKey),
+            )
+        }
+
+        val leftPolicy = requireNotNull(leftAddress.multisigPolicyPayloadIgnoringCurveSupport())
+        val rightPolicy = requireNotNull(rightAddress.multisigPolicyPayloadIgnoringCurveSupport())
+        leftPolicy.version.compareTo(rightPolicy.version).let { if (it != 0) return it }
+        leftPolicy.threshold.compareTo(rightPolicy.threshold).let { if (it != 0) return it }
+        for (index in 0 until minOf(leftPolicy.members.size, rightPolicy.members.size)) {
+            val leftMember = leftPolicy.members[index]
+            val rightMember = rightPolicy.members[index]
+            compareUnsignedBytes(
+                compactPublicKeyPayload(leftMember.curveId, leftMember.publicKey),
+                compactPublicKeyPayload(rightMember.curveId, rightMember.publicKey),
+            ).let { if (it != 0) return it }
+            leftMember.weight.compareTo(rightMember.weight).let { if (it != 0) return it }
+        }
+        return leftPolicy.members.size.compareTo(rightPolicy.members.size)
+    }
+
+    private fun canonicalAccountAddress(value: String): AccountAddress {
+        requireCanonicalI105Address(value, "maintainer account")
+        return AccountAddress.parseEncodedIgnoringCurveSupport(value, null).address
+    }
+
+    fun effectivePageLimit(limit: Long): Int = when {
+        limit == 0L -> 50
+        limit > 100L -> 100
+        else -> limit.toInt()
+    }
+
+    fun requirePageMatches(
+        request: MusubiPageRequestV1,
+        snapshot: MusubiRegistrySnapshotV1,
+        nextCursor: MusubiFinalizedCursorV1?,
+        itemCount: Int,
+    ) {
+        // Typed page carriers validate their echoed query identity before this shared page check.
+        val cursor = request.cursor
+        require(itemCount <= effectivePageLimit(request.limit) &&
+            (cursor == null || cursor.snapshot == snapshot &&
+                (nextCursor == null || nextCursor.queryHash == cursor.queryHash &&
+                    nextCursor.caller == cursor.caller))) {
+            "Musubi response does not use the requested page limit or cursor binding"
+        }
+    }
+
+    fun requireFinalizedPageMatches(
+        request: MusubiPageRequestV1,
+        itemCount: Int,
+        firstKey: String?,
+        lastKey: String?,
+        snapshot: MusubiRegistrySnapshotV1,
+        nextCursor: MusubiFinalizedCursorV1?,
+    ) {
+        val effectiveLimit = effectivePageLimit(request.limit)
+        require(itemCount <= effectiveLimit &&
+            (itemCount == 0 && firstKey == null && lastKey == null ||
+                itemCount > 0 && firstKey != null && lastKey != null)) {
+            "Musubi response exceeds its requested bound or has invalid cursor keys"
+        }
+        request.cursor?.let { cursor ->
+            require(cursor.snapshot == snapshot && cursor.caller == null) {
+                "Musubi response does not continue its public finalized cursor"
+            }
+        }
+        nextCursor?.let { cursor ->
+            require(cursor.snapshot == snapshot && cursor.caller == null &&
+                itemCount == effectiveLimit && cursor.lastKey == lastKey &&
+                (request.cursor == null || request.cursor.queryHash == cursor.queryHash)) {
+                "Musubi next cursor does not bind its exact full page"
+            }
+        }
+    }
 
     fun requireNonZeroDigest(value: MusubiDigest32V1, field: String) {
         require(value.bytes().any { it.toInt() != 0 }) { "$field must be non-zero" }

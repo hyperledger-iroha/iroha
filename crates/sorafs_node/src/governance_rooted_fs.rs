@@ -1247,12 +1247,29 @@ impl RootedDirectory {
     /// Remove matching atomic crash temporaries below this exact directory.
     pub(super) fn remove_atomic_temps_for(&self, target_name: &str) -> io::Result<usize> {
         validate_component(OsStr::new(target_name))?;
+        self.remove_atomic_temps_matching(DEFAULT_CHILD_ENTRY_LIMIT, |candidate| {
+            candidate == target_name
+        })
+    }
+
+    /// Remove bounded atomic crash temporaries whose decoded target is allowed.
+    pub(super) fn remove_atomic_temps_matching<Allowed>(
+        &self,
+        max_entries: usize,
+        mut allowed: Allowed,
+    ) -> io::Result<usize>
+    where
+        Allowed: FnMut(&str) -> bool,
+    {
         let mut removed = 0usize;
-        for name in self.child_names()? {
+        for name in self.child_names_bounded(max_entries)? {
             let Some(name_utf8) = name.to_str() else {
                 continue;
             };
-            if !is_atomic_temp_for_target(name_utf8, target_name) {
+            let Some(target_name) = atomic_temp_target_name(name_utf8) else {
+                continue;
+            };
+            if !allowed(target_name) {
                 continue;
             }
             self.verify()?;
@@ -1270,6 +1287,9 @@ impl RootedDirectory {
                 )));
             }
             platform::remove_open_file(&self.handle, &file, &name, Some(identity))?;
+            drop(linked);
+            drop(file);
+            self.require_file_name_absent(&name)?;
             removed = removed.saturating_add(1);
         }
         if removed != 0 {
@@ -1303,6 +1323,69 @@ impl RootedDirectory {
         platform::remove_open_file(&self.handle, &file, name, Some(identity))?;
         drop(linked);
         drop(file);
+        self.require_file_name_absent(name)?;
+        self.handle.sync_all()?;
+        self.verify()?;
+        Ok(true)
+    }
+
+    fn require_file_name_absent(&self, name: &OsStr) -> io::Result<()> {
+        match platform::open_file(&self.handle, name, false) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Ok(replacement) => {
+                drop(replacement);
+                Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!(
+                        "governance file `{}` was replaced during removal",
+                        self.display_path.join(name).display()
+                    ),
+                ))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Remove one direct empty child directory by its exact retained identity.
+    pub(super) fn remove_empty_directory_if_exists(&self, name: &OsStr) -> io::Result<bool> {
+        validate_component(name)?;
+        if !self.writable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "read-only governance directory cannot remove children",
+            ));
+        }
+        self.verify()?;
+        let child = match self.open_directory(name) {
+            Ok(child) => child,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if !child.child_names_bounded(1)?.is_empty() {
+            return Err(io::Error::other(format!(
+                "governance directory `{}` is not empty",
+                child.display_path.display()
+            )));
+        }
+        self.verify()?;
+        child.verify()?;
+        let identity = child.identity;
+        platform::remove_open_directory(&self.handle, &child.handle, name, Some(identity))?;
+        drop(child);
+        match self.open_directory(name) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(replacement) => {
+                drop(replacement);
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!(
+                        "governance directory `{}` was replaced during removal",
+                        self.display_path.join(name).display()
+                    ),
+                ));
+            }
+            Err(error) => return Err(error),
+        }
         self.handle.sync_all()?;
         self.verify()?;
         Ok(true)
@@ -1499,17 +1582,23 @@ fn metadata_stable_during_read(_before: &fs::Metadata, _after: &fs::Metadata) ->
     false
 }
 
-fn is_atomic_temp_for_target(name: &str, target_name: &str) -> bool {
-    let Some(suffix) = name.strip_prefix(&format!(".{target_name}.tmp-")) else {
-        return false;
-    };
+fn atomic_temp_target_name(name: &str) -> Option<&str> {
+    let name = name.strip_prefix('.')?;
+    let (target_name, suffix) = name.rsplit_once(".tmp-")?;
+    if target_name.is_empty() {
+        return None;
+    }
     let Some((pid, counter)) = suffix.split_once('-') else {
-        return false;
+        return None;
     };
-    !pid.is_empty()
-        && !counter.is_empty()
-        && pid.bytes().all(|byte| byte.is_ascii_digit())
-        && counter.bytes().all(|byte| byte.is_ascii_digit())
+    if pid.is_empty()
+        || counter.is_empty()
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !counter.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(target_name)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1552,6 +1641,10 @@ mod platform {
     const O_DIRECTORY: c_int = 0x10_0000;
     const O_READ_ONLY: c_int = 0;
     const O_READ_WRITE: c_int = 2;
+    #[cfg(target_os = "linux")]
+    const AT_REMOVE_DIRECTORY: c_int = 0x200;
+    #[cfg(target_os = "macos")]
+    const AT_REMOVE_DIRECTORY: c_int = 0x80;
     #[cfg(target_os = "linux")]
     const RENAME_NO_REPLACE: c_uint = 1;
     #[cfg(target_os = "macos")]
@@ -2034,6 +2127,39 @@ mod platform {
         // SAFETY: the direct component and retained directory descriptor are
         // valid. Identity was checked immediately above; failure is propagated.
         if unsafe { unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    pub(super) fn remove_open_directory(
+        parent: &File,
+        directory: &File,
+        name: &OsStr,
+        expected: Option<FileIdentity>,
+    ) -> io::Result<()> {
+        let actual = file_identity(&directory.metadata()?)?;
+        if expected.is_some_and(|expected| expected != actual) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance directory changed before removal",
+            ));
+        }
+        let linked = open_directory(parent, name, true)?;
+        let linked_identity = file_identity(&linked.metadata()?)?;
+        if linked_identity != actual {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance directory binding changed before removal",
+            ));
+        }
+        let name = c_name(name)?;
+        // SAFETY: the direct component and retained parent descriptor are
+        // valid, and both the supplied and freshly opened child identities
+        // were checked immediately above. The kernel requires the child to be
+        // empty for `AT_REMOVEDIR`.
+        if unsafe { unlinkat(parent.as_raw_fd(), name.as_ptr(), AT_REMOVE_DIRECTORY) } == 0 {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
@@ -2682,7 +2808,13 @@ mod platform {
     }
 
     pub(super) fn open_directory(parent: &File, name: &OsStr, writable: bool) -> io::Result<File> {
-        let access = GENERIC_READ | SYNCHRONIZE | if writable { GENERIC_WRITE } else { 0 };
+        let access = GENERIC_READ
+            | SYNCHRONIZE
+            | if writable {
+                GENERIC_WRITE | DELETE_ACCESS
+            } else {
+                0
+            };
         nt_open_relative(
             parent,
             name,
@@ -2829,6 +2961,47 @@ mod platform {
             )
         };
         if result != 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    pub(super) fn remove_open_directory(
+        parent: &File,
+        directory: &File,
+        name: &OsStr,
+        expected: Option<FileIdentity>,
+    ) -> io::Result<()> {
+        let actual = file_identity(&directory.metadata()?)?;
+        if expected.is_some_and(|expected| expected != actual) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Windows governance directory handle changed identity",
+            ));
+        }
+        let linked = open_directory(parent, name, true)?;
+        let linked_identity = file_identity(&linked.metadata()?)?;
+        if linked_identity != actual {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Windows governance directory binding changed before removal",
+            ));
+        }
+        let info = FileDispositionInfo { delete_file: 1 };
+        // SAFETY: disposition applies to the exact retained, reparse-free
+        // directory handle. Windows refuses the operation unless it is empty.
+        let result = unsafe {
+            set_file_information_by_handle(
+                directory.as_raw_handle(),
+                FILE_DISPOSITION_INFO_CLASS,
+                ptr::from_ref(&info).cast(),
+                u32::try_from(size_of::<FileDispositionInfo>())
+                    .expect("FILE_DISPOSITION_INFO fits u32"),
+            )
+        };
+        if result != 0 {
+            drop(linked);
             Ok(())
         } else {
             Err(io::Error::last_os_error())
@@ -3222,6 +3395,15 @@ mod platform {
         Err(unsupported())
     }
 
+    pub(super) fn remove_open_directory(
+        _parent: &File,
+        _directory: &File,
+        _name: &OsStr,
+        _expected: Option<FileIdentity>,
+    ) -> io::Result<()> {
+        Err(unsupported())
+    }
+
     pub(super) fn child_names(
         _directory: &RootedDirectory,
         _max_entries: usize,
@@ -3597,6 +3779,27 @@ mod tests {
     }
 
     #[test]
+    fn rooted_bounded_atomic_temp_recovery_filters_decoded_targets() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join(".state.tmp-42000-1"), b"stale").expect("seed allowed temp");
+        fs::write(temp.path().join(".other.tmp-42000-2"), b"other").expect("seed rejected temp");
+        fs::write(temp.path().join("retained"), b"retained").expect("seed retained file");
+
+        assert_eq!(
+            root.remove_atomic_temps_matching(3, |target| target == "state")
+                .expect("recover bounded allowed temp"),
+            1
+        );
+        assert!(!temp.path().join(".state.tmp-42000-1").exists());
+        assert!(temp.path().join(".other.tmp-42000-2").exists());
+        assert_eq!(
+            fs::read(temp.path().join("retained")).expect("read retained file"),
+            b"retained"
+        );
+    }
+
+    #[test]
     fn rooted_child_enumeration_is_deterministically_sorted() {
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());
@@ -3622,6 +3825,40 @@ mod tests {
             .child_names_bounded(2)
             .expect_err("enumeration overflow must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn rooted_empty_directory_removal_is_identity_bound_and_idempotent() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::create_dir(temp.path().join("orphan")).expect("seed empty orphan directory");
+
+        assert!(
+            root.remove_empty_directory_if_exists(OsStr::new("orphan"))
+                .expect("remove exact empty orphan")
+        );
+        assert!(!temp.path().join("orphan").exists());
+        assert!(
+            !root
+                .remove_empty_directory_if_exists(OsStr::new("orphan"))
+                .expect("missing orphan removal is idempotent")
+        );
+    }
+
+    #[test]
+    fn rooted_empty_directory_removal_rejects_nonempty_children() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let retained = temp.path().join("retained");
+        fs::create_dir(&retained).expect("seed retained directory");
+        fs::write(retained.join("state"), b"retained").expect("seed retained child");
+
+        root.remove_empty_directory_if_exists(OsStr::new("retained"))
+            .expect_err("nonempty retained directory must not be removed");
+        assert_eq!(
+            fs::read(retained.join("state")).expect("read retained child"),
+            b"retained"
+        );
     }
 
     #[test]

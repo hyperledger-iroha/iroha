@@ -52,8 +52,6 @@ internal static class ToriiVpnJson
         ValidateStringList(response.TunnelAddresses, $"{context}.tunnel_addresses", token: true);
         RequireExactUInt64(response.MtuBytes, 1280, $"{context}.mtu_bytes");
         RequireExactNonEmptyText(response.DisplayBillingLabel, $"{context}.display_billing_label");
-        ToriiSseEventJson.RequireExactTokenText(response.FeeAssetId, $"{context}.fee_asset_id");
-        RequireCanonicalAccountId(response.EscrowAccountId, $"{context}.escrow_account_id");
         RequireCanonicalAccountId(response.OperatorAccountId, $"{context}.operator_account_id");
         _ = ToriiQuantityJson.RequireCanonicalQuantity(response.LeaseFee, $"{context}.lease_fee");
         RequirePositiveUInt64(response.SettlementGraceSeconds, $"{context}.settlement_grace_secs");
@@ -103,8 +101,7 @@ internal static class ToriiVpnJson
             response.DirectorySnapshotDigestHex,
             context);
         ToriiSseEventJson.RequireExactSizedHex(response.MeteringPublicKeyHex, $"{context}.metering_public_key_hex", 32);
-        ValidateOptionalVpnTxInstruction(response.OpenLeaseInstruction, $"{context}.open_lease_instruction");
-        ValidateVpnTxInstructions(response.TxInstructions, $"{context}.tx_instructions", minimumCount: 1, maximumCount: 1);
+        ValidateVpnTxInstruction(response.OpenLeaseInstruction, $"{context}.open_lease_instruction");
     }
 
     internal static void ValidateVpnSession(ToriiVpnSession response, string context)
@@ -178,7 +175,6 @@ internal static class ToriiVpnJson
         ToriiSseEventJson.RequireExactSizedHex(response.LeaseIdHex, $"{context}.lease_id_hex", 32);
 
         ValidateOptionalVpnTxInstruction(response.SettleLeaseInstruction, $"{context}.settle_lease_instruction");
-        ValidateVpnTxInstructions(response.TxInstructions, $"{context}.tx_instructions", minimumCount: 0, maximumCount: 1);
     }
 
     internal static void ValidateVpnReceiptListResponse(ToriiVpnReceiptListResponse response, string context)
@@ -272,34 +268,6 @@ internal static class ToriiVpnJson
     internal static ToriiVpnTxInstruction? ReadOptionalVpnTxInstruction(ref Utf8JsonReader reader, string context)
     {
         return reader.TokenType == JsonTokenType.Null ? null : ReadVpnTxInstruction(ref reader, context);
-    }
-
-    internal static IReadOnlyList<ToriiVpnTxInstruction>? ReadVpnTxInstructionList(ref Utf8JsonReader reader, string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            return null;
-        }
-
-        if (reader.TokenType != JsonTokenType.StartArray)
-        {
-            throw new JsonException($"{context} must be an array.");
-        }
-
-        var items = new List<ToriiVpnTxInstruction>();
-        var index = 0;
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndArray)
-            {
-                return items;
-            }
-
-            items.Add(ReadVpnTxInstruction(ref reader, $"{context}[{index}]"));
-            index++;
-        }
-
-        throw new JsonException($"{context} JSON array is incomplete.");
     }
 
     internal static IReadOnlyList<string>? ReadStringList(ref Utf8JsonReader reader, string context)
@@ -453,31 +421,6 @@ internal static class ToriiVpnJson
         if (values.Count != 3)
         {
             throw new JsonException($"{context} must contain exactly 3 items.");
-        }
-    }
-
-    private static void ValidateVpnTxInstructions(
-        IReadOnlyList<ToriiVpnTxInstruction>? instructions,
-        string context,
-        int minimumCount,
-        int maximumCount)
-    {
-        if (instructions is null)
-        {
-            throw new JsonException($"{context} is required.");
-        }
-
-        if (instructions.Count < minimumCount || instructions.Count > maximumCount)
-        {
-            var requirement = minimumCount == maximumCount
-                ? $"exactly {minimumCount}"
-                : $"between {minimumCount} and {maximumCount}";
-            throw new JsonException($"{context} must contain {requirement} items.");
-        }
-
-        for (var index = 0; index < instructions.Count; index++)
-        {
-            ValidateVpnTxInstruction(instructions[index], $"{context}[{index}]");
         }
     }
 
@@ -877,33 +820,6 @@ internal static class ToriiVpnJson
         WriteVpnTxInstruction(writer, instruction, context);
     }
 
-    internal static void WriteVpnTxInstructionList(
-        Utf8JsonWriter writer,
-        string propertyName,
-        IReadOnlyList<ToriiVpnTxInstruction>? instructions,
-        string context)
-    {
-        if (instructions is null)
-        {
-            writer.WriteNull(propertyName);
-            return;
-        }
-
-        writer.WriteStartArray(propertyName);
-        for (var index = 0; index < instructions.Count; index++)
-        {
-            var instruction = instructions[index];
-            if (instruction is null)
-            {
-                throw new JsonException($"{context}[{index}] must be an object.");
-            }
-
-            WriteVpnTxInstruction(writer, instruction, $"{context}[{index}]");
-        }
-
-        writer.WriteEndArray();
-    }
-
     internal static void WriteVpnTxInstruction(Utf8JsonWriter writer, ToriiVpnTxInstruction instruction, string context)
     {
         ValidateVpnTxInstruction(instruction, context);
@@ -940,7 +856,6 @@ internal static class ToriiVpnJson
             _ when TryMapCollectionField(paramName, nameof(ToriiVpnProfile.ExcludedRoutes), "excluded_routes", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiVpnProfile.DnsServers), "dns_servers", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiVpnProfile.TunnelAddresses), "tunnel_addresses", out var mapped) => mapped,
-            _ when TryMapCollectionField(paramName, nameof(ToriiVpnQuote.TxInstructions), "tx_instructions", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiVpnReceiptListResponse.Items), "items", out var mapped) => mapped,
             _ when TryMapNestedField(paramName, nameof(ToriiVpnQuote.OpenLeaseInstruction), "open_lease_instruction", out var mapped) => mapped,
             _ when TryMapNestedField(paramName, nameof(ToriiVpnReceipt.SettleLeaseInstruction), "settle_lease_instruction", out var mapped) => mapped,
@@ -951,8 +866,6 @@ internal static class ToriiVpnJson
             nameof(ToriiVpnProfile.MeterFamily) => "meter_family",
             nameof(ToriiVpnProfile.MtuBytes) => "mtu_bytes",
             nameof(ToriiVpnProfile.DisplayBillingLabel) => "display_billing_label",
-            nameof(ToriiVpnProfile.FeeAssetId) => "fee_asset_id",
-            nameof(ToriiVpnProfile.EscrowAccountId) => "escrow_account_id",
             nameof(ToriiVpnProfile.OperatorAccountId) => "operator_account_id",
             nameof(ToriiVpnProfile.RelayIdHex) => "relay_id_hex",
             nameof(ToriiVpnProfile.DescriptorCommitHex) => "descriptor_commit_hex",
@@ -1158,8 +1071,6 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         "tunnel_addresses",
         "mtu_bytes",
         "display_billing_label",
-        "fee_asset_id",
-        "escrow_account_id",
         "operator_account_id",
         "lease_fee",
         "settlement_grace_secs",
@@ -1205,8 +1116,6 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         IReadOnlyList<string>? tunnelAddresses = null;
         ulong? mtuBytes = null;
         string? displayBillingLabel = null;
-        string? feeAssetId = null;
-        string? escrowAccountId = null;
         string? operatorAccountId = null;
         string? leaseFee = null;
         ulong? settlementGraceSeconds = null;
@@ -1241,8 +1150,6 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
                     TunnelAddresses = tunnelAddresses!,
                     MtuBytes = ToriiVpnReceiptListResponseJsonConverter.RequireUInt64(mtuBytes, context, "mtu_bytes"),
                     DisplayBillingLabel = ToriiVpnJson.RequireString(displayBillingLabel, $"{context}.display_billing_label"),
-                    FeeAssetId = ToriiVpnJson.RequireString(feeAssetId, $"{context}.fee_asset_id"),
-                    EscrowAccountId = ToriiVpnJson.RequireString(escrowAccountId, $"{context}.escrow_account_id"),
                     OperatorAccountId = ToriiVpnJson.RequireString(operatorAccountId, $"{context}.operator_account_id"),
                     LeaseFee = ToriiQuantityJson.RequireCanonicalQuantity(
                         ToriiVpnJson.RequireString(leaseFee, $"{context}.lease_fee"),
@@ -1329,12 +1236,6 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
                 case "display_billing_label":
                     displayBillingLabel = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.display_billing_label");
                     break;
-                case "fee_asset_id":
-                    feeAssetId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.fee_asset_id");
-                    break;
-                case "escrow_account_id":
-                    escrowAccountId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.escrow_account_id");
-                    break;
                 case "operator_account_id":
                     operatorAccountId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.operator_account_id");
                     break;
@@ -1397,8 +1298,6 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         ToriiVpnJson.WriteStringList(writer, "tunnel_addresses", value.TunnelAddresses);
         writer.WriteNumber("mtu_bytes", value.MtuBytes);
         writer.WriteString("display_billing_label", value.DisplayBillingLabel);
-        writer.WriteString("fee_asset_id", value.FeeAssetId);
-        writer.WriteString("escrow_account_id", value.EscrowAccountId);
         writer.WriteString("operator_account_id", value.OperatorAccountId);
         writer.WriteString("lease_fee", value.LeaseFee);
         writer.WriteNumber("settlement_grace_secs", value.SettlementGraceSeconds);
@@ -1447,7 +1346,6 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         "directory_snapshot_digest_hex",
         "metering_public_key_hex",
         "open_lease_instruction",
-        "tx_instructions",
     ];
 
     public override bool HandleNull => true;
@@ -1498,7 +1396,6 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         string? directorySnapshotDigestHex = null;
         string? meteringPublicKeyHex = null;
         ToriiVpnTxInstruction? openLeaseInstruction = null;
-        IReadOnlyList<ToriiVpnTxInstruction>? txInstructions = null;
 
         while (reader.Read())
         {
@@ -1552,8 +1449,8 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
                     MeteringPublicKeyHex = ToriiVpnJson.RequireString(
                         meteringPublicKeyHex,
                         $"{context}.metering_public_key_hex"),
-                    OpenLeaseInstruction = openLeaseInstruction,
-                    TxInstructions = ToriiVpnJson.RequireList(txInstructions, context, "tx_instructions"),
+                    OpenLeaseInstruction = openLeaseInstruction
+                        ?? throw new JsonException($"{context}.open_lease_instruction must not be null."),
                 }, context);
                 ToriiVpnJson.ValidateVpnQuote(quote, context);
                 ToriiVpnJson.RequireRequiredProperties(seen, context, RequiredPropertyNames);
@@ -1659,10 +1556,9 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
                     meteringPublicKeyHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.metering_public_key_hex");
                     break;
                 case "open_lease_instruction":
-                    openLeaseInstruction = ToriiVpnJson.ReadOptionalVpnTxInstruction(ref reader, $"{context}.open_lease_instruction");
-                    break;
-                case "tx_instructions":
-                    txInstructions = ToriiVpnJson.ReadVpnTxInstructionList(ref reader, $"{context}.tx_instructions");
+                    openLeaseInstruction = ToriiVpnJson.ReadVpnTxInstruction(
+                        ref reader,
+                        $"{context}.open_lease_instruction");
                     break;
                 default:
                     throw new JsonException($"{context}.{propertyName} is not allowed.");
@@ -1709,16 +1605,11 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         writer.WriteString("relay_certificate_sha256_hex", value.RelayCertificateSha256Hex);
         writer.WriteString("directory_snapshot_digest_hex", value.DirectorySnapshotDigestHex);
         writer.WriteString("metering_public_key_hex", value.MeteringPublicKeyHex);
-        ToriiVpnJson.WriteOptionalVpnTxInstruction(
+        writer.WritePropertyName("open_lease_instruction");
+        ToriiVpnJson.WriteVpnTxInstruction(
             writer,
-            "open_lease_instruction",
             value.OpenLeaseInstruction,
             "vpn quote.open_lease_instruction");
-        ToriiVpnJson.WriteVpnTxInstructionList(
-            writer,
-            "tx_instructions",
-            value.TxInstructions,
-            "vpn quote.tx_instructions");
         writer.WriteEndObject();
     }
 }
@@ -2066,7 +1957,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
         "refunded_fee",
         "lease_id_hex",
         "settle_lease_instruction",
-        "tx_instructions",
     ];
 
     public override bool HandleNull => true;
@@ -2114,7 +2004,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
         string? refundedFee = null;
         string? leaseIdHex = null;
         ToriiVpnTxInstruction? settleLeaseInstruction = null;
-        IReadOnlyList<ToriiVpnTxInstruction>? txInstructions = null;
 
         while (reader.Read())
         {
@@ -2161,7 +2050,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
                         $"{context}.refunded_fee"),
                     LeaseIdHex = ToriiVpnJson.RequireString(leaseIdHex, $"{context}.lease_id_hex"),
                     SettleLeaseInstruction = settleLeaseInstruction,
-                    TxInstructions = ToriiVpnJson.RequireList(txInstructions, context, "tx_instructions"),
                 }, context);
                 ToriiVpnJson.ValidateVpnReceipt(receipt, context);
                 ToriiVpnJson.RequireRequiredProperties(seen, context, RequiredPropertyNames);
@@ -2248,9 +2136,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
                 case "settle_lease_instruction":
                     settleLeaseInstruction = ToriiVpnJson.ReadOptionalVpnTxInstruction(ref reader, $"{context}.settle_lease_instruction");
                     break;
-                case "tx_instructions":
-                    txInstructions = ToriiVpnJson.ReadVpnTxInstructionList(ref reader, $"{context}.tx_instructions");
-                    break;
                 default:
                     throw new JsonException($"{context}.{propertyName} is not allowed.");
             }
@@ -2299,11 +2184,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
             "settle_lease_instruction",
             value.SettleLeaseInstruction,
             $"{context}.settle_lease_instruction");
-        ToriiVpnJson.WriteVpnTxInstructionList(
-            writer,
-            "tx_instructions",
-            value.TxInstructions,
-            $"{context}.tx_instructions");
         writer.WriteEndObject();
     }
 }

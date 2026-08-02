@@ -7,8 +7,7 @@
 //! must all be pinned by the release KAT.
 
 use super::{
-    BgvProfile, ZkAmsMkheErrorV1, checked_hybrid_streaming_workspace_bytes,
-    compact_collective_key_switch_ring_multiplication_count,
+    BgvProfile, ZkAmsMkheErrorV1, collective_eval_keys::seekable_evaluated_key_accounting,
     packing::ZK_AMS_T256_GALOIS_KEY_COUNT_V1, phase23_max_composed_rotation_key_switch_count,
     ring_multiplication_work, wire::derive_wire_length_certificate_v1,
 };
@@ -46,7 +45,13 @@ pub struct ZkAmsMkheResourceCertificateV1 {
     pub streamed_hybrid_workspace_bytes: u64,
     /// Abstract work units for one full-RNS negacyclic multiplication.
     pub ring_multiplication_work_units: u64,
-    /// Abstract work units for a complete streamed 38-limb hybrid key switch.
+    /// Work units spent in balanced CRT decomposition by one key switch.
+    pub hybrid_key_switch_decomposition_work_units: u64,
+    /// Work units spent in all NTT ring multiplications by one key switch.
+    pub hybrid_key_switch_ntt_work_units: u64,
+    /// Work units spent adding digit products into both accumulators.
+    pub hybrid_key_switch_accumulator_work_units: u64,
+    /// Total work units for a complete streamed 38-limb hybrid key switch.
     pub hybrid_key_switch_work_units: u64,
     /// Maximum constituent key switches in one canonical signed-binary packed
     /// rotation under the release slot topology.
@@ -119,27 +124,21 @@ pub(super) fn derive_resource_certificate_v1(
         .max_share_bytes
         .checked_sub(contribution_base)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let workspace = checked_hybrid_streaming_workspace_bytes(profile)?;
+    // The runtime certificate must use the exact accounting of the seekable
+    // implementation.  Counting only its NTT multiplications silently omits
+    // balanced CRT decomposition, accumulator additions, provider buffers,
+    // and the actual live allocation graph.
+    let runtime = seekable_evaluated_key_accounting(profile)?;
+    let workspace = usize::try_from(runtime.peak_managed_workspace_bytes)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let multiplication_work = ring_multiplication_work(profile)?;
-    let key_switch_multiplications =
-        compact_collective_key_switch_ring_multiplication_count(profile, 1)?;
-    let key_switch_work = multiplication_work
-        .checked_mul(
-            u64::try_from(key_switch_multiplications)
-                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-        )
-        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let key_switch_work = runtime.total_key_switch_work_units;
     let slot_count = profile.ring_degree / 2;
     let max_composed_rotation_key_switch_count =
         phase23_max_composed_rotation_key_switch_count(slot_count)?;
-    let max_composed_rotation_multiplications =
-        compact_collective_key_switch_ring_multiplication_count(
-            profile,
-            max_composed_rotation_key_switch_count,
-        )?;
-    let max_composed_rotation_work = multiplication_work
+    let max_composed_rotation_work = key_switch_work
         .checked_mul(
-            u64::try_from(max_composed_rotation_multiplications)
+            u64::try_from(max_composed_rotation_key_switch_count)
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
         )
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -165,6 +164,9 @@ pub(super) fn derive_resource_certificate_v1(
         max_decryption_share_proof_bytes: as_u64(share_proof_budget)?,
         streamed_hybrid_workspace_bytes: as_u64(workspace)?,
         ring_multiplication_work_units: multiplication_work,
+        hybrid_key_switch_decomposition_work_units: runtime.balanced_decomposition_work_units,
+        hybrid_key_switch_ntt_work_units: runtime.ring_multiplication_work_units,
+        hybrid_key_switch_accumulator_work_units: runtime.accumulator_addition_work_units,
         hybrid_key_switch_work_units: key_switch_work,
         max_composed_rotation_key_switch_count: u8::try_from(
             max_composed_rotation_key_switch_count,
@@ -220,15 +222,33 @@ mod tests {
         assert_eq!(certificate.proof_envelope_header_wire_bytes, 151);
         assert_eq!(certificate.max_round_contribution_proof_bytes, 27_262_691);
         assert_eq!(certificate.max_decryption_share_proof_bytes, 27_262_691);
-        assert_eq!(certificate.streamed_hybrid_workspace_bytes, 122_683_404);
+        assert_eq!(certificate.streamed_hybrid_workspace_bytes, 161_481_912);
         assert_eq!(certificate.ring_multiplication_work_units, 89_653_248);
-        assert_eq!(certificate.hybrid_key_switch_work_units, 6_813_646_848);
+        assert_eq!(
+            certificate.hybrid_key_switch_decomposition_work_units,
+            14_952_169_472
+        );
+        assert_eq!(certificate.hybrid_key_switch_ntt_work_units, 6_813_646_848);
+        assert_eq!(
+            certificate.hybrid_key_switch_accumulator_work_units,
+            378_535_936
+        );
+        assert_eq!(certificate.hybrid_key_switch_work_units, 22_144_352_256);
+        assert_eq!(
+            certificate.hybrid_key_switch_work_units,
+            certificate.hybrid_key_switch_decomposition_work_units
+                + certificate.hybrid_key_switch_ntt_work_units
+                + certificate.hybrid_key_switch_accumulator_work_units
+        );
         assert_eq!(certificate.max_composed_rotation_key_switch_count, 8);
-        assert_eq!(certificate.max_composed_rotation_work_units, 54_509_174_784);
+        assert_eq!(
+            certificate.max_composed_rotation_work_units,
+            177_154_818_048
+        );
         assert!(certificate.ciphertext_ceiling_met);
         assert!(certificate.per_evaluated_key_ceiling_met);
         assert!(certificate.workspace_ceiling_met);
-        assert!(certificate.composed_rotation_work_ceiling_met);
+        assert!(!certificate.composed_rotation_work_ceiling_met);
         assert!(!certificate.contribution_proof_sizes_certified);
         assert!(!certificate.evaluated_key_artifact_transport_certified);
         assert!(!certificate.phase23_work_measured);
@@ -306,8 +326,8 @@ mod tests {
         let profile = super::super::manifest::release_profile_v1();
         let baseline = derive_resource_certificate_v1(&profile, 8).expect("eight-party release");
         assert_eq!(baseline.max_composed_rotation_key_switch_count, 8);
-        assert_eq!(baseline.max_composed_rotation_work_units, 54_509_174_784);
-        assert!(baseline.composed_rotation_work_ceiling_met);
+        assert_eq!(baseline.max_composed_rotation_work_units, 177_154_818_048);
+        assert!(!baseline.composed_rotation_work_ceiling_met);
 
         for party_count in 2..=8 {
             let candidate =
@@ -318,5 +338,32 @@ mod tests {
                 "offline CKS compaction must remove the runtime roster factor"
             );
         }
+    }
+
+    #[test]
+    fn multiplication_only_undercount_cannot_close_the_rotation_gate() {
+        let profile = super::super::manifest::release_profile_v1();
+        let certificate =
+            derive_resource_certificate_v1(&profile, 8).expect("resource certificate");
+        let switches = u64::from(certificate.max_composed_rotation_key_switch_count);
+        let multiplication_only = certificate
+            .hybrid_key_switch_ntt_work_units
+            .checked_mul(switches)
+            .expect("release count fits");
+
+        assert_eq!(multiplication_only, 54_509_174_784);
+        assert!(multiplication_only <= profile.max_work_units);
+        assert!(certificate.max_composed_rotation_work_units > profile.max_work_units);
+        assert!(!certificate.composed_rotation_work_ceiling_met);
+
+        let mut stale_ceiling = profile;
+        stale_ceiling.max_work_units = multiplication_only;
+        let recomputed = derive_resource_certificate_v1(&stale_ceiling, 8)
+            .expect("one complete switch still fits the stale ceiling");
+        assert_eq!(
+            recomputed.max_composed_rotation_work_units,
+            certificate.max_composed_rotation_work_units
+        );
+        assert!(!recomputed.composed_rotation_work_ceiling_met);
     }
 }

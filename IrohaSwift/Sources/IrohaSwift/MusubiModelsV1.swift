@@ -1103,7 +1103,20 @@ public struct MusubiPageRequestV1: Codable, Hashable, Sendable {
     public let limit: UInt32
     public let cursor: MusubiFinalizedCursorV1?
 
-    public init(limit: UInt32 = 50, cursor: MusubiFinalizedCursorV1? = nil) {
+    public init() {
+        limit = 50
+        cursor = nil
+    }
+
+    public init(cursor: MusubiFinalizedCursorV1?) {
+        limit = 50
+        self.cursor = cursor
+    }
+
+    public init(limit: UInt32, cursor: MusubiFinalizedCursorV1? = nil) throws {
+        guard limit <= 100 else {
+            throw MusubiV1Error.invalidValue("Musubi page limit exceeds 100.")
+        }
         self.limit = limit
         self.cursor = cursor
     }
@@ -1113,8 +1126,10 @@ public struct MusubiPageRequestV1: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         try musubiRequireExactKeys(decoder, ["limit", "cursor"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        limit = try container.decode(UInt32.self, forKey: .limit)
-        cursor = try container.decodeIfPresent(MusubiFinalizedCursorV1.self, forKey: .cursor)
+        try self.init(
+            limit: container.decode(UInt32.self, forKey: .limit),
+            cursor: container.decodeIfPresent(MusubiFinalizedCursorV1.self, forKey: .cursor)
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1551,8 +1566,31 @@ public struct MusubiOrderedPrefixQueryV1: Codable, Hashable, Sendable {
     public let page: MusubiPageRequestV1
     public init(prefix: String, page: MusubiPageRequestV1 = .init()) throws {
         try musubiRequireExactText(prefix, field: "Musubi ordered prefix")
-        guard prefix.utf8.count <= 512 else {
-            throw MusubiV1Error.invalidValue("Musubi ordered prefix exceeds 512 bytes.")
+        let components = prefix.split(
+            separator: "/",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard components.count == 2,
+              (try? MusubiNamespaceV1(String(components[0]))) != nil else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi ordered prefix must use namespace/package-prefix."
+            )
+        }
+        let packagePrefix = components[1]
+        guard prefix.utf8.count <= 512,
+              packagePrefix.utf8.count <= 255,
+              !packagePrefix.contains("/"),
+              !packagePrefix.hasPrefix("-"),
+              !packagePrefix.contains("--"),
+              packagePrefix.utf8.allSatisfy({
+                  (0x61...0x7a).contains($0)
+                      || (0x30...0x39).contains($0)
+                      || $0 == 0x2d
+              }) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi ordered package prefix is not portable canonical text."
+            )
         }
         self.prefix = prefix; self.page = page
     }
@@ -1700,6 +1738,35 @@ public struct MusubiSearchQueryV1: Codable, Hashable, Sendable {
             query: container.decode(String.self, forKey: .query),
             page: container.decode(MusubiSearchPageRequestV1.self, forKey: .page)
         )
+    }
+}
+
+/// Exact request context echoed by a finalized generic Musubi list page.
+public enum MusubiListPageQueryV1: Codable, Hashable, Sendable {
+    /// Package-scoped query used by version and maintainer pages.
+    case package(MusubiPackagePageQueryV1)
+    /// Alias-scoped query used by alias-history pages.
+    case alias(MusubiAliasQueryV1)
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: MusubiDynamicCodingKey.self)
+        switch Set(container.allKeys.map(\.stringValue)) {
+        case ["package", "page"]:
+            self = .package(try MusubiPackagePageQueryV1(from: decoder))
+        case ["alias", "page"]:
+            self = .alias(try MusubiAliasQueryV1(from: decoder))
+        default:
+            throw MusubiV1Error.invalidValue(
+                "Musubi list-page query is neither an exact package nor alias query."
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .package(let query): try query.encode(to: encoder)
+        case .alias(let query): try query.encode(to: encoder)
+        }
     }
 }
 
@@ -1939,11 +2006,43 @@ public struct MusubiPackageRecordV1: Codable, Hashable, Sendable {
         memberAccounts = try container.decode([String].self, forKey: .memberAccounts)
         claimedAtHeight = try container.decode(UInt64.self, forKey: .claimedAtHeight)
         revisions = try container.decode(MusubiPackageRevisionsV1.self, forKey: .revisions)
-        guard !owners.isEmpty else {
-            throw MusubiV1Error.invalidValue("Musubi package record must retain at least one owner.")
+        let ownerKeys = try owners.map {
+            [UInt8](try CanonicalNorito.encodeCompactAccountId($0))
         }
-        try (owners + memberAccounts).forEach {
-            try musubiRequireExactText($0, field: "Musubi package account")
+        let memberKeys = try memberAccounts.map {
+            [UInt8](try CanonicalNorito.encodeCompactAccountId($0))
+        }
+        let ownersAreSorted = zip(ownerKeys, ownerKeys.dropFirst()).allSatisfy {
+            musubiCompareUnsignedBytes($0.0, $0.1) < 0
+        }
+        let membersAreSorted = zip(memberKeys, memberKeys.dropFirst()).allSatisfy {
+            musubiCompareUnsignedBytes($0.0, $0.1) < 0
+        }
+        guard claimedNamespaceBinding.bytes.contains(where: { $0 != 0 }),
+              musubiNamespaceMatchesScope(package: package, namespace: claimedNamespace),
+              claimedAtHeight > 0,
+              revisions.governance > 0,
+              revisions.metadata > 0,
+              revisions.archiveLocations > 0,
+              !owners.isEmpty,
+              owners.count <= 64,
+              ownersAreSorted,
+              !memberAccounts.isEmpty,
+              memberAccounts.count <= 320,
+              membersAreSorted,
+              Set(owners).isSubset(of: Set(memberAccounts)) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi package record violates ownership invariants."
+            )
+        }
+    }
+
+    /// Require this exact lookup result to carry the requested structural identity.
+    public func requireMatches(_ request: MusubiExactPackageQueryV1) throws {
+        guard package == request.package else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi package response does not match the exact request."
+            )
         }
     }
 }
@@ -2108,6 +2207,7 @@ public struct MusubiReleaseRecordV1: Codable, Hashable, Sendable {
         publishedAtHeight = try musubiRawUnsigned(
             raw["published_at_height"], field: "published_at_height"
         )
+        _ = try CanonicalNorito.encodeCompactAccountId(publishedBy)
         try musubiValidateYank(raw["yank"], expectedRelease: release, field: "yank")
         try musubiValidateGovernance(raw["artifact_governance"], field: "artifact_governance")
         guard let revisionsValue = raw["revisions"] else {
@@ -2118,10 +2218,25 @@ public struct MusubiReleaseRecordV1: Codable, Hashable, Sendable {
             field: "revisions",
             exactKeys: ["yank", "artifact_governance"]
         )
-        guard try musubiRawUnsigned(revisions["yank"], field: "revisions.yank") > 0,
+        let yankRevision = try musubiRawUnsigned(revisions["yank"], field: "revisions.yank")
+        guard releaseDigest.bytes.contains(where: { $0 != 0 }),
+              publishedAtHeight > 0,
+              yankRevision > 0,
               try musubiRawUnsigned(
                   revisions["artifact_governance"], field: "revisions.artifact_governance"
-              ) > 0 else {
+              ) > 0,
+              let yankValue = raw["yank"],
+              try musubiRawUnsigned(
+                  musubiRawObject(
+                      yankValue,
+                      field: "yank",
+                      exactKeys: [
+                          "release", "yanked", "reason", "changed_by", "changed_at_height",
+                          "revision"
+                      ]
+                  )["revision"],
+                  field: "yank.revision"
+              ) == yankRevision else {
             throw MusubiV1Error.invalidValue("Release revisions must be non-zero.")
         }
     }
@@ -2129,6 +2244,15 @@ public struct MusubiReleaseRecordV1: Codable, Hashable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(MusubiJSONValueV1.object(raw))
+    }
+
+    /// Require this exact lookup result to carry the requested release identity.
+    public func requireMatches(_ request: MusubiExactReleaseQueryV1) throws {
+        guard release == request.release else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi release response does not match the exact request."
+            )
+        }
     }
 }
 
@@ -2175,6 +2299,7 @@ public struct MusubiResolverReleaseRowV1: Codable, Hashable, Sendable {
 
 /// Resolver page carrying exact chain/genesis identity for consumer lockfiles.
 public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
+    public let query: MusubiResolverIndexQueryV1
     public let chainId: String
     public let genesisHash: [UInt8]
     public let items: [MusubiResolverReleaseRowV1]
@@ -2182,6 +2307,7 @@ public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
     public let snapshot: MusubiRegistrySnapshotV1
 
     private enum CodingKeys: String, CodingKey {
+        case query
         case chainId = "chain_id"
         case genesisHash = "genesis_hash"
         case items
@@ -2191,17 +2317,39 @@ public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
 
     public init(from decoder: Decoder) throws {
         try musubiRequireExactKeys(
-            decoder, ["chain_id", "genesis_hash", "items", "next_cursor", "snapshot"]
+            decoder,
+            ["query", "chain_id", "genesis_hash", "items", "next_cursor", "snapshot"]
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        query = try container.decode(MusubiResolverIndexQueryV1.self, forKey: .query)
         chainId = try container.decode(String.self, forKey: .chainId)
         try musubiRequireExactText(chainId, field: "Musubi resolver chain ID")
         genesisHash = try container.decode([UInt8].self, forKey: .genesisHash)
         items = try container.decode([MusubiResolverReleaseRowV1].self, forKey: .items)
         nextCursor = try container.decodeIfPresent(MusubiFinalizedCursorV1.self, forKey: .nextCursor)
         snapshot = try container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot)
+        let itemsAreSorted = zip(items, items.dropFirst()).allSatisfy { pair in
+            musubiReleaseIdLessThan(pair.0.release, pair.1.release)
+        }
+        let firstVersion = items.first?.release.version
+        let firstKey = firstVersion?.canonicalText
+        let lastKey = items.last?.release.version.canonicalText
         guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
               items.count <= 100,
+              itemsAreSorted,
+              items.allSatisfy({ row in
+                  row.release.package == query.package
+                      && (query.requirement?.matches(row.release.version) ?? true)
+              }),
+              musubiSemVerPageAdvances(query.page, first: firstVersion),
+              musubiFinalizedPageMatches(
+                  query.page,
+                  itemCount: items.count,
+                  firstKey: firstKey,
+                  lastKey: lastKey,
+                  snapshot: snapshot,
+                  nextCursor: nextCursor
+              ),
               nextCursor == nil || nextCursor?.snapshot == snapshot else {
             throw MusubiV1Error.invalidValue(
                 "Musubi resolver page has an invalid genesis hash, size, or cursor."
@@ -2214,12 +2362,36 @@ public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
             throw MusubiV1Error.invalidValue("Musubi genesis hash must contain 32 bytes.")
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(query, forKey: .query)
         try container.encode(chainId, forKey: .chainId)
         try container.encode(genesisHash, forKey: .genesisHash)
         try container.encode(items, forKey: .items)
         if let nextCursor { try container.encode(nextCursor, forKey: .nextCursor) }
         else { try container.encodeNil(forKey: .nextCursor) }
         try container.encode(snapshot, forKey: .snapshot)
+    }
+
+    /// Bind this page to the exact package, requirement, and continuation request.
+    public func requireMatches(_ request: MusubiResolverIndexQueryV1) throws {
+        let rowsMatch = items.allSatisfy { row in
+            row.release.package == request.package
+                && (request.requirement?.matches(row.release.version) ?? true)
+        }
+        guard query == request,
+              rowsMatch,
+              musubiSemVerPageAdvances(request.page, first: items.first?.release.version),
+              musubiFinalizedPageMatches(
+                  request.page,
+                  itemCount: items.count,
+                  firstKey: items.first?.release.version.canonicalText,
+                  lastKey: items.last?.release.version.canonicalText,
+                  snapshot: snapshot,
+                  nextCursor: nextCursor
+              ) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi resolver response does not match the exact request."
+            )
+        }
     }
 }
 
@@ -2928,6 +3100,7 @@ public struct MusubiArchiveRecordV1: Codable, Hashable, Sendable {
 public struct MusubiArchiveLocationV1: Codable, Hashable, Sendable {
     public let locationId: MusubiDigest32V1
     public let archiveId: MusubiDigest32V1
+    public let finalizedHeight: UInt64
     public let revision: UInt64
     public let stateKind: String
     public let raw: [String: MusubiJSONValueV1]
@@ -2946,6 +3119,9 @@ public struct MusubiArchiveLocationV1: Codable, Hashable, Sendable {
         }
         locationId = try musubiDecodeRaw(locationRaw, as: MusubiDigest32V1.self)
         archiveId = try musubiDecodeRaw(archiveRaw, as: MusubiDigest32V1.self)
+        finalizedHeight = try musubiRawUnsigned(
+            raw["finalized_height"], field: "location.finalized_height"
+        )
         revision = try musubiRawUnsigned(raw["revision"], field: "location.revision")
         stateKind = try musubiValidateTaggedUnit(
             raw["state"], field: "location.state", allowed: ["Pending", "Healthy", "Degraded", "Retired"]
@@ -2993,12 +3169,23 @@ public struct MusubiArchiveLocationPageV1: Codable, Hashable, Sendable {
         nextCursor = try container.decodeIfPresent(MusubiFinalizedCursorV1.self, forKey: .nextCursor)
         snapshot = try container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot)
         try musubiRequireExactText(chainId, field: "Archive-location chain ID")
+        let itemsAreSorted = zip(items, items.dropFirst()).allSatisfy { pair in
+            musubiCompareUnsignedBytes(pair.0.locationId.bytes, pair.1.locationId.bytes) < 0
+        }
+        let itemsAreCurrent = items.allSatisfy { location in
+            location.archiveId == archive.archiveId
+                && archive.locationIds.contains(location.locationId)
+                && location.stateKind != "Retired"
+                && location.finalizedHeight <= snapshot.finalizedHeight
+                && location.revision <= archive.locationRevision
+        }
         guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
               archive.stagingReceipt.payload.binding.chainId == chainId,
               archive.stagingReceipt.payload.binding.genesisBlockHash == genesisHash,
               archive.registeredAtHeight <= snapshot.finalizedHeight,
               items.count <= 4,
-              items.allSatisfy({ $0.archiveId == archive.archiveId }),
+              itemsAreSorted,
+              itemsAreCurrent,
               nextCursor == nil || nextCursor?.snapshot == snapshot else {
             throw MusubiV1Error.invalidValue(
                 "Archive-location page has an inconsistent deployment, archive, or cursor."
@@ -3016,6 +3203,22 @@ public struct MusubiArchiveLocationPageV1: Codable, Hashable, Sendable {
         else { try container.encodeNil(forKey: .nextCursor) }
         try container.encode(snapshot, forKey: .snapshot)
     }
+
+    /// Bind this page to the exact archive identity and continuation snapshot.
+    public func requireMatches(_ request: MusubiArchiveLocationQueryV1) throws {
+        guard archive.archiveId == request.archiveId,
+              items.allSatisfy({ $0.archiveId == request.archiveId }),
+              musubiPageRequestMatches(
+                  request.page,
+                  itemCount: items.count,
+                  snapshot: snapshot,
+                  nextCursor: nextCursor
+              ) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi archive-location response does not match the exact request."
+            )
+        }
+    }
 }
 
 /// Exact finalized cache-retention decisions for one bounded request batch.
@@ -3024,18 +3227,21 @@ public struct MusubiArchiveRetentionPageV1: Codable, Hashable, Sendable {
     public let genesisHash: [UInt8]
     public let items: [MusubiArchiveRetentionDecisionV1]
     public let snapshot: MusubiRegistrySnapshotV1
+    public let finalizedTimeMs: UInt64
 
     private enum CodingKeys: String, CodingKey {
         case chainId = "chain_id"
         case genesisHash = "genesis_hash"
         case items, snapshot
+        case finalizedTimeMs = "finalized_time_ms"
     }
 
     public init(
         chainId: String,
         genesisHash: [UInt8],
         items: [MusubiArchiveRetentionDecisionV1],
-        snapshot: MusubiRegistrySnapshotV1
+        snapshot: MusubiRegistrySnapshotV1,
+        finalizedTimeMs: UInt64
     ) throws {
         try musubiRequireExactText(chainId, field: "Musubi archive-retention chain ID")
         let canonicalItems = zip(items, items.dropFirst()).allSatisfy { pair in
@@ -3058,10 +3264,14 @@ public struct MusubiArchiveRetentionPageV1: Codable, Hashable, Sendable {
         self.genesisHash = genesisHash
         self.items = items
         self.snapshot = snapshot
+        self.finalizedTimeMs = finalizedTimeMs
     }
 
     public init(from decoder: Decoder) throws {
-        try musubiRequireExactKeys(decoder, ["chain_id", "genesis_hash", "items", "snapshot"])
+        try musubiRequireExactKeys(
+            decoder,
+            ["chain_id", "genesis_hash", "items", "snapshot", "finalized_time_ms"]
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             chainId: container.decode(String.self, forKey: .chainId),
@@ -3070,7 +3280,8 @@ public struct MusubiArchiveRetentionPageV1: Codable, Hashable, Sendable {
                 [MusubiArchiveRetentionDecisionV1].self,
                 forKey: .items
             ),
-            snapshot: container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot)
+            snapshot: container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot),
+            finalizedTimeMs: container.decode(UInt64.self, forKey: .finalizedTimeMs)
         )
     }
 
@@ -3121,7 +3332,9 @@ public struct MusubiAliasRecordV1: Codable, Hashable, Sendable {
         paidXor = try container.decode(UInt64.self, forKey: .paidXor)
         registeredAtHeight = try container.decode(UInt64.self, forKey: .registeredAtHeight)
         historyRevision = try container.decode(UInt64.self, forKey: .historyRevision)
-        guard pricingRevision > 0, registeredAtHeight > 0, historyRevision > 0 else {
+        _ = try CanonicalNorito.encodeCompactAccountId(registeredBy)
+        guard pricingRevision > 0, paidXor > 0,
+              registeredAtHeight > 0, historyRevision > 0 else {
             throw MusubiV1Error.invalidValue("Alias heights and revisions must be non-zero.")
         }
     }
@@ -3135,6 +3348,15 @@ public struct MusubiAliasRecordV1: Codable, Hashable, Sendable {
         try container.encode(paidXor, forKey: .paidXor)
         try container.encode(registeredAtHeight, forKey: .registeredAtHeight)
         try container.encode(historyRevision, forKey: .historyRevision)
+    }
+
+    /// Require this exact alias lookup to carry the requested permanent alias.
+    public func requireMatches(_ request: MusubiAliasQueryV1) throws {
+        guard alias == request.alias else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi alias response does not match the exact request."
+            )
+        }
     }
 }
 
@@ -3195,7 +3417,18 @@ public struct MusubiAliasHistoryEntryV1: Codable, Hashable, Sendable {
         target = try container.decode(MusubiPackageIdV1.self, forKey: .target)
         governanceAction = try container.decodeIfPresent(MusubiDigest32V1.self, forKey: .governanceAction)
         finalizedHeight = try container.decode(UInt64.self, forKey: .finalizedHeight)
-        guard revision > 0, finalizedHeight > 0 else {
+        let actionIsCanonical: Bool
+        switch action {
+        case .registered:
+            actionIsCanonical = revision == 1
+                && previousTarget == nil
+                && governanceAction == nil
+        case .parliamentRetarget:
+            actionIsCanonical = revision > 1
+                && previousTarget != nil
+                && governanceAction?.bytes.contains(where: { $0 != 0 }) == true
+        }
+        guard actionIsCanonical, finalizedHeight > 0 else {
             throw MusubiV1Error.invalidValue("Alias history height and revision must be non-zero.")
         }
     }
@@ -3263,6 +3496,7 @@ public struct MusubiOrderedPackageEntryV1: Codable, Hashable, Sendable {
 
 /// Ordered-directory page carrying exact chain/genesis identity for lock creation.
 public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
+    public let query: MusubiOrderedPrefixQueryV1
     public let chainId: String
     public let genesisHash: [UInt8]
     public let namespaceBinding: MusubiNamespaceBindingV1
@@ -3271,6 +3505,7 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
     public let snapshot: MusubiRegistrySnapshotV1
 
     private enum CodingKeys: String, CodingKey {
+        case query
         case chainId = "chain_id"
         case genesisHash = "genesis_hash"
         case namespaceBinding = "namespace_binding"
@@ -3283,11 +3518,12 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
         try musubiRequireExactKeys(
             decoder,
             [
-                "chain_id", "genesis_hash", "namespace_binding", "items", "next_cursor",
-                "snapshot"
+                "query", "chain_id", "genesis_hash", "namespace_binding", "items",
+                "next_cursor", "snapshot"
             ]
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        query = try container.decode(MusubiOrderedPrefixQueryV1.self, forKey: .query)
         chainId = try container.decode(String.self, forKey: .chainId)
         try musubiRequireExactText(chainId, field: "Musubi directory chain ID")
         genesisHash = try container.decode([UInt8].self, forKey: .genesisHash)
@@ -3308,14 +3544,31 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
                     Array(pair.1.selector.name.value.utf8)
                 ) < 0
         }
+        let requestedNamespace = query.prefix.split(
+            separator: "/",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        ).first.map(String.init)
         guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
               items.count <= 100,
+              requestedNamespace == namespaceBinding.namespace.value,
               items.allSatisfy({ item in
                   item.selector.namespace == namespaceBinding.namespace
                       && item.package.homeDataspace == namespaceBinding.homeDataspace
                       && item.package.scope == namespaceBinding.scope
+                      && "\(item.selector.namespace.value)/\(item.selector.name.value)"
+                          .hasPrefix(query.prefix)
               }),
               ordered,
+              musubiOrderedPrefixPageAdvances(query, first: items.first),
+              musubiFinalizedPageMatches(
+                  query.page,
+                  itemCount: items.count,
+                  firstKey: items.first.map { musubiSelectorText($0.selector) },
+                  lastKey: items.last.map { musubiSelectorText($0.selector) },
+                  snapshot: snapshot,
+                  nextCursor: nextCursor
+              ),
               nextCursor == nil || nextCursor?.snapshot == snapshot else {
             throw MusubiV1Error.invalidValue(
                 "Musubi ordered-prefix page has an invalid genesis hash, size, or cursor."
@@ -3328,6 +3581,7 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
             throw MusubiV1Error.invalidValue("Musubi genesis hash must contain 32 bytes.")
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(query, forKey: .query)
         try container.encode(chainId, forKey: .chainId)
         try container.encode(genesisHash, forKey: .genesisHash)
         try container.encode(namespaceBinding, forKey: .namespaceBinding)
@@ -3335,6 +3589,34 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
         if let nextCursor { try container.encode(nextCursor, forKey: .nextCursor) }
         else { try container.encodeNil(forKey: .nextCursor) }
         try container.encode(snapshot, forKey: .snapshot)
+    }
+
+    /// Bind every directory item and continuation anchor to the requested byte prefix.
+    public func requireMatches(_ request: MusubiOrderedPrefixQueryV1) throws {
+        let namespace = request.prefix.split(
+            separator: "/",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        ).first.map(String.init)
+        guard query == request,
+              namespace == namespaceBinding.namespace.value,
+              items.allSatisfy({ item in
+                  "\(item.selector.namespace.value)/\(item.selector.name.value)"
+                      .hasPrefix(request.prefix)
+              }),
+              musubiOrderedPrefixPageAdvances(request, first: items.first),
+              musubiFinalizedPageMatches(
+                  request.page,
+                  itemCount: items.count,
+                  firstKey: items.first.map { musubiSelectorText($0.selector) },
+                  lastKey: items.last.map { musubiSelectorText($0.selector) },
+                  snapshot: snapshot,
+                  nextCursor: nextCursor
+              ) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi ordered-prefix response does not match the exact request."
+            )
+        }
     }
 }
 
@@ -3353,6 +3635,305 @@ private func musubiPackageIdLessThan(
     default: break
     }
     return musubiCompareUnsignedBytes(Array(left.name.value.utf8), Array(right.name.value.utf8)) < 0
+}
+
+private func musubiReleaseIdLessThan(
+    _ left: MusubiReleaseIdV1,
+    _ right: MusubiReleaseIdV1
+) -> Bool {
+    if left.package != right.package {
+        return musubiPackageIdLessThan(left.package, right.package)
+    }
+    return left.version < right.version
+}
+
+private extension MusubiMaintainerDirectoryEntryV1 {
+    var package: MusubiPackageIdV1 {
+        switch self {
+        case .accepted(let member): return member.package
+        case .pendingInvitation(let invitation): return invitation.package
+        }
+    }
+
+    var account: String {
+        switch self {
+        case .accepted(let member): return member.account
+        case .pendingInvitation(let invitation): return invitation.invitedAccount
+        }
+    }
+
+    var invitation: MusubiDigest32V1? {
+        switch self {
+        case .accepted: return nil
+        case .pendingInvitation(let invitation): return invitation.inviteId
+        }
+    }
+
+    func cursorKey() throws -> String {
+        let accountBytes = [UInt8](try CanonicalNorito.encodeCompactAccountId(account))
+        let accountLabel = musubiLowerHex(accountBytes)
+        let invitationLabel = invitation.map { "pending-\(musubiLowerHex($0.bytes))" }
+            ?? "accepted"
+        return "\(accountLabel)|\(invitationLabel)"
+    }
+}
+
+private func musubiLowerHex(_ bytes: [UInt8]) -> String {
+    let alphabet = Array("0123456789abcdef".utf8)
+    var encoded = [UInt8]()
+    encoded.reserveCapacity(bytes.count * 2)
+    for byte in bytes {
+        encoded.append(alphabet[Int(byte >> 4)])
+        encoded.append(alphabet[Int(byte & 0x0f)])
+    }
+    return String(decoding: encoded, as: UTF8.self)
+}
+
+private func musubiIsLowerHex(_ value: Substring) -> Bool {
+    !value.isEmpty && value.utf8.allSatisfy {
+        (0x30...0x39).contains($0) || (0x61...0x66).contains($0)
+    }
+}
+
+private struct MusubiMaintainerCursorBoundaryV1 {
+    let account: [UInt8]
+    let invitation: [UInt8]?
+}
+
+private func musubiDecodeLowerHex(_ value: Substring) -> [UInt8]? {
+    guard value.count.isMultiple(of: 2), musubiIsLowerHex(value) else { return nil }
+    let bytes = Array(value.utf8)
+    var decoded = [UInt8]()
+    decoded.reserveCapacity(bytes.count / 2)
+    for index in stride(from: 0, to: bytes.count, by: 2) {
+        func nibble(_ byte: UInt8) -> UInt8 {
+            byte <= 0x39 ? byte - 0x30 : byte - 0x61 + 10
+        }
+        decoded.append(nibble(bytes[index]) << 4 | nibble(bytes[index + 1]))
+    }
+    return decoded
+}
+
+private func musubiMaintainerCursorBoundary(
+    _ value: String
+) -> MusubiMaintainerCursorBoundaryV1? {
+    let components = value.split(separator: "|", omittingEmptySubsequences: false)
+    guard components.count == 2,
+          let account = musubiDecodeLowerHex(components[0]) else {
+        return nil
+    }
+    if components[1] == "accepted" {
+        return MusubiMaintainerCursorBoundaryV1(account: account, invitation: nil)
+    }
+    guard components[1].hasPrefix("pending-") else { return nil }
+    let invitation = components[1].dropFirst("pending-".count)
+    guard invitation.count == 64,
+          let invitationBytes = musubiDecodeLowerHex(invitation) else {
+        return nil
+    }
+    return MusubiMaintainerCursorBoundaryV1(
+        account: account,
+        invitation: invitationBytes
+    )
+}
+
+private func musubiMaintainerPageAdvances(
+    _ request: MusubiPageRequestV1,
+    first: MusubiMaintainerDirectoryEntryV1?
+) throws -> Bool {
+    guard let cursor = request.cursor else { return true }
+    guard let previous = musubiMaintainerCursorBoundary(cursor.lastKey) else { return false }
+    guard let first else { return true }
+    let firstAccount = [UInt8](try CanonicalNorito.encodeCompactAccountId(first.account))
+    let accountOrder = musubiCompareUnsignedBytes(previous.account, firstAccount)
+    if accountOrder != 0 { return accountOrder < 0 }
+    switch (previous.invitation, first.invitation?.bytes) {
+    case (nil, .some): return true
+    case (.some, nil), (nil, nil): return false
+    case let (.some(previousInvite), .some(firstInvite)):
+        return musubiCompareUnsignedBytes(previousInvite, firstInvite) < 0
+    }
+}
+
+private func musubiSemVerPageAdvances(
+    _ request: MusubiPageRequestV1,
+    first: MusubiVersionV1?
+) -> Bool {
+    guard let cursor = request.cursor else { return true }
+    guard let previous = try? MusubiVersionV1.parse(cursor.lastKey) else { return false }
+    return first.map { previous < $0 } ?? true
+}
+
+private func musubiAliasHistoryCursorKey(_ entry: MusubiAliasHistoryEntryV1) -> String {
+    let revision = String(entry.revision)
+    return "\(entry.alias):\(String(repeating: "0", count: 20 - revision.count))\(revision)"
+}
+
+private func musubiAliasHistoryPageAdvances(
+    _ request: MusubiAliasQueryV1,
+    first: MusubiAliasHistoryEntryV1?
+) -> Bool {
+    guard let cursor = request.page.cursor else { return true }
+    guard let separator = cursor.lastKey.lastIndex(of: ":") else { return false }
+    let alias = String(cursor.lastKey[..<separator])
+    let revisionText = cursor.lastKey[cursor.lastKey.index(after: separator)...]
+    guard alias == request.alias,
+          revisionText.count == 20,
+          revisionText.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
+          let revision = UInt64(revisionText),
+          String(repeating: "0", count: 20 - String(revision).count) + String(revision)
+              == revisionText else {
+        return false
+    }
+    return first.map { $0.alias == alias && $0.revision > revision } ?? true
+}
+
+private func musubiSelectorText(_ selector: MusubiPackageSelectorV1) -> String {
+    "\(selector.namespace.value)/\(selector.name.value)"
+}
+
+private func musubiParseSelector(_ value: String) -> MusubiPackageSelectorV1? {
+    let components = value.split(separator: "/", omittingEmptySubsequences: false)
+    guard components.count == 2,
+          let namespace = try? MusubiNamespaceV1(String(components[0])),
+          let name = try? MusubiPackageNameV1(String(components[1])) else {
+        return nil
+    }
+    let selector = MusubiPackageSelectorV1(namespace: namespace, name: name)
+    return musubiSelectorText(selector) == value ? selector : nil
+}
+
+private func musubiSelectorLessThan(
+    _ left: MusubiPackageSelectorV1,
+    _ right: MusubiPackageSelectorV1
+) -> Bool {
+    let namespaceOrder = musubiCompareUnsignedBytes(
+        Array(left.namespace.value.utf8),
+        Array(right.namespace.value.utf8)
+    )
+    return namespaceOrder < 0 || namespaceOrder == 0
+        && musubiCompareUnsignedBytes(Array(left.name.value.utf8), Array(right.name.value.utf8)) < 0
+}
+
+private func musubiOrderedPrefixPageAdvances(
+    _ request: MusubiOrderedPrefixQueryV1,
+    first: MusubiOrderedPackageEntryV1?
+) -> Bool {
+    guard let cursor = request.page.cursor else { return true }
+    guard let previous = musubiParseSelector(cursor.lastKey),
+          cursor.lastKey.hasPrefix(request.prefix) else {
+        return false
+    }
+    let requestedNamespace = request.prefix.split(
+        separator: "/",
+        maxSplits: 1,
+        omittingEmptySubsequences: false
+    ).first.map(String.init)
+    guard previous.namespace.value == requestedNamespace else { return false }
+    return first.map { musubiSelectorLessThan(previous, $0.selector) } ?? true
+}
+
+private func musubiMaintainerEntryLessThan(
+    _ left: MusubiMaintainerDirectoryEntryV1,
+    _ right: MusubiMaintainerDirectoryEntryV1
+) throws -> Bool {
+    if left.package != right.package {
+        return musubiPackageIdLessThan(left.package, right.package)
+    }
+    if left.account != right.account {
+        let leftAccount = [UInt8](try CanonicalNorito.encodeCompactAccountId(left.account))
+        let rightAccount = [UInt8](try CanonicalNorito.encodeCompactAccountId(right.account))
+        return musubiCompareUnsignedBytes(leftAccount, rightAccount) < 0
+    }
+    switch (left.invitation, right.invitation) {
+    case (nil, .some): return true
+    case (.some, nil), (nil, nil): return false
+    case let (.some(leftInvite), .some(rightInvite)):
+        return musubiCompareUnsignedBytes(leftInvite.bytes, rightInvite.bytes) < 0
+    }
+}
+
+private func musubiGenericPageItemsAreStrictlyOrdered<Item: Hashable>(
+    _ items: [Item]
+) throws -> Bool {
+    if let versions = items as? [MusubiVersionV1] {
+        return zip(versions, versions.dropFirst()).allSatisfy { $0.0 < $0.1 }
+    }
+    if let maintainers = items as? [MusubiMaintainerDirectoryEntryV1] {
+        for pair in zip(maintainers, maintainers.dropFirst()) {
+            guard try musubiMaintainerEntryLessThan(pair.0, pair.1) else { return false }
+        }
+        return true
+    }
+    if let history = items as? [MusubiAliasHistoryEntryV1] {
+        return zip(history, history.dropFirst()).allSatisfy { pair in
+            let aliasOrder = musubiCompareUnsignedBytes(
+                Array(pair.0.alias.utf8),
+                Array(pair.1.alias.utf8)
+            )
+            return aliasOrder < 0 || aliasOrder == 0 && pair.0.revision < pair.1.revision
+        }
+    }
+    if let packages = items as? [MusubiPackageRecordV1] {
+        return zip(packages, packages.dropFirst()).allSatisfy {
+            musubiPackageIdLessThan($0.0.package, $0.1.package)
+        }
+    }
+    if let releases = items as? [MusubiReleaseRecordV1] {
+        return zip(releases, releases.dropFirst()).allSatisfy {
+            musubiReleaseIdLessThan($0.0.release, $0.1.release)
+        }
+    }
+    return Set(items).count == items.count
+}
+
+private func musubiPageRequestMatches(
+    _ request: MusubiPageRequestV1,
+    itemCount: Int,
+    snapshot: MusubiRegistrySnapshotV1,
+    nextCursor: MusubiFinalizedCursorV1?
+) -> Bool {
+    guard let effectiveLimit = musubiEffectivePageLimit(request.limit) else { return false }
+    guard itemCount <= effectiveLimit else { return false }
+    guard let requestCursor = request.cursor else { return true }
+    return requestCursor.snapshot == snapshot
+        && (nextCursor == nil
+            || nextCursor?.queryHash == requestCursor.queryHash
+                && nextCursor?.caller == requestCursor.caller)
+}
+
+private func musubiFinalizedPageMatches(
+    _ request: MusubiPageRequestV1,
+    itemCount: Int,
+    firstKey: String?,
+    lastKey: String?,
+    snapshot: MusubiRegistrySnapshotV1,
+    nextCursor: MusubiFinalizedCursorV1?
+) -> Bool {
+    guard let effectiveLimit = musubiEffectivePageLimit(request.limit),
+          itemCount <= effectiveLimit,
+          (itemCount == 0 && firstKey == nil && lastKey == nil
+              || itemCount > 0 && firstKey != nil && lastKey != nil) else {
+        return false
+    }
+    if let cursor = request.cursor {
+        guard cursor.snapshot == snapshot, cursor.caller == nil else { return false }
+    }
+    if let cursor = nextCursor {
+        guard cursor.snapshot == snapshot,
+              cursor.caller == nil,
+              itemCount == effectiveLimit,
+              cursor.lastKey == lastKey,
+              request.cursor == nil || request.cursor?.queryHash == cursor.queryHash else {
+            return false
+        }
+    }
+    return true
+}
+
+private func musubiEffectivePageLimit(_ limit: UInt32) -> Int? {
+    guard limit <= 100 else { return nil }
+    return limit == 0 ? 50 : Int(limit)
 }
 
 private func musubiNamespaceMatchesScope(
@@ -3457,11 +4038,13 @@ public struct MusubiSearchHitV1: Codable, Hashable, Sendable {
 
 /// Bounded page from the finalized-event package-search projection.
 public struct MusubiSearchPageV1: Codable, Hashable, Sendable {
+    public let query: MusubiSearchQueryV1
     public let items: [MusubiSearchHitV1]
     public let nextCursor: MusubiSearchCursorV1?
     public let snapshot: MusubiSearchSnapshotV1
 
     public init(
+        query: MusubiSearchQueryV1,
         items: [MusubiSearchHitV1],
         nextCursor: MusubiSearchCursorV1?,
         snapshot: MusubiSearchSnapshotV1
@@ -3469,26 +4052,43 @@ public struct MusubiSearchPageV1: Codable, Hashable, Sendable {
         let ordered = zip(items, items.dropFirst()).allSatisfy {
             musubiPackageIdLessThan($0.0.package, $0.1.package)
         }
-        guard items.count <= 100, ordered,
+        let cursorMatches: Bool
+        if let cursor = query.page.cursor {
+            cursorMatches = cursor.snapshot == snapshot
+                && (items.first.map {
+                    musubiPackageIdLessThan(cursor.lastPackage, $0.package)
+                } ?? true)
+                && (nextCursor.map { $0.queryHash == cursor.queryHash } ?? true)
+        } else {
+            cursorMatches = true
+        }
+        guard let effectiveLimit = musubiEffectivePageLimit(query.page.limit),
+              items.count <= effectiveLimit,
+              ordered,
+              cursorMatches,
               nextCursor == nil || nextCursor?.snapshot == snapshot,
+              nextCursor == nil || items.count == effectiveLimit,
               nextCursor == nil || nextCursor?.lastPackage == items.last?.package else {
             throw MusubiV1Error.invalidValue("Musubi search page is invalid.")
         }
+        self.query = query
         self.items = items
         self.nextCursor = nextCursor
         self.snapshot = snapshot
     }
 
     private enum CodingKeys: String, CodingKey {
+        case query
         case items
         case nextCursor = "next_cursor"
         case snapshot
     }
 
     public init(from decoder: Decoder) throws {
-        try musubiRequireExactKeys(decoder, ["items", "next_cursor", "snapshot"])
+        try musubiRequireExactKeys(decoder, ["query", "items", "next_cursor", "snapshot"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
+            query: container.decode(MusubiSearchQueryV1.self, forKey: .query),
             items: container.decode([MusubiSearchHitV1].self, forKey: .items),
             nextCursor: container.decodeIfPresent(MusubiSearchCursorV1.self, forKey: .nextCursor),
             snapshot: container.decode(MusubiSearchSnapshotV1.self, forKey: .snapshot)
@@ -3497,42 +4097,133 @@ public struct MusubiSearchPageV1: Codable, Hashable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(query, forKey: .query)
         try container.encode(items, forKey: .items)
         if let nextCursor { try container.encode(nextCursor, forKey: .nextCursor) }
         else { try container.encodeNil(forKey: .nextCursor) }
         try container.encode(snapshot, forKey: .snapshot)
     }
+
+    /// Bind a continuation response to the exact finalized search cursor supplied by the caller.
+    public func requireMatches(_ request: MusubiSearchQueryV1) throws {
+        let cursorMatches: Bool
+        if let cursor = request.page.cursor {
+            let firstFollowsCursor = items.first.map {
+                musubiPackageIdLessThan(cursor.lastPackage, $0.package)
+            } ?? true
+            let nextCursorMatches = nextCursor.map {
+                $0.queryHash == cursor.queryHash
+            } ?? true
+            cursorMatches = snapshot == cursor.snapshot
+                && firstFollowsCursor
+                && nextCursorMatches
+        } else {
+            cursorMatches = true
+        }
+        guard query == request,
+              let effectiveLimit = musubiEffectivePageLimit(request.page.limit),
+              items.count <= effectiveLimit,
+              cursorMatches,
+              nextCursor == nil || items.count == effectiveLimit,
+              nextCursor == nil || nextCursor?.lastPackage == items.last?.package else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi search response does not match the exact continuation request."
+            )
+        }
+    }
 }
 
 /// Typed bounded page shared by all finalized Musubi list responses.
 public struct MusubiPageV1<Item: Codable & Hashable & Sendable>: Codable, Hashable, Sendable {
+    public let query: MusubiListPageQueryV1
     public let items: [Item]
     public let nextCursor: MusubiFinalizedCursorV1?
     public let snapshot: MusubiRegistrySnapshotV1
 
     public init(
+        query: MusubiListPageQueryV1,
         items: [Item],
         nextCursor: MusubiFinalizedCursorV1?,
         snapshot: MusubiRegistrySnapshotV1
     ) throws {
-        guard items.count <= 100, nextCursor == nil || nextCursor?.snapshot == snapshot else {
+        let queryMatchesItems: Bool
+        switch query {
+        case .package(let request) where Item.self == MusubiVersionV1.self:
+            if let versions = items as? [MusubiVersionV1] {
+                queryMatchesItems = musubiSemVerPageAdvances(
+                    request.page,
+                    first: versions.first
+                ) && musubiFinalizedPageMatches(
+                    request.page,
+                    itemCount: versions.count,
+                    firstKey: versions.first?.canonicalText,
+                    lastKey: versions.last?.canonicalText,
+                    snapshot: snapshot,
+                    nextCursor: nextCursor
+                )
+            } else {
+                queryMatchesItems = false
+            }
+        case .package(let request) where Item.self == MusubiMaintainerDirectoryEntryV1.self:
+            if let maintainers = items as? [MusubiMaintainerDirectoryEntryV1] {
+                queryMatchesItems = try maintainers.allSatisfy({ $0.package == request.package })
+                    && musubiMaintainerPageAdvances(
+                        request.page,
+                        first: maintainers.first
+                    )
+                    && musubiFinalizedPageMatches(
+                        request.page,
+                        itemCount: maintainers.count,
+                        firstKey: try maintainers.first?.cursorKey(),
+                        lastKey: try maintainers.last?.cursorKey(),
+                        snapshot: snapshot,
+                        nextCursor: nextCursor
+                    )
+            } else {
+                queryMatchesItems = false
+            }
+        case .alias(let request) where Item.self == MusubiAliasHistoryEntryV1.self:
+            if let history = items as? [MusubiAliasHistoryEntryV1] {
+                queryMatchesItems = history.allSatisfy({ $0.alias == request.alias })
+                    && musubiAliasHistoryPageAdvances(request, first: history.first)
+                    && musubiFinalizedPageMatches(
+                        request.page,
+                        itemCount: history.count,
+                        firstKey: history.first.map(musubiAliasHistoryCursorKey),
+                        lastKey: history.last.map(musubiAliasHistoryCursorKey),
+                        snapshot: snapshot,
+                        nextCursor: nextCursor
+                    )
+            } else {
+                queryMatchesItems = false
+            }
+        default:
+            queryMatchesItems = false
+        }
+        guard items.count <= 100,
+              try musubiGenericPageItemsAreStrictlyOrdered(items),
+              queryMatchesItems,
+              nextCursor == nil || nextCursor?.snapshot == snapshot else {
             throw MusubiV1Error.invalidValue("Musubi page is oversized or has a mismatched cursor.")
         }
+        self.query = query
         self.items = items
         self.nextCursor = nextCursor
         self.snapshot = snapshot
     }
 
     private enum CodingKeys: String, CodingKey {
+        case query
         case items
         case nextCursor = "next_cursor"
         case snapshot
     }
 
     public init(from decoder: Decoder) throws {
-        try musubiRequireExactKeys(decoder, ["items", "next_cursor", "snapshot"])
+        try musubiRequireExactKeys(decoder, ["query", "items", "next_cursor", "snapshot"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
+            query: container.decode(MusubiListPageQueryV1.self, forKey: .query),
             items: container.decode([Item].self, forKey: .items),
             nextCursor: container.decodeIfPresent(MusubiFinalizedCursorV1.self, forKey: .nextCursor),
             snapshot: container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot)
@@ -3541,10 +4232,73 @@ public struct MusubiPageV1<Item: Codable & Hashable & Sendable>: Codable, Hashab
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(query, forKey: .query)
         try container.encode(items, forKey: .items)
         if let nextCursor { try container.encode(nextCursor, forKey: .nextCursor) }
         else { try container.encodeNil(forKey: .nextCursor) }
         try container.encode(snapshot, forKey: .snapshot)
+    }
+}
+
+public extension MusubiPageV1 where Item == MusubiVersionV1 {
+    /// Bind a version page to its continuation snapshot.
+    func requireMatches(_ request: MusubiPackagePageQueryV1) throws {
+        guard query == .package(request),
+              musubiSemVerPageAdvances(request.page, first: items.first),
+              musubiFinalizedPageMatches(
+                  request.page,
+                  itemCount: items.count,
+                  firstKey: items.first?.canonicalText,
+                  lastKey: items.last?.canonicalText,
+                  snapshot: snapshot,
+                  nextCursor: nextCursor
+              ) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi version response does not match the exact continuation request."
+            )
+        }
+    }
+}
+
+public extension MusubiPageV1 where Item == MusubiMaintainerDirectoryEntryV1 {
+    /// Bind every member or invitation and continuation anchor to the requested package.
+    func requireMatches(_ request: MusubiPackagePageQueryV1) throws {
+        guard query == .package(request),
+              items.allSatisfy({ $0.package == request.package }),
+              try musubiMaintainerPageAdvances(request.page, first: items.first),
+              musubiFinalizedPageMatches(
+                  request.page,
+                  itemCount: items.count,
+                  firstKey: try items.first?.cursorKey(),
+                  lastKey: try items.last?.cursorKey(),
+                  snapshot: snapshot,
+                  nextCursor: nextCursor
+              ) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi maintainer response does not match the exact package request."
+            )
+        }
+    }
+}
+
+public extension MusubiPageV1 where Item == MusubiAliasHistoryEntryV1 {
+    /// Bind every history entry and continuation anchor to the requested alias.
+    func requireMatches(_ request: MusubiAliasQueryV1) throws {
+        guard query == .alias(request),
+              items.allSatisfy({ $0.alias == request.alias }),
+              musubiAliasHistoryPageAdvances(request, first: items.first),
+              musubiFinalizedPageMatches(
+                  request.page,
+                  itemCount: items.count,
+                  firstKey: items.first.map(musubiAliasHistoryCursorKey),
+                  lastKey: items.last.map(musubiAliasHistoryCursorKey),
+                  snapshot: snapshot,
+                  nextCursor: nextCursor
+              ) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi alias-history response does not match the exact alias request."
+            )
+        }
     }
 }
 

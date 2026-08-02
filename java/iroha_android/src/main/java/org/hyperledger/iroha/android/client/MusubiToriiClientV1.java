@@ -71,38 +71,83 @@ public final class MusubiToriiClientV1 {
 
   /** Fetches one exact structural package record. */
   public CompletableFuture<PackageRecord> findExactPackage(final ExactPackageQuery request) {
-    return executePost(EXACT_PACKAGE_PATH, required(request).toJsonBytes(), MusubiJsonV1::parseExactPackage);
+    final ExactPackageQuery checked = required(request);
+    return executePost(
+        EXACT_PACKAGE_PATH,
+        checked.toJsonBytes(),
+        payload -> {
+          final PackageRecord record = MusubiJsonV1.parseExactPackage(payload);
+          record.requireMatches(checked);
+          return record;
+        });
   }
 
   /** Fetches one exact immutable release and its mutable projections. */
   public CompletableFuture<ReleaseRecord> findExactRelease(final ExactReleaseQuery request) {
-    return executePost(EXACT_RELEASE_PATH, required(request).toJsonBytes(), MusubiJsonV1::parseExactRelease);
+    final ExactReleaseQuery checked = required(request);
+    return executePost(
+        EXACT_RELEASE_PATH,
+        checked.toJsonBytes(),
+        payload -> {
+          final ReleaseRecord record = MusubiJsonV1.parseExactRelease(payload);
+          record.requireMatches(checked);
+          return record;
+        });
   }
 
   /** Reads the finalized universal sparse resolver index. */
   public CompletableFuture<ResolverIndexPage> findResolverIndex(
       final ResolverIndexQuery request) {
-    return executePost(RESOLVER_INDEX_PATH, required(request).toJsonBytes(), MusubiJsonV1::parseResolverPage);
+    final ResolverIndexQuery checked = required(request);
+    return executePost(
+        RESOLVER_INDEX_PATH,
+        checked.toJsonBytes(),
+        payload -> {
+          final ResolverIndexPage page = MusubiJsonV1.parseResolverPage(payload);
+          page.requireMatches(checked);
+          return page;
+        });
   }
 
   /** Lists exact structured versions for a package. */
   public CompletableFuture<Page<Version>> findVersions(final PackagePageQuery request) {
-    return executePost(VERSIONS_PATH, required(request).toJsonBytes(), MusubiJsonV1::parseVersionPage);
+    final PackagePageQuery checked = required(request);
+    return executePost(
+        VERSIONS_PATH,
+        checked.toJsonBytes(),
+        payload -> {
+          final Page<Version> page = MusubiJsonV1.parseVersionPage(payload);
+          page.requireVersionMatches(checked);
+          return page;
+        });
   }
 
   /** Lists accepted owners/maintainers and pending invitations for a package. */
   public CompletableFuture<Page<MaintainerDirectoryEntry>> findMaintainers(
       final PackagePageQuery request) {
-    return executePost(MAINTAINERS_PATH, required(request).toJsonBytes(), MusubiJsonV1::parseMaintainerPage);
+    final PackagePageQuery checked = required(request);
+    return executePost(
+        MAINTAINERS_PATH,
+        checked.toJsonBytes(),
+        payload -> {
+          final Page<MaintainerDirectoryEntry> page = MusubiJsonV1.parseMaintainerPage(payload);
+          page.requireMaintainerMatches(checked);
+          return page;
+        });
   }
 
   /** Lists renewable SoraFS locations for an archive. */
   public CompletableFuture<ArchiveLocationPage> findArchiveLocations(
       final ArchiveLocationQuery request) {
+    final ArchiveLocationQuery checked = required(request);
     return executePost(
         ARCHIVE_LOCATIONS_PATH,
-        required(request).toJsonBytes(),
-        MusubiJsonV1::parseArchiveLocationPage);
+        checked.toJsonBytes(),
+        payload -> {
+          final ArchiveLocationPage page = MusubiJsonV1.parseArchiveLocationPage(payload);
+          page.requireMatches(checked);
+          return page;
+        });
   }
 
   /** Classifies a bounded exact archive batch for fail-closed cache retention. */
@@ -121,32 +166,55 @@ public final class MusubiToriiClientV1 {
 
   /** Resolves one paid permanent global alias. */
   public CompletableFuture<AliasRecord> findAlias(final AliasQuery request) {
-    return executePost(ALIAS_PATH, required(request).toJsonBytes(), MusubiJsonV1::parseAlias);
+    final AliasQuery checked = required(request);
+    return executePost(
+        ALIAS_PATH,
+        checked.toJsonBytes(),
+        payload -> {
+          final AliasRecord record = MusubiJsonV1.parseAlias(payload);
+          record.requireMatches(checked);
+          return record;
+        });
   }
 
   /** Lists immutable history for one permanent global alias. */
   public CompletableFuture<Page<AliasHistoryEntry>> findAliasHistory(final AliasQuery request) {
+    final AliasQuery checked = required(request);
     return executePost(
         ALIAS_HISTORY_PATH,
-        required(request).toJsonBytes(),
-        MusubiJsonV1::parseAliasHistoryPage);
+        checked.toJsonBytes(),
+        payload -> {
+          final Page<AliasHistoryEntry> page = MusubiJsonV1.parseAliasHistoryPage(payload);
+          page.requireAliasHistoryMatches(checked);
+          return page;
+        });
   }
 
   /** Scans the deterministic public package directory by byte prefix. */
   public CompletableFuture<OrderedPrefixPage> findOrderedPrefix(
       final OrderedPrefixQuery request) {
+    final OrderedPrefixQuery checked = required(request);
     return executePost(
         ORDERED_PREFIX_PATH,
-        required(request).toJsonBytes(),
-        MusubiJsonV1::parseOrderedPackagePage);
+        checked.toJsonBytes(),
+        payload -> {
+          final OrderedPrefixPage page = MusubiJsonV1.parseOrderedPackagePage(payload);
+          page.requireMatches(checked);
+          return page;
+        });
   }
 
   /** Searches the rebuildable finalized-event package metadata projection. */
   public CompletableFuture<SearchPage> search(final SearchQuery request) {
+    final SearchQuery checked = required(request);
     return executePost(
         SEARCH_PATH,
-        required(request).toJsonBytes(),
-        MusubiJsonV1::parseSearchPage);
+        checked.toJsonBytes(),
+        payload -> {
+          final SearchPage page = MusubiJsonV1.parseSearchPage(payload);
+          page.requireMatches(checked);
+          return page;
+        });
   }
 
   public HttpTransportExecutor executor() { return executor; }

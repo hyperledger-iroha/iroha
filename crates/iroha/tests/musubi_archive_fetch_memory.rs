@@ -210,11 +210,9 @@ fn measured_peak_delta(operation: impl FnOnce()) -> usize {
 
 #[test]
 fn production_stream_bridge_peak_heap_is_bounded() {
-    if std::env::var_os(CHILD_MODE_ENV).is_some() {
-        return;
-    }
     let output = Command::new(std::env::current_exe().expect("current test executable"))
         .args([
+            "--ignored",
             "--exact",
             "production_stream_bridge_peak_heap_child",
             "--nocapture",
@@ -231,6 +229,7 @@ fn production_stream_bridge_peak_heap_is_bounded() {
 }
 
 #[test]
+#[ignore = "executed in an isolated child by production_stream_bridge_peak_heap_is_bounded"]
 fn production_stream_bridge_peak_heap_child() {
     if std::env::var_os(CHILD_MODE_ENV).is_none() {
         return;
@@ -267,9 +266,14 @@ fn production_stream_bridge_peak_heap_child() {
     let accounted_bridge_peak = caller_plan_bytes
         .checked_add(stream_peak_delta)
         .and_then(|bytes| bytes.checked_add(maximum_provider_chunk))
+        // The observed allocator delta is scheduling-dependent. Add the full
+        // channel ownership reserve so a fast consumer cannot make this probe
+        // understate four queued frames plus the producer/consumer frames.
+        .and_then(|bytes| bytes.checked_add(bounded_stream::STREAM_MAX_OWNED_FRAME_BYTES))
         .expect("stream-memory accounting fits usize");
     eprintln!(
-        "musubi stream bridge heap: caller_plan={caller_plan_bytes} measured_delta={stream_peak_delta} provider_chunk_reserve={maximum_provider_chunk} accounted={accounted_bridge_peak} limit={FETCH_HEAP_LIMIT_BYTES}"
+        "musubi stream bridge heap: caller_plan={caller_plan_bytes} measured_delta={stream_peak_delta} provider_chunk_reserve={maximum_provider_chunk} channel_reserve={} accounted={accounted_bridge_peak} limit={FETCH_HEAP_LIMIT_BYTES}",
+        bounded_stream::STREAM_MAX_OWNED_FRAME_BYTES
     );
     assert!(
         accounted_bridge_peak <= FETCH_HEAP_LIMIT_BYTES,

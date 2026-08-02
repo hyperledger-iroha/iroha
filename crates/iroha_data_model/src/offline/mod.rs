@@ -1865,25 +1865,26 @@ mod model {
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendQualificationReceiptV4 {
         /// Exact receipt schema identifier.
-        schema: String,
+        pub(super) schema: String,
         /// Receipt layout version.
-        version: u16,
+        pub(super) version: u16,
         /// SHA-256 of the exact canonical unsigned candidate record.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        candidate_sha256: [u8; 32],
+        pub(super) candidate_sha256: [u8; 32],
         /// SHA-256 of the candidate's exact canonical unsigned manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        manifest_sha256: [u8; 32],
+        pub(super) manifest_sha256: [u8; 32],
         /// Exact in-process physical-memory ceiling committed by the candidate.
-        generation_memory_limit_bytes: u64,
+        pub(super) generation_memory_limit_bytes: u64,
         /// Exact mandatory in-process memory enforcement profile.
-        generation_memory_enforcement_profile: String,
+        pub(super) generation_memory_enforcement_profile: String,
         /// Framed then payload SHA-256 for all eight canonical artifact roles.
-        artifact_role_digests: [[u8; 32]; 16],
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+        pub(super) artifact_role_digests: [[u8; 32]; 16],
         /// Exact canonical Eq/Ep initialization proof pair bytes.
-        initialization_pair: Vec<u8>,
+        pub(super) initialization_pair: Vec<u8>,
         /// Exact canonical Eq/Ep one-parent child proof pair bytes.
-        append_pair: Vec<u8>,
+        pub(super) append_pair: Vec<u8>,
     }
 
     /// Immutable release identity reviewed before evidence finalization.
@@ -8125,6 +8126,16 @@ mod kagemusha_v4_artifact_contract_tests {
             .expect("decode exact receipt"),
             receipt
         );
+        #[cfg(feature = "json")]
+        {
+            let json = norito::json::to_json(&receipt).expect("qualification receipt JSON");
+            let decoded: KagemushaRecursiveSpendQualificationReceiptV4 =
+                norito::json::from_str(&json).expect("decode qualification receipt JSON");
+            assert_eq!(decoded, receipt);
+            decoded
+                .validate_against_candidate(&candidate)
+                .expect("JSON receipt remains candidate-bound");
+        }
 
         let mut reordered = receipt.clone();
         reordered.artifact_role_digests.swap(0, 2);

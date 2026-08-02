@@ -212,9 +212,21 @@ PrepareQC, after CommitQC, or immediately before world commit. The non-shipping
 adversarial-test daemon now has source-bound, one-shot abort hooks at those
 three exact Core insertion points. Each hook fsyncs and reads back a canonical
 Norito acknowledgement before aborting, and the acknowledgement suppresses an
-identical cut after restart. A four-peer test must still drive a selectable
-three-replica publication through every hook and prove that home and universal
-projections are never half-visible before the Native AMX release gate closes.
+identical cut after restart. The integration gate now drives a selectable
+three-replica publication through every hook without synthetic storage state:
+each cut receives a fresh four-peer DA/RBC network, a canonical paid pin,
+three admitted providers and governed completion authorities, one canonical
+three-assignment replication order, three completions bound to a real finalized
+chain anchor, and provider-owner signatures over the exact parsed bundle. The
+PrepareQC and CommitQC cuts target the deterministic autonomous universal-lane
+author derived from the durable lane frontier; the other three peers must keep
+the release absent until that sole author restarts. The pre-world-commit cut
+instead requires the other three peers to finalize while the target is down.
+After restart, a finalized barrier requires every peer to expose the same
+complete package, release, resolver, directory, location, and retention tuple
+with exactly one successful publication occurrence. The gate has source
+implementation coverage but still requires an execution receipt once the
+unrelated workspace MKHE build failure is cleared.
 
 Snapshot loading reserves the complete generic `musubi` state-path namespace:
 the bare name and `_`, `/`, `.`, or `:` descendants are rejected as legacy
@@ -228,11 +240,28 @@ the canonical query hash, the last returned key, index revision, and caller
 when authorization affects output. A changed anchor, query, revision, caller,
 or boundary is an explicit stale-cursor error.
 
+Every resolver-index, version, maintainer, alias-history, ordered-prefix, and
+search page echoes the exact bounded request object that produced it, including
+its structural selector or terms and page controls. This response context is
+required even for an empty first page, so clients compare canonical fields
+directly instead of attempting to reproduce a Norito query hash or infer an
+identity from result rows. Page validation requires every row to match the
+echoed package, requirement, alias, or complete prefix; enforces the requested
+effective limit; and binds a continuation cursor to the exact final row of a
+full page. Version and resolver cursor advancement uses structured SemVer,
+including prereleases, rather than lexical version text. Ordered-prefix text is
+canonical `namespace/package-prefix` syntax and remains present when no package
+matches. Search echoes the original bounded query text, preserving first-page
+identity before a search cursor exists.
+
 Cache pruning uses a separate exact archive-retention query, bounded to 100
 sorted, distinct `ArchiveId` values. The first response establishes the chain,
 genesis hash, and finalized registry snapshot; every later request carries that
 snapshot as `expected_snapshot`, and the client rejects any deployment, anchor,
-or response-identity mismatch before changing the cache. The query performs
+or response-identity mismatch before changing the cache. The response also
+carries the consensus-committed creation time of that exact finalized block;
+publication may use it only with an exact `RetainUnknown` decision and never as
+a local-clock substitute. The query performs
 only direct archive, reverse-reference, release, and availability lookups. An
 unknown archive is retained fail-closed because the cache is not chain-scoped.
 A governance-available active or yanked release retains its archive regardless
@@ -433,10 +462,27 @@ reserved names, Unicode/case collisions, and known credential/private-key
 paths or contents. SoraFS CAR portable-path and chunk-plan validation applies
 before commitments are calculated.
 
+The package reader retains and revalidates the opened final-file identity, so a
+leaf replacement cannot change the bytes admitted to the immutable plan.
+Ancestor-directory confinement still uses path-based checks before and after
+that open, however. A deliberately timed ancestor ABA replacement therefore
+remains a release gate until package traversal is handle-relative and enforces
+no-follow/open-beneath semantics for every component on each supported host.
+
 The canonical bundle contains the semantic release manifest, typed artifact
 descriptor, normalized source tree, and verification lock. Provider validation
 attests successful parsing and verification of that bundle, not storage of an
 opaque byte string.
+
+Authenticated fetches reject oversized JSON nesting, token inventories,
+strings, and unquoted scalar literals before constructing a Norito JSON DOM.
+The canonical CAR bridge has a four-frame queue, accounts the consumer-owned
+frame and a producer frame blocked on that queue, and closes and joins its
+worker on success, error, or reader drop. Cache admission separately bounds
+retained plan allocation and SoraFS ingest estimates. These are deterministic
+logical-allocation controls; deployment-equivalent HTTP/TLS, JSON-DOM, cache,
+allocator, thread-stack, and operating-system RSS qualification remains a
+release gate.
 
 The user cache path is derived only from the trusted root and archive id:
 
@@ -499,11 +545,73 @@ version with different commitments is permanently rejected.
 Archive-registration evidence must retain the exact staged receipt from that
 operation, including its nonce; another independently valid broker receipt
 cannot cross the registration boundary.
+Phase three persists a canonical registration intent containing the exact
+instruction digest, receipt, fee-quoted signed transaction, and transaction
+hash before registry submission. Recovery verifies the returned and status
+hashes, requires authoritative applied-height evidence, queries a finalized
+archive page covering that height, and persists the authoritative record before
+pin coordination begins. The journal retains at most eight contiguous,
+append-only attempts. Pending, absent, or transport-unknown transactions are
+never replaced. An attempt becomes replaceable only with a finalized
+`RetainUnknown` archive decision and either authoritative `Expired` status or a
+consensus-committed finalized block time strictly after the exact signed
+transaction/receipt validity deadline. A cache-only expiry observation is not
+terminal evidence, and an authoritative generic rejection remains permanent.
+Pin coordination authenticates the finalized transaction hash, chain/genesis,
+snapshot, immutable archive-registration projection, and verification-lock
+digest rather than a new live seed receipt, and it rejects fewer than three
+parsed-bundle provider attestations. The projection contains the archive id,
+commitment, original staging receipt, registrant, and registration height but
+deliberately excludes the renewable location revision and location identities.
+The coordinator independently retrieves the exact transaction, proves that its
+sole instruction is the matching archive registration finalized by the named
+snapshot, then may reproduce the projection from any later finalized exact
+archive read; its response separately carries the current mutable archive
+record used for location CAS.
+
+Archive locations use a separate append-only journal of at most eight one-based
+generations. Before submitting a location Add, the publisher persists the
+complete finalized preparation page, current location-set CAS revision,
+never-before-used stable location ID, provider attestations, exact instruction
+digest, fee-quoted signed transaction, and transaction hash. The private
+storage-coordination replay journal uses the generation as part of its durable
+idempotency key, and every request carries the sorted IDs of prior generations;
+the coordinator must not return one of them. A later generation is accepted
+only after the prior generation has immutable terminal evidence, and its
+preparation page must equal or advance that terminal finalized state without
+resurrecting any prior identity.
+
+An identical active-location Add is a validated no-op before the consumed
+location-set CAS revision, so a lost response recovers the exact journaled
+transaction rather than building another mutation. For an absent target, the
+publisher obtains the current CAS revision from a complete finalized location
+page rather than trusting the coordinator's cached revision. A finalized CAS
+rejection may rotate only when the covering complete page also proves a later
+revision and absence. An applied transaction may rotate only when its applied
+height is covered and a still-later revision proves that the identity was
+retired. Expiry likewise requires authoritative exact-transaction status and
+finalized absence. Unknown, pending, lagging, or coordinator-only claims never
+rotate, and a same-ID content conflict remains permanent.
+
+After a generation is finalized active, every replication poll, provider
+readback, and release submission rechecks the complete finalized directory. A
+later height and revision that omit the stable ID append exact retirement
+evidence, clear replication and readback checkpoints, and return to location
+coordination for the next bounded generation. Release rejection gets one typed
+post-rejection location check; only exact retirement evidence permits rotation.
+A healthy same-ID renewal resumes from its current finalized pin, order, epochs,
+and provider attestations, all of which must still bind the exact chain,
+archive, bundle, source, semantic manifest, verification lock, and replication
+order. Production qualification still must exercise the real fee-quote and
+submission transport at every location-generation crash boundary.
 Final verification retains the resolver page's chain and genesis identities in
 the operation evidence and requires both to match the immutable publication
-request. An exact-looking release row returned by another chain incarnation is
-therefore rejected even when its package, version, and content digests happen
-to match.
+request. It also journals the Native AMX transaction's authoritative applied
+height and requires the final snapshot to cover it. An exact-looking release
+row returned by another chain incarnation, or from before that application, is
+rejected even when its package, version, and content digests happen to match. A
+row revision may precede the page's current global index revision when an
+unrelated later mutation did not rewrite that exact row.
 
 Core plans and validates the successor package-governance revision, pending
 invitation rebases or expirations, resolver-index revision, exact archive
@@ -588,6 +696,44 @@ dedicated supervisor adapter. TLS material and backend credentials never enter
 argv, project files, publication journals, Torii, or the daemon-private runtime
 provider broker. Hostname binding to deployment-signed provider adverts and
 the concrete HSM/storage adapters remain deployment qualification gates.
+The stock tree does not yet supply the authoritative storage/finality backend:
+an implementation must prove that the exact transaction contains the matching
+archive-registration instruction and was included by the named finalized
+snapshot, then match the immutable registration projection against a finalized
+exact archive read before coordinating SoraFS. The latest-state
+public archive query is sufficient for that projection because Core never
+mutates its fields after registration; historical mutable location state is no
+longer part of the request contract. Trait injection and authenticated
+requester bytes alone are not finality evidence.
+
+The production adapter dependency order is therefore explicit and fail-closed:
+
+1. extend the authenticated seed request with a bounded canonical SoraFS plan
+   projection, and durably stage/read back the opaque CAR against that plan and
+   the complete archive commitment; a CAR digest and length cannot reconstruct
+   the plan required by provider ingest;
+2. place a reusable full Musubi bundle verifier below the publisher crate and
+   have each admitted provider issue its completion-authority attestation only
+   after verifying the CAR, plan, descriptor, source tree, semantic manifest,
+   and verification lock;
+3. implement a durable idempotent coordinator which independently retrieves
+   and verifies the exact finalized archive-registration transaction, submits
+   or reconciles canonical pin and replication operations, and returns only
+   authoritative current archive/location state and distinct-provider
+   attestations;
+4. implement authenticated provider readback with redirect denial, DNS/IP
+   pinning, bounded streaming, and the same complete verifier; and
+5. resolve public policy and identity bindings through `iroha_config`, resolve
+   credentials and signing keys only from deployment runtime providers, then
+   construct a private TLS runner after daemon-owned finalized-state and SoraFS
+   handles are available.
+
+`run_with_musubi_publication` is only the supervisor injection boundary; it is
+not a production backend or finality adapter. Until all five dependencies are
+present and qualified, the stock launch must remain `Unavailable`. An
+in-memory adapter, latest-state query without transaction inclusion proof,
+publisher-supplied evidence, ordinary SoraFS storage completion, or the retired
+public Torii upload route cannot satisfy this boundary.
 
 Active and yanked releases cannot lose their last healthy archive location.
 Replica degradation removes a row from fresh selection and emits an alert but

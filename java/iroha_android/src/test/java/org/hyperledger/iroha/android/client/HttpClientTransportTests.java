@@ -2608,8 +2608,6 @@ public final class HttpClientTransportTests {
             + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
             + "\"mtu_bytes\":1280,"
             + "\"display_billing_label\":\"standard XOR\","
-            + "\"fee_asset_id\":\"xor#universal.universal\","
-            + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
             + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
             + "\"lease_fee\":\"1000000.25\","
             + "\"settlement_grace_secs\":120,"
@@ -2642,8 +2640,6 @@ public final class HttpClientTransportTests {
     final VpnProfile profile = transport.getVpnProfile().join();
 
     assert profile.available() : "VPN profile should be available";
-    assert "xor#universal.universal".equals(profile.feeAssetId()) : "VPN fee asset mismatch";
-    assert "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".equals(profile.escrowAccountId()) : "VPN escrow account mismatch";
     assert "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
     assert "1000000.25".equals(profile.leaseFee()) : "VPN lease fee mismatch";
     assert profile.dnsPushIntervalSecs() == 60L : "VPN DNS push interval mismatch";
@@ -2870,7 +2866,6 @@ public final class HttpClientTransportTests {
                     vpnJsonWithoutField(profile, "relay_tls_spki_sha256_hex")),
             () ->
                 VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "open_lease_instruction")),
-            () -> VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "tx_instructions")),
             () -> VpnJsonParser.parseSession(vpnJsonWithoutField(session, "route_pushes")),
             () ->
                 VpnJsonParser.parseReceipt(
@@ -2902,13 +2897,11 @@ public final class HttpClientTransportTests {
           "VPN profile parser must reject invalid " + violation[0]);
     }
 
-    final Object instruction = vpnJsonObject(quote).get("open_lease_instruction");
-    for (final List<Object> instructions :
-        List.of(Collections.emptyList(), List.of(instruction, instruction))) {
-      expectRuntimeException(
-          () -> VpnJsonParser.parseQuote(vpnJsonWithField(quote, "tx_instructions", instructions)),
-          "VPN quote parser must require exactly one transaction instruction");
-    }
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseQuote(
+                vpnJsonWithField(quote, "tx_instructions", Collections.emptyList())),
+        "VPN quote parser must reject the retired transaction instruction array");
     expectRuntimeException(
         () -> VpnJsonParser.parseSession(vpnJsonWithField(session, "status", "settled")),
         "VPN session parser must require active status");
@@ -2918,16 +2911,11 @@ public final class HttpClientTransportTests {
     expectRuntimeException(
         () -> VpnJsonParser.parseReceipt(vpnJsonWithField(receipt, "receipt_source", "operator")),
         "VPN receipt parser must reject unknown receipt sources");
-    final Map<String, Object> receiptInstruction =
-        Map.of("wire_id", "SettleVpnLease", "payload_hex", "abcd");
     expectRuntimeException(
         () ->
             VpnJsonParser.parseReceipt(
-                vpnJsonWithField(
-                    receipt,
-                    "tx_instructions",
-                    List.of(receiptInstruction, receiptInstruction))),
-        "VPN receipt parser must allow at most one transaction instruction");
+                vpnJsonWithField(receipt, "tx_instructions", Collections.emptyList())),
+        "VPN receipt parser must reject the retired transaction instruction array");
 
     final Map<String, Object> receiptObject = vpnJsonObject(receipt);
     expectRuntimeException(
@@ -3048,7 +3036,6 @@ public final class HttpClientTransportTests {
     assert quote.openLeaseInstruction() != null : "VPN quote must include open lease instruction";
     assert "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow"
         .equals(quote.openLeaseInstruction().wireId()) : "Open lease wire id mismatch";
-    assert quote.txInstructions().size() == 1 : "VPN quote should have one native instruction";
 
     final TransportRequest request = executor.lastRequest();
     assert "POST".equals(request.method()) : "VPN quote must use POST";
@@ -6606,8 +6593,6 @@ public final class HttpClientTransportTests {
         + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
         + "\"mtu_bytes\":1280,"
         + "\"display_billing_label\":\"standard XOR\","
-        + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
         + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"settlement_grace_secs\":120,"
@@ -6678,10 +6663,7 @@ public final class HttpClientTransportTests {
         + meteringKey
         + "\",\"open_lease_instruction\":{"
         + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
-        + "\"payload_hex\":\"cafe\"},"
-        + "\"tx_instructions\":[{"
-        + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
-        + "\"payload_hex\":\"cafe\"}]"
+        + "\"payload_hex\":\"cafe\"}"
         + "}";
   }
 
@@ -6747,11 +6729,8 @@ public final class HttpClientTransportTests {
         settled
             ? ",\"settle_lease_instruction\":{"
                 + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
-                + "\"payload_hex\":\"f00d\"},"
-                + "\"tx_instructions\":[{"
-                + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
-                + "\"payload_hex\":\"f00d\"}]"
-            : ",\"settle_lease_instruction\":null,\"tx_instructions\":[]";
+                + "\"payload_hex\":\"f00d\"}"
+            : ",\"settle_lease_instruction\":null";
     return "{"
         + "\"session_id\":\""
         + sessionId

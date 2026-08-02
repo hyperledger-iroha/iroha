@@ -198,13 +198,13 @@ impl LockfileV1 {
         let table = document
             .parse::<toml::Table>()
             .map_err(LockfileError::Toml)?;
-        reject_unknown(&table, ROOT_KEYS, "lock document")?;
 
         if optional_string(&table, "schema")? != Some(LOCK_SCHEMA)
             || optional_integer(&table, "version")? != Some(i64::from(LOCK_VERSION))
         {
             return Err(LockfileError::Legacy);
         }
+        reject_unknown(&table, ROOT_KEYS, "lock document")?;
 
         let chain_id = required_string(&table, "chain")?.parse().map_err(
             |error: iroha_data_model::ParseError| LockfileError::invalid(error.reason()),
@@ -950,6 +950,7 @@ mod tests {
             "version = 3\n",
             "schema = \"musubi-lock\"\nversion = 2\n",
             "schema = \"legacy\"\nversion = 1\n",
+            "package = \"pre-release-name\"\nsource = \"legacy-cache-plan\"\n",
         ] {
             assert!(matches!(
                 LockfileV1::parse(document),

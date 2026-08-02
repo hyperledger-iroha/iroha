@@ -4,6 +4,10 @@
 //! `client.toml`. Account authentication reuses that file's Iroha signer through a fixed,
 //! domain-separated request protocol; no token, credential, or provider URL enters a project,
 //! command line, lockfile, or publication journal.
+//! Storage coordination is deliberately downstream of journaled finalized registration evidence;
+//! this service never registers an archive and never refreshes or replaces the receipt embedded
+//! in the exact registration transaction. An exact active location replay is accepted by Core
+//! before the location-set CAS check; any changed location request remains revision-gated.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -15,17 +19,20 @@ use std::{
 };
 
 use iroha::musubi_runtime::{
-    AuthenticatedMusubiPublicationRuntimeClientV1, MusubiProviderReadbackRequestV1,
+    AuthenticatedMusubiPublicationRuntimeClientV1, MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1,
+    MusubiFinalizedArchiveRegistrationEvidenceV1, MusubiProviderReadbackRequestV1,
     MusubiPublicationRuntimeTransportErrorV1, MusubiPublicationRuntimeTransportFailureClassV1,
     MusubiSeedIngressStageRequestV1, MusubiStorageCoordinationRequestV1,
-    MusubiStorageLocationDispositionV1, publication_service_origin,
-    validate_publication_service_base_url,
+    MusubiStorageCoordinationResponseV1, MusubiStorageLocationDispositionV1,
+    publication_service_origin, validate_publication_service_base_url,
 };
 use iroha_data_model::{
-    isi::musubi::{AddMusubiArchiveLocationV1, RegisterMusubiArchiveV1},
+    isi::musubi::AddMusubiArchiveLocationV1,
     musubi::{
-        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MusubiNamespaceDelegationV1,
-        MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
+        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+        MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1,
+        MusubiNamespaceDelegationV1, MusubiPageRequestV1, MusubiSeedIngressReceiptBindingV1,
+        MusubiSeedIngressReceiptV1,
     },
     sorafs::capacity::ProviderId,
 };
@@ -34,10 +41,16 @@ use url::Url;
 
 use crate::{
     publish::{
+        PublicationArchiveLocationAdvanceV1, PublicationArchiveLocationIntentV1,
+        PublicationArchiveLocationTerminalReasonV1, PublicationArchiveLocationTerminalV1,
         PublicationArchiveRegistrationV1, PublicationBackendError, PublicationOperationIdV1,
-        PublicationReadbackEvidenceV1, PublicationRequestV1, PublicationValidationEvidenceV1,
+        PublicationReadbackEvidenceV1, PublicationRegisteredArchiveV1, PublicationRequestV1,
+        PublicationValidationEvidenceV1, validate_archive_location_page,
     },
-    registry::{PublicationRuntimeServicesV1, RegistryFailureClassV1, RegistrySigningClientV1},
+    registry::{
+        PublicationRuntimeServicesV1, RegistryFailureClassV1, RegistryReadClientV1,
+        RegistrySigningClientV1, RegistryTerminalTransactionStateV1, RegistryTransactionStateV1,
+    },
 };
 
 const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
@@ -158,6 +171,7 @@ impl fmt::Debug for ParsedProductionPublicationConfigV1 {
 
 /// Production implementation of the runtime-only publication service boundary.
 pub struct ProductionPublicationRuntimeV1<V> {
+    read: RegistryReadClientV1,
     signing: RegistrySigningClientV1,
     http: AuthenticatedMusubiPublicationRuntimeClientV1,
     validator: V,
@@ -202,6 +216,322 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(())
     }
+
+    fn finalized_archive_page(
+        &self,
+        request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
+    ) -> Result<MusubiArchiveLocationPageV1, PublicationBackendError> {
+        let page = self
+            .read
+            .archive_locations(&MusubiArchiveLocationQueryV1 {
+                archive_id: request.archive_commitment.archive_id(),
+                page: MusubiPageRequestV1 {
+                    limit: MUSUBI_MAX_PAGE_SIZE_V1 as u32,
+                    cursor: None,
+                },
+            })
+            .map_err(map_registry_error)?
+            .ok_or_else(|| {
+                PublicationBackendError::retryable("ARCHIVE_LOCATION_FINALIZED_QUERY_PENDING")
+            })?;
+        validate_finalized_archive_page(request, registered, &page)?;
+        if page.next_cursor.is_some()
+            || page.items.len() != page.archive.location_ids.len()
+            || page
+                .items
+                .iter()
+                .zip(&page.archive.location_ids)
+                .any(|(location, location_id)| location.location_id != *location_id)
+        {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_FINALIZED_PAGE_INCOMPLETE",
+            ));
+        }
+        Ok(page)
+    }
+
+    fn finalized_location_state(
+        &self,
+        request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
+        response: &MusubiStorageCoordinationResponseV1,
+    ) -> Result<FinalizedLocationStateV1, PublicationBackendError> {
+        let page = self.finalized_archive_page(request, registered)?;
+        if page.archive.location_revision < response.archive.location_revision {
+            return Err(PublicationBackendError::retryable(
+                "ARCHIVE_LOCATION_FINALIZED_SNAPSHOT_STALE",
+            ));
+        }
+        match page
+            .items
+            .binary_search_by_key(&response.location_id, |location| location.location_id)
+        {
+            Ok(index) => {
+                let location = &page.items[index];
+                if location.state == MusubiArchiveLocationStateV1::Retired {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_ID_CONFLICT",
+                    ));
+                }
+                if !location_matches_coordination_response(location, response) {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_ID_CONFLICT",
+                    ));
+                }
+                Ok(FinalizedLocationStateV1::Exact { page })
+            }
+            Err(_) => {
+                // A location present in the coordinator's finalized current archive but absent from
+                // the current non-retired directory was retired. Stable location identities are
+                // never reusable, so do not loop on a mutation Core must permanently reject.
+                if response
+                    .archive
+                    .location_ids
+                    .binary_search(&response.location_id)
+                    .is_ok()
+                {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_ID_CONFLICT",
+                    ));
+                }
+                if page.archive.location_revision == u64::MAX {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_REVISION_EXHAUSTED",
+                    ));
+                }
+                Ok(FinalizedLocationStateV1::Absent { page })
+            }
+        }
+    }
+
+    fn location_transaction_advance(
+        &self,
+        request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
+        intent: &PublicationArchiveLocationIntentV1,
+        state: RegistryTransactionStateV1,
+    ) -> Result<PublicationArchiveLocationAdvanceV1, PublicationBackendError> {
+        if state == RegistryTransactionStateV1::Pending
+            || state == RegistryTransactionStateV1::Absent
+        {
+            return Ok(PublicationArchiveLocationAdvanceV1::Pending);
+        }
+        let page = self.finalized_archive_page(request, registered)?;
+        validate_archive_location_page(request, registered, &page).map_err(|_| {
+            PublicationBackendError::permanent("ARCHIVE_LOCATION_FINALIZED_PAGE_INVALID")
+        })?;
+        let location_present = page
+            .items
+            .binary_search_by_key(&intent.location_id, |location| location.location_id)
+            .is_ok();
+        match state {
+            RegistryTransactionStateV1::Applied { block_height } => {
+                if block_height <= intent.prepared_page.snapshot.finalized_height {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_TRANSACTION_STATUS_INVALID",
+                    ));
+                }
+                if page.snapshot.finalized_height < block_height {
+                    return Ok(PublicationArchiveLocationAdvanceV1::Pending);
+                }
+                if location_present {
+                    return Ok(PublicationArchiveLocationAdvanceV1::Registered(
+                        PublicationArchiveRegistrationV1 {
+                            intent: intent.clone(),
+                            applied_height: block_height,
+                            finalized_page: page,
+                        },
+                    ));
+                }
+                if page.archive.location_revision
+                    > intent.expected_location_revision.saturating_add(1)
+                {
+                    return Ok(PublicationArchiveLocationAdvanceV1::Terminal(
+                        PublicationArchiveLocationTerminalV1 {
+                            transaction_hash: intent.transaction_hash,
+                            reason:
+                                PublicationArchiveLocationTerminalReasonV1::AppliedThenRetired {
+                                    applied_height: block_height,
+                                },
+                            finalized_page: page,
+                        },
+                    ));
+                }
+                Err(PublicationBackendError::permanent(
+                    "ARCHIVE_LOCATION_APPLIED_STATE_MISSING",
+                ))
+            }
+            RegistryTransactionStateV1::Terminal {
+                kind: RegistryTerminalTransactionStateV1::Rejected,
+                block_height: Some(block_height),
+            } => {
+                if block_height <= intent.prepared_page.snapshot.finalized_height {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_TRANSACTION_STATUS_INVALID",
+                    ));
+                }
+                if page.snapshot.finalized_height < block_height {
+                    return Ok(PublicationArchiveLocationAdvanceV1::Pending);
+                }
+                if location_present {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_REJECTED_ID_PRESENT",
+                    ));
+                }
+                if page.archive.location_revision <= intent.expected_location_revision {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_REGISTRATION_REJECTED",
+                    ));
+                }
+                Ok(PublicationArchiveLocationAdvanceV1::Terminal(
+                    PublicationArchiveLocationTerminalV1 {
+                        transaction_hash: intent.transaction_hash,
+                        reason: PublicationArchiveLocationTerminalReasonV1::RejectedRebase {
+                            block_height,
+                        },
+                        finalized_page: page,
+                    },
+                ))
+            }
+            RegistryTransactionStateV1::Terminal {
+                kind: RegistryTerminalTransactionStateV1::Rejected,
+                block_height: None,
+            } => Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_TRANSACTION_STATUS_INVALID",
+            )),
+            RegistryTransactionStateV1::Terminal {
+                kind: RegistryTerminalTransactionStateV1::Expired,
+                block_height,
+            } => {
+                if block_height
+                    .is_some_and(|height| height <= intent.prepared_page.snapshot.finalized_height)
+                {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_TRANSACTION_STATUS_INVALID",
+                    ));
+                }
+                if block_height.is_some_and(|height| page.snapshot.finalized_height < height) {
+                    return Ok(PublicationArchiveLocationAdvanceV1::Pending);
+                }
+                if location_present {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_EXPIRED_ID_PRESENT",
+                    ));
+                }
+                Ok(PublicationArchiveLocationAdvanceV1::Terminal(
+                    PublicationArchiveLocationTerminalV1 {
+                        transaction_hash: intent.transaction_hash,
+                        reason: PublicationArchiveLocationTerminalReasonV1::RegistryExpired {
+                            block_height,
+                        },
+                        finalized_page: page,
+                    },
+                ))
+            }
+            RegistryTransactionStateV1::Pending | RegistryTransactionStateV1::Absent => {
+                Ok(PublicationArchiveLocationAdvanceV1::Pending)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FinalizedLocationStateV1 {
+    Exact { page: MusubiArchiveLocationPageV1 },
+    Absent { page: MusubiArchiveLocationPageV1 },
+}
+
+fn validate_finalized_archive_page(
+    request: &PublicationRequestV1,
+    registered: &PublicationRegisteredArchiveV1,
+    page: &MusubiArchiveLocationPageV1,
+) -> Result<(), PublicationBackendError> {
+    let expected = &registered.archive;
+    let observed = &page.archive;
+    if page.snapshot.finalized_height < registered.snapshot.finalized_height
+        || page.snapshot.index_revision < registered.snapshot.index_revision
+    {
+        return Err(PublicationBackendError::retryable(
+            "ARCHIVE_LOCATION_FINALIZED_SNAPSHOT_STALE",
+        ));
+    }
+    if page.snapshot.finalized_height == registered.snapshot.finalized_height
+        && page.snapshot != registered.snapshot
+    {
+        return Err(PublicationBackendError::permanent(
+            "ARCHIVE_LOCATION_FINALIZED_SNAPSHOT_CONFLICT",
+        ));
+    }
+    if observed.location_revision < expected.location_revision {
+        return Err(PublicationBackendError::retryable(
+            "ARCHIVE_LOCATION_FINALIZED_SNAPSHOT_STALE",
+        ));
+    }
+    if page.snapshot == registered.snapshot && observed != expected {
+        return Err(PublicationBackendError::permanent(
+            "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT",
+        ));
+    }
+    if registered.chain_id != request.chain_id
+        || registered.genesis_block_hash != request.genesis_block_hash
+        || expected.archive_id != request.archive_commitment.archive_id()
+        || expected.commitment != request.archive_commitment
+        || expected.registered_by != request.publisher
+        || page.chain_id != registered.chain_id
+        || page.genesis_hash != registered.genesis_block_hash
+        || observed.archive_id != expected.archive_id
+        || observed.commitment != expected.commitment
+        || observed.staging_receipt != expected.staging_receipt
+        || observed.registered_by != expected.registered_by
+        || observed.registered_at_height != expected.registered_at_height
+    {
+        return Err(PublicationBackendError::permanent(
+            "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT",
+        ));
+    }
+    Ok(())
+}
+
+fn coordination_provider_attestations(
+    response: &MusubiStorageCoordinationResponseV1,
+) -> &[iroha_data_model::musubi::MusubiProviderBundleVerificationAttestationV1] {
+    match &response.disposition {
+        MusubiStorageLocationDispositionV1::NeedsRegistration {
+            provider_attestations,
+            ..
+        } => provider_attestations,
+        MusubiStorageLocationDispositionV1::Registered(location) => &location.provider_attestations,
+    }
+}
+
+fn location_matches_coordination_response(
+    location: &iroha_data_model::musubi::MusubiArchiveLocationV1,
+    response: &MusubiStorageCoordinationResponseV1,
+) -> bool {
+    location.location_id == response.location_id
+        && location.archive_id == response.archive.archive_id
+        && location.pin_manifest == response.pin_manifest
+        && location.replication_order == response.replication_order
+        && location.provider_attestations == coordination_provider_attestations(response)
+        && location.renew_after_epoch == response.renew_after_epoch
+        && location.expires_at_epoch == response.expires_at_epoch
+}
+
+fn location_add_instruction(
+    response: &MusubiStorageCoordinationResponseV1,
+    expected_location_revision: u64,
+) -> AddMusubiArchiveLocationV1 {
+    AddMusubiArchiveLocationV1 {
+        archive_id: response.archive.archive_id,
+        location_id: response.location_id,
+        pin_manifest: response.pin_manifest,
+        replication_order: response.replication_order,
+        provider_attestations: coordination_provider_attestations(response).to_vec(),
+        renew_after_epoch: response.renew_after_epoch,
+        expires_at_epoch: response.expires_at_epoch,
+        expected_location_revision,
+    }
 }
 
 impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
@@ -243,30 +573,55 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
             .map_err(map_transport_error)
     }
 
-    fn ensure_archive_and_permanent_pin(
+    fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
         request: &PublicationRequestV1,
-        receipt: &MusubiSeedIngressReceiptV1,
-    ) -> Result<PublicationArchiveRegistrationV1, PublicationBackendError> {
+        registered: &PublicationRegisteredArchiveV1,
+        generation: u8,
+        prior_location_ids: &[iroha_data_model::musubi::MusubiArchiveLocationIdV1],
+    ) -> Result<PublicationArchiveLocationIntentV1, PublicationBackendError> {
         self.validate_request(request)?;
-        self.signing
-            .submit_v1(RegisterMusubiArchiveV1::new(
-                request.archive_commitment.clone(),
-                receipt.clone(),
-                request.expected_policy_revision,
-            ))
-            .map_err(map_registry_error)?;
+        if generation == 0
+            || usize::from(generation) > MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
+            || prior_location_ids.len() + 1 != usize::from(generation)
+            || prior_location_ids.iter().any(|location| location.is_zero())
+        {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_GENERATION_INVALID",
+            ));
+        }
+        let mut sorted_prior_location_ids = prior_location_ids.to_vec();
+        sorted_prior_location_ids.sort();
+        if sorted_prior_location_ids
+            .windows(2)
+            .any(|pair| pair[0] == pair[1])
+        {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_GENERATION_INVALID",
+            ));
+        }
 
         let coordination_request = MusubiStorageCoordinationRequestV1 {
             version: 1,
             operation_id: *operation_id.as_bytes(),
+            generation,
+            prior_location_ids: sorted_prior_location_ids,
             chain_id: request.chain_id.clone(),
             genesis_block_hash: request.genesis_block_hash,
             publisher: request.publisher.clone(),
             commitment: request.archive_commitment.clone(),
-            staging_receipt: receipt.clone(),
+            verification_lock_digest: request.publication.manifest.verification_lock_digest,
+            staging_receipt: registered.archive.staging_receipt.clone(),
             expected_policy_revision: request.expected_policy_revision,
+            finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
+                version: 1,
+                chain_id: registered.chain_id.clone(),
+                genesis_block_hash: registered.genesis_block_hash,
+                transaction_hash: registered.finalized_transaction_hash,
+                snapshot: registered.snapshot,
+                registration: registered.archive.registration_projection(),
+            },
         };
         let response = self
             .http
@@ -276,36 +631,87 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
                 current_time_ms()?,
             )
             .map_err(map_transport_error)?;
-
-        match &response.disposition {
-            MusubiStorageLocationDispositionV1::NeedsRegistration {
-                provider_attestations,
-                expected_location_revision,
-            } => {
-                self.signing
-                    .submit_v1(AddMusubiArchiveLocationV1 {
-                        archive_id: request.archive_commitment.archive_id(),
-                        location_id: response.location_id,
-                        pin_manifest: response.pin_manifest,
-                        replication_order: response.replication_order,
-                        provider_attestations: provider_attestations.clone(),
-                        renew_after_epoch: response.renew_after_epoch,
-                        expires_at_epoch: response.expires_at_epoch,
-                        expected_location_revision: *expected_location_revision,
-                    })
-                    .map_err(map_registry_error)?;
-            }
-            MusubiStorageLocationDispositionV1::Registered(_) => {}
+        if response.archive.registration_projection()
+            != registered.archive.registration_projection()
+        {
+            return Err(PublicationBackendError::permanent(
+                "STORAGE_COORDINATOR_ARCHIVE_CONFLICT",
+            ));
         }
 
-        Ok(PublicationArchiveRegistrationV1 {
-            archive: response.archive,
-            location_id: response.location_id,
-            pin_manifest: response.pin_manifest,
-            replication_order: response.replication_order,
-            renew_after_epoch: response.renew_after_epoch,
-            expires_at_epoch: response.expires_at_epoch,
-        })
+        let FinalizedLocationStateV1::Absent { page } =
+            self.finalized_location_state(request, registered, &response)?
+        else {
+            // A location must never be adopted without first journaling the exact signed CAS that
+            // created it. An identical retry reaches this branch only after journal loss, which is
+            // intentionally fail-closed.
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
+            ));
+        };
+        let MusubiStorageLocationDispositionV1::NeedsRegistration { .. } = &response.disposition
+        else {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
+            ));
+        };
+
+        let instruction = location_add_instruction(&response, page.archive.location_revision);
+        let payload = self
+            .signing
+            .prebuild_v1(instruction.clone())
+            .map_err(map_registry_error)?;
+        let signed_transaction = self
+            .signing
+            .quote_and_sign_v1(payload)
+            .map_err(map_registry_error)?;
+        Ok(PublicationArchiveLocationIntentV1::new(
+            operation_id,
+            generation,
+            page,
+            instruction,
+            signed_transaction,
+        ))
+    }
+
+    fn submit_or_recover_archive_location(
+        &mut self,
+        operation_id: PublicationOperationIdV1,
+        request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
+        intent: &PublicationArchiveLocationIntentV1,
+        prior_location_ids: &[iroha_data_model::musubi::MusubiArchiveLocationIdV1],
+    ) -> Result<PublicationArchiveLocationAdvanceV1, PublicationBackendError> {
+        self.validate_request(request)?;
+        intent
+            .validate_for(operation_id, request, registered, prior_location_ids)
+            .map_err(|_| PublicationBackendError::permanent("ARCHIVE_LOCATION_INTENT_INVALID"))?;
+        let initial_state = self
+            .signing
+            .transaction_application_state_v1(&intent.signed_transaction)
+            .map_err(map_registry_error)?;
+        if initial_state == RegistryTransactionStateV1::Absent {
+            let submission = self.signing.submit_signed_v1(&intent.signed_transaction);
+            if let Ok(transaction_hash) = submission {
+                if transaction_hash != intent.transaction_hash {
+                    return Err(PublicationBackendError::permanent(
+                        "ARCHIVE_LOCATION_TRANSACTION_HASH_MISMATCH",
+                    ));
+                }
+            }
+            let observed = self
+                .signing
+                .transaction_application_state_v1(&intent.signed_transaction)
+                .map_err(map_registry_error)?;
+            if observed == RegistryTransactionStateV1::Absent {
+                return match submission {
+                    Ok(_) => Ok(PublicationArchiveLocationAdvanceV1::Pending),
+                    Err(error) => Err(map_registry_error(error)),
+                };
+            }
+            return self.location_transaction_advance(request, registered, intent, observed);
+        }
+        self.location_transaction_advance(request, registered, intent, initial_state)
     }
 
     fn readback_provider(
@@ -404,6 +810,14 @@ where
                     "MUSUBI_PUBLICATION_SIGNER_CONFIG_INVALID",
                 )
             })?;
+    let read = RegistryReadClientV1::load_from_config_bytes(&config_bytes).map_err(|_| {
+        ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_PUBLIC_CONFIG_INVALID")
+    })?;
+    if read.account_chain_discriminant() != signing.account_chain_discriminant() {
+        return Err(ProductionPublicationConfigurationErrorV1::new(
+            "MUSUBI_PUBLICATION_REGISTRY_PROFILE_MISMATCH",
+        ));
+    }
     let parsed = parse_publication_config(&config_path, &signing, &publication)?;
     let http = signing
         .publication_runtime_client(parsed.request_timeout)
@@ -414,6 +828,7 @@ where
         })?;
     let bindings = parsed.bindings.clone();
     let services = ProductionPublicationRuntimeV1 {
+        read,
         signing: signing.clone(),
         http,
         validator,
@@ -842,14 +1257,38 @@ fn map_registry_error(error: crate::registry::RegistryErrorV1) -> PublicationBac
 
 #[cfg(test)]
 mod tests {
+    use std::{io::Write as _, net::TcpListener, thread};
+
     use iroha::crypto::{Algorithm, ExposedPrivateKey, KeyPair, SignatureOf};
-    use iroha_data_model::musubi::{
-        MusubiNamespaceBindingDigestV1, MusubiNamespaceDelegationApprovalV1,
-        MusubiNamespaceDelegationPayloadV1,
+    use iroha_data_model::{
+        ChainId,
+        account::address::ChainDiscriminantGuard,
+        musubi::{
+            MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveCommitmentV1,
+            MusubiArchiveLocationIdV1, MusubiArchiveLocationV1, MusubiArchiveRecordV1,
+            MusubiContentDigestV1, MusubiKotodamaEditionV1, MusubiNamespaceBindingDigestV1,
+            MusubiNamespaceDelegationApprovalV1, MusubiNamespaceDelegationPayloadV1,
+            MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageScopeV1,
+            MusubiProviderBundleVerificationApprovalV1,
+            MusubiProviderBundleVerificationAttestationV1,
+            MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
+            MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
+            MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiResolutionProofV1,
+            MusubiSeedIngressReceiptApprovalV1, MusubiSeedIngressReceiptPayloadV1,
+            MusubiVerificationLockV1, MusubiVersionV1,
+        },
+        nexus::DataSpaceId,
+        sorafs::pin_registry::{
+            ChunkerProfileHandle, ManifestDigest, ManifestRootCid,
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+        },
+        transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use tempfile::tempdir;
 
     use super::*;
+    use crate::publish::PublicationBackendFailureClass;
 
     fn write_client_config(
         path: &Path,
@@ -903,6 +1342,772 @@ mod tests {
         .expect("write config");
         RegistrySigningClientV1::load_with_publication_config(Some(path))
             .expect("load signer with typed publication config")
+    }
+
+    fn serve_archive_page_once(
+        page: &MusubiArchiveLocationPageV1,
+    ) -> (Url, thread::JoinHandle<Vec<u8>>) {
+        let response = {
+            let _guard = ChainDiscriminantGuard::enter(369);
+            norito::json::to_vec(page).expect("encode archive page")
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let address = listener.local_addr().expect("loopback address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("one finalized query");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("query read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 2_048];
+            let (header_end, content_length) = loop {
+                let read = stream.read(&mut buffer).expect("read query request");
+                assert_ne!(read, 0, "query ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = std::str::from_utf8(&request[..header_end]).expect("HTTP headers");
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().expect("content length"))
+                    })
+                    .unwrap_or(0);
+                break (header_end + 4, content_length);
+            };
+            while request.len() < header_end + content_length {
+                let read = stream.read(&mut buffer).expect("read query body");
+                assert_ne!(read, 0, "query ended before its body");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let request_body = request[header_end..header_end + content_length].to_vec();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response.len()
+            )
+            .expect("write response headers");
+            stream.write_all(&response).expect("write response body");
+            request_body
+        });
+        (
+            format!("http://{address}/").parse().expect("loopback URL"),
+            server,
+        )
+    }
+
+    fn rebase_commitment() -> MusubiArchiveCommitmentV1 {
+        MusubiArchiveCommitmentV1 {
+            root_cid: ManifestRootCid::from_blake3_digest([0x71; 32]).expect("root CID"),
+            chunker: ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_owned(),
+                name: "sf1".to_owned(),
+                semver: "1.0.0".to_owned(),
+                multihash_code: 0x1f,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new([0x72; 32]),
+            por_root: MusubiContentDigestV1::new([0x73; 32]),
+            content_length: 1_024,
+            car_digest: MusubiContentDigestV1::new([0x74; 32]),
+            car_size: 2_048,
+            bundle_digest: MusubiContentDigestV1::new([0x75; 32]),
+            source_tree_digest: MusubiContentDigestV1::new([0x76; 32]),
+            descriptor_digest: MusubiContentDigestV1::new([0x77; 32]),
+            file_count: 2,
+            chunk_count: 4,
+        }
+    }
+
+    struct RebaseFixture {
+        runtime: ProductionPublicationRuntimeV1<UnavailablePublicationCleanPackageValidatorV1>,
+        request: PublicationRequestV1,
+        registered: PublicationRegisteredArchiveV1,
+        response: MusubiStorageCoordinationResponseV1,
+        page: MusubiArchiveLocationPageV1,
+    }
+
+    fn rebase_fixture(torii_url: Url) -> RebaseFixture {
+        let temporary = tempdir().expect("temporary directory");
+        let config_path = temporary.path().join("client.toml");
+        let (signing, publication_config) = write_client_config(&config_path, "");
+        let parsed = parse_publication_config(&config_path, &signing, &publication_config)
+            .expect("parse runtime config");
+        let publisher = signing.authority().clone();
+        let broker_key =
+            KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("broker key");
+        let commitment = rebase_commitment();
+        let package = MusubiPackageIdV1::new(
+            DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "rebase-fixture".parse().expect("package name"),
+        );
+        let release = MusubiReleaseIdV1::new(
+            package,
+            "1.0.0".parse::<MusubiVersionV1>().expect("version"),
+        );
+        let lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: release.clone(),
+            root_dependencies: Vec::new(),
+            nodes: Vec::new(),
+        };
+        let manifest = MusubiReleaseManifestV1 {
+            release,
+            edition: MusubiKotodamaEditionV1::V1,
+            abi: MusubiAbiBindingV1::new([0x78; 32]).expect("ABI"),
+            dependencies: Vec::new(),
+            exports: Vec::new(),
+            interface_digest: MusubiContentDigestV1::new([0x79; 32]),
+            metadata: MusubiReleaseMetadataV1::default(),
+            archive_id: commitment.archive_id(),
+            verification_lock_digest: lock.digest(),
+        };
+        let resolution_snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 40,
+            finalized_block_hash: [0x7a; 32],
+            index_revision: 2,
+        };
+        let request = PublicationRequestV1 {
+            chain_id: ChainId::from("musubi-publication-runtime-test"),
+            genesis_block_hash: [0x7b; 32],
+            publisher: publisher.clone(),
+            ingress_broker: publisher.clone(),
+            seed_provider: ProviderId::new([0x11; 32]),
+            namespace: MusubiNamespaceV1::new("rebase").expect("namespace"),
+            publication: MusubiPublicationV1 {
+                manifest,
+                resolution: MusubiResolutionProofV1 {
+                    snapshot: resolution_snapshot,
+                    lock,
+                },
+            },
+            archive_commitment: commitment.clone(),
+            namespace_delegation: None,
+            expected_policy_revision: 7,
+            expected_governance_revision: None,
+            nonce: [0x7c; 32],
+        };
+        request.validate().expect("publication request");
+        let receipt_payload = MusubiSeedIngressReceiptPayloadV1 {
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            binding: MusubiSeedIngressReceiptBindingV1 {
+                chain_id: request.chain_id.clone(),
+                genesis_block_hash: request.genesis_block_hash,
+                publisher: request.publisher.clone(),
+                ingress_broker: request.ingress_broker.clone(),
+                seed_provider: request.seed_provider,
+                semantic_release_manifest_digest: request.publication.manifest.semantic_digest(),
+                archive_id: request.archive_commitment.archive_id(),
+                car_body_digest: request.archive_commitment.car_digest,
+                car_body_length: request.archive_commitment.car_size,
+                nonce: request.nonce,
+            },
+            issued_at_ms: 1_000,
+            expires_at_ms: 2_000,
+        };
+        let receipt = MusubiSeedIngressReceiptV1 {
+            approvals: vec![MusubiSeedIngressReceiptApprovalV1 {
+                public_key: broker_key.public_key().clone(),
+                signature: SignatureOf::try_from_hash(
+                    broker_key.private_key(),
+                    receipt_payload.signing_hash(),
+                )
+                .expect("receipt signature"),
+            }],
+            payload: receipt_payload,
+        };
+        let archive = MusubiArchiveRecordV1 {
+            archive_id: commitment.archive_id(),
+            commitment: commitment.clone(),
+            staging_receipt: receipt,
+            registered_by: publisher.clone(),
+            registered_at_height: 50,
+            location_revision: 1,
+            location_ids: Vec::new(),
+        };
+        let registered_snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 60,
+            finalized_block_hash: [0x7d; 32],
+            index_revision: 4,
+        };
+        let registered = PublicationRegisteredArchiveV1 {
+            finalized_transaction_hash: [0x7e; 32],
+            chain_id: request.chain_id.clone(),
+            genesis_block_hash: request.genesis_block_hash,
+            snapshot: registered_snapshot,
+            archive: archive.clone(),
+        };
+        let replication_order = ReplicationOrderId::new([0x81; 32]);
+        let provider_attestations = (0_u16..MUSUBI_MIN_HEALTHY_REPLICAS_V1)
+            .map(|index| {
+                let index = u8::try_from(index).expect("replica bound fits u8");
+                let provider_key =
+                    KeyPair::try_from_seed(vec![0x88 + index; 32], Algorithm::Ed25519)
+                        .expect("provider key");
+                let provider_owner =
+                    iroha_data_model::account::AccountId::new(provider_key.public_key().clone());
+                let provider_binding = MusubiProviderBundleVerificationBindingV1 {
+                    chain_id: request.chain_id.clone(),
+                    genesis_block_hash: request.genesis_block_hash,
+                    provider_id: ProviderId::new([0x90 + index; 32]),
+                    completed_by: provider_owner.clone(),
+                    completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                        provider_owner,
+                        ProviderIngestCompletionSignerPolicyV1 {
+                            policy_id: [0x98 + index; 32],
+                            revision: 1,
+                            predecessor_digest: None,
+                            policy_digest: [0xa0 + index; 32],
+                        },
+                    ),
+                    replication_order,
+                    assignment_revision: 1,
+                    completion_epoch: 12,
+                    finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                        height: 61,
+                        block_hash: [0xa8 + index; 32],
+                    },
+                    archive_id: commitment.archive_id(),
+                    bundle_digest: commitment.bundle_digest,
+                    descriptor_digest: commitment.descriptor_digest,
+                    semantic_release_manifest_digest: request
+                        .publication
+                        .manifest
+                        .semantic_digest(),
+                    verification_lock_digest: request.publication.manifest.verification_lock_digest,
+                    source_tree_digest: commitment.source_tree_digest,
+                };
+                let provider_payload = MusubiProviderBundleVerificationPayloadV1 {
+                    version: MUSUBI_REGISTRY_VERSION_V1,
+                    binding: provider_binding,
+                };
+                MusubiProviderBundleVerificationAttestationV1 {
+                    approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+                        public_key: provider_key.public_key().clone(),
+                        signature: SignatureOf::try_from_hash(
+                            provider_key.private_key(),
+                            provider_payload.signing_hash(),
+                        )
+                        .expect("provider signature"),
+                    }],
+                    payload: provider_payload,
+                }
+            })
+            .collect::<Vec<_>>();
+        let response = MusubiStorageCoordinationResponseV1 {
+            version: 1,
+            archive: archive.clone(),
+            location_id: MusubiArchiveLocationIdV1::new([0x85; 32]),
+            pin_manifest: ManifestDigest::new([0x86; 32]),
+            replication_order,
+            renew_after_epoch: 10,
+            expires_at_epoch: 20,
+            disposition: MusubiStorageLocationDispositionV1::NeedsRegistration {
+                provider_attestations,
+                expected_location_revision: archive.location_revision,
+            },
+        };
+        let page = MusubiArchiveLocationPageV1 {
+            chain_id: request.chain_id.clone(),
+            genesis_hash: request.genesis_block_hash,
+            archive,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot: registered_snapshot,
+        };
+        let read = RegistryReadClientV1::new(torii_url, Duration::from_secs(2), 369)
+            .expect("registry reader");
+        let http = signing
+            .publication_runtime_client(parsed.request_timeout)
+            .expect("authenticated runtime client");
+        let runtime = ProductionPublicationRuntimeV1 {
+            read,
+            signing,
+            http,
+            validator: UnavailablePublicationCleanPackageValidatorV1,
+            seed_ingress_url: parsed.seed_ingress_url,
+            storage_coordinator_url: parsed.storage_coordinator_url,
+            provider_gateways: parsed.provider_gateways,
+            bindings: parsed.bindings,
+        };
+        RebaseFixture {
+            runtime,
+            request,
+            registered,
+            response,
+            page,
+        }
+    }
+
+    fn coordinator_location(fixture: &RebaseFixture) -> MusubiArchiveLocationV1 {
+        let attestations = coordination_provider_attestations(&fixture.response).to_vec();
+        MusubiArchiveLocationV1 {
+            location_id: fixture.response.location_id,
+            archive_id: fixture.response.archive.archive_id,
+            pin_manifest: fixture.response.pin_manifest,
+            replication_order: fixture.response.replication_order,
+            providers: attestations
+                .iter()
+                .map(|attestation| attestation.payload.binding.provider_id)
+                .collect(),
+            provider_attestations: attestations,
+            renew_after_epoch: fixture.response.renew_after_epoch,
+            expires_at_epoch: fixture.response.expires_at_epoch,
+            finalized_height: 61,
+            revision: 1,
+            state: MusubiArchiveLocationStateV1::Healthy,
+        }
+    }
+
+    fn serve_rebase_fixture_page(fixture: &mut RebaseFixture) -> thread::JoinHandle<Vec<u8>> {
+        fixture
+            .page
+            .validate()
+            .expect("valid finalized archive page");
+        let (url, server) = serve_archive_page_once(&fixture.page);
+        fixture.runtime.read = RegistryReadClientV1::new(url, Duration::from_secs(2), 369)
+            .expect("loopback registry reader");
+        server
+    }
+
+    fn advance_rebase_page(fixture: &mut RebaseFixture, location_revision: u64) {
+        fixture.page.snapshot.finalized_height += 1;
+        fixture.page.snapshot.finalized_block_hash = [0x87; 32];
+        fixture.page.snapshot.index_revision += 1;
+        fixture.page.archive.location_revision = location_revision;
+    }
+
+    fn rebase_location_intent(fixture: &RebaseFixture) -> PublicationArchiveLocationIntentV1 {
+        let instruction =
+            location_add_instruction(&fixture.response, fixture.page.archive.location_revision);
+        let publisher_key =
+            KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("publisher key");
+        let mut builder = TransactionBuilder::new(
+            fixture.request.chain_id.clone(),
+            fixture.request.publisher.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction.clone()]);
+        builder.set_creation_time(Duration::from_millis(1_000));
+        PublicationArchiveLocationIntentV1::new(
+            fixture.request.operation_id(),
+            1,
+            fixture.page.clone(),
+            instruction,
+            builder.sign(publisher_key.private_key()),
+        )
+    }
+
+    #[test]
+    fn finalized_rebase_recovers_preexisting_exact_location_without_submission() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let location = coordinator_location(&fixture);
+        advance_rebase_page(&mut fixture, 2);
+        fixture.page.archive.location_ids = vec![location.location_id];
+        fixture.page.items = vec![location];
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        assert!(matches!(
+            fixture
+                .runtime
+                .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+                .expect("exact committed location"),
+            FinalizedLocationStateV1::Exact { .. }
+        ));
+        let request_body = server.join().expect("finalized query server");
+        let query: MusubiArchiveLocationQueryV1 =
+            norito::json::from_slice(&request_body).expect("archive-location query");
+        assert_eq!(query.archive_id, fixture.response.archive.archive_id);
+        assert_eq!(query.page.limit, MUSUBI_MAX_PAGE_SIZE_V1 as u32);
+        assert!(query.page.cursor.is_none());
+    }
+
+    #[test]
+    fn archive_location_page_rejects_future_height_and_revision_items() {
+        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut page = fixture.page.clone();
+        let mut location = coordinator_location(&fixture);
+        page.archive.location_revision = 2;
+        page.archive.location_ids = vec![location.location_id];
+        location.finalized_height = page.snapshot.finalized_height + 1;
+        location.revision = 2;
+        page.items = vec![location.clone()];
+        assert!(
+            page.validate().is_err(),
+            "a finalized page cannot contain a future location transition"
+        );
+
+        location.finalized_height = page.snapshot.finalized_height;
+        location.revision = page.archive.location_revision + 1;
+        page.items = vec![location];
+        assert!(
+            page.validate().is_err(),
+            "a location revision cannot exceed its archive CAS revision"
+        );
+    }
+
+    #[test]
+    fn preparation_rejects_a_same_id_location_changed_after_coordination() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut location = coordinator_location(&fixture);
+        location.pin_manifest = ManifestDigest::new([0x88; 32]);
+        location.renew_after_epoch = 20;
+        location.expires_at_epoch = 40;
+        location.revision = 2;
+        advance_rebase_page(&mut fixture, 2);
+        fixture.page.archive.location_ids = vec![location.location_id];
+        fixture.page.items = vec![location];
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let error = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect_err("preparation cannot adopt a changed unjournaled location");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_ID_CONFLICT");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_rejects_same_id_provider_evidence_for_another_chain() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut location = coordinator_location(&fixture);
+        for (index, attestation) in location.provider_attestations.iter_mut().enumerate() {
+            let index = u8::try_from(index).expect("provider fixture index fits u8");
+            let provider_key = KeyPair::try_from_seed(vec![0x88 + index; 32], Algorithm::Ed25519)
+                .expect("provider key");
+            attestation.payload.binding.chain_id = ChainId::from("other-chain");
+            attestation.approvals[0].signature = SignatureOf::try_from_hash(
+                provider_key.private_key(),
+                attestation.payload.signing_hash(),
+            )
+            .expect("replacement provider signature");
+        }
+        advance_rebase_page(&mut fixture, 2);
+        fixture.page.archive.location_ids = vec![location.location_id];
+        fixture.page.items = vec![location];
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let error = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect_err("same-id evidence for another chain must conflict");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_ID_CONFLICT");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_rejects_a_coordinator_location_retired_since_its_checkpoint() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let historical_location = coordinator_location(&fixture);
+        fixture.registered.archive.location_revision = 2;
+        fixture.registered.archive.location_ids = vec![historical_location.location_id];
+        fixture.response.archive = fixture.registered.archive.clone();
+        fixture.response.disposition =
+            MusubiStorageLocationDispositionV1::Registered(historical_location);
+        advance_rebase_page(&mut fixture, 3);
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let error = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect_err("retired stable location identity must not be reused");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_ID_CONFLICT");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_uses_current_revision_instead_of_coordinator_cache() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        advance_rebase_page(&mut fixture, 7);
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let state = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect("absent location can be rebased");
+        let FinalizedLocationStateV1::Absent { page } = state else {
+            panic!("expected absent finalized location state");
+        };
+        assert_eq!(page.archive.location_revision, 7);
+        assert_eq!(
+            page.snapshot.finalized_height,
+            fixture.page.snapshot.finalized_height
+        );
+        let instruction =
+            location_add_instruction(&fixture.response, page.archive.location_revision);
+        assert_eq!(instruction.expected_location_revision, 7);
+        assert_ne!(
+            instruction.expected_location_revision,
+            match &fixture.response.disposition {
+                MusubiStorageLocationDispositionV1::NeedsRegistration {
+                    expected_location_revision,
+                    ..
+                } => *expected_location_revision,
+                MusubiStorageLocationDispositionV1::Registered(_) => {
+                    unreachable!("fixture requires registration")
+                }
+            }
+        );
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_rejects_immutable_archive_conflict() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        advance_rebase_page(&mut fixture, 2);
+        fixture.page.archive.registered_at_height += 1;
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let error = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect_err("immutable registration height substitution must fail");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_retries_a_snapshot_older_than_registration_evidence() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        fixture.page.snapshot.finalized_height -= 1;
+        fixture.page.snapshot.finalized_block_hash = [0x89; 32];
+        fixture.page.snapshot.index_revision -= 1;
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let error = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect_err("lagging finalized endpoint must not supply a CAS revision");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_FINALIZED_SNAPSHOT_STALE");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Retryable);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_rejects_mutable_change_at_the_same_snapshot() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        fixture.page.archive.location_revision += 1;
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let error = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect_err("one finalized snapshot cannot carry two archive records");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_retries_a_regressed_location_revision() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        fixture.registered.archive.location_revision = 3;
+        fixture.response.archive.location_revision = 3;
+        if let MusubiStorageLocationDispositionV1::NeedsRegistration {
+            expected_location_revision,
+            ..
+        } = &mut fixture.response.disposition
+        {
+            *expected_location_revision = 3;
+        }
+        advance_rebase_page(&mut fixture, 2);
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let error = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect_err("a later snapshot cannot regress the archive CAS revision");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_FINALIZED_SNAPSHOT_STALE");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Retryable);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_rejects_exhausted_location_revision() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        advance_rebase_page(&mut fixture, u64::MAX);
+        let server = serve_rebase_fixture_page(&mut fixture);
+
+        let error = fixture
+            .runtime
+            .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+            .expect_err("location revision cannot be incremented");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_REVISION_EXHAUSTED");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn location_transaction_waits_for_its_finalized_anchor_and_fails_closed_without_rebase() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let intent = rebase_location_intent(&fixture);
+        advance_rebase_page(&mut fixture, intent.expected_location_revision);
+        let server = serve_rebase_fixture_page(&mut fixture);
+        assert_eq!(
+            fixture
+                .runtime
+                .location_transaction_advance(
+                    &fixture.request,
+                    &fixture.registered,
+                    &intent,
+                    RegistryTransactionStateV1::Terminal {
+                        kind: RegistryTerminalTransactionStateV1::Rejected,
+                        block_height: Some(fixture.page.snapshot.finalized_height + 1),
+                    },
+                )
+                .expect("a lagging page remains pending"),
+            PublicationArchiveLocationAdvanceV1::Pending
+        );
+        server.join().expect("finalized query server");
+
+        let server = serve_rebase_fixture_page(&mut fixture);
+        let error = fixture
+            .runtime
+            .location_transaction_advance(
+                &fixture.request,
+                &fixture.registered,
+                &intent,
+                RegistryTransactionStateV1::Terminal {
+                    kind: RegistryTerminalTransactionStateV1::Rejected,
+                    block_height: Some(fixture.page.snapshot.finalized_height),
+                },
+            )
+            .expect_err("a rejection at the unchanged CAS revision is permanent");
+        assert_eq!(error.code(), "ARCHIVE_LOCATION_REGISTRATION_REJECTED");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn location_transaction_records_rebase_expiry_application_and_later_retirement() {
+        let mut rejected = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let rejected_intent = rebase_location_intent(&rejected);
+        advance_rebase_page(
+            &mut rejected,
+            rejected_intent.expected_location_revision + 1,
+        );
+        let rejected_height = rejected.page.snapshot.finalized_height;
+        let server = serve_rebase_fixture_page(&mut rejected);
+        let rejected_advance = rejected
+            .runtime
+            .location_transaction_advance(
+                &rejected.request,
+                &rejected.registered,
+                &rejected_intent,
+                RegistryTransactionStateV1::Terminal {
+                    kind: RegistryTerminalTransactionStateV1::Rejected,
+                    block_height: Some(rejected_height),
+                },
+            )
+            .expect("finalized CAS rebase is a terminal generation");
+        assert!(matches!(
+            rejected_advance,
+            PublicationArchiveLocationAdvanceV1::Terminal(
+                PublicationArchiveLocationTerminalV1 {
+                    reason: PublicationArchiveLocationTerminalReasonV1::RejectedRebase {
+                        block_height
+                    },
+                    ..
+                }
+            ) if block_height == rejected_height
+        ));
+        server.join().expect("finalized query server");
+
+        let mut expired = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let expired_intent = rebase_location_intent(&expired);
+        advance_rebase_page(&mut expired, expired_intent.expected_location_revision);
+        let server = serve_rebase_fixture_page(&mut expired);
+        let expired_advance = expired
+            .runtime
+            .location_transaction_advance(
+                &expired.request,
+                &expired.registered,
+                &expired_intent,
+                RegistryTransactionStateV1::Terminal {
+                    kind: RegistryTerminalTransactionStateV1::Expired,
+                    block_height: None,
+                },
+            )
+            .expect("expired absent transaction is a terminal generation");
+        assert!(matches!(
+            expired_advance,
+            PublicationArchiveLocationAdvanceV1::Terminal(PublicationArchiveLocationTerminalV1 {
+                reason: PublicationArchiveLocationTerminalReasonV1::RegistryExpired {
+                    block_height: None
+                },
+                ..
+            })
+        ));
+        server.join().expect("finalized query server");
+
+        let mut applied = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let applied_intent = rebase_location_intent(&applied);
+        let location = coordinator_location(&applied);
+        advance_rebase_page(&mut applied, applied_intent.expected_location_revision + 1);
+        applied.page.archive.location_ids = vec![location.location_id];
+        applied.page.items = vec![location];
+        let applied_height = applied.page.snapshot.finalized_height;
+        let server = serve_rebase_fixture_page(&mut applied);
+        let applied_advance = applied
+            .runtime
+            .location_transaction_advance(
+                &applied.request,
+                &applied.registered,
+                &applied_intent,
+                RegistryTransactionStateV1::Applied {
+                    block_height: applied_height,
+                },
+            )
+            .expect("applied exact transaction recovers its finalized location");
+        assert!(matches!(
+            applied_advance,
+            PublicationArchiveLocationAdvanceV1::Registered(
+                PublicationArchiveRegistrationV1 {
+                    applied_height: observed,
+                    ..
+                }
+            ) if observed == applied_height
+        ));
+        server.join().expect("finalized query server");
+
+        let mut retired = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let retired_intent = rebase_location_intent(&retired);
+        advance_rebase_page(&mut retired, retired_intent.expected_location_revision + 2);
+        let applied_height = retired.page.snapshot.finalized_height;
+        let server = serve_rebase_fixture_page(&mut retired);
+        let retired_advance = retired
+            .runtime
+            .location_transaction_advance(
+                &retired.request,
+                &retired.registered,
+                &retired_intent,
+                RegistryTransactionStateV1::Applied {
+                    block_height: applied_height,
+                },
+            )
+            .expect("applied then retired transaction is terminal");
+        assert!(matches!(
+            retired_advance,
+            PublicationArchiveLocationAdvanceV1::Terminal(
+                PublicationArchiveLocationTerminalV1 {
+                    reason: PublicationArchiveLocationTerminalReasonV1::AppliedThenRetired {
+                        applied_height: observed
+                    },
+                    ..
+                }
+            ) if observed == applied_height
+        ));
+        server.join().expect("finalized query server");
     }
 
     #[test]

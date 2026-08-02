@@ -178,6 +178,9 @@ pub(crate) enum SoracloudAction {
     SecretMutation,
     StateMutation,
     FheJobRun,
+    FhePolicyRegister,
+    FhePolicyRotate,
+    FhePolicyRevoke,
     DecryptionRequest,
     CiphertextQuery,
     Rollout,
@@ -4163,6 +4166,9 @@ fn soracloud_action_label(action: SoracloudAction) -> &'static str {
         SoracloudAction::SecretMutation => "secret_mutation",
         SoracloudAction::StateMutation => "state_mutation",
         SoracloudAction::FheJobRun => "fhe_job_run",
+        SoracloudAction::FhePolicyRegister => "fhe_policy_register",
+        SoracloudAction::FhePolicyRotate => "fhe_policy_rotate",
+        SoracloudAction::FhePolicyRevoke => "fhe_policy_revoke",
         SoracloudAction::DecryptionRequest => "decryption_request",
         SoracloudAction::CiphertextQuery => "ciphertext_query",
         SoracloudAction::Rollout => "rollout",
@@ -5968,6 +5974,9 @@ fn audit_action_to_control_plane_action(action: SoraServiceLifecycleActionV1) ->
         SoraServiceLifecycleActionV1::SecretMutation => SoracloudAction::SecretMutation,
         SoraServiceLifecycleActionV1::StateMutation => SoracloudAction::StateMutation,
         SoraServiceLifecycleActionV1::FheJobRun => SoracloudAction::FheJobRun,
+        SoraServiceLifecycleActionV1::FhePolicyRegister => SoracloudAction::FhePolicyRegister,
+        SoraServiceLifecycleActionV1::FhePolicyRotate => SoracloudAction::FhePolicyRotate,
+        SoraServiceLifecycleActionV1::FhePolicyRevoke => SoracloudAction::FhePolicyRevoke,
         SoraServiceLifecycleActionV1::DecryptionRequest => SoracloudAction::DecryptionRequest,
         SoraServiceLifecycleActionV1::CiphertextQuery => SoracloudAction::CiphertextQuery,
         SoraServiceLifecycleActionV1::Rollout => SoracloudAction::Rollout,
@@ -10240,6 +10249,7 @@ pub(crate) async fn handle_rollout(
     };
     let service_label = service_name.to_string();
     let rollout_handle = request.payload.rollout_handle.clone();
+    let governance_tx_hash = request.payload.governance_tx_hash;
     match submit_confirm_and_respond(
         &app,
         signer,
@@ -13340,6 +13350,30 @@ mod tests {
     fn checked_test_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("test fixture key derivation should succeed")
+    }
+
+    #[test]
+    fn fhe_policy_lifecycle_actions_keep_distinct_control_plane_identity() {
+        for (source, expected, label) in [
+            (
+                SoraServiceLifecycleActionV1::FhePolicyRegister,
+                SoracloudAction::FhePolicyRegister,
+                "fhe_policy_register",
+            ),
+            (
+                SoraServiceLifecycleActionV1::FhePolicyRotate,
+                SoracloudAction::FhePolicyRotate,
+                "fhe_policy_rotate",
+            ),
+            (
+                SoraServiceLifecycleActionV1::FhePolicyRevoke,
+                SoracloudAction::FhePolicyRevoke,
+                "fhe_policy_revoke",
+            ),
+        ] {
+            assert_eq!(audit_action_to_control_plane_action(source), expected);
+            assert_eq!(soracloud_action_label(expected), label);
+        }
     }
 
     fn checked_test_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {

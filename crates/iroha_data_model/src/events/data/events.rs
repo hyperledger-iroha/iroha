@@ -2544,24 +2544,6 @@ pub trait HasOrigin {
     fn origin(&self) -> &<Self::Origin as Identifiable>::Id;
 }
 
-impl From<AccountEvent> for DataEvent {
-    fn from(value: AccountEvent) -> Self {
-        Self::Account(value)
-    }
-}
-
-impl From<AssetDefinitionEvent> for DataEvent {
-    fn from(value: AssetDefinitionEvent) -> Self {
-        Self::AssetDefinition(value)
-    }
-}
-
-impl From<AssetEvent> for DataEvent {
-    fn from(value: AssetEvent) -> Self {
-        Self::Asset(value)
-    }
-}
-
 impl From<NftEvent> for DataEvent {
     fn from(value: NftEvent) -> Self {
         DomainEvent::Nft(value).into()

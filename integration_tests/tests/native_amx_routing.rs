@@ -22,7 +22,9 @@ use iroha::{
         block::{
             ExternalExecutionRouteLeg, ExternalExecutionRouteRole, Header, SignedBlock,
             consensus::{
-                LaneBlockCommitment, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, LaneBlockCommitment,
+                NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
             },
         },
         da::commitment::DaProofPolicyBundle,
@@ -34,19 +36,27 @@ use iroha::{
         isi::{
             Grant, InstructionBox, Log, Mint, Register, SetParameter,
             musubi::{
-                PublishMusubiReleaseV1, RegisterMusubiArchiveV1, RegisterMusubiNamespaceBindingV1,
+                AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1,
+                RegisterMusubiNamespaceBindingV1,
             },
-            sorafs::RegisterProviderOwner,
+            sorafs::{
+                CompleteReplicationOrder, IssueReplicationOrder, RegisterPinManifest,
+                RegisterProviderOwner, SetProviderIngestCompletionAuthority,
+            },
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         metadata::Metadata,
         musubi::{
             ArchiveId, MUSUBI_MAX_SEED_INGRESS_RECEIPT_LIFETIME_MS_V1, MUSUBI_REGISTRY_VERSION_V1,
-            MusubiAbiBindingV1, MusubiArchiveCommitmentV1, MusubiArchiveLocationQueryV1,
+            MusubiAbiBindingV1, MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1,
+            MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1,
             MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionQueryV1,
             MusubiContentDigestV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
             MusubiKotodamaEditionV1, MusubiNamespaceBindingV1, MusubiOrderedPrefixQueryV1,
             MusubiOrderedPrefixV1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiPageRequestV1,
+            MusubiProviderBundleVerificationApprovalV1,
+            MusubiProviderBundleVerificationAttestationV1,
+            MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
             MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
             MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiResolutionProofV1,
             MusubiResolverIndexQueryV1, MusubiSeedIngressReceiptApprovalV1,
@@ -72,7 +82,11 @@ use iroha::{
         },
         sorafs::{
             capacity::ProviderId,
-            pin_registry::{ChunkerProfileHandle, ManifestRootCid},
+            pin_registry::{
+                ChunkerProfileHandle, ManifestDigest, ManifestRootCid,
+                ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+                ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+            },
         },
         transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
     },
@@ -89,14 +103,23 @@ use iroha_config_base::WithOrigin;
 use iroha_core::{da::proof_policy_bundle, kura::Kura};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::prelude::QueryBuilderExt;
-use iroha_executor_data_model::permission::sorafs::CanRegisterSorafsProviderOwner;
+use iroha_executor_data_model::permission::sorafs::{
+    CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder, CanRegisterSorafsPin,
+    CanRegisterSorafsProviderOwner,
+};
 use iroha_test_network::{
-    NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
+    NativeAmxFaultPhase, NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
     domain_setup_instruction_in_dataspace, genesis_factory_with_post_topology,
     init_instruction_registry,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json::{self, Value as JsonValue};
+use sorafs_manifest::{
+    DagCodecId, ManifestBuilder, ManifestV1, PinPolicy as ManifestPinPolicy,
+    REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+    ReplicationOrderV1, StorageClass as ManifestStorageClass,
+    chunker_registry::{MANIFEST_DAG_CODEC, default_descriptor},
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
@@ -133,6 +156,8 @@ const NATIVE_AMX_LATEST_POINTER_FILE: &str = "native_amx_participant_receipts.la
 const MUSUBI_FAULT_DOMAIN: &str = "musubifault";
 const MUSUBI_FAULT_PACKAGE: &str = "atomic-replay";
 const MUSUBI_FAULT_NAMESPACE: &str = "musubifault.acme";
+const MUSUBI_FAULT_RETENTION_EPOCH: u64 = 1_000;
+const MUSUBI_FAULT_RENEW_EPOCH: u64 = 500;
 
 #[derive(Clone)]
 struct ConfigLayer(Table);
@@ -456,11 +481,45 @@ fn musubi_fault_provider() -> ProviderId {
     ProviderId::new([0xD7; 32])
 }
 
+fn musubi_fault_replica_providers() -> [ProviderId; 3] {
+    [
+        ProviderId::new([0xD7; 32]),
+        ProviderId::new([0xD8; 32]),
+        ProviderId::new([0xD9; 32]),
+    ]
+}
+
 fn musubi_fault_localnet_builder() -> NetworkBuilder {
     localnet_builder().with_genesis_instruction(Grant::account_permission(
         Permission::from(CanRegisterSorafsProviderOwner),
         ALICE_ID.clone(),
     ))
+}
+
+fn musubi_selectable_fault_localnet_builder() -> NetworkBuilder {
+    let treasury = gas_account()
+        .canonical_i105()
+        .expect("canonical SoraFS pin-fee treasury");
+    musubi_fault_localnet_builder()
+        .with_consensus_message_control()
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanRegisterSorafsPin),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanIssueSorafsReplicationOrder),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanCompleteSorafsReplicationOrder),
+            ALICE_ID.clone(),
+        ))
+        .with_config_layer(move |layer| {
+            layer.write(
+                ["governance", "sorafs_pin_fee_treasury_account"],
+                treasury.clone(),
+            );
+        })
 }
 
 fn musubi_fault_package() -> MusubiPackageIdV1 {
@@ -543,6 +602,148 @@ const fn musubi_fault_page() -> MusubiPageRequestV1 {
         limit: 50,
         cursor: None,
     }
+}
+
+fn musubi_fault_completion_authority(
+    owner: &AccountId,
+    provider: ProviderId,
+) -> ProviderIngestCompletionAuthorityV1 {
+    let seed = provider.as_bytes()[0];
+    ProviderIngestCompletionAuthorityV1::new(
+        owner.clone(),
+        ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [seed.wrapping_add(1); 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [seed.wrapping_add(2); 32],
+        },
+    )
+}
+
+fn musubi_fault_pin_manifest(
+    commitment: &MusubiArchiveCommitmentV1,
+) -> Result<(ManifestV1, ManifestDigest)> {
+    let descriptor = default_descriptor();
+    ensure!(
+        commitment.chunker.profile_id == descriptor.id.0
+            && commitment.chunker.namespace == descriptor.namespace
+            && commitment.chunker.name == descriptor.name
+            && commitment.chunker.semver == descriptor.semver
+            && commitment.chunker.multihash_code == descriptor.multihash_code,
+        "Musubi fault commitment must use the canonical default SoraFS chunker"
+    );
+    let manifest = ManifestBuilder::new()
+        .root_cid(commitment.root_cid.as_bytes().to_vec())
+        .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
+        .chunking_from_registry(descriptor.id)
+        .chunk_digest_sha3_256(*commitment.chunk_plan_digest.as_bytes())
+        .por_root(*commitment.por_root.as_bytes())
+        .content_length(commitment.content_length)
+        .car_digest(*commitment.car_digest.as_bytes())
+        .car_size(commitment.car_size)
+        .pin_policy(ManifestPinPolicy {
+            min_replicas: 3,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch: MUSUBI_FAULT_RETENTION_EPOCH,
+        })
+        .build()
+        .wrap_err("build canonical selectable Musubi SoraFS manifest")?;
+    let digest = ManifestDigest::from_manifest(&manifest)
+        .wrap_err("derive selectable Musubi SoraFS manifest digest")?;
+    Ok((manifest, digest))
+}
+
+fn musubi_fault_replication_order(
+    commitment: &MusubiArchiveCommitmentV1,
+    manifest_digest: ManifestDigest,
+    order_id: ReplicationOrderId,
+) -> ReplicationOrderV1 {
+    ReplicationOrderV1 {
+        version: REPLICATION_ORDER_VERSION_V1,
+        order_id: *order_id.as_bytes(),
+        manifest_cid: commitment.root_cid.as_bytes().to_vec(),
+        manifest_digest: *manifest_digest.as_bytes(),
+        chunking_profile: commitment.chunker.to_handle(),
+        target_replicas: 3,
+        assignments: musubi_fault_replica_providers()
+            .into_iter()
+            .map(|provider| ReplicationAssignmentV1 {
+                provider_id: *provider.as_bytes(),
+                slice_gib: 1,
+                lane: None,
+            })
+            .collect(),
+        issued_at: 1,
+        deadline_at: 100,
+        sla: ReplicationOrderSlaV1 {
+            ingest_deadline_secs: 10,
+            min_availability_percent_milli: 99_500,
+            min_por_success_percent_milli: 98_000,
+        },
+        metadata: Vec::new(),
+    }
+}
+
+fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinalizedAnchorV1> {
+    let blocks = client.query(FindBlocks).execute_all()?;
+    // `FindBlocks` is newest-first, so the first row is the exact finalized
+    // prefix on which the completion transaction is prepared.
+    let latest = blocks
+        .first()
+        .ok_or_else(|| eyre!("selectable Musubi fixture has no finalized anchor block"))?;
+    Ok(ProviderIngestFinalizedAnchorV1 {
+        height: latest.header().height().get(),
+        block_hash: *latest.hash().as_ref(),
+    })
+}
+
+fn musubi_fault_provider_attestations(
+    client: &Client,
+    genesis_hash: [u8; 32],
+    commitment: &MusubiArchiveCommitmentV1,
+    manifest: &MusubiReleaseManifestV1,
+    order_id: ReplicationOrderId,
+    anchor: ProviderIngestFinalizedAnchorV1,
+) -> Vec<MusubiProviderBundleVerificationAttestationV1> {
+    musubi_fault_replica_providers()
+        .into_iter()
+        .map(|provider| {
+            let payload = MusubiProviderBundleVerificationPayloadV1 {
+                version: MUSUBI_REGISTRY_VERSION_V1,
+                binding: MusubiProviderBundleVerificationBindingV1 {
+                    chain_id: client.chain.clone(),
+                    genesis_block_hash: genesis_hash,
+                    provider_id: provider,
+                    completed_by: client.account.clone(),
+                    completion_authority: musubi_fault_completion_authority(
+                        &client.account,
+                        provider,
+                    ),
+                    replication_order: order_id,
+                    assignment_revision: 1,
+                    completion_epoch: 3,
+                    finalized_anchor: anchor,
+                    archive_id: commitment.archive_id(),
+                    bundle_digest: commitment.bundle_digest,
+                    descriptor_digest: commitment.descriptor_digest,
+                    semantic_release_manifest_digest: manifest.semantic_digest(),
+                    verification_lock_digest: manifest.verification_lock_digest,
+                    source_tree_digest: commitment.source_tree_digest,
+                },
+            };
+            MusubiProviderBundleVerificationAttestationV1 {
+                approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+                    public_key: client.key_pair.public_key().clone(),
+                    signature: SignatureOf::try_from_hash(
+                        client.key_pair.private_key(),
+                        payload.signing_hash(),
+                    )
+                    .expect("sign selectable Musubi provider attestation"),
+                }],
+                payload,
+            }
+        })
+        .collect()
 }
 
 async fn submit_and_wait_for_approval(
@@ -775,7 +976,7 @@ fn musubi_fault_snapshot_and_time(
     );
     let blocks = client.query(FindBlocks).execute_all()?;
     let latest = blocks
-        .last()
+        .first()
         .ok_or_else(|| eyre!("Musubi fault fixture has no finalized block"))?;
     let latest_time_ms = u64::try_from(latest.header().creation_time().as_millis())
         .wrap_err("Musubi fault fixture block time overflows u64")?;
@@ -820,6 +1021,246 @@ fn musubi_fault_staging_receipt(
         }],
         payload,
     }
+}
+
+struct SelectableMusubiPublicationFixture {
+    transaction: SignedTransaction,
+    binding: MusubiNamespaceBindingV1,
+    release: MusubiReleaseIdV1,
+    manifest: MusubiReleaseManifestV1,
+    archive_id: ArchiveId,
+    location_id: MusubiArchiveLocationIdV1,
+    pin_manifest: ManifestDigest,
+    replication_order: ReplicationOrderId,
+}
+
+async fn prepare_selectable_musubi_publication(
+    network: &sandbox::SerializedNetwork,
+    submitter: &Client,
+    context: &str,
+) -> Result<SelectableMusubiPublicationFixture> {
+    let providers = musubi_fault_replica_providers();
+    let mut provider_instructions = Vec::with_capacity(providers.len() * 2);
+    for provider in providers {
+        provider_instructions.push(InstructionBox::from(RegisterProviderOwner::new(
+            provider,
+            submitter.account.clone(),
+        )));
+        provider_instructions.push(InstructionBox::from(
+            SetProviderIngestCompletionAuthority::new(
+                provider,
+                None,
+                musubi_fault_completion_authority(&submitter.account, provider),
+            ),
+        ));
+    }
+    let provider_transaction = submitter.build_transaction(
+        provider_instructions,
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        provider_transaction,
+        &format!("{context}: register three replica providers"),
+    )
+    .await?;
+
+    let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
+    let domain =
+        DomainId::try_new(MUSUBI_FAULT_DOMAIN, "acme").expect("Musubi fault namespace domain");
+    let namespace_home_transaction = submitter.build_transaction(
+        [
+            dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
+            domain_setup_instruction_in_dataspace(&domain, acme_dataspace, &submitter.account)?,
+        ],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        namespace_home_transaction,
+        &format!("{context}: establish namespace home"),
+    )
+    .await?;
+
+    let binding = musubi_fault_namespace_binding();
+    let binding_transaction = submitter.build_transaction(
+        [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
+            binding.clone(),
+            1,
+        ))],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    let binding_block = submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        binding_transaction.clone(),
+        &format!("{context}: register namespace binding"),
+    )
+    .await?;
+    assert_musubi_universal_home_execution_context(&binding_block, &binding_transaction)?;
+
+    let commitment = musubi_fault_archive_commitment();
+    let archive_id = commitment.archive_id();
+    let (manifest, lock) = musubi_fault_release_manifest_and_lock();
+    let (_, genesis_hash, latest_time_ms) = musubi_fault_snapshot_and_time(submitter)?;
+    let staging_receipt = musubi_fault_staging_receipt(
+        submitter,
+        genesis_hash,
+        latest_time_ms,
+        &commitment,
+        &manifest,
+    );
+    let archive_transaction = submitter.build_transaction(
+        [InstructionBox::from(RegisterMusubiArchiveV1::new(
+            commitment.clone(),
+            staging_receipt,
+            1,
+        ))],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        archive_transaction,
+        &format!("{context}: register archive"),
+    )
+    .await?;
+
+    let (pin_manifest, pin_manifest_digest) = musubi_fault_pin_manifest(&commitment)?;
+    let pin_transaction = submitter.build_transaction(
+        [InstructionBox::from(RegisterPinManifest::new(
+            pin_manifest
+                .encode()
+                .wrap_err("encode selectable Musubi pin manifest")?,
+            1,
+            None,
+            None,
+        ))],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        pin_transaction,
+        &format!("{context}: register registry-grade pin"),
+    )
+    .await?;
+
+    let replication_order = ReplicationOrderId::new([0xDA; 32]);
+    let canonical_order =
+        musubi_fault_replication_order(&commitment, pin_manifest_digest, replication_order);
+    canonical_order
+        .validate()
+        .wrap_err("validate selectable Musubi replication order")?;
+    let issue_transaction = submitter.build_transaction(
+        [InstructionBox::from(IssueReplicationOrder::new(
+            replication_order,
+            norito::encode_canonical(&canonical_order)
+                .wrap_err("encode selectable Musubi replication order")?,
+            2,
+            MUSUBI_FAULT_RETENTION_EPOCH,
+        ))],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        issue_transaction,
+        &format!("{context}: issue three-replica order"),
+    )
+    .await?;
+
+    let anchor = musubi_fault_finalized_anchor(submitter)?;
+    let completion_transaction = submitter.build_transaction(
+        musubi_fault_replica_providers().map(|provider| {
+            InstructionBox::from(CompleteReplicationOrder::new(
+                replication_order,
+                provider,
+                3,
+                musubi_fault_completion_authority(&submitter.account, provider),
+                1,
+                anchor,
+            ))
+        }),
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        completion_transaction,
+        &format!("{context}: finalize three distinct replicas"),
+    )
+    .await?;
+
+    let location_id = MusubiArchiveLocationIdV1::new([0xDB; 32]);
+    let provider_attestations = musubi_fault_provider_attestations(
+        submitter,
+        genesis_hash,
+        &commitment,
+        &manifest,
+        replication_order,
+        anchor,
+    );
+    let location_transaction = submitter.build_transaction(
+        [InstructionBox::from(AddMusubiArchiveLocationV1 {
+            archive_id,
+            location_id,
+            pin_manifest: pin_manifest_digest,
+            replication_order,
+            provider_attestations,
+            renew_after_epoch: MUSUBI_FAULT_RENEW_EPOCH,
+            expires_at_epoch: MUSUBI_FAULT_RETENTION_EPOCH,
+            expected_location_revision: 1,
+        })],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        location_transaction,
+        &format!("{context}: bind selectable archive location"),
+    )
+    .await?;
+
+    let (snapshot, _, _) = musubi_fault_snapshot_and_time(submitter)?;
+    let publication = MusubiPublicationV1 {
+        manifest: manifest.clone(),
+        resolution: MusubiResolutionProofV1 { snapshot, lock },
+    };
+    publication
+        .validate()
+        .wrap_err("validate selectable Musubi publication")?;
+    let transaction = submitter.build_transaction(
+        [InstructionBox::from(PublishMusubiReleaseV1::new(
+            binding.namespace.clone(),
+            publication,
+            None,
+            1,
+            None,
+        ))],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    Ok(SelectableMusubiPublicationFixture {
+        transaction,
+        binding,
+        release: manifest.release.clone(),
+        manifest,
+        archive_id,
+        location_id,
+        pin_manifest: pin_manifest_digest,
+        replication_order,
+    })
 }
 
 fn is_query_not_found(error: &QueryError) -> bool {
@@ -921,6 +1362,234 @@ fn assert_musubi_publication_absent(
             && resolver.snapshot == locations.snapshot
             && resolver.snapshot == retention.snapshot,
         "{context}: Musubi home/universal absence tuple was read from different snapshots"
+    );
+    Ok(resolver.snapshot)
+}
+
+fn assert_selectable_musubi_archive_without_release(
+    client: &Client,
+    fixture: &SelectableMusubiPublicationFixture,
+    context: &str,
+) -> Result<MusubiRegistrySnapshotV1> {
+    let package_error = client
+        .query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
+            package: fixture.release.package.clone(),
+        }))
+        .expect_err("unpublished selectable fixture must not create its home package");
+    ensure!(
+        is_query_not_found(&package_error),
+        "{context}: exact package query failed unexpectedly: {package_error:?}"
+    );
+    let release_error = client
+        .query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
+            release: fixture.release.clone(),
+        }))
+        .expect_err("unpublished selectable fixture must not create its home release");
+    ensure!(
+        is_query_not_found(&release_error),
+        "{context}: exact release query failed unexpectedly: {release_error:?}"
+    );
+
+    let resolver =
+        client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
+            package: fixture.release.package.clone(),
+            requirement: None,
+            page: musubi_fault_page(),
+        }))?;
+    ensure!(
+        resolver.items.is_empty() && resolver.next_cursor.is_none(),
+        "{context}: unpublished selectable fixture has a resolver row"
+    );
+    let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
+    let directory =
+        client.query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
+            prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
+                .expect("Musubi fault directory prefix"),
+            page: musubi_fault_page(),
+        }))?;
+    ensure!(
+        directory.namespace_binding == fixture.binding
+            && directory.items.is_empty()
+            && directory.next_cursor.is_none(),
+        "{context}: unpublished selectable fixture changed its directory projection"
+    );
+    let locations = client.query_single(FindMusubiArchiveLocationsV1::new(
+        MusubiArchiveLocationQueryV1 {
+            archive_id: fixture.archive_id,
+            page: musubi_fault_page(),
+        },
+    ))?;
+    let [location] = locations.items.as_slice() else {
+        return Err(eyre!(
+            "{context}: selectable fixture returned {} locations instead of one",
+            locations.items.len()
+        ));
+    };
+    ensure!(
+        location.location_id == fixture.location_id
+            && location.archive_id == fixture.archive_id
+            && location.pin_manifest == fixture.pin_manifest
+            && location.replication_order == fixture.replication_order
+            && location.providers == musubi_fault_replica_providers()
+            && location.state == MusubiArchiveLocationStateV1::Healthy,
+        "{context}: selectable archive location differs from finalized evidence: {location:?}"
+    );
+    let retention = client.query_single(FindMusubiArchiveRetentionV1::new(
+        MusubiArchiveRetentionQueryV1 {
+            archive_ids: vec![fixture.archive_id],
+            expected_snapshot: None,
+        },
+    ))?;
+    let [decision] = retention.items.as_slice() else {
+        return Err(eyre!(
+            "{context}: selectable fixture retention query returned the wrong item count"
+        ));
+    };
+    ensure!(
+        decision.disposition == MusubiArchiveRetentionDispositionV1::PruneUnreferenced
+            && decision.active_releases == 0
+            && decision.yanked_releases == 0
+            && decision.taken_down_releases == 0
+            && decision.storage.is_some_and(|storage| {
+                storage.archive_id == fixture.archive_id
+                    && storage.availability == MusubiStorageAvailabilityV1::Selectable
+                    && storage.healthy_replicas == 3
+                    && storage.active_locations == 1
+            }),
+        "{context}: selectable unpublished archive has the wrong retention state: {decision:?}"
+    );
+    ensure!(
+        resolver.snapshot == directory.snapshot
+            && resolver.snapshot == locations.snapshot
+            && resolver.snapshot == retention.snapshot,
+        "{context}: selectable absence tuple was read from different snapshots"
+    );
+    Ok(resolver.snapshot)
+}
+
+fn assert_selectable_musubi_publication_present(
+    client: &Client,
+    fixture: &SelectableMusubiPublicationFixture,
+    context: &str,
+) -> Result<MusubiRegistrySnapshotV1> {
+    let package =
+        client.query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
+            package: fixture.release.package.clone(),
+        }))?;
+    ensure!(
+        package.package == fixture.release.package
+            && package.claimed_namespace == fixture.binding.namespace
+            && package.owners == vec![ALICE_ID.clone()]
+            && package.member_accounts == vec![ALICE_ID.clone()],
+        "{context}: home package record is incomplete: {package:?}"
+    );
+    let release =
+        client.query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
+            release: fixture.release.clone(),
+        }))?;
+    ensure!(
+        release.manifest == fixture.manifest
+            && release.release_digest == fixture.manifest.release_digest()
+            && release.published_by == ALICE_ID.clone()
+            && !release.yank.yanked,
+        "{context}: home release record is incomplete: {release:?}"
+    );
+
+    let resolver =
+        client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
+            package: fixture.release.package.clone(),
+            requirement: None,
+            page: musubi_fault_page(),
+        }))?;
+    let [row] = resolver.items.as_slice() else {
+        return Err(eyre!(
+            "{context}: resolver returned {} rows instead of one",
+            resolver.items.len()
+        ));
+    };
+    ensure!(
+        resolver.next_cursor.is_none()
+            && row.release == fixture.release
+            && row.release_digest == fixture.manifest.release_digest()
+            && row.archive_id == fixture.archive_id
+            && row.source_digest == musubi_fault_archive_commitment().source_tree_digest
+            && row.interface_digest == fixture.manifest.interface_digest
+            && row.abi == fixture.manifest.abi
+            && row.dependencies.is_empty()
+            && row.selection.fresh_selectable(),
+        "{context}: universal resolver row is incomplete: {row:?}"
+    );
+    let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
+    let directory =
+        client.query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
+            prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
+                .expect("Musubi fault directory prefix"),
+            page: musubi_fault_page(),
+        }))?;
+    let [entry] = directory.items.as_slice() else {
+        return Err(eyre!(
+            "{context}: directory returned {} entries instead of one",
+            directory.items.len()
+        ));
+    };
+    ensure!(
+        directory.namespace_binding == fixture.binding
+            && directory.next_cursor.is_none()
+            && entry.package == fixture.release.package
+            && entry.selector.namespace == fixture.binding.namespace
+            && entry.selector.name == fixture.release.package.name
+            && entry.latest_selectable.as_ref() == Some(&fixture.release.version),
+        "{context}: universal directory entry is incomplete: {entry:?}"
+    );
+    let locations = client.query_single(FindMusubiArchiveLocationsV1::new(
+        MusubiArchiveLocationQueryV1 {
+            archive_id: fixture.archive_id,
+            page: musubi_fault_page(),
+        },
+    ))?;
+    let [location] = locations.items.as_slice() else {
+        return Err(eyre!(
+            "{context}: published archive returned {} locations instead of one",
+            locations.items.len()
+        ));
+    };
+    ensure!(
+        location.location_id == fixture.location_id
+            && location.pin_manifest == fixture.pin_manifest
+            && location.replication_order == fixture.replication_order
+            && location.providers == musubi_fault_replica_providers()
+            && location.state == MusubiArchiveLocationStateV1::Healthy,
+        "{context}: published archive location is incomplete: {location:?}"
+    );
+    let retention = client.query_single(FindMusubiArchiveRetentionV1::new(
+        MusubiArchiveRetentionQueryV1 {
+            archive_ids: vec![fixture.archive_id],
+            expected_snapshot: None,
+        },
+    ))?;
+    let [decision] = retention.items.as_slice() else {
+        return Err(eyre!(
+            "{context}: published retention query returned the wrong item count"
+        ));
+    };
+    ensure!(
+        decision.disposition == MusubiArchiveRetentionDispositionV1::RetainReferenced
+            && decision.active_releases == 1
+            && decision.yanked_releases == 0
+            && decision.taken_down_releases == 0
+            && decision.storage.is_some_and(|storage| {
+                storage.archive_id == fixture.archive_id
+                    && storage.availability == MusubiStorageAvailabilityV1::Selectable
+                    && storage.healthy_replicas == 3
+                    && storage.active_locations == 1
+            }),
+        "{context}: published archive retention state is incomplete: {decision:?}"
+    );
+    ensure!(
+        resolver.snapshot == directory.snapshot
+            && resolver.snapshot == locations.snapshot
+            && resolver.snapshot == retention.snapshot,
+        "{context}: home/universal publication tuple was read from different snapshots"
     );
     Ok(resolver.snapshot)
 }
@@ -1058,6 +1727,100 @@ fn native_amx_source_id(transaction: &SignedTransaction) -> [u8; Hash::LENGTH] {
     let mut source_id = [0_u8; Hash::LENGTH];
     source_id.copy_from_slice(transaction.hash().as_ref());
     source_id
+}
+
+fn next_universal_autonomous_lane_author_peer(
+    peers: &[NetworkPeer],
+    context: &str,
+) -> Result<usize> {
+    let diagnostics = peers
+        .iter()
+        .enumerate()
+        .map(|(index, peer)| {
+            let diagnostics = peer
+                .client()
+                .get_sumeragi_diagnostics()
+                .wrap_err_with(|| format!("{context}: query pre-cut peer {index} diagnostics"))?;
+            let ownership = diagnostics
+                .lane_payload_ownerships
+                .iter()
+                .find(|ownership| {
+                    ownership.lane_id == LaneId::new(UNIVERSAL_LANE)
+                        && ownership.dataspace_id == DataSpaceId::UNIVERSAL
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    eyre!("{context}: pre-cut peer {index} has no universal-lane frontier")
+                })?;
+            ownership.validate_replay_material().wrap_err_with(|| {
+                format!("{context}: pre-cut peer {index} has an invalid universal-lane frontier")
+            })?;
+            let descriptor_hash = ownership.lane_block_descriptor_hash.ok_or_else(|| {
+                eyre!("{context}: universal-lane frontier has no descriptor hash")
+            })?;
+            ensure!(
+                diagnostics.committed_lane_blocks.iter().any(|block| {
+                    block.lane_id == ownership.lane_id
+                        && block.dataspace_id == ownership.dataspace_id
+                        && block.lane_incarnation == ownership.lane_incarnation
+                        && block.lane_block_height == ownership.lane_block_height
+                        && block.lane_block_view == ownership.lane_block_view
+                        && block.descriptor_hash == descriptor_hash
+                        && block.executable_payload_available
+                        && matches!(
+                            block.execution_status.as_str(),
+                            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
+                                | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
+                        )
+                }),
+                "{context}: pre-cut peer {index} universal-lane frontier is not durably applied"
+            );
+            Ok(ownership)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .wrap_err_with(|| format!("{context}: derive exact pre-cut universal-lane frontiers"))?;
+    let reference = diagnostics
+        .first()
+        .ok_or_else(|| eyre!("{context}: phase-cut network has no lane diagnostics"))?;
+    ensure!(
+        diagnostics.iter().all(|ownership| ownership == reference),
+        "{context}: validators do not share one exact universal-lane frontier"
+    );
+    let validator_set = &reference.lane_block_descriptor_validator_set;
+    let controlled_peers = peers.iter().map(NetworkPeer::id).collect::<BTreeSet<_>>();
+    let committee = validator_set.iter().cloned().collect::<BTreeSet<_>>();
+    ensure!(
+        validator_set.len() == PEERS
+            && committee.len() == validator_set.len()
+            && committee == controlled_peers
+            && reference.lane_block_descriptor_validator_count
+                == u32::try_from(validator_set.len()).unwrap_or(u32::MAX),
+        "{context}: universal-lane committee is not the exact controlled four-peer set"
+    );
+    let next_lane_block_height = reference
+        .lane_block_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("{context}: universal lane height overflow"))?;
+    let validator_count = u64::try_from(validator_set.len())
+        .wrap_err("universal-lane validator count does not fit u64")?;
+    let author_index = usize::try_from((next_lane_block_height - 1) % validator_count)
+        .wrap_err("universal-lane author index does not fit usize")?;
+    let author = validator_set
+        .get(author_index)
+        .ok_or_else(|| eyre!("{context}: universal-lane author index is out of bounds"))?;
+    let matching_peers = peers
+        .iter()
+        .enumerate()
+        .filter(|(_, peer)| peer.id() == author.clone())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let [target_index] = matching_peers.as_slice() else {
+        return Err(eyre!(
+            "{context}: exact universal-lane author maps to {} controlled peers",
+            matching_peers.len()
+        ));
+    };
+    Ok(*target_index)
 }
 
 fn bank_participant_leg(receipt: &NativeAmxReceipt) -> Result<&NativeAmxLegRecordV2> {
@@ -2481,11 +3244,8 @@ async fn musubi_publication_below_quorum_queue_crash_replay_keeps_projection_tup
             .wrap_err("submit journaled Musubi publication while below consensus quorum")?;
         admitting_peer.shutdown().await;
 
-        // TODO: Add a separate three-cut publication gate which arms
-        // `NativeAmxFaultPhase::{AfterPrepareQc, AfterCommitQc, BeforeWorldCommit}`
-        // against a publication backed by three finalized healthy archive replicas.
-        // The feature-isolated daemon now exposes those exact, source-bound cuts;
-        // this unavailable-archive case remains only a queue-journal replay smoke.
+        // The selectable-archive three-cut matrix below covers the execution
+        // phases; this unavailable-archive case remains a queue-journal replay smoke.
         for peer in &peers {
             peer.start_checked(config_layers.iter().cloned(), None)
                 .await
@@ -2586,6 +3346,263 @@ async fn musubi_publication_below_quorum_queue_crash_replay_keeps_projection_tup
 
     network.shutdown().await;
     result
+}
+
+async fn run_selectable_musubi_publication_phase_cut(
+    phase: NativeAmxFaultPhase,
+    phase_label: &str,
+) -> Result<bool> {
+    let context = format!("selectable Musubi publication phase cut {phase_label}");
+    let Some(network) =
+        sandbox::start_network_async_or_skip(musubi_selectable_fault_localnet_builder(), &context)
+            .await?
+    else {
+        return Ok(false);
+    };
+
+    let result: Result<()> = async {
+        let config_layers: Vec<ConfigLayer> = network
+            .config_layers()
+            .map(|layer| ConfigLayer(layer.into_owned()))
+            .collect();
+        let peers = network.peers().iter().cloned().collect::<Vec<_>>();
+        ensure!(
+            peers.len() == PEERS,
+            "{context}: phase cut requires exactly four voting peers"
+        );
+        let submitter = peers[0].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let fixture = prepare_selectable_musubi_publication(&network, &submitter, &context).await?;
+
+        let mut pre_cut_snapshot = None;
+        for (index, peer) in peers.iter().enumerate() {
+            let snapshot = assert_selectable_musubi_archive_without_release(
+                &peer.client(),
+                &fixture,
+                &format!("{context}: pre-cut peer {index}"),
+            )?;
+            if let Some(expected) = pre_cut_snapshot.as_ref() {
+                ensure!(
+                    &snapshot == expected,
+                    "{context}: pre-cut peer {index} queried another finalized snapshot"
+                );
+            } else {
+                pre_cut_snapshot = Some(snapshot);
+            }
+        }
+
+        // Fresh Native AMX PrepareQC/CommitQC assembly runs only on the
+        // deterministic autonomous coordinator-lane author. Derive that peer
+        // from the exact durable universal-lane frontier and its embedded
+        // authority committee; the global Sumeragi leader is unrelated.
+        let target_index = next_universal_autonomous_lane_author_peer(&peers, &context)?;
+        let target = peers[target_index].clone();
+        let live_submitter = peers
+            .iter()
+            .enumerate()
+            .find(|(index, _)| *index != target_index)
+            .map(|(_, peer)| peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone()))
+            .ok_or_else(|| eyre!("{context}: phase cut has no live ingress peer"))?;
+        let source_id = native_amx_source_id(&fixture.transaction);
+        let target_control = target
+            .consensus_message_control()
+            .ok_or_else(|| eyre!("{context}: target peer lacks Native AMX fault control"))?;
+        let revision = target_control
+            .arm_native_amx_fault(phase, source_id)
+            .wrap_err_with(|| format!("{context}: arm exact phase cut"))?;
+        let transaction_for_submit = fixture.transaction.clone();
+        let submitter_for_submit = live_submitter.clone();
+        spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
+            .await
+            .map_err(|error| eyre!("{context}: publication submit task failed: {error}"))?
+            .wrap_err_with(|| format!("{context}: submit exact publication"))?;
+
+        let ack = target_control
+            .wait_for_native_amx_fault(revision, phase, source_id, STATUS_WAIT_TIMEOUT)
+            .await
+            .wrap_err_with(|| format!("{context}: wait for durable phase acknowledgement"))?;
+        ensure!(
+            ack.revision == revision && ack.phase == phase && ack.source_id == source_id,
+            "{context}: durable phase acknowledgement did not bind the exact publication"
+        );
+
+        let publish_entrypoint = fixture.transaction.hash_as_entrypoint();
+        let live_block_before_restart = if phase == NativeAmxFaultPhase::BeforeWorldCommit {
+            // This cut is after the complete block overlay exists. The other
+            // three validators must finalize the exact publication while the
+            // target remains down, proving there was no target-local WSV leak.
+            let live_block = wait_for_block_with_entrypoint(
+                &live_submitter,
+                publish_entrypoint,
+                &format!("{context}: three live validators before target restart"),
+            )
+            .await?;
+            assert_musubi_universal_home_execution_context(&live_block, &fixture.transaction)?;
+            for (index, peer) in peers
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != target_index)
+            {
+                let peer_block = wait_for_block_with_entrypoint(
+                    &peer.client(),
+                    publish_entrypoint,
+                    &format!("{context}: live peer {index} before target restart"),
+                )
+                .await?;
+                ensure!(
+                    peer_block.hash() == live_block.hash(),
+                    "{context}: live peer {index} committed a different publication block"
+                );
+                assert_selectable_musubi_publication_present(
+                    &peer.client(),
+                    &fixture,
+                    &format!("{context}: live peer {index} before restart"),
+                )?;
+            }
+            Some(live_block)
+        } else {
+            // Prepare/Commit cuts abort the sole autonomous author before it
+            // can assemble and publish the executable payload. Progress is
+            // impossible until that exact author restarts; requiring a live
+            // commit here would turn these cuts into deterministic timeouts.
+            for (index, peer) in peers
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != target_index)
+            {
+                assert_selectable_musubi_archive_without_release(
+                    &peer.client(),
+                    &fixture,
+                    &format!("{context}: live peer {index} before author restart"),
+                )?;
+            }
+            None
+        };
+
+        ensure!(
+            target.shutdown_if_started().await,
+            "{context}: aborted target peer had no reapable run"
+        );
+        target
+            .start_checked(config_layers.iter().cloned(), None)
+            .await
+            .wrap_err_with(|| format!("{context}: restart phase-cut target"))?;
+
+        let live_block = match live_block_before_restart {
+            Some(block) => block,
+            None => {
+                let block = wait_for_block_with_entrypoint(
+                    &live_submitter,
+                    publish_entrypoint,
+                    &format!("{context}: publication after autonomous-author restart"),
+                )
+                .await?;
+                assert_musubi_universal_home_execution_context(&block, &fixture.transaction)?;
+                block
+            }
+        };
+
+        let barrier_transaction = live_submitter.build_transaction(
+            [InstructionBox::from(Log::new(
+                Level::INFO,
+                format!("Musubi selectable publication {phase_label} restart barrier"),
+            ))],
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
+        submit_approved_and_wait_for_all_peers(
+            &network,
+            &live_submitter,
+            barrier_transaction,
+            &format!("{context}: post-restart visibility barrier"),
+        )
+        .await?;
+
+        // The barrier proves the restarted peer caught the same canonical
+        // publication block, rather than executing a second copy locally.
+        ensure!(
+            live_block
+                .entrypoint_hashes()
+                .any(|hash| hash == publish_entrypoint),
+            "{context}: selected publication block lost the exact entrypoint"
+        );
+
+        let mut canonical_snapshot = None;
+        let mut canonical_publication_block = None;
+        for (index, peer) in peers.iter().enumerate() {
+            let client = peer.client();
+            let snapshot = assert_selectable_musubi_publication_present(
+                &client,
+                &fixture,
+                &format!("{context}: post-replay peer {index}"),
+            )?;
+            if let Some(expected) = canonical_snapshot.as_ref() {
+                ensure!(
+                    &snapshot == expected,
+                    "{context}: post-replay peer {index} exposed another registry snapshot"
+                );
+            } else {
+                canonical_snapshot = Some(snapshot);
+            }
+
+            let blocks = client.query(FindBlocks).execute_all()?;
+            let occurrences = blocks
+                .iter()
+                .flat_map(|block| {
+                    block.entrypoint_hashes().enumerate().filter_map(
+                        move |(entrypoint_index, hash)| {
+                            (hash == publish_entrypoint).then_some((block, entrypoint_index))
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            ensure!(
+                occurrences.len() == 1,
+                "{context}: post-replay peer {index} recorded the publication {} time(s)",
+                occurrences.len()
+            );
+            let (publication_block, entrypoint_index) = occurrences[0];
+            ensure!(
+                publication_block.error(entrypoint_index).is_none(),
+                "{context}: post-replay peer {index} retained a rejected publication occurrence"
+            );
+            if let Some(expected) = canonical_publication_block {
+                ensure!(
+                    publication_block.hash() == expected,
+                    "{context}: post-replay peer {index} stored another publication block"
+                );
+            } else {
+                canonical_publication_block = Some(publication_block.hash());
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    network.shutdown().await;
+    result?;
+    Ok(true)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay() -> Result<()> {
+    init_instruction_registry();
+    let context = stringify!(musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay);
+    if !multilane_release_gate_requested(context)? {
+        return Ok(());
+    }
+    for (phase, label) in [
+        (NativeAmxFaultPhase::AfterPrepareQc, "after-prepare-qc"),
+        (NativeAmxFaultPhase::AfterCommitQc, "after-commit-qc"),
+        (
+            NativeAmxFaultPhase::BeforeWorldCommit,
+            "before-world-commit",
+        ),
+    ] {
+        if !run_selectable_musubi_publication_phase_cut(phase, label).await? {
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 fn multilane_release_gate_requested(context: &str) -> Result<bool> {

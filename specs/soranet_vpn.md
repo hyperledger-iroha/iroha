@@ -53,8 +53,9 @@ the same deterministic framing.
 - **Native XOR lease flow:** Torii now issues account-authenticated VPN quote
   responses before sessions.
   Each quote binds the account, exit class, relay, client metering public key,
-  XOR fee asset, non-operator escrow account, and tariff, and returns a
-  Norito-framed `OpenVpnLeaseEscrow` instruction in `tx_instructions`. Session
+  protocol-fixed XOR fee asset, deterministic per-lease custody account, and
+  tariff, and returns exactly one required Norito-framed `OpenVpnLeaseEscrow`
+  instruction as `open_lease_instruction`. Session
   creation only succeeds after the wallet submits that exact native lease-open
   transaction and provides the committed transaction hash. Native `vpn_leases`
   are the settlement source of truth: Torii process-local quote/session/receipt
@@ -62,6 +63,12 @@ the same deterministic framing.
   unexpired active session from WSV after a Torii restart, and
   `/v1/vpn/receipts` rebuilds settlement context from WSV by lease id or relay
   receipt quote id within the on-chain grace window.
+  The fee asset and custody account are consensus policy, not deployment
+  profile inputs: Torii derives the canonical typed XOR definition and the
+  custody account from the chain, lease id, and asset. Consequently neither
+  value is configurable under `network.soranet_vpn` or advertised by the
+  pre-quote profile; quote, session, and receipt records retain the resolved
+  values needed to authorize and audit settlement.
 - **Helper tickets:** Helper tickets are fixed 664-byte v1 frames. Each tariff
   component occupies a fixed slot containing a canonical exact `Quantity`
   frame, so no implicit integer nano-XOR unit crosses the helper boundary. The
@@ -102,8 +109,9 @@ the same deterministic framing.
   accepted voucher into settlement receipts. The earned fee is recomputed from
   the helper-ticket tariff; a client-supplied voucher envelope cannot raise or
   lower the settlement amount. Operator-submitted receipts return a Norito-framed
-  `SettleVpnLease` instruction so earned XOR and refunds are split from native
-  custody instead of trusting relay-supplied prepaid claims. Runtime
+  optional `settle_lease_instruction` containing `SettleVpnLease` so earned XOR
+  and refunds are split from native custody instead of trusting relay-supplied
+  prepaid claims. Runtime
   operators can set `vpn.receipt_spool_dir` on the relay to persist the exact
   `/v1/vpn/receipts` request body (`relay_receipt_hex`, `client_voucher_hex`,
   and `lease_id_hex`) plus the audited top-level `earned_fee` as a canonical

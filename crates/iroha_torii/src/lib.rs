@@ -2174,7 +2174,7 @@ struct AppState {
     vpn_used_payments: Arc<DashMap<String, ()>>,
     vpn_sessions: Arc<DashMap<String, vpn::VpnSessionRecord>>,
     vpn_receipts: Arc<DashMap<String, Vec<vpn::VpnReceiptRecord>>>,
-    vpn_state_lock: Arc<tokio::sync::Mutex<()>>,
+    vpn_state_lock: Arc<std::sync::Mutex<vpn::VpnRuntimeState>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     #[cfg(feature = "app_api")]
@@ -54984,7 +54984,7 @@ impl Torii {
             vpn_used_payments: Arc::new(DashMap::new()),
             vpn_sessions: Arc::new(DashMap::new()),
             vpn_receipts: Arc::new(DashMap::new()),
-            vpn_state_lock: Arc::new(tokio::sync::Mutex::new(())),
+            vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
             soracloud_runtime: self.soracloud_runtime.clone(),
             soracloud_hf_config: self.soracloud_hf_config.clone(),
             #[cfg(feature = "app_api")]
@@ -56641,7 +56641,11 @@ fn build_por_components(
     let snapshot_path = por_cfg
         .state_dir
         .join(iroha_config::parameters::defaults::sorafs::por::COORDINATOR_STATE_FILE);
-    let coordinator_result = sorafs::PorCoordinator::with_persistence(&snapshot_path);
+    let status_record_limit = config.sorafs_storage.runtime.state_entry_limit;
+    let coordinator_result = sorafs::PorCoordinator::with_persistence_and_record_limit(
+        &snapshot_path,
+        status_record_limit,
+    );
     let coordinator = match coordinator_result {
         Ok(coord) => Arc::new(coord),
         Err(err) if !por_cfg.enabled => {
@@ -56650,7 +56654,9 @@ fn build_por_components(
                 path = ?snapshot_path,
                 "failed to load PoR report-publication state while PoR is disabled; lifecycle reads remain unavailable"
             );
-            Arc::new(sorafs::PorCoordinator::new())
+            Arc::new(sorafs::PorCoordinator::with_record_limit(
+                status_record_limit,
+            ))
         }
         Err(err) => panic!(
             "torii.sorafs_por.enabled failed to load durable coordinator state at {}: {err}",

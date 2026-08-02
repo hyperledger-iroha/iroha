@@ -1362,8 +1362,6 @@ def _vpn_profile_payload() -> Dict[str, Any]:
         "tunnel_addresses": ["10.208.0.2/32"],
         "mtu_bytes": 1280,
         "display_billing_label": "standard - soranet.vpn.v1 - 100.25 XOR",
-        "fee_asset_id": "xor#universal",
-        "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
         "lease_fee": "100.25",
         "settlement_grace_secs": 300,
@@ -1385,7 +1383,7 @@ def _vpn_quote_payload() -> Dict[str, Any]:
         "relay_endpoint": payload["relay_endpoint"],
         "lease_secs": payload["lease_secs"],
         "quote_expires_at_ms": 1_700_000_000_000,
-        "fee_asset_id": payload["fee_asset_id"],
+        "fee_asset_id": "xor#universal",
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
         "lease_fee": payload["lease_fee"],
@@ -1400,7 +1398,6 @@ def _vpn_quote_payload() -> Dict[str, Any]:
         **_vpn_trust_fields(payload["relay_tls_spki_sha256_hex"]),
         "metering_public_key_hex": VPN_METERING_KEY,
         "open_lease_instruction": _vpn_instruction(),
-        "tx_instructions": [_vpn_instruction()],
     }
 
 
@@ -1462,7 +1459,6 @@ def _vpn_receipt_payload(status: str = "settled") -> Dict[str, Any]:
         "refunded_fee": "75.125",
         "lease_id_hex": VPN_LEASE_ID,
         "settle_lease_instruction": _vpn_instruction("SettleVpnLease"),
-        "tx_instructions": [_vpn_instruction("SettleVpnLease")],
     }
 
 
@@ -1486,9 +1482,7 @@ def test_vpn_profile_deserializes_native_lease_fields() -> None:
 
     profile = client.get_vpn_profile()
 
-    assert profile.fee_asset_id == "xor#universal"
     assert profile.lease_fee == "100.25"
-    assert profile.escrow_account_id == VPN_ESCROW
     assert profile.operator_account_id == VPN_OPERATOR
     assert profile.route_pushes == ["0.0.0.0/0"]
     assert session.calls[0]["url"] == "https://node.test/v1/vpn/profile"
@@ -1768,9 +1762,8 @@ def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None
     assert headers["X-Iroha-Timestamp-Ms"] == str(auth.timestamp_ms)
     assert headers["X-Iroha-Nonce"] == auth.nonce
     assert quote.lease_id_hex == VPN_LEASE_ID
-    assert quote.open_lease_instruction is not None
     assert quote.open_lease_instruction.wire_id == "OpenVpnLeaseEscrow"
-    assert quote.tx_instructions[0].payload_hex == "ab" * 8
+    assert quote.open_lease_instruction.payload_hex == "ab" * 8
 
 
 def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
@@ -2130,8 +2123,6 @@ def test_vpn_response_parsers_reject_empty_min_length_strings() -> None:
                 "relay_endpoint",
                 "meter_family",
                 "display_billing_label",
-                "fee_asset_id",
-                "escrow_account_id",
                 "operator_account_id",
             ),
         ),
@@ -2220,7 +2211,7 @@ def test_vpn_response_parsers_enforce_openapi_enums_and_bounds() -> None:
             "vpn profile",
         ),
         (
-            "quote instruction count",
+            "retired quote instruction array",
             ToriiClient._parse_vpn_quote,
             _vpn_quote_payload(),
             lambda payload: payload.__setitem__("tx_instructions", []),
@@ -2465,7 +2456,7 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
     assert fetched is not None and fetched.payment_tx_hash == VPN_PAYMENT_HASH
     assert deleted is not None and deleted.status == "disconnected"
     assert deleted.settle_lease_instruction is not None
-    assert deleted.tx_instructions[0].wire_id == "SettleVpnLease"
+    assert deleted.settle_lease_instruction.wire_id == "SettleVpnLease"
     assert receipts.total == 1
     assert receipts.items[0].refunded_fee == "75.125"
     assert missing is None

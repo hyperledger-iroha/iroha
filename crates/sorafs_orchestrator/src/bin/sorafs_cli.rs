@@ -96,8 +96,9 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::por::{
-    POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
-    POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1, decode_por_weekly_report_v1,
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+    POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1, POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1,
+    PorStatusCursorV1, decode_por_weekly_report_v1,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
@@ -2141,9 +2142,47 @@ enum ReportOutputFormat {
     Json,
 }
 
-const POR_STATUS_CURSOR_MAX_LENGTH_V1: usize = 256;
 const POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1: usize = 64 * 1024;
 const POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1: usize = 512;
+const POR_STATUS_DECODE_MAX_TOTAL_ELEMENTS_V1: usize =
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 * 64;
+const POR_STATUS_DECODE_ALLOCATION_MULTIPLIER_V1: usize = 4;
+const POR_STATUS_DECODE_MAX_NESTING_DEPTH_V1: usize = 32;
+
+#[derive(Clone, Copy)]
+struct PorStatusResponseBoundsV1 {
+    response_max_bytes: usize,
+    response_max_bytes_u64: u64,
+    response_read_limit: u64,
+    decode_limits: norito::DecodeLimits,
+}
+
+fn por_status_response_bounds(canonical_record_bytes: usize) -> Option<PorStatusResponseBoundsV1> {
+    if canonical_record_bytes == 0
+        || canonical_record_bytes > POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1
+    {
+        return None;
+    }
+    let response_max_bytes =
+        canonical_record_bytes.checked_add(POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1)?;
+    let response_max_bytes_u64 = u64::try_from(response_max_bytes).ok()?;
+    let response_read_limit = response_max_bytes_u64.checked_add(1)?;
+    let max_total_allocated_bytes =
+        response_max_bytes.checked_mul(POR_STATUS_DECODE_ALLOCATION_MULTIPLIER_V1)?;
+    let decode_limits = norito::DecodeLimits::new(
+        POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+        response_max_bytes,
+        POR_STATUS_DECODE_MAX_TOTAL_ELEMENTS_V1,
+        max_total_allocated_bytes,
+        POR_STATUS_DECODE_MAX_NESTING_DEPTH_V1,
+    );
+    Some(PorStatusResponseBoundsV1 {
+        response_max_bytes,
+        response_max_bytes_u64,
+        response_read_limit,
+        decode_limits,
+    })
+}
 
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ToriiPorStatusPageV1 {
@@ -2177,21 +2216,13 @@ struct RequestedPorStatusFilter {
     outcome: Option<PorChallengeOutcome>,
 }
 
-fn validate_sorafs_por_cursor(cursor: &str, context: &str) -> Result<(), String> {
-    if cursor.is_empty() || cursor.len() > POR_STATUS_CURSOR_MAX_LENGTH_V1 {
-        return Err(format!(
-            "{context} must be 1..={POR_STATUS_CURSOR_MAX_LENGTH_V1} characters"
-        ));
-    }
-    let decoded = BASE64_URL_SAFE_NO_PAD
-        .decode(cursor.as_bytes())
-        .map_err(|_| format!("{context} must be canonical unpadded base64url"))?;
-    if BASE64_URL_SAFE_NO_PAD.encode(decoded) != cursor {
-        return Err(format!(
-            "{context} must be the unique canonical unpadded base64url encoding"
-        ));
-    }
-    Ok(())
+fn validate_sorafs_por_cursor(cursor: &str, context: &str) -> Result<PorStatusCursorV1, String> {
+    PorStatusCursorV1::decode_opaque(cursor)
+        .map_err(|error| {
+            format!(
+                "{context} must be a bounded canonical PoR cursor (maximum {POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1} bytes): {error}"
+            )
+        })
 }
 
 fn validate_torii_por_status_page(
@@ -2207,17 +2238,21 @@ fn validate_torii_por_status_page(
         || usize::try_from(page.canonical_bytes)
             .ok()
             .is_none_or(|bytes| bytes > expected_max_bytes)
-        || usize::try_from(page.inspected_candidates).ok().is_none_or(|count| {
-            count < page.statuses.len()
-                || count > POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
-        })
+        || usize::try_from(page.inspected_candidates)
+            .ok()
+            .is_none_or(|count| {
+                count < page.statuses.len() || count > POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
+            })
         || page.has_more != page.next_cursor.is_some()
         || (page.has_more && page.inspected_candidates == 0)
     {
         return Err("PoR status page metadata violates the requested bounds".into());
     }
     if let Some(cursor) = page.next_cursor.as_deref() {
-        validate_sorafs_por_cursor(cursor, "PoR status page next_cursor")?;
+        let cursor = validate_sorafs_por_cursor(cursor, "PoR status page next_cursor")?;
+        if cursor.snapshot_generation != page.snapshot_generation {
+            return Err("PoR status page next_cursor does not bind the response generation".into());
+        }
     }
 
     let mut canonical_bytes = 0usize;
@@ -2343,9 +2378,9 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
                     .trim()
                     .parse::<usize>()
                     .map_err(|err| format!("invalid `--max-bytes` value: {err}"))?;
-                if parsed == 0 || parsed > POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 {
+                if parsed == 0 || parsed > POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 {
                     return Err(format!(
-                        "`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1}"
+                        "`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1}"
                     ));
                 }
                 max_bytes = Some(parsed);
@@ -2418,7 +2453,7 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
             "`--limit={effective_limit}` exceeds the PoR status page maximum of {POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1}"
         ));
     }
-    let effective_max_bytes = max_bytes.unwrap_or(POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1);
+    let effective_max_bytes = max_bytes.unwrap_or(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1);
 
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
@@ -2457,26 +2492,20 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
         .send()
         .map_err(|err| format!("failed to request PoR status from `{endpoint}`: {err}"))?;
     let status = response.status();
-    let response_max_bytes = effective_max_bytes
-        .checked_add(POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1)
+    let response_bounds = por_status_response_bounds(effective_max_bytes)
         .ok_or_else(|| "PoR status response bound overflowed".to_owned())?;
+    let response_max_bytes = response_bounds.response_max_bytes;
     if response
         .content_length()
-        .is_some_and(|length| length > u64::try_from(response_max_bytes).unwrap_or(u64::MAX))
+        .is_some_and(|length| length > response_bounds.response_max_bytes_u64)
     {
         return Err(format!(
             "PoR status response exceeds the {response_max_bytes}-byte envelope limit"
         ));
     }
-    let response_read_limit = u64::try_from(
-        response_max_bytes
-            .checked_add(1)
-            .expect("PoR status response bound can be incremented"),
-    )
-    .expect("PoR status response bound fits u64");
     let mut body = Vec::new();
     response
-        .take(response_read_limit)
+        .take(response_bounds.response_read_limit)
         .read_to_end(&mut body)
         .map_err(|err| format!("failed to read PoR status response: {err}"))?;
     if body.len() > response_max_bytes {
@@ -2490,17 +2519,9 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
             body_snippet(&body)
         ));
     }
-    let page: ToriiPorStatusPageV1 = norito::decode_from_bytes_with_limits(
-        &body,
-        norito::DecodeLimits::new(
-            POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
-            POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1,
-            POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 * 64,
-            response_max_bytes.saturating_mul(4),
-            32,
-        ),
-    )
-    .map_err(|err| format!("failed to decode PoR status page: {err}"))?;
+    let page: ToriiPorStatusPageV1 =
+        norito::decode_from_bytes_with_limits(&body, response_bounds.decode_limits)
+            .map_err(|err| format!("failed to decode PoR status page: {err}"))?;
     if to_bytes(&page).map_err(|err| format!("failed to re-encode PoR status page: {err}"))? != body
     {
         return Err("PoR status page is not canonical Norito".into());
@@ -2536,7 +2557,7 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     let mut start_epoch: Option<u64> = None;
     let mut end_epoch: Option<u64> = None;
     let mut limit: usize = POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1;
-    let mut max_bytes: usize = POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1;
+    let mut max_bytes: usize = POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1;
     let mut cursor: Option<String> = None;
 
     for arg in raw_args {
@@ -2579,9 +2600,9 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
                     .trim()
                     .parse::<usize>()
                     .map_err(|err| format!("invalid `--max-bytes` value: {err}"))?;
-                if max_bytes == 0 || max_bytes > POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 {
+                if max_bytes == 0 || max_bytes > POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 {
                     return Err(format!(
-                        "`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1}"
+                        "`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1}"
                     ));
                 }
             }
@@ -2642,12 +2663,12 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
         .send()
         .map_err(|err| format!("failed to request PoR export from `{endpoint}`: {err}"))?;
     let status = response.status();
-    let response_max_bytes = max_bytes
-        .checked_add(POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1)
+    let response_bounds = por_status_response_bounds(max_bytes)
         .ok_or_else(|| "PoR export response bound overflowed".to_owned())?;
+    let response_max_bytes = response_bounds.response_max_bytes;
     if response
         .content_length()
-        .is_some_and(|length| length > u64::try_from(response_max_bytes).unwrap_or(u64::MAX))
+        .is_some_and(|length| length > response_bounds.response_max_bytes_u64)
     {
         return Err(format!(
             "PoR export response exceeds the {response_max_bytes}-byte envelope limit"
@@ -2655,11 +2676,7 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     }
     let mut body = Vec::new();
     response
-        .take(
-            u64::try_from(response_max_bytes)
-                .unwrap_or(u64::MAX)
-                .saturating_add(1),
-        )
+        .take(response_bounds.response_read_limit)
         .read_to_end(&mut body)
         .map_err(|err| format!("failed to read PoR export response: {err}"))?;
     if body.len() > response_max_bytes {
@@ -2673,17 +2690,9 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
             body_snippet(&body)
         ));
     }
-    let export: ToriiPorStatusExportPageV1 = norito::decode_from_bytes_with_limits(
-        &body,
-        norito::DecodeLimits::new(
-            POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
-            POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1,
-            POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 * 64,
-            response_max_bytes.saturating_mul(4),
-            32,
-        ),
-    )
-    .map_err(|err| format!("failed to decode PoR export page: {err}"))?;
+    let export: ToriiPorStatusExportPageV1 =
+        norito::decode_from_bytes_with_limits(&body, response_bounds.decode_limits)
+            .map_err(|err| format!("failed to decode PoR export page: {err}"))?;
     if to_bytes(&export).map_err(|err| format!("failed to re-encode PoR export page: {err}"))?
         != body
     {
@@ -2706,6 +2715,9 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     }
     write_bytes(&out_path, &body)?;
     println!("exported {} bytes to `{}`.", body.len(), out_path.display());
+    if let Some(cursor) = export.page.next_cursor {
+        println!("next_cursor={cursor}");
+    }
     Ok(())
 }
 
@@ -3168,7 +3180,7 @@ fn usage() -> String {
   sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
   sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]
-  sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
+  sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]
   sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]
   sorafs_cli proxy set-mode --orchestrator-config=PATH --mode=bridge|metadata-only [--json-out=PATH] [--config-out=PATH] [--dry-run]
@@ -3435,7 +3447,7 @@ fn insert_telemetry_source(summary: &mut Value, telemetry_source: Option<&str>) 
 
 fn por_usage() -> String {
     "Usage:
-  sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
+  sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]
   sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]"
         .to_string()
@@ -22358,10 +22370,19 @@ mod tests {
 
     #[test]
     fn sorafs_por_cursor_validation_is_strictly_canonical() {
-        for canonical in ["AA", "_w", "AQIDBA"] {
-            validate_sorafs_por_cursor(canonical, "cursor")
-                .expect("canonical unpadded base64url cursor");
-        }
+        let cursor = PorStatusCursorV1 {
+            version: sorafs_manifest::por::POR_STATUS_CURSOR_VERSION_V1,
+            snapshot_generation: 7,
+            selection_digest: [0x41; 32],
+            last_epoch_id: 11,
+            last_issued_at: 1_700_000_000,
+            last_challenge_id: [0x42; 32],
+        };
+        let canonical = cursor.encode_opaque().expect("canonical cursor fixture");
+        assert_eq!(
+            validate_sorafs_por_cursor(&canonical, "cursor").expect("canonical bounded cursor"),
+            cursor
+        );
         for malformed in ["", "A", "AB", "AA=", "AA!", "AA\n"] {
             assert!(
                 validate_sorafs_por_cursor(malformed, "cursor").is_err(),
@@ -22369,9 +22390,72 @@ mod tests {
             );
         }
         assert!(
-            validate_sorafs_por_cursor(&"A".repeat(POR_STATUS_CURSOR_MAX_LENGTH_V1 + 1), "cursor",)
-                .is_err()
+            validate_sorafs_por_cursor(
+                &"A".repeat(POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1 + 1),
+                "cursor",
+            )
+            .is_err()
         );
+    }
+
+    #[test]
+    fn sorafs_por_response_decode_field_bound_is_exact() {
+        assert!(por_status_response_bounds(0).is_none());
+        assert!(
+            por_status_response_bounds(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 1).is_none()
+        );
+        let response_bounds =
+            por_status_response_bounds(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1)
+                .expect("protocol response bound");
+        let response_max_bytes = response_bounds.response_max_bytes;
+        let limits = response_bounds.decode_limits;
+        assert_eq!(
+            response_bounds.response_max_bytes_u64,
+            u64::try_from(response_max_bytes).expect("response bound fits u64")
+        );
+        assert_eq!(
+            response_bounds.response_read_limit,
+            response_bounds.response_max_bytes_u64 + 1
+        );
+        assert_eq!(limits.max_field_bytes(), response_max_bytes);
+        assert_eq!(
+            limits.max_sequence_elements(),
+            POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1
+        );
+        assert_eq!(
+            limits.max_total_elements(),
+            POR_STATUS_DECODE_MAX_TOTAL_ELEMENTS_V1
+        );
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            response_max_bytes * POR_STATUS_DECODE_ALLOCATION_MULTIPLIER_V1
+        );
+        assert_eq!(
+            limits.max_nesting_depth(),
+            POR_STATUS_DECODE_MAX_NESTING_DEPTH_V1
+        );
+
+        let exact = u64::try_from(response_max_bytes)
+            .expect("response bound fits u64")
+            .to_le_bytes();
+        norito::with_decode_limits(limits, || {
+            norito::core::read_len_from_slice_with_flags(&exact, 0).map(|_| ())
+        })
+        .expect("the exact protocol field bound is accepted");
+
+        let above = u64::try_from(response_max_bytes + 1)
+            .expect("response bound plus one fits u64")
+            .to_le_bytes();
+        let error = norito::with_decode_limits(limits, || {
+            norito::core::read_len_from_slice_with_flags(&above, 0).map(|_| ())
+        })
+        .expect_err("one byte above the protocol field bound is rejected");
+        assert!(matches!(
+            error,
+            norito::Error::FieldLengthExceeded { length, limit }
+                if length == u64::try_from(response_max_bytes + 1).expect("bound fits u64")
+                    && limit == u64::try_from(response_max_bytes).expect("bound fits u64")
+        ));
     }
 
     #[test]
@@ -22383,7 +22467,7 @@ mod tests {
             provider_id: [0x33; 32],
             epoch_id: 42,
             drand_round: 100,
-            status: PorChallengeOutcome::Pending,
+            status: PorChallengeOutcome::AwaitingProof,
             sample_count: 64,
             forced: false,
             issued_at: 1_700_000_000,
@@ -24785,7 +24869,7 @@ fn render_status_table(entries: &[PorChallengeStatusV1]) -> String {
     let mut out = String::new();
     let _ = writeln!(
         &mut out,
-        "{:<12} {:<12} {:<8} {:>8} {:>6} {:>12} {:>12} FAILURE",
+        "{:<12} {:<12} {:<15} {:>8} {:>6} {:>12} {:>12} FAILURE",
         "CHALLENGE", "PROVIDER", "STATUS", "SAMPLES", "FORCED", "ISSUED", "RESPONDED"
     );
     for entry in entries {
@@ -24806,7 +24890,7 @@ fn render_status_table(entries: &[PorChallengeStatusV1]) -> String {
             .unwrap_or_else(|| "-".to_string());
         let _ = writeln!(
             &mut out,
-            "{challenge:<12} {provider:<12} {status:<8} {samples:>8} {forced:>6} \
+            "{challenge:<12} {provider:<12} {status:<15} {samples:>8} {forced:>6} \
              {issued:>12} {responded:>12} {failure}"
         );
     }

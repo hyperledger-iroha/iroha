@@ -125,7 +125,7 @@ impl ResolverIndexCacheSnapshotV1 {
                 .validate()
                 .map_err(|error| invalid(error.reason()))?;
             page.response
-                .validate()
+                .validate_for(&page.request)
                 .map_err(|error| invalid(error.reason()))?;
             self.validate_anchor(
                 &page.response.chain_id,
@@ -175,7 +175,7 @@ impl ResolverIndexCacheSnapshotV1 {
                     .map_err(|error| invalid(error.reason()))?;
             }
             page.response
-                .validate()
+                .validate_for(&page.request)
                 .map_err(|error| invalid(error.reason()))?;
             self.validate_anchor(
                 &page.response.chain_id,
@@ -1215,15 +1215,17 @@ exports = []
 
     fn ordered_page(namespace: &str, height: u64, byte: u8) -> CachedOrderedPageV1 {
         let prefix = format!("{namespace}/");
-        CachedOrderedPageV1 {
-            request: MusubiOrderedPrefixQueryV1 {
-                prefix: MusubiOrderedPrefixV1::new(&prefix).expect("prefix"),
-                page: MusubiPageRequestV1 {
-                    limit: 1,
-                    cursor: None,
-                },
+        let request = MusubiOrderedPrefixQueryV1 {
+            prefix: MusubiOrderedPrefixV1::new(&prefix).expect("prefix"),
+            page: MusubiPageRequestV1 {
+                limit: 1,
+                cursor: None,
             },
+        };
+        CachedOrderedPageV1 {
+            request: request.clone(),
             response: MusubiOrderedPackagePageV1 {
+                query: request,
                 chain_id: "musubi-cache-test".parse().expect("chain"),
                 genesis_hash: [9; 32],
                 namespace_binding: binding(namespace),

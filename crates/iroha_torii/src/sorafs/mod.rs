@@ -75,6 +75,9 @@ pub use por::{
     DrandHttpRandomnessProvider, PorAutomationError, PorCoordinatorRuntime, PorStorage,
     RandomnessProvider, VerifiedVrfProvider, VrfError, VrfProvider,
 };
+pub(crate) use por::{
+    POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorStatusPageCursor, PorStatusPageLimits,
+};
 pub use por::{
     PorCoordinator, PorCoordinatorError, PorStatusExportPageV1, PorStatusFilter, PorStatusPageV1,
 };

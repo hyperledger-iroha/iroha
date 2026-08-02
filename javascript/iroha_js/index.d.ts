@@ -2547,8 +2547,6 @@ export interface ToriiVpnProfile {
   tunnelAddresses: ReadonlyArray<string>;
   mtuBytes: number;
   displayBillingLabel: string;
-  feeAssetId: string;
-  escrowAccountId: string;
   operatorAccountId: string;
   leaseFee: string;
   settlementGraceSecs: number;
@@ -2596,8 +2594,7 @@ export interface ToriiVpnQuote {
   relayCertificateSha256Hex: string;
   directorySnapshotDigestHex: string;
   meteringPublicKeyHex: string;
-  openLeaseInstruction: ToriiVpnTxInstruction | null;
-  txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
+  openLeaseInstruction: ToriiVpnTxInstruction;
 }
 
 export interface ToriiVpnSession {
@@ -2658,7 +2655,6 @@ export interface ToriiVpnReceipt {
   refundedFee: string;
   leaseIdHex: string;
   settleLeaseInstruction: ToriiVpnTxInstruction | null;
-  txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
 }
 
 export interface ToriiVpnReceiptListResponse {

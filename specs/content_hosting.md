@@ -18,12 +18,17 @@ individual files directly from Torii.
   hash with reference counts; retiring a bundle decrements and prunes chunks.
 - **Serve**: Torii exposes `GET /v1/content/{bundle}/{path}`. Responses stream
   directly from the chunk store with `ETag` = file hash, `Accept-Ranges: bytes`,
-  Range support, and Cache-Control derived from the manifest. Reads honour the
-  manifest auth mode: role-gated and sponsor-gated responses require canonical
-  request headers (`X-Iroha-Account`, `X-Iroha-Signature`,
-  `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`) for the signed account; Torii also
-  rejects stale timestamps and replayed nonces. Missing/expired bundles return
-  404.
+  Range support, and Cache-Control derived from the manifest. Public bundles
+  use the configured `max_age_seconds` and optional `immutable` directive.
+  Role- and sponsor-gated responses always use `private, no-store`; manifest
+  cache settings cannot make protected bytes reusable by a shared cache or
+  outlive a current-state authorization decision. They also vary on the full
+  canonical authentication header set, including `X-Iroha-Witness`.
+  Protected reads require `X-Iroha-Account` plus either
+  `X-Iroha-Signature`/`X-Iroha-Timestamp-Ms`/`X-Iroha-Nonce` or a canonical
+  `X-Iroha-Witness`; Torii authenticates protected bundles before resolving a
+  file path, rejects stale timestamps and replayed nonces, and does not expose
+  a protected path-existence oracle. Missing/expired bundles return 404.
 - **CLI**: `iroha content publish --bundle <path.tar>` (or `--root <dir>`) now
   auto-generates a manifest, emits optional `--manifest-out/--bundle-out`, and
   accepts `--auth`, `--cache-max-age-secs`, `--dataspace`, `--lane`, `--immutable`,

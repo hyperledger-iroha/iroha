@@ -1600,6 +1600,8 @@ pub mod sorafs {
         pub const RUNTIME_EVENT_HISTORY_LIMIT: usize = 4_096;
         /// Maximum entries retained in each auxiliary runtime state index.
         pub const RUNTIME_STATE_ENTRY_LIMIT: usize = 65_536;
+        /// First-release hard ceiling shared by node and Torii PoR projections.
+        pub const RUNTIME_STATE_ENTRY_LIMIT_MAX: usize = 65_536;
         /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
         pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
         /// Finalized reconciliation cadence for durable proof-outcome delivery.
@@ -4625,16 +4627,6 @@ pub mod soranet {
         }
         /// Default settlement grace after disconnect before escrow is refundable.
         pub const SETTLEMENT_GRACE_SECS: u64 = 60;
-
-        /// XOR asset definition used for VPN escrow.
-        pub fn fee_asset_id() -> String {
-            "xor#universal.universal".to_string()
-        }
-
-        /// Account that receives VPN escrow payments before receipt settlement.
-        pub fn escrow_account_id() -> String {
-            super::super::governance::bond_escrow_account()
-        }
 
         /// Default operator account used when an enabled deployment does not override it.
         pub fn operator_account_id() -> String {

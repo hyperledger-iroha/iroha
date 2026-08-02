@@ -58,7 +58,7 @@ impl RegionCode {
 }
 
 /// Policy configuration controlling the enforcement surface.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct GatewayPolicyConfig {
     /// Require manifests to ship the governance envelope before serving data.
     pub require_manifest_envelope: bool,
@@ -79,7 +79,7 @@ impl Default for GatewayPolicyConfig {
 }
 
 /// Result returned after evaluating policy rules.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyDecision {
     /// Request is permitted to proceed.
     Allow,
@@ -88,7 +88,7 @@ pub enum PolicyDecision {
 }
 
 /// Detailed classification for policy denials.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyViolation {
     /// Manifest envelope was required but missing.
     ManifestEnvelopeMissing,

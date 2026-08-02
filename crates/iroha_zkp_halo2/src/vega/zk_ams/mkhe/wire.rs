@@ -8,9 +8,10 @@
 //! and sample ceilings early enough for release-sized (`N = 131_072`) inputs.
 //!
 //! This module implements the canonical representation/predecode obligation.
-//! It does not claim that a release-parameter wire KAT or CKS/RKG/share proofs
-//! exist; the manifest therefore keeps the wire, malicious-party,
-//! decryption-share, resource, and release-KAT gates fail-closed.
+//! Decryption shares deliberately do not reuse its combined-contribution
+//! frame: their release transport is the authenticated split manifest plus
+//! separately addressed polynomial and native-proof objects implemented by
+//! `decryption`.
 
 use super::{
     BgvProfile, MKHE_VERSION_V1, Scalar, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
@@ -29,7 +30,6 @@ pub(super) const GOVERNED_ROSTER_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.gover
 const CIPHERTEXT_TAG_V1: [u8; 4] = *b"ZACT";
 const SEEDED_RKG_KEY_TAG_V1: [u8; 4] = *b"ZARK";
 const CKS_CONTRIBUTION_TAG_V1: [u8; 4] = *b"ZACK";
-const DECRYPTION_SHARE_TAG_V1: [u8; 4] = *b"ZADS";
 const PROOF_ENVELOPE_TAG_V1: [u8; 4] = *b"ZAPE";
 
 const AUTHENTICATION_WIRE_BYTES: usize = 1 + 32 + 33 + 65;
@@ -43,8 +43,8 @@ const PROOF_ENVELOPE_HEADER_WIRE_BYTES: usize = COMMON_BINDING_WIRE_BYTES + 1 + 
 
 /// Absolute allocation ceiling for one opaque canonical proof payload.
 ///
-/// The enclosing CKS/RKG/decryption record applies its stricter governed round
-/// or share ceiling as well.  Proof-system decoders must independently enforce
+/// The enclosing CKS/RKG record applies its stricter governed round ceiling as
+/// well. Proof-system decoders must independently enforce
 /// their own exact canonical layout after this transport layer has preflighted
 /// the byte string.
 pub const ZK_AMS_MKHE_MAX_PROOF_BYTES_V1: usize = 32 * 1024 * 1024;
@@ -59,7 +59,6 @@ struct WireDimensions<'a> {
     max_ciphertext_bytes: usize,
     max_evaluated_key_bytes: usize,
     max_round_bytes: usize,
-    max_share_bytes: usize,
 }
 
 impl<'a> WireDimensions<'a> {
@@ -146,7 +145,6 @@ fn release_dimensions() -> Result<WireDimensions<'static>, ZkAmsMkheErrorV1> {
         max_ciphertext_bytes: profile.max_ciphertext_bytes,
         max_evaluated_key_bytes: profile.max_evaluated_key_bytes,
         max_round_bytes: profile.max_round_bytes,
-        max_share_bytes: profile.max_share_bytes,
     })
 }
 
@@ -468,8 +466,6 @@ pub enum ZkAmsMkheProofKindV1 {
     CksContribution = 1,
     /// RKG digit/contribution proof.
     RkgContribution = 2,
-    /// Partial-decryption share proof.
-    DecryptionShare = 3,
 }
 
 impl TryFrom<u8> for ZkAmsMkheProofKindV1 {
@@ -479,7 +475,6 @@ impl TryFrom<u8> for ZkAmsMkheProofKindV1 {
         match value {
             1 => Ok(Self::CksContribution),
             2 => Ok(Self::RkgContribution),
-            3 => Ok(Self::DecryptionShare),
             _ => Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
         }
     }
@@ -488,8 +483,9 @@ impl TryFrom<u8> for ZkAmsMkheProofKindV1 {
 /// Canonical kind-tagged envelope for one proof system's exact byte encoding.
 ///
 /// The transport does not invent a common curve-point/scalar shape: the active
-/// RKG, CKS, and decryption proof systems have different native transcripts and
-/// enforce their canonical encodings in their own decoders.
+/// RKG and CKS proof systems have different native transcripts and enforce
+/// their canonical encodings in their own decoders. Decryption proofs use
+/// their standalone native `ZADP` encoding instead.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheProofEnvelopeWireV1 {
     binding: ZkAmsMkheWireBindingV1,
@@ -869,7 +865,6 @@ impl ZkAmsMkheCksContributionWireV1 {
             expected_source_ciphertext_digest,
             expected_party,
             ZkAmsMkheProofKindV1::CksContribution,
-            false,
         )
         .and_then(|decoded| {
             Self::new(
@@ -928,132 +923,7 @@ impl ZkAmsMkheCksContributionWireV1 {
     }
 }
 
-/// One proof-bound authenticated collective decryption share.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ZkAmsMkheDecryptionShareWireV1 {
-    binding: ZkAmsMkheWireBindingV1,
-    ciphertext_digest: [u8; 32],
-    authentication: ZkAmsMkheAuthenticationWireV1,
-    share: ZkAmsMkheRnsPolynomialWireV1,
-    proof: ZkAmsMkheProofEnvelopeWireV1,
-}
-
-impl ZkAmsMkheDecryptionShareWireV1 {
-    /// Construct a share whose proof statement binds every exact record field.
-    pub fn new(
-        roster: &ZkAmsMkheGovernedRosterWireV1,
-        binding: ZkAmsMkheWireBindingV1,
-        ciphertext_digest: [u8; 32],
-        authentication: ZkAmsMkheAuthenticationWireV1,
-        share: ZkAmsMkheRnsPolynomialWireV1,
-        proof: ZkAmsMkheProofEnvelopeWireV1,
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let value = Self {
-            binding,
-            ciphertext_digest,
-            authentication,
-            share,
-            proof,
-        };
-        value.validate(release_dimensions()?)?;
-        if expected_roster_party(roster, binding)? != value.authentication.party {
-            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-        }
-        Ok(value)
-    }
-
-    /// Encode one exact partial-decryption share.
-    pub fn encode(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
-        let dimensions = release_dimensions()?;
-        self.validate(dimensions)?;
-        let proof_len = proof_envelope_wire_bytes(self.proof.proof_bytes.len())?;
-        let length = contribution_wire_bytes(dimensions, proof_len, dimensions.max_share_bytes)?;
-        let mut encoder = WireEncoder::new(length)?;
-        write_binding(&mut encoder, DECRYPTION_SHARE_TAG_V1, self.binding);
-        encoder.bytes(&self.ciphertext_digest);
-        write_authentication(&mut encoder, &self.authentication);
-        write_polynomial(&mut encoder, &self.share)?;
-        encoder.u32(as_u32(proof_len)?);
-        self.proof.write_to(&mut encoder)?;
-        encoder.finish_exact(length)
-    }
-
-    /// Decode under trusted binding, ciphertext digest, and roster party.
-    pub fn decode_exact(
-        bytes: &[u8],
-        expected_roster: &ZkAmsMkheGovernedRosterWireV1,
-        expected_binding: ZkAmsMkheWireBindingV1,
-        expected_ciphertext_digest: [u8; 32],
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let expected_party = expected_roster_party(expected_roster, expected_binding)?;
-        decode_contribution(
-            bytes,
-            DECRYPTION_SHARE_TAG_V1,
-            expected_binding,
-            expected_ciphertext_digest,
-            expected_party,
-            ZkAmsMkheProofKindV1::DecryptionShare,
-            true,
-        )
-        .and_then(|decoded| {
-            Self::new(
-                expected_roster,
-                decoded.binding,
-                decoded.subject_digest,
-                decoded.authentication,
-                decoded.polynomial,
-                decoded.proof,
-            )
-        })
-    }
-
-    /// Exact share binding.
-    #[must_use]
-    pub const fn binding(&self) -> ZkAmsMkheWireBindingV1 {
-        self.binding
-    }
-
-    /// Digest of the exact collective ciphertext being decrypted.
-    #[must_use]
-    pub const fn ciphertext_digest(&self) -> [u8; 32] {
-        self.ciphertext_digest
-    }
-
-    /// Authenticated roster party.
-    #[must_use]
-    pub const fn authentication(&self) -> &ZkAmsMkheAuthenticationWireV1 {
-        &self.authentication
-    }
-
-    /// Partial-decryption polynomial.
-    #[must_use]
-    pub const fn share(&self) -> &ZkAmsMkheRnsPolynomialWireV1 {
-        &self.share
-    }
-
-    /// Proof envelope bound to this share statement.
-    #[must_use]
-    pub const fn proof(&self) -> &ZkAmsMkheProofEnvelopeWireV1 {
-        &self.proof
-    }
-
-    fn validate(&self, dimensions: WireDimensions<'_>) -> Result<(), ZkAmsMkheErrorV1> {
-        validate_contribution_parts(
-            self.binding,
-            self.ciphertext_digest,
-            &self.authentication,
-            &self.share,
-            &self.proof,
-            ZkAmsMkheProofKindV1::DecryptionShare,
-            dimensions,
-            dimensions.max_share_bytes,
-            SHARE_STATEMENT_DOMAIN_V1,
-        )
-    }
-}
-
 const CKS_STATEMENT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cks-wire-statement";
-const SHARE_STATEMENT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.share-wire-statement";
 
 fn expected_roster_party(
     roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -1088,23 +958,6 @@ pub fn zk_ams_mkhe_cks_statement_digest_v1(
         source_ciphertext_digest,
         party,
         contribution,
-        release_dimensions()?,
-    )
-}
-
-/// Derive the exact statement digest required by a decryption-share proof envelope.
-pub fn zk_ams_mkhe_decryption_share_statement_digest_v1(
-    binding: ZkAmsMkheWireBindingV1,
-    ciphertext_digest: [u8; 32],
-    party: ZkAmsMkhePartyIdV1,
-    share: &ZkAmsMkheRnsPolynomialWireV1,
-) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    contribution_statement_digest(
-        SHARE_STATEMENT_DOMAIN_V1,
-        binding,
-        ciphertext_digest,
-        party,
-        share,
         release_dimensions()?,
     )
 }
@@ -1207,14 +1060,8 @@ fn decode_contribution(
     expected_subject_digest: [u8; 32],
     expected_party: ZkAmsMkhePartyIdV1,
     expected_kind: ZkAmsMkheProofKindV1,
-    share: bool,
 ) -> Result<DecodedContribution, ZkAmsMkheErrorV1> {
     let dimensions = release_dimensions()?;
-    let ceiling = if share {
-        dimensions.max_share_bytes
-    } else {
-        dimensions.max_round_bytes
-    };
     preflight_contribution(
         bytes,
         tag,
@@ -1223,7 +1070,7 @@ fn decode_contribution(
         expected_party,
         expected_kind,
         dimensions,
-        ceiling,
+        dimensions.max_round_bytes,
     )?;
     let mut decoder = WireDecoder::new(bytes);
     read_binding(&mut decoder, tag, expected_binding, dimensions)?;
@@ -1554,7 +1401,6 @@ fn max_proof_envelope_bytes(dimensions: WireDimensions<'_>) -> Result<usize, ZkA
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     dimensions
         .max_round_bytes
-        .min(dimensions.max_share_bytes)
         .checked_sub(base)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
@@ -1720,7 +1566,6 @@ mod tests {
             max_ciphertext_bytes: 4_096,
             max_evaluated_key_bytes: 4_096,
             max_round_bytes: 8_192,
-            max_share_bytes: 8_192,
         }
     }
 
@@ -2017,7 +1862,7 @@ mod tests {
             preflight_proof_envelope(
                 &canonical,
                 binding,
-                ZkAmsMkheProofKindV1::DecryptionShare,
+                ZkAmsMkheProofKindV1::RkgContribution,
                 dimensions(),
             )
             .is_err()
@@ -2159,76 +2004,24 @@ mod tests {
             ZkAmsMkheProofKindV1::CksContribution,
             CKS_STATEMENT_DOMAIN_V1,
         );
-        let (share, share_party) = encode_contribution_for_dimensions(
-            DECRYPTION_SHARE_TAG_V1,
-            binding,
-            [0x42; 32],
-            ZkAmsMkheProofKindV1::DecryptionShare,
-            SHARE_STATEMENT_DOMAIN_V1,
-        );
-        for (name, canonical, tag, subject, party, kind) in [
-            (
-                "cks",
-                cks.clone(),
-                CKS_CONTRIBUTION_TAG_V1,
-                [0x41; 32],
-                cks_party,
-                ZkAmsMkheProofKindV1::CksContribution,
-            ),
-            (
-                "share",
-                share.clone(),
-                DECRYPTION_SHARE_TAG_V1,
-                [0x42; 32],
-                share_party,
-                ZkAmsMkheProofKindV1::DecryptionShare,
-            ),
-        ] {
-            for offset in 0..5 {
-                let mut forged = canonical.clone();
-                forged[offset] ^= 0x80;
-                assert!(
-                    preflight_contribution(
-                        &forged,
-                        tag,
-                        binding,
-                        subject,
-                        party,
-                        kind,
-                        dimensions(),
-                        dimensions().max_round_bytes,
-                    )
-                    .is_err(),
-                    "{name} tag/version byte {offset}"
-                );
-            }
+        for offset in 0..5 {
+            let mut forged = cks.clone();
+            forged[offset] ^= 0x80;
+            assert!(
+                preflight_contribution(
+                    &forged,
+                    CKS_CONTRIBUTION_TAG_V1,
+                    binding,
+                    [0x41; 32],
+                    cks_party,
+                    ZkAmsMkheProofKindV1::CksContribution,
+                    dimensions(),
+                    dimensions().max_round_bytes,
+                )
+                .is_err(),
+                "cks tag/version byte {offset}"
+            );
         }
-        assert!(
-            preflight_contribution(
-                &cks,
-                DECRYPTION_SHARE_TAG_V1,
-                binding,
-                [0x41; 32],
-                cks_party,
-                ZkAmsMkheProofKindV1::CksContribution,
-                dimensions(),
-                dimensions().max_round_bytes,
-            )
-            .is_err()
-        );
-        assert!(
-            preflight_contribution(
-                &share,
-                CKS_CONTRIBUTION_TAG_V1,
-                binding,
-                [0x42; 32],
-                share_party,
-                ZkAmsMkheProofKindV1::DecryptionShare,
-                dimensions(),
-                dimensions().max_round_bytes,
-            )
-            .is_err()
-        );
     }
 
     #[test]
@@ -2410,7 +2203,7 @@ mod tests {
             .unwrap();
         let proof = ZkAmsMkheProofEnvelopeWireV1 {
             binding,
-            kind: ZkAmsMkheProofKindV1::DecryptionShare,
+            kind: ZkAmsMkheProofKindV1::RkgContribution,
             statement_digest: [0x72; 32],
             proof_bytes: vec![0xa5; payload_len],
         };
@@ -2420,12 +2213,12 @@ mod tests {
         preflight_proof_envelope(
             &encoded,
             binding,
-            ZkAmsMkheProofKindV1::DecryptionShare,
+            ZkAmsMkheProofKindV1::RkgContribution,
             dimensions,
         )
         .unwrap();
         assert_eq!(
-            contribution_wire_bytes(dimensions, encoded.len(), dimensions.max_share_bytes),
+            contribution_wire_bytes(dimensions, encoded.len(), dimensions.max_round_bytes),
             Err(ZkAmsMkheErrorV1::WireTooLarge)
         );
     }

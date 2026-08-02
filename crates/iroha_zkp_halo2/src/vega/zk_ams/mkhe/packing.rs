@@ -7,7 +7,7 @@ use super::{
     },
 };
 use crate::vega::{
-    VegaT256ScalarV1 as Scalar,
+    VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
     sponge::{Keccak256, keccak256, shake256},
 };
 
@@ -15,8 +15,11 @@ const PACKING_VERSION_V1: u8 = 1;
 const SLOT_GALOIS_GENERATOR_V1: usize = 5;
 const GALOIS_KEY_SCHEDULE_BITS_V1: u32 = 16;
 const RELEASE_ROOT_DERIVATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-fp2-root";
+const RELEASE_ROOT_IDENTITY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-fp2-root-identity";
 const PACKING_LAYOUT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packing-layout";
 const PACKED_PLAINTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packed-plaintext";
+const PACKED_SUBFIELD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packed-subfield";
+const PACKED_SUBFIELD_RELATION_V1: &[u8] = b"sigma_p(M)=M mod p:sigma_p(X)=X^(p mod 2N)=X^(2N-1)";
 const ROTATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-rotation";
 const GALOIS_KEY_SCHEDULE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-galois-key-schedule";
 const ROTATION_CERTIFICATE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-rotation-certificate";
@@ -54,18 +57,20 @@ pub const ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1: [u8; 32] = [
 ];
 /// Pinned digest of the exact adversarial packing/rotation rejection catalogue.
 pub const ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1: [u8; 32] = [
-    0x19, 0xfa, 0xf6, 0x2b, 0x64, 0x9b, 0xff, 0x56, 0x6a, 0xf4, 0xcf, 0xbb, 0x03, 0xfc, 0x34, 0xd7,
-    0x52, 0xb8, 0xc2, 0xd8, 0x15, 0xc6, 0xa1, 0x63, 0x4d, 0xaf, 0x6e, 0xcb, 0xbb, 0xbe, 0xaf, 0xac,
+    0xd7, 0xf3, 0x56, 0xce, 0xa3, 0x80, 0xb6, 0x9d, 0xa5, 0xc7, 0x08, 0xc8, 0x9a, 0x86, 0xb6, 0xb9,
+    0xa7, 0x1b, 0x57, 0x0e, 0x61, 0x1c, 0xc3, 0x2d, 0xcc, 0xa2, 0xa6, 0x40, 0x7f, 0x8a, 0x9f, 0xf7,
 ];
 /// Exact number of independently labelled rejection cases in the release KAT.
-pub const ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1: u16 = 30;
+pub const ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1: u16 = 31;
 
-const RELEASE_ROOT_EXPONENT_BE_V1: [u8; 64] = [
+#[cfg(test)]
+const RELEASE_ROOT_EXPONENT_KAT_BE_V1: [u8; 64] = [
     0x00, 0x00, 0x3f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0xbf, 0xff, 0xff, 0xff, 0x80, 0x00,
     0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff,
     0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xbf, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
+
 const RELEASE_ROOT_C0_BE_V1: [u8; 32] = [
     0x2e, 0xb7, 0xc1, 0x99, 0xa1, 0x3f, 0x8f, 0xc4, 0x72, 0x3a, 0x51, 0x4c, 0x33, 0xa9, 0x8a, 0x23,
     0x00, 0xfd, 0x4b, 0x08, 0x23, 0x65, 0x17, 0xf6, 0xba, 0xb6, 0x9e, 0xd3, 0x0d, 0x11, 0x91, 0xb2,
@@ -318,6 +323,12 @@ pub struct ZkAmsT256ReleasePackingCertificateV1 {
     pub slot_count: u32,
     /// Digest of the exact full-chunk packing layout exercised by the KAT.
     pub layout_digest: [u8; 32],
+    /// Digest of the modulus-derived exponent and exact primitive `Fp2` root.
+    pub root_digest: [u8; 32],
+    /// Exact `X -> X^(p mod 2N)` exponent fixing the packed base-field image.
+    pub subfield_conjugation_exponent: u32,
+    /// Digest of the coefficient-level packed-subfield relation.
+    pub subfield_relation_digest: [u8; 32],
     /// Digest of the exact inverse rotation request exercised by the KAT.
     pub rotation_digest: [u8; 32],
     /// Exact number of keys in the canonical binary Galois schedule.
@@ -349,13 +360,13 @@ pub fn zk_ams_t256_release_packing_certificate_v1()
         u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
     )?;
-    let rotation = zk_ams_t256_rotation_v1(
-        layout,
-        0,
-        0xA55A,
-        ZkAmsT256RotationDirectionV1::Inverse,
-    )?;
+    let rotation =
+        zk_ams_t256_rotation_v1(layout, 0, 0xA55A, ZkAmsT256RotationDirectionV1::Inverse)?;
     let schedule = zk_ams_t256_galois_key_schedule_v1()?;
+    let root_exponent = release_root_exponent_be_v1()?;
+    let root = release_root()?;
+    let root_digest = release_root_identity_digest(root, &root_exponent)?;
+    let subfield_conjugation_exponent = zk_ams_t256_packed_subfield_conjugation_exponent_v1()?;
     let mut certificate = ZkAmsT256ReleasePackingCertificateV1 {
         version: PACKING_VERSION_V1,
         profile_digest: profile.digest()?,
@@ -364,6 +375,13 @@ pub fn zk_ams_t256_release_packing_certificate_v1()
         slot_count: u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
         layout_digest: layout.digest,
+        root_digest,
+        subfield_conjugation_exponent,
+        subfield_relation_digest: packed_subfield_relation_digest(
+            profile.digest()?,
+            root_digest,
+            subfield_conjugation_exponent,
+        )?,
         rotation_digest: rotation.digest,
         galois_key_count: u8::try_from(ZK_AMS_T256_GALOIS_KEY_COUNT_V1)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
@@ -371,8 +389,7 @@ pub fn zk_ams_t256_release_packing_certificate_v1()
         packed_input_kat_digest: ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1,
         packed_output_kat_digest: ZK_AMS_T256_RELEASE_PACKED_OUTPUT_KAT_DIGEST_V1,
         transformed_rns_kat_digest: ZK_AMS_T256_RELEASE_TRANSFORMED_RNS_KAT_DIGEST_V1,
-        rotation_certificate_kat_digest:
-            ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1,
+        rotation_certificate_kat_digest: ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1,
         negative_case_count: ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1,
         negative_kat_digest: ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1,
         digest: [0; 32],
@@ -380,6 +397,37 @@ pub fn zk_ams_t256_release_packing_certificate_v1()
     certificate.digest = release_packing_certificate_digest(certificate);
     validate_release_packing_certificate(certificate)?;
     Ok(certificate)
+}
+
+/// Return the exact Galois exponent whose fixed subspace is the canonical
+/// 65,536-slot T256 plaintext image.
+///
+/// The frozen P-256 base-field modulus is `-1 mod 2N`. Consequently its
+/// Frobenius action on the primitive `2N`-th root is conjugation/inversion,
+/// represented by `X -> X^(2N-1)` in `Fp[X]/(X^N+1)`.
+pub fn zk_ams_t256_packed_subfield_conjugation_exponent_v1() -> Result<u32, ZkAmsMkheErrorV1> {
+    let twice_degree = ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1
+        .checked_mul(2)
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    if !twice_degree.is_power_of_two() {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    let twice_degree_u64 =
+        u64::try_from(twice_degree).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    let low = u64::from_be_bytes(
+        VEGA_T256_SCALAR_MODULUS_BE_V1[24..]
+            .try_into()
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+    );
+    let remainder =
+        usize::try_from(low % twice_degree_u64).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    let exponent = twice_degree
+        .checked_sub(1)
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    if remainder != exponent || exponent.is_multiple_of(2) {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    u32::try_from(exponent).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
 
 /// Construct the sole canonical chunking layout for a nonempty logical vector.
@@ -853,7 +901,64 @@ fn validate_packed(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
+    validate_packed_subfield_coefficients(&packed.coefficients)
+}
+
+fn validate_packed_subfield_coefficients(
+    coefficients: &[[u8; 32]],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let degree = ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1;
+    let expected_exponent = degree
+        .checked_mul(2)
+        .and_then(|twice_degree| twice_degree.checked_sub(1))
+        .and_then(|exponent| u32::try_from(exponent).ok())
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    if coefficients.len() != degree
+        || zk_ams_t256_packed_subfield_conjugation_exponent_v1()? != expected_exponent
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+
+    // For `sigma_{-1}: X -> X^-1`, coefficient zero is fixed and every
+    // nonzero coefficient obeys `m[N-i] = -m[i]`. Scanning only through N/2
+    // checks every pair exactly once; the midpoint must therefore be zero.
+    for index in 1..=degree / 2 {
+        let left = Scalar::from_be_bytes_exact(coefficients[index])
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?;
+        let right = Scalar::from_be_bytes_exact(coefficients[degree - index])
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?;
+        if right != -left {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+    }
     Ok(())
+}
+
+fn packed_subfield_relation_digest(
+    profile_digest: [u8; 32],
+    root_digest: [u8; 32],
+    exponent: u32,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    if profile_digest == [0; 32]
+        || root_digest == [0; 32]
+        || exponent != zk_ams_t256_packed_subfield_conjugation_exponent_v1()?
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    let mut frame = Vec::with_capacity(PACKED_SUBFIELD_DOMAIN_V1.len() + 160);
+    frame.extend_from_slice(PACKED_SUBFIELD_DOMAIN_V1);
+    frame.push(PACKING_VERSION_V1);
+    frame.extend_from_slice(&profile_digest);
+    frame.extend_from_slice(&VEGA_T256_SCALAR_MODULUS_BE_V1);
+    frame.extend_from_slice(
+        &u32::try_from(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(&exponent.to_be_bytes());
+    frame.extend_from_slice(&root_digest);
+    frame.extend_from_slice(PACKED_SUBFIELD_RELATION_V1);
+    Ok(keccak256(&frame))
 }
 
 fn packing_layout_digest(layout: ZkAmsT256PackingLayoutV1) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1113,6 +1218,83 @@ fn rotation_certificate_digest(certificate: ZkAmsT256RotationCertificateV1) -> [
     keccak256(&frame)
 }
 
+fn release_packing_certificate_digest(
+    certificate: ZkAmsT256ReleasePackingCertificateV1,
+) -> [u8; 32] {
+    let mut frame = Vec::with_capacity(RELEASE_PACKING_CERTIFICATE_DOMAIN_V1.len() + 360);
+    frame.extend_from_slice(RELEASE_PACKING_CERTIFICATE_DOMAIN_V1);
+    frame.push(certificate.version);
+    frame.extend_from_slice(&certificate.profile_digest);
+    frame.extend_from_slice(&certificate.ring_degree.to_be_bytes());
+    frame.extend_from_slice(&certificate.slot_count.to_be_bytes());
+    frame.extend_from_slice(&certificate.layout_digest);
+    frame.extend_from_slice(&certificate.root_digest);
+    frame.extend_from_slice(&certificate.subfield_conjugation_exponent.to_be_bytes());
+    frame.extend_from_slice(&certificate.subfield_relation_digest);
+    frame.extend_from_slice(&certificate.rotation_digest);
+    frame.push(certificate.galois_key_count);
+    frame.extend_from_slice(&certificate.galois_key_schedule_digest);
+    frame.extend_from_slice(&certificate.packed_input_kat_digest);
+    frame.extend_from_slice(&certificate.packed_output_kat_digest);
+    frame.extend_from_slice(&certificate.transformed_rns_kat_digest);
+    frame.extend_from_slice(&certificate.rotation_certificate_kat_digest);
+    frame.extend_from_slice(&certificate.negative_case_count.to_be_bytes());
+    frame.extend_from_slice(&certificate.negative_kat_digest);
+    keccak256(&frame)
+}
+
+fn validate_release_packing_certificate(
+    certificate: ZkAmsT256ReleasePackingCertificateV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    profile.validate()?;
+    let slot_count = u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    let layout = zk_ams_t256_packing_layout_v1(slot_count)?;
+    let rotation =
+        zk_ams_t256_rotation_v1(layout, 0, 0xA55A, ZkAmsT256RotationDirectionV1::Inverse)?;
+    let schedule = zk_ams_t256_galois_key_schedule_v1()?;
+    let root_exponent = release_root_exponent_be_v1()?;
+    let root = release_root()?;
+    let root_digest = release_root_identity_digest(root, &root_exponent)?;
+    let subfield_conjugation_exponent = zk_ams_t256_packed_subfield_conjugation_exponent_v1()?;
+    if certificate.version != PACKING_VERSION_V1
+        || certificate.profile_digest != profile.digest()?
+        || certificate.ring_degree
+            != u32::try_from(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+        || certificate.slot_count != slot_count
+        || certificate.layout_digest != layout.digest
+        || certificate.root_digest != root_digest
+        || certificate.subfield_conjugation_exponent != subfield_conjugation_exponent
+        || certificate.subfield_relation_digest
+            != packed_subfield_relation_digest(
+                profile.digest()?,
+                root_digest,
+                subfield_conjugation_exponent,
+            )?
+        || certificate.rotation_digest != rotation.digest
+        || certificate.galois_key_count
+            != u8::try_from(ZK_AMS_T256_GALOIS_KEY_COUNT_V1)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+        || certificate.galois_key_schedule_digest != schedule.digest
+        || certificate.galois_key_schedule_digest != ZK_AMS_T256_GALOIS_KEY_SCHEDULE_DIGEST_V1
+        || certificate.packed_input_kat_digest != ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1
+        || certificate.packed_output_kat_digest != ZK_AMS_T256_RELEASE_PACKED_OUTPUT_KAT_DIGEST_V1
+        || certificate.transformed_rns_kat_digest
+            != ZK_AMS_T256_RELEASE_TRANSFORMED_RNS_KAT_DIGEST_V1
+        || certificate.rotation_certificate_kat_digest
+            != ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1
+        || certificate.negative_case_count != ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1
+        || certificate.negative_kat_digest != ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1
+        || certificate.digest == [0; 32]
+        || certificate.digest != release_packing_certificate_digest(certificate)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    Ok(())
+}
+
 fn validate_rotation_certificate(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -1138,6 +1320,100 @@ fn validate_rotation_certificate(
     Ok(())
 }
 
+fn release_root_identity_digest(
+    root: T256Fp2,
+    exponent: &[u8; 64],
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let mut frame = Vec::with_capacity(RELEASE_ROOT_IDENTITY_DOMAIN_V1.len() + 128);
+    frame.extend_from_slice(RELEASE_ROOT_IDENTITY_DOMAIN_V1);
+    frame.extend_from_slice(&VEGA_T256_SCALAR_MODULUS_BE_V1);
+    frame.extend_from_slice(
+        &u32::try_from(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(exponent);
+    frame.extend_from_slice(&root.c0.to_be_bytes());
+    frame.extend_from_slice(&root.c1.to_be_bytes());
+    Ok(keccak256(&frame))
+}
+
+fn release_root_exponent_be_v1() -> Result<[u8; 64], ZkAmsMkheErrorV1> {
+    let mut modulus = [0_u64; 4];
+    for (index, chunk) in VEGA_T256_SCALAR_MODULUS_BE_V1.rchunks_exact(8).enumerate() {
+        modulus[index] = u64::from_be_bytes(
+            chunk
+                .try_into()
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+        );
+    }
+
+    // Compute `p^2 - 1` in eight little-endian 64-bit limbs. Keeping this
+    // derivation native avoids the error-prone hand-transcribed 512-bit
+    // exponent that previously drifted by two bytes.
+    let mut product = [0_u64; 8];
+    for (left_index, left) in modulus.iter().copied().enumerate() {
+        let mut carry = 0_u128;
+        for (right_index, right) in modulus.iter().copied().enumerate() {
+            let output_index = left_index + right_index;
+            let wide = u128::from(left)
+                .checked_mul(u128::from(right))
+                .and_then(|value| value.checked_add(u128::from(product[output_index])))
+                .and_then(|value| value.checked_add(carry))
+                .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+            product[output_index] = wide as u64;
+            carry = wide >> 64;
+        }
+        let mut output_index = left_index + modulus.len();
+        while carry != 0 {
+            let output = product
+                .get_mut(output_index)
+                .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+            let wide = u128::from(*output)
+                .checked_add(carry)
+                .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+            *output = wide as u64;
+            carry = wide >> 64;
+            output_index += 1;
+        }
+    }
+    let mut borrow = 1_u64;
+    for limb in &mut product {
+        let (value, borrowed) = limb.overflowing_sub(borrow);
+        *limb = value;
+        borrow = borrowed.into();
+        if borrow == 0 {
+            break;
+        }
+    }
+    if borrow != 0 {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+
+    let root_order = ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1
+        .checked_mul(2)
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    if !root_order.is_power_of_two() {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    let shift = root_order.trailing_zeros();
+    if shift == 0 || shift >= 64 || product[0] & ((1_u64 << shift) - 1) != 0 {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    let mut quotient = [0_u64; 8];
+    for index in 0..quotient.len() {
+        quotient[index] = product[index] >> shift;
+        if let Some(high) = product.get(index + 1) {
+            quotient[index] |= *high << (64 - shift);
+        }
+    }
+    let mut exponent = [0_u8; 64];
+    for (index, limb) in quotient.iter().rev().copied().enumerate() {
+        exponent[index * 8..(index + 1) * 8].copy_from_slice(&limb.to_be_bytes());
+    }
+    Ok(exponent)
+}
+
 fn release_root() -> Result<T256Fp2, ZkAmsMkheErrorV1> {
     let pinned = T256Fp2 {
         c0: Scalar::from_be_bytes_exact(RELEASE_ROOT_C0_BE_V1)
@@ -1160,7 +1436,7 @@ fn release_root() -> Result<T256Fp2, ZkAmsMkheErrorV1> {
         c0: Scalar::from_uniform_le_bytes(first),
         c1: Scalar::from_uniform_le_bytes(second),
     }
-    .pow_be(&RELEASE_ROOT_EXPONENT_BE_V1);
+    .pow_be(&release_root_exponent_be_v1()?);
     let minus_one = T256Fp2::from_base(-Scalar::one());
     if derived != pinned
         || pinned.pow_u64(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 as u64) != minus_one
@@ -1367,21 +1643,49 @@ pub(super) mod tests {
         }
     }
 
+    struct NegativePackingKatV1 {
+        hash: Keccak256,
+        case_count: u16,
+    }
+
+    impl NegativePackingKatV1 {
+        fn new() -> Self {
+            let mut hash = Keccak256::new();
+            hash.update(b"iroha.zk-ams.v1.mkhe.t256-packing-negative-kat");
+            Self {
+                hash,
+                case_count: 0,
+            }
+        }
+
+        fn record(&mut self, label: &[u8], error: ZkAmsMkheErrorV1) {
+            self.hash.update(
+                &u16::try_from(label.len())
+                    .expect("fixed negative KAT label length")
+                    .to_be_bytes(),
+            );
+            self.hash.update(label);
+            self.hash.update(&[error_tag(error)]);
+            self.case_count = self
+                .case_count
+                .checked_add(1)
+                .expect("fixed negative KAT case count");
+        }
+
+        fn finalize(self) -> ([u8; 32], u16) {
+            (self.hash.finalize(), self.case_count)
+        }
+    }
+
     fn record_negative<T: core::fmt::Debug>(
-        hash: &mut Keccak256,
+        kat: &mut NegativePackingKatV1,
         label: &[u8],
         result: Result<T, ZkAmsMkheErrorV1>,
         expected: ZkAmsMkheErrorV1,
     ) {
         let actual = result.expect_err("adversarial packing KAT must fail closed");
         assert_eq!(actual, expected, "negative KAT case {:?}", label);
-        hash.update(
-            &u16::try_from(label.len())
-                .expect("fixed negative KAT label length")
-                .to_be_bytes(),
-        );
-        hash.update(label);
-        hash.update(&[error_tag(actual)]);
+        kat.record(label, actual);
     }
 
     #[test]
@@ -1417,12 +1721,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn fp2_decode_rejects_non_subfield_and_layout_rejects_nonzero_padding() {
+    fn fp2_decode_preserves_base_subfield_and_layout_rejects_nonzero_padding() {
         let mut coefficients =
             encode_coefficients(&[1_u64, 2, 3, 4].map(Scalar::from_u64), 8).unwrap();
         coefficients[0] += Scalar::one();
         assert_eq!(
-            decode_coefficients(&coefficients, 8),
+            decode_coefficients(&coefficients, 8).unwrap(),
+            [2_u64, 3, 4, 5].map(Scalar::from_u64)
+        );
+        assert_eq!(
+            decode_coefficients(&coefficients[..coefficients.len() - 1], 8),
             Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         );
 
@@ -1438,6 +1746,10 @@ pub(super) mod tests {
 
     #[test]
     fn release_root_every_rotation_and_binary_key_schedule_are_exact() {
+        assert_eq!(
+            release_root_exponent_be_v1().unwrap(),
+            RELEASE_ROOT_EXPONENT_KAT_BE_V1
+        );
         let root = release_root().unwrap();
         assert_eq!(root.c0.to_be_bytes(), RELEASE_ROOT_C0_BE_V1);
         assert_eq!(root.c1.to_be_bytes(), RELEASE_ROOT_C1_BE_V1);
@@ -1569,6 +1881,78 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn release_packing_certificate_binds_every_kat_axis() {
+        let certificate =
+            zk_ams_t256_release_packing_certificate_v1().expect("release packing certificate");
+        assert_eq!(certificate.version, PACKING_VERSION_V1);
+        assert_eq!(
+            certificate.ring_degree as usize,
+            ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1
+        );
+        assert_eq!(
+            certificate.slot_count as usize,
+            ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1
+        );
+        assert_eq!(
+            usize::from(certificate.galois_key_count),
+            ZK_AMS_T256_GALOIS_KEY_COUNT_V1
+        );
+        assert_eq!(
+            certificate.subfield_conjugation_exponent,
+            u32::try_from(2 * ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 - 1).unwrap()
+        );
+        assert_ne!(certificate.subfield_relation_digest, [0; 32]);
+        assert_eq!(
+            certificate.negative_case_count,
+            ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1
+        );
+        assert_ne!(certificate.digest, [0; 32]);
+
+        let mut mutations = Vec::new();
+        macro_rules! rebound_mutation {
+            ($field:ident, $value:expr) => {{
+                let mut mutation = certificate;
+                mutation.$field = $value;
+                mutation.digest = release_packing_certificate_digest(mutation);
+                mutations.push(mutation);
+            }};
+        }
+        rebound_mutation!(version, certificate.version + 1);
+        rebound_mutation!(profile_digest, [0; 32]);
+        rebound_mutation!(ring_degree, certificate.ring_degree - 1);
+        rebound_mutation!(slot_count, certificate.slot_count - 1);
+        rebound_mutation!(layout_digest, [0; 32]);
+        rebound_mutation!(root_digest, [0; 32]);
+        rebound_mutation!(
+            subfield_conjugation_exponent,
+            certificate.subfield_conjugation_exponent - 2
+        );
+        rebound_mutation!(subfield_relation_digest, [0; 32]);
+        rebound_mutation!(rotation_digest, [0; 32]);
+        rebound_mutation!(galois_key_count, certificate.galois_key_count - 1);
+        rebound_mutation!(galois_key_schedule_digest, [0; 32]);
+        rebound_mutation!(packed_input_kat_digest, [0; 32]);
+        rebound_mutation!(packed_output_kat_digest, [0; 32]);
+        rebound_mutation!(transformed_rns_kat_digest, [0; 32]);
+        rebound_mutation!(rotation_certificate_kat_digest, [0; 32]);
+        rebound_mutation!(negative_case_count, certificate.negative_case_count - 1);
+        rebound_mutation!(negative_kat_digest, [0; 32]);
+        for mutation in mutations {
+            assert_eq!(
+                validate_release_packing_certificate(mutation),
+                Err(ZkAmsMkheErrorV1::InvalidProfile)
+            );
+        }
+
+        let mut corrupted_digest = certificate;
+        corrupted_digest.digest[0] ^= 1;
+        assert_eq!(
+            validate_release_packing_certificate(corrupted_digest),
+            Err(ZkAmsMkheErrorV1::InvalidProfile)
+        );
+    }
+
+    #[test]
     fn release_degree_packing_rotation_rns_and_adversarial_kats_are_pinned() {
         let coefficients = release_sparse_cosine_coefficients();
         let slot_scalars =
@@ -1595,6 +1979,19 @@ pub(super) mod tests {
         assert_eq!(
             decode_zk_ams_t256_packed_plaintext_v1(layout, &packed).unwrap(),
             slots
+        );
+        let conjugation_exponent =
+            usize::try_from(zk_ams_t256_packed_subfield_conjugation_exponent_v1().unwrap())
+                .unwrap();
+        let packed_scalars = packed
+            .coefficients
+            .iter()
+            .copied()
+            .map(|coefficient| Scalar::from_be_bytes_exact(coefficient).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            automorphism_coefficients(&packed_scalars, conjugation_exponent).unwrap(),
+            packed_scalars
         );
 
         let rotation =
@@ -1644,8 +2041,7 @@ pub(super) mod tests {
             .iter()
             .map(|entry| entry.exponent)
             .collect::<Vec<_>>();
-        let mut negative = Keccak256::new();
-        negative.update(b"iroha.zk-ams.v1.mkhe.t256-packing-negative-kat");
+        let mut negative = NegativePackingKatV1::new();
 
         record_negative(
             &mut negative,
@@ -1769,6 +2165,18 @@ pub(super) mod tests {
                 &mut negative,
                 b"packed.coefficient",
                 decode_zk_ams_t256_packed_plaintext_v1(layout, &mutation),
+                ZkAmsMkheErrorV1::InvalidPolynomial,
+            );
+        }
+        {
+            let mut mutation = packed.clone();
+            let coefficient = Scalar::from_be_bytes_exact(mutation.coefficients[1]).unwrap();
+            mutation.coefficients[1] = (coefficient + Scalar::one()).to_be_bytes();
+            mutation.digest = packed_plaintext_digest(&mutation).unwrap();
+            record_negative(
+                &mut negative,
+                b"packed.non-subfield",
+                packed_plaintext_to_rns_v1(layout, &mutation),
                 ZkAmsMkheErrorV1::InvalidPolynomial,
             );
         }
@@ -1958,7 +2366,11 @@ pub(super) mod tests {
             );
         }
 
-        let negative_digest = negative.finalize();
+        let (negative_digest, negative_case_count) = negative.finalize();
+        assert_eq!(
+            negative_case_count,
+            ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1
+        );
         assert_eq!(
             negative_digest,
             ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1

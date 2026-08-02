@@ -480,6 +480,14 @@ fn rekey_account_id(
             .into(),
         ));
     }
+    if crate::smartcontracts::isi::vpn::is_active_vpn_client(state_transaction, old_account) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: it funds an active operator-signed VPN lease"
+            )
+            .into(),
+        ));
+    }
 
     if state_transaction.world.accounts.get(new_account).is_some() {
         return Err(InstructionExecutionError::InvariantViolation(

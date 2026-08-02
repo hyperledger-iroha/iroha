@@ -20,8 +20,6 @@ public final class VpnProfile {
   private final List<String> tunnelAddresses;
   private final long mtuBytes;
   private final String displayBillingLabel;
-  private final String feeAssetId;
-  private final String escrowAccountId;
   private final String operatorAccountId;
   private final String leaseFee;
   private final long settlementGraceSecs;
@@ -48,8 +46,6 @@ public final class VpnProfile {
       final List<String> tunnelAddresses,
       final long mtuBytes,
       final String displayBillingLabel,
-      final String feeAssetId,
-      final String escrowAccountId,
       final String operatorAccountId,
       final String leaseFee,
       final long settlementGraceSecs,
@@ -74,8 +70,6 @@ public final class VpnProfile {
     this.tunnelAddresses = immutableList(tunnelAddresses);
     this.mtuBytes = mtuBytes;
     this.displayBillingLabel = Objects.requireNonNull(displayBillingLabel, "displayBillingLabel");
-    this.feeAssetId = Objects.requireNonNull(feeAssetId, "feeAssetId");
-    this.escrowAccountId = Objects.requireNonNull(escrowAccountId, "escrowAccountId");
     this.operatorAccountId = Objects.requireNonNull(operatorAccountId, "operatorAccountId");
     this.leaseFee = Objects.requireNonNull(leaseFee, "leaseFee");
     this.settlementGraceSecs = settlementGraceSecs;
@@ -105,8 +99,6 @@ public final class VpnProfile {
   public List<String> tunnelAddresses() { return tunnelAddresses; }
   public long mtuBytes() { return mtuBytes; }
   public String displayBillingLabel() { return displayBillingLabel; }
-  public String feeAssetId() { return feeAssetId; }
-  public String escrowAccountId() { return escrowAccountId; }
   public String operatorAccountId() { return operatorAccountId; }
   public String leaseFee() { return leaseFee; }
   public long settlementGraceSecs() { return settlementGraceSecs; }

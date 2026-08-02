@@ -29,7 +29,7 @@ public final class VpnJsonParser {
           "available", "relay_endpoint", "supported_exit_classes", "default_exit_class",
           "lease_secs", "dns_push_interval_secs", "meter_family", "route_pushes",
           "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
-          "display_billing_label", "fee_asset_id", "escrow_account_id", "operator_account_id",
+          "display_billing_label", "operator_account_id",
           "lease_fee", "settlement_grace_secs", "flow_label_bits", "padding_budget_ms",
           "relay_id_hex", "descriptor_commit_hex", "tls_server_name",
           "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
@@ -43,7 +43,7 @@ public final class VpnJsonParser {
           "flow_label_bits", "padding_budget_ms", "relay_id_hex", "descriptor_commit_hex",
           "tls_server_name", "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
           "directory_snapshot_digest_hex",
-          "metering_public_key_hex", "open_lease_instruction", "tx_instructions");
+          "metering_public_key_hex", "open_lease_instruction");
   private static final Set<String> SESSION_FIELDS =
       fields(
           "session_id", "account_id", "exit_class", "relay_endpoint", "lease_secs",
@@ -60,7 +60,7 @@ public final class VpnJsonParser {
           "connected_at_ms", "disconnected_at_ms", "duration_ms", "bytes_in", "bytes_out",
           "status", "receipt_source", "quote_id", "payment_tx_hash", "fee_asset_id",
           "escrow_account_id", "operator_account_id", "lease_fee", "earned_fee", "refunded_fee",
-          "lease_id_hex", "settle_lease_instruction", "tx_instructions");
+          "lease_id_hex", "settle_lease_instruction");
   private static final Set<String> RECEIPT_LIST_FIELDS = fields("items", "total");
   private static final Set<String> TX_INSTRUCTION_FIELDS = fields("wire_id", "payload_hex");
 
@@ -91,8 +91,6 @@ public final class VpnJsonParser {
         stringList(root.get("tunnel_addresses"), "vpn profile response.tunnel_addresses"),
         exactLong(root.get("mtu_bytes"), "vpn profile response.mtu_bytes", 1280L),
         requiredString(root.get("display_billing_label"), "vpn profile response.display_billing_label"),
-        requiredString(root.get("fee_asset_id"), "vpn profile response.fee_asset_id"),
-        requiredString(root.get("escrow_account_id"), "vpn profile response.escrow_account_id"),
         requiredString(root.get("operator_account_id"), "vpn profile response.operator_account_id"),
         quantity(root.get("lease_fee"), "vpn profile response.lease_fee"),
         atLeastLong(root.get("settlement_grace_secs"), "vpn profile response.settlement_grace_secs", 1L),
@@ -140,8 +138,10 @@ public final class VpnJsonParser {
         trust.relayCertificateSha256Hex,
         trust.directorySnapshotDigestHex,
         ed25519PublicKeyHex(root.get("metering_public_key_hex"), "meteringPublicKeyHex"),
-        optionalTxInstruction(root.get("open_lease_instruction"), "vpn quote response.open_lease_instruction"),
-        txInstructionList(root.get("tx_instructions"), "vpn quote response.tx_instructions", 1, 1));
+        parseTxInstruction(
+            expectObject(
+                root.get("open_lease_instruction"), "vpn quote response.open_lease_instruction"),
+            "vpn quote response.open_lease_instruction"));
   }
 
   public static VpnSession parseSession(final byte[] payload) {
@@ -234,8 +234,8 @@ public final class VpnJsonParser {
         quantity(root.get("earned_fee"), path + ".earned_fee"),
         quantity(root.get("refunded_fee"), path + ".refunded_fee"),
         hex32(root.get("lease_id_hex"), "leaseIdHex"),
-        optionalTxInstruction(root.get("settle_lease_instruction"), path + ".settle_lease_instruction"),
-        txInstructionList(root.get("tx_instructions"), path + ".tx_instructions", 0, 1));
+        optionalTxInstruction(
+            root.get("settle_lease_instruction"), path + ".settle_lease_instruction"));
   }
 
   private static Object parse(final byte[] payload, final String context) {
@@ -279,20 +279,6 @@ public final class VpnJsonParser {
     final List<Object> items = requiredList(value, path);
     for (int i = 0; i < items.size(); i++) {
       out.add(requiredString(items.get(i), path + "[" + i + "]"));
-    }
-    return out;
-  }
-
-  private static List<VpnTxInstruction> txInstructionList(
-      final Object value, final String path, final int minimum, final int maximum) {
-    final List<VpnTxInstruction> out = new ArrayList<>();
-    final List<Object> items = requiredList(value, path);
-    for (int i = 0; i < items.size(); i++) {
-      out.add(parseTxInstruction(expectObject(items.get(i), path + "[" + i + "]"), path + "[" + i + "]"));
-    }
-    if (out.size() < minimum || out.size() > maximum) {
-      throw new IllegalStateException(
-          path + " must contain between " + minimum + " and " + maximum + " entries");
     }
     return out;
   }

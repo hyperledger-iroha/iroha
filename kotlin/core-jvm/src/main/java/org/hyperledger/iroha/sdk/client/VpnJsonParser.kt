@@ -19,7 +19,7 @@ object VpnJsonParser {
         "available", "relay_endpoint", "supported_exit_classes", "default_exit_class",
         "lease_secs", "dns_push_interval_secs", "meter_family", "route_pushes",
         "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
-        "display_billing_label", "fee_asset_id", "escrow_account_id", "operator_account_id",
+        "display_billing_label", "operator_account_id",
         "lease_fee", "settlement_grace_secs", "flow_label_bits", "padding_budget_ms",
         "relay_id_hex", "descriptor_commit_hex", "tls_server_name",
         "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
@@ -33,7 +33,7 @@ object VpnJsonParser {
         "flow_label_bits", "padding_budget_ms", "relay_id_hex", "descriptor_commit_hex",
         "tls_server_name", "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
         "directory_snapshot_digest_hex",
-        "metering_public_key_hex", "open_lease_instruction", "tx_instructions",
+        "metering_public_key_hex", "open_lease_instruction",
     )
     private val SESSION_FIELDS = setOf(
         "session_id", "account_id", "exit_class", "relay_endpoint", "lease_secs",
@@ -50,7 +50,7 @@ object VpnJsonParser {
         "connected_at_ms", "disconnected_at_ms", "duration_ms", "bytes_in", "bytes_out",
         "status", "receipt_source", "quote_id", "payment_tx_hash", "fee_asset_id",
         "escrow_account_id", "operator_account_id", "lease_fee", "earned_fee", "refunded_fee",
-        "lease_id_hex", "settle_lease_instruction", "tx_instructions",
+        "lease_id_hex", "settle_lease_instruction",
     )
     private val RECEIPT_LIST_FIELDS = setOf("items", "total")
     private val TX_INSTRUCTION_FIELDS = setOf("wire_id", "payload_hex")
@@ -83,8 +83,6 @@ object VpnJsonParser {
             tunnelAddresses = stringList(root["tunnel_addresses"], "vpn profile response.tunnel_addresses"),
             mtuBytes = exactLong(root["mtu_bytes"], "vpn profile response.mtu_bytes", 1_280),
             displayBillingLabel = requiredString(root["display_billing_label"], "vpn profile response.display_billing_label"),
-            feeAssetId = requiredString(root["fee_asset_id"], "vpn profile response.fee_asset_id"),
-            escrowAccountId = requiredString(root["escrow_account_id"], "vpn profile response.escrow_account_id"),
             operatorAccountId = requiredString(root["operator_account_id"], "vpn profile response.operator_account_id"),
             leaseFee = quantity(root["lease_fee"], "vpn profile response.lease_fee"),
             settlementGraceSecs = atLeastLong(root["settlement_grace_secs"], "vpn profile response.settlement_grace_secs", 1),
@@ -134,8 +132,10 @@ object VpnJsonParser {
             directorySnapshotDigestHex = trust.directorySnapshotDigestHex,
             meteringPublicKeyHex =
                 ed25519PublicKeyHex(root["metering_public_key_hex"], "meteringPublicKeyHex"),
-            openLeaseInstruction = optionalTxInstruction(root["open_lease_instruction"], "vpn quote response.open_lease_instruction"),
-            txInstructions = txInstructionList(root["tx_instructions"], "vpn quote response.tx_instructions", 1, 1),
+            openLeaseInstruction = parseTxInstruction(
+                expectObject(root["open_lease_instruction"], "vpn quote response.open_lease_instruction"),
+                "vpn quote response.open_lease_instruction",
+            ),
         )
     }
 
@@ -226,7 +226,6 @@ object VpnJsonParser {
             refundedFee = quantity(root["refunded_fee"], "$path.refunded_fee"),
             leaseIdHex = hex32(root["lease_id_hex"], "leaseIdHex"),
             settleLeaseInstruction = optionalTxInstruction(root["settle_lease_instruction"], "$path.settle_lease_instruction"),
-            txInstructions = txInstructionList(root["tx_instructions"], "$path.tx_instructions", 0, 1),
         )
     }
 
@@ -259,16 +258,6 @@ object VpnJsonParser {
         return requiredList(value, path).mapIndexed { index, item ->
             requiredString(item, "$path[$index]")
         }
-    }
-
-    private fun txInstructionList(value: Any?, path: String, minimum: Int, maximum: Int): List<VpnTxInstruction> {
-        val parsed = requiredList(value, path).mapIndexed { index, item ->
-            parseTxInstruction(expectObject(item, "$path[$index]"), "$path[$index]")
-        }
-        check(parsed.size in minimum..maximum) {
-            "$path must contain between $minimum and $maximum entries"
-        }
-        return parsed
     }
 
     private fun optionalTxInstruction(value: Any?, path: String): VpnTxInstruction? {

@@ -1211,7 +1211,65 @@ impl MusubiArtifactDescriptorV1 {
     }
 }
 
-/// Authoritative archive registration independent of any renewable location.
+/// Immutable archive-registration projection independent of renewable locations.
+///
+/// Unlike [`MusubiArchiveRecordV1`], this projection deliberately excludes the
+/// mutable location revision and current location identities. A finalized
+/// registration can therefore be revalidated from a later exact archive read
+/// without requiring a historical copy of mutable registry state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiArchiveRegistrationProjectionV1 {
+    /// Derived archive identity.
+    pub archive_id: ArchiveId,
+    /// Complete immutable commitment.
+    pub commitment: MusubiArchiveCommitmentV1,
+    /// Exact authenticated receipt consumed by archive admission.
+    pub staging_receipt: MusubiSeedIngressReceiptV1,
+    /// Account that registered the archive.
+    pub registered_by: AccountId,
+    /// Finalized block height of registration.
+    pub registered_at_height: u64,
+}
+
+impl MusubiArchiveRegistrationProjectionV1 {
+    /// Validate the immutable archive identity and its exact ingress binding.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        validate_archive_registration_fields(
+            self.archive_id,
+            &self.commitment,
+            &self.staging_receipt,
+            &self.registered_by,
+            self.registered_at_height,
+        )
+    }
+}
+
+fn validate_archive_registration_fields(
+    archive_id: ArchiveId,
+    commitment: &MusubiArchiveCommitmentV1,
+    staging_receipt: &MusubiSeedIngressReceiptV1,
+    registered_by: &AccountId,
+    registered_at_height: u64,
+) -> Result<(), ParseError> {
+    commitment.validate()?;
+    staging_receipt.validate()?;
+    if archive_id != commitment.archive_id()
+        || staging_receipt.payload.binding.archive_id != archive_id
+        || staging_receipt.payload.binding.car_body_digest != commitment.car_digest
+        || staging_receipt.payload.binding.car_body_length != commitment.car_size
+        || &staging_receipt.payload.binding.publisher != registered_by
+        || registered_at_height == 0
+    {
+        return Err(ParseError::new(
+            "Musubi archive registration has an invalid identity or receipt",
+        ));
+    }
+    Ok(())
+}
+
+/// Authoritative archive registration and its mutable renewable-location directory.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -1233,17 +1291,28 @@ pub struct MusubiArchiveRecordV1 {
 }
 
 impl MusubiArchiveRecordV1 {
+    /// Return the immutable registration fields reproducible by every later archive read.
+    #[must_use]
+    pub fn registration_projection(&self) -> MusubiArchiveRegistrationProjectionV1 {
+        MusubiArchiveRegistrationProjectionV1 {
+            archive_id: self.archive_id,
+            commitment: self.commitment.clone(),
+            staging_receipt: self.staging_receipt.clone(),
+            registered_by: self.registered_by.clone(),
+            registered_at_height: self.registered_at_height,
+        }
+    }
+
     /// Validate the commitment and its derived identity.
     pub fn validate(&self) -> Result<(), ParseError> {
-        self.commitment.validate()?;
-        self.staging_receipt.validate()?;
-        if self.archive_id != self.commitment.archive_id()
-            || self.staging_receipt.payload.binding.archive_id != self.archive_id
-            || self.staging_receipt.payload.binding.car_body_digest != self.commitment.car_digest
-            || self.staging_receipt.payload.binding.car_body_length != self.commitment.car_size
-            || self.staging_receipt.payload.binding.publisher != self.registered_by
-            || self.registered_at_height == 0
-            || self.location_revision == 0
+        validate_archive_registration_fields(
+            self.archive_id,
+            &self.commitment,
+            &self.staging_receipt,
+            &self.registered_by,
+            self.registered_at_height,
+        )?;
+        if self.location_revision == 0
             || self.location_ids.len() > MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
             || self
                 .location_ids
@@ -3176,6 +3245,35 @@ impl MusubiMaintainerDirectoryEntryV1 {
         }
     }
 
+    /// Return the stable text key carried by finalized pagination cursors.
+    #[must_use]
+    pub fn cursor_key(&self) -> String {
+        let key = self.key();
+        let account = key
+            .account
+            .as_ref()
+            .expect("persisted Musubi maintainer directory entries always carry an account");
+        let encoded_account = account.encode();
+        let mut account_label = String::with_capacity(encoded_account.len().saturating_mul(2));
+        for byte in encoded_account {
+            fmt::Write::write_fmt(&mut account_label, format_args!("{byte:02x}"))
+                .expect("writing into a String cannot fail");
+        }
+        let invitation = key.invitation.as_ref().map_or_else(
+            || "accepted".to_owned(),
+            |invite_id| {
+                let mut label = String::with_capacity("pending-".len() + 64);
+                label.push_str("pending-");
+                for byte in invite_id.as_bytes() {
+                    fmt::Write::write_fmt(&mut label, format_args!("{byte:02x}"))
+                        .expect("writing into a String cannot fail");
+                }
+                label
+            },
+        );
+        format!("{account_label}|{invitation}")
+    }
+
     /// Validate the record and require invitations to remain pending.
     pub fn validate(&self) -> Result<(), ParseError> {
         match self {
@@ -4054,18 +4152,137 @@ musubi_page_type!(
     "Ordered page of release records with yank, takedown, and revision projections.",
     |pair: &[MusubiReleaseRecordV1]| pair[0].manifest.release >= pair[1].manifest.release
 );
-musubi_page_type!(
-    MusubiVersionPageV1,
-    MusubiVersionV1,
-    "Ordered page of structured package versions.",
-    |pair: &[MusubiVersionV1]| pair[0] >= pair[1]
-);
-musubi_page_type!(
-    MusubiMaintainerPageV1,
-    MusubiMaintainerDirectoryEntryV1,
-    "Ordered page of accepted package members and pending invitations.",
-    |pair: &[MusubiMaintainerDirectoryEntryV1]| pair[0].key() >= pair[1].key()
-);
+/// Ordered page of structured package versions bound to its exact request.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiVersionPageV1 {
+    /// Exact request whose results this page carries.
+    pub query: MusubiPackagePageQueryV1,
+    /// Ordered structured versions for `query.package`.
+    pub items: Vec<MusubiVersionV1>,
+    /// Cursor for the next page, absent at the end.
+    pub next_cursor: Option<MusubiFinalizedCursorV1>,
+    /// Finalized snapshot shared by every item.
+    pub snapshot: MusubiRegistrySnapshotV1,
+}
+
+impl MusubiVersionPageV1 {
+    /// Validate request identity, page bounds, strict order, and cursor binding.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.query.validate()?;
+        self.snapshot.validate()?;
+        if self.items.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(ParseError::new(
+                "Musubi version page is not strictly ordered",
+            ));
+        }
+        self.items.iter().try_for_each(MusubiVersionV1::validate)?;
+        if let Some(cursor) = &self.query.page.cursor {
+            let previous = cursor
+                .last_key
+                .parse::<MusubiVersionV1>()
+                .map_err(|_| ParseError::new("Musubi version cursor key is invalid"))?;
+            if self
+                .items
+                .first()
+                .is_some_and(|version| version <= &previous)
+            {
+                return Err(ParseError::new(
+                    "Musubi version page does not advance its structured cursor",
+                ));
+            }
+        }
+        let first_key = self.items.first().map(ToString::to_string);
+        let last_key = self.items.last().map(ToString::to_string);
+        validate_finalized_response_page(
+            &self.query.page,
+            self.items.len(),
+            first_key.as_deref(),
+            last_key.as_deref(),
+            &self.next_cursor,
+            self.snapshot,
+        )
+    }
+
+    /// Validate the page and require its echoed context to equal `query` exactly.
+    pub fn validate_for(&self, query: &MusubiPackagePageQueryV1) -> Result<(), ParseError> {
+        self.validate()?;
+        if &self.query != query {
+            return Err(ParseError::new(
+                "Musubi version page carries a different request context",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Ordered page of package members and invitations bound to its exact request.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiMaintainerPageV1 {
+    /// Exact request whose results this page carries.
+    pub query: MusubiPackagePageQueryV1,
+    /// Ordered accepted package members and pending invitations.
+    pub items: Vec<MusubiMaintainerDirectoryEntryV1>,
+    /// Cursor for the next page, absent at the end.
+    pub next_cursor: Option<MusubiFinalizedCursorV1>,
+    /// Finalized snapshot shared by every item.
+    pub snapshot: MusubiRegistrySnapshotV1,
+}
+
+impl MusubiMaintainerPageV1 {
+    /// Validate request identity, package membership, bounds, order, and cursor binding.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.query.validate()?;
+        self.snapshot.validate()?;
+        if self
+            .items
+            .windows(2)
+            .any(|pair| pair[0].key() >= pair[1].key())
+        {
+            return Err(ParseError::new(
+                "Musubi maintainer page is not strictly ordered",
+            ));
+        }
+        for entry in &self.items {
+            entry.validate()?;
+            if entry.key().package != self.query.package {
+                return Err(ParseError::new(
+                    "Musubi maintainer page item belongs to a different package",
+                ));
+            }
+        }
+        let first_key = self
+            .items
+            .first()
+            .map(MusubiMaintainerDirectoryEntryV1::cursor_key);
+        let last_key = self
+            .items
+            .last()
+            .map(MusubiMaintainerDirectoryEntryV1::cursor_key);
+        validate_finalized_response_page(
+            &self.query.page,
+            self.items.len(),
+            first_key.as_deref(),
+            last_key.as_deref(),
+            &self.next_cursor,
+            self.snapshot,
+        )
+    }
+
+    /// Validate the page and require its echoed context to equal `query` exactly.
+    pub fn validate_for(&self, query: &MusubiPackagePageQueryV1) -> Result<(), ParseError> {
+        self.validate()?;
+        if &self.query != query {
+            return Err(ParseError::new(
+                "Musubi maintainer page carries a different request context",
+            ));
+        }
+        Ok(())
+    }
+}
 /// Ordered renewable locations plus their authoritative immutable archive commitment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4074,8 +4291,12 @@ pub struct MusubiArchiveLocationPageV1 {
     /// Deployment-selected chain identity used by locks and archive admission.
     pub chain_id: ChainId,
     /// Hash of the first finalized block used as the genesis identity.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
-    /// Authoritative immutable archive registration and full source commitment.
+    /// Current authoritative archive record and full source commitment.
+    ///
+    /// [`MusubiArchiveRecordV1::registration_projection`] excludes this record's mutable
+    /// location directory for finality checks that outlive the named snapshot.
     pub archive: MusubiArchiveRecordV1,
     /// Ordered current non-retired locations for the archive.
     pub items: Vec<MusubiArchiveLocationV1>,
@@ -4240,6 +4461,11 @@ pub struct MusubiArchiveRetentionPageV1 {
     pub items: Vec<MusubiArchiveRetentionDecisionV1>,
     /// Finalized universal registry snapshot shared by every decision.
     pub snapshot: MusubiRegistrySnapshotV1,
+    /// Consensus-committed creation time of the block named by `snapshot`.
+    ///
+    /// This may be zero for bootstrap fixtures. A publication expiry proof requires it to be
+    /// strictly later than the exact signed transaction and receipt validity window.
+    pub finalized_time_ms: u64,
 }
 
 impl MusubiArchiveRetentionPageV1 {
@@ -4307,6 +4533,8 @@ impl MusubiArchiveLocationPageV1 {
                     .location_ids
                     .binary_search(&location.location_id)
                     .is_err()
+                || location.finalized_height > self.snapshot.finalized_height
+                || location.revision > self.archive.location_revision
                 || location.state == MusubiArchiveLocationStateV1::Retired
             {
                 return Err(ParseError::new(
@@ -4325,20 +4553,102 @@ impl MusubiArchiveLocationPageV1 {
         Ok(())
     }
 }
-musubi_page_type!(
-    MusubiAliasHistoryPageV1,
-    MusubiAliasHistoryEntryV1,
-    "Ordered page of permanent alias history.",
-    |pair: &[MusubiAliasHistoryEntryV1]| pair[0].key() >= pair[1].key()
-);
+/// Ordered page of permanent alias history bound to its exact request.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiAliasHistoryPageV1 {
+    /// Exact request whose results this page carries.
+    pub query: MusubiAliasQueryV1,
+    /// Ordered permanent history for `query.alias`.
+    pub items: Vec<MusubiAliasHistoryEntryV1>,
+    /// Cursor for the next page, absent at the end.
+    pub next_cursor: Option<MusubiFinalizedCursorV1>,
+    /// Finalized snapshot shared by every item.
+    pub snapshot: MusubiRegistrySnapshotV1,
+}
+
+impl MusubiAliasHistoryPageV1 {
+    /// Validate request identity, alias membership, bounds, order, and cursor binding.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.query.validate()?;
+        self.snapshot.validate()?;
+        if self
+            .items
+            .windows(2)
+            .any(|pair| pair[0].key() >= pair[1].key())
+        {
+            return Err(ParseError::new(
+                "Musubi alias-history page is not strictly ordered",
+            ));
+        }
+        for entry in &self.items {
+            entry.validate()?;
+            if entry.alias != self.query.alias {
+                return Err(ParseError::new(
+                    "Musubi alias-history page item belongs to a different alias",
+                ));
+            }
+        }
+        if let Some(cursor) = &self.query.page.cursor {
+            let (alias, revision) = cursor
+                .last_key
+                .rsplit_once(':')
+                .ok_or_else(|| ParseError::new("Musubi alias-history cursor key is invalid"))?;
+            if revision.len() != 20 {
+                return Err(ParseError::new(
+                    "Musubi alias-history cursor key is invalid",
+                ));
+            }
+            let revision = revision
+                .parse::<u64>()
+                .map_err(|_| ParseError::new("Musubi alias-history cursor key is invalid"))?;
+            if alias != self.query.alias.as_str()
+                || self.items.first().is_some_and(|entry| {
+                    entry.key() <= MusubiAliasHistoryKeyV1::new(self.query.alias.clone(), revision)
+                })
+            {
+                return Err(ParseError::new(
+                    "Musubi alias-history page does not advance its structured cursor",
+                ));
+            }
+        }
+        let cursor_key =
+            |entry: &MusubiAliasHistoryEntryV1| format!("{}:{:020}", entry.alias, entry.revision);
+        let first_key = self.items.first().map(cursor_key);
+        let last_key = self.items.last().map(cursor_key);
+        validate_finalized_response_page(
+            &self.query.page,
+            self.items.len(),
+            first_key.as_deref(),
+            last_key.as_deref(),
+            &self.next_cursor,
+            self.snapshot,
+        )
+    }
+
+    /// Validate the page and require its echoed context to equal `query` exactly.
+    pub fn validate_for(&self, query: &MusubiAliasQueryV1) -> Result<(), ParseError> {
+        self.validate()?;
+        if &self.query != query {
+            return Err(ParseError::new(
+                "Musubi alias-history page carries a different request context",
+            ));
+        }
+        Ok(())
+    }
+}
 /// Ordered page of universal resolver-index rows with authoritative lock identity.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiResolverIndexPageV1 {
+    /// Exact request whose rows this page carries.
+    pub query: MusubiResolverIndexQueryV1,
     /// Deployment-selected chain identity used by generated lockfiles.
     pub chain_id: ChainId,
     /// Hash of the first finalized block used as the genesis identity.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
     /// Ordered universal resolver-index rows.
     pub items: Vec<MusubiResolverReleaseRowV1>,
@@ -4349,11 +4659,11 @@ pub struct MusubiResolverIndexPageV1 {
 }
 
 impl MusubiResolverIndexPageV1 {
-    /// Validate lock identity, page size, snapshot, and cursor binding.
+    /// Validate request identity, lock identity, page bounds, rows, and cursor binding.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.query.validate()?;
         if self.chain_id.as_str().is_empty()
             || self.genesis_hash.iter().all(|byte| *byte == 0)
-            || self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1
             || self
                 .items
                 .windows(2)
@@ -4363,17 +4673,58 @@ impl MusubiResolverIndexPageV1 {
                 "Musubi resolver page has an invalid chain identity or item bound",
             ));
         }
-        self.items
-            .iter()
-            .try_for_each(MusubiResolverReleaseRowV1::validate)?;
-        self.snapshot.validate()?;
-        if let Some(cursor) = &self.next_cursor {
-            cursor.validate()?;
-            if cursor.snapshot != self.snapshot {
+        for row in &self.items {
+            row.validate()?;
+            if row.release.package != self.query.package
+                || self
+                    .query
+                    .requirement
+                    .as_ref()
+                    .is_some_and(|requirement| !requirement.matches(&row.release.version))
+            {
                 return Err(ParseError::new(
-                    "Musubi resolver page cursor uses a different finalized snapshot",
+                    "Musubi resolver row does not match its response request context",
                 ));
             }
+        }
+        if let Some(cursor) = &self.query.page.cursor {
+            let previous = cursor
+                .last_key
+                .parse::<MusubiVersionV1>()
+                .map_err(|_| ParseError::new("Musubi resolver cursor key is invalid"))?;
+            if self
+                .items
+                .first()
+                .is_some_and(|row| row.release.version <= previous)
+            {
+                return Err(ParseError::new(
+                    "Musubi resolver page does not advance its structured cursor",
+                ));
+            }
+        }
+        self.snapshot.validate()?;
+        let first_key = self
+            .items
+            .first()
+            .map(|row| row.release.version.to_string());
+        let last_key = self.items.last().map(|row| row.release.version.to_string());
+        validate_finalized_response_page(
+            &self.query.page,
+            self.items.len(),
+            first_key.as_deref(),
+            last_key.as_deref(),
+            &self.next_cursor,
+            self.snapshot,
+        )
+    }
+
+    /// Validate the page and require its echoed context to equal `query` exactly.
+    pub fn validate_for(&self, query: &MusubiResolverIndexQueryV1) -> Result<(), ParseError> {
+        self.validate()?;
+        if &self.query != query {
+            return Err(ParseError::new(
+                "Musubi resolver page carries a different request context",
+            ));
         }
         Ok(())
     }
@@ -4416,9 +4767,12 @@ impl MusubiOrderedPackageEntryV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiOrderedPackagePageV1 {
+    /// Exact request whose directory rows this page carries.
+    pub query: MusubiOrderedPrefixQueryV1,
     /// Deployment-selected chain identity used by generated lockfiles.
     pub chain_id: ChainId,
     /// Hash of the first finalized block used as the genesis identity.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
     /// Authoritative immutable namespace binding, present even when no package matches.
     pub namespace_binding: MusubiNamespaceBindingV1,
@@ -4431,12 +4785,14 @@ pub struct MusubiOrderedPackagePageV1 {
 }
 
 impl MusubiOrderedPackagePageV1 {
-    /// Validate lock identity, page size, snapshot, and cursor binding.
+    /// Validate request identity, lock identity, rows, bounds, and cursor binding.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.query.validate()?;
         self.namespace_binding.validate()?;
+        let (namespace, _) = self.query.prefix.components()?;
         if self.chain_id.as_str().is_empty()
             || self.genesis_hash.iter().all(|byte| *byte == 0)
-            || self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1
+            || namespace != self.namespace_binding.namespace
             || self
                 .items
                 .windows(2)
@@ -4452,20 +4808,53 @@ impl MusubiOrderedPackagePageV1 {
                 || item.package.home_dataspace != self.namespace_binding.home_dataspace
                 || item.package.scope != self.namespace_binding.scope
                 || item.package.name != item.selector.name
+                || !item
+                    .selector
+                    .to_string()
+                    .starts_with(self.query.prefix.as_str())
             {
                 return Err(ParseError::new(
-                    "Musubi directory page item disagrees with its namespace binding",
+                    "Musubi directory page item disagrees with its request or namespace binding",
+                ));
+            }
+        }
+        if let Some(cursor) = &self.query.page.cursor {
+            let previous = cursor
+                .last_key
+                .parse::<MusubiPackageSelectorV1>()
+                .map_err(|_| ParseError::new("Musubi directory cursor key is invalid"))?;
+            if previous.namespace != namespace
+                || !previous.to_string().starts_with(self.query.prefix.as_str())
+                || self
+                    .items
+                    .first()
+                    .is_some_and(|item| item.selector <= previous)
+            {
+                return Err(ParseError::new(
+                    "Musubi directory page does not advance its structured cursor",
                 ));
             }
         }
         self.snapshot.validate()?;
-        if let Some(cursor) = &self.next_cursor {
-            cursor.validate()?;
-            if cursor.snapshot != self.snapshot {
-                return Err(ParseError::new(
-                    "Musubi directory page cursor uses a different finalized snapshot",
-                ));
-            }
+        let first_key = self.items.first().map(|item| item.selector.to_string());
+        let last_key = self.items.last().map(|item| item.selector.to_string());
+        validate_finalized_response_page(
+            &self.query.page,
+            self.items.len(),
+            first_key.as_deref(),
+            last_key.as_deref(),
+            &self.next_cursor,
+            self.snapshot,
+        )
+    }
+
+    /// Validate the page and require its echoed context to equal `query` exactly.
+    pub fn validate_for(&self, query: &MusubiOrderedPrefixQueryV1) -> Result<(), ParseError> {
+        self.validate()?;
+        if &self.query != query {
+            return Err(ParseError::new(
+                "Musubi directory page carries a different request context",
+            ));
         }
         Ok(())
     }
@@ -4495,7 +4884,7 @@ pub struct MusubiExactReleaseQueryV1 {
 pub struct MusubiOrderedPrefixV1(String);
 
 impl MusubiOrderedPrefixV1 {
-    /// Parse a non-empty portable ordered prefix.
+    /// Parse a canonical `namespace/package-prefix` directory prefix.
     pub fn new(raw: &str) -> Result<Self, ParseError> {
         parse_clean(
             raw,
@@ -4505,13 +4894,35 @@ impl MusubiOrderedPrefixV1 {
         if raw.len() > MUSUBI_MAX_CURSOR_KEY_BYTES_V1 {
             return Err(ParseError::new("Musubi ordered prefix exceeds its bound"));
         }
-        Ok(Self(raw.to_owned()))
+        let prefix = Self(raw.to_owned());
+        prefix.components()?;
+        Ok(prefix)
     }
 
     /// Return prefix text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Return the structural namespace and portable package-name prefix.
+    pub fn components(&self) -> Result<(MusubiNamespaceV1, &str), ParseError> {
+        let (namespace, name_prefix) = self.0.split_once('/').ok_or_else(|| {
+            ParseError::new("Musubi ordered prefix must use namespace/package-prefix")
+        })?;
+        if name_prefix.contains('/')
+            || name_prefix.len() > MUSUBI_MAX_PACKAGE_NAME_BYTES_V1
+            || name_prefix.starts_with('-')
+            || name_prefix.contains("--")
+            || !name_prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(ParseError::new(
+                "Musubi ordered package prefix is not portable canonical text",
+            ));
+        }
+        Ok((namespace.parse()?, name_prefix))
     }
 
     /// Validate prefix text obtained through decoding.
@@ -4560,6 +4971,49 @@ impl MusubiPageRequestV1 {
     }
 }
 
+fn validate_finalized_response_page(
+    request: &MusubiPageRequestV1,
+    item_count: usize,
+    first_key: Option<&str>,
+    last_key: Option<&str>,
+    next_cursor: &Option<MusubiFinalizedCursorV1>,
+    snapshot: MusubiRegistrySnapshotV1,
+) -> Result<(), ParseError> {
+    request.validate()?;
+    if item_count > request.effective_limit()
+        || (item_count == 0 && (first_key.is_some() || last_key.is_some()))
+        || (item_count > 0 && (first_key.is_none() || last_key.is_none()))
+    {
+        return Err(ParseError::new(
+            "Musubi response page exceeds its requested bound or has invalid keys",
+        ));
+    }
+    if let Some(cursor) = &request.cursor {
+        if cursor.snapshot != snapshot || cursor.caller.is_some() {
+            return Err(ParseError::new(
+                "Musubi response page does not continue its request cursor",
+            ));
+        }
+    }
+    if let Some(cursor) = next_cursor {
+        cursor.validate()?;
+        if cursor.snapshot != snapshot
+            || cursor.caller.is_some()
+            || item_count != request.effective_limit()
+            || Some(cursor.last_key.as_str()) != last_key
+            || request
+                .cursor
+                .as_ref()
+                .is_some_and(|previous| previous.query_hash != cursor.query_hash)
+        {
+            return Err(ParseError::new(
+                "Musubi response next cursor does not bind its exact full page",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Resolver-index range request; exact resolution never uses fuzzy search.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4573,6 +5027,17 @@ pub struct MusubiResolverIndexQueryV1 {
     pub page: MusubiPageRequestV1,
 }
 
+impl MusubiResolverIndexQueryV1 {
+    /// Validate structural package, optional requirement, and page controls.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        self.requirement
+            .as_ref()
+            .map_or(Ok(()), MusubiVersionReqV1::validate)?;
+        self.page.validate()
+    }
+}
+
 /// Package-scoped versions/members query.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4582,6 +5047,14 @@ pub struct MusubiPackagePageQueryV1 {
     pub package: MusubiPackageIdV1,
     /// Page controls.
     pub page: MusubiPageRequestV1,
+}
+
+impl MusubiPackagePageQueryV1 {
+    /// Validate structural package identity and page controls.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        self.page.validate()
+    }
 }
 
 /// Archive-location query.
@@ -4606,6 +5079,14 @@ pub struct MusubiAliasQueryV1 {
     pub page: MusubiPageRequestV1,
 }
 
+impl MusubiAliasQueryV1 {
+    /// Validate permanent alias identity and page controls.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.alias.validate()?;
+        self.page.validate()
+    }
+}
+
 /// Ordered-prefix registry query.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4615,6 +5096,14 @@ pub struct MusubiOrderedPrefixQueryV1 {
     pub prefix: MusubiOrderedPrefixV1,
     /// Page controls.
     pub page: MusubiPageRequestV1,
+}
+
+impl MusubiOrderedPrefixQueryV1 {
+    /// Validate canonical structural prefix and page controls.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.prefix.validate()?;
+        self.page.validate()
+    }
 }
 
 /// Snapshot of the process-local finalized-event package-search projection.
@@ -4833,6 +5322,8 @@ impl MusubiSearchHitV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiSearchPageV1 {
+    /// Exact bounded request whose discovery results this page carries.
+    pub query: MusubiSearchQueryV1,
     /// Results ordered by structural package identity.
     pub items: Vec<MusubiSearchHitV1>,
     /// Continuation cursor, absent at the end of the result set.
@@ -4842,10 +5333,11 @@ pub struct MusubiSearchPageV1 {
 }
 
 impl MusubiSearchPageV1 {
-    /// Validate page bounds, strict ordering, and cursor binding.
+    /// Validate request identity, page bounds, strict ordering, and cursor binding.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.query.validate()?;
         self.snapshot.validate()?;
-        if self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1
+        if self.items.len() > self.query.page.effective_limit()
             || self
                 .items
                 .windows(2)
@@ -4858,15 +5350,45 @@ impl MusubiSearchPageV1 {
         self.items
             .iter()
             .try_for_each(MusubiSearchHitV1::validate)?;
+        if let Some(cursor) = &self.query.page.cursor {
+            if cursor.snapshot != self.snapshot
+                || self
+                    .items
+                    .first()
+                    .is_some_and(|item| item.package <= cursor.last_package)
+            {
+                return Err(ParseError::new(
+                    "Musubi search page does not continue its request cursor",
+                ));
+            }
+        }
         if let Some(cursor) = &self.next_cursor {
             cursor.validate()?;
             if cursor.snapshot != self.snapshot
                 || self.items.last().map(|hit| &hit.package) != Some(&cursor.last_package)
+                || self.items.len() != self.query.page.effective_limit()
+                || self
+                    .query
+                    .page
+                    .cursor
+                    .as_ref()
+                    .is_some_and(|previous| previous.query_hash != cursor.query_hash)
             {
                 return Err(ParseError::new(
                     "Musubi search page cursor does not bind its final result",
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// Validate the page and require its echoed context to equal `query` exactly.
+    pub fn validate_for(&self, query: &MusubiSearchQueryV1) -> Result<(), ParseError> {
+        self.validate()?;
+        if &self.query != query {
+            return Err(ParseError::new(
+                "Musubi search page carries a different request context",
+            ));
         }
         Ok(())
     }
@@ -5132,6 +5654,61 @@ mod tests {
         let decoded = MusubiSeedIngressReceiptV1::decode_all(&mut receipt.encode().as_slice())
             .expect("receipt Norito roundtrip");
         assert_eq!(decoded, receipt);
+    }
+
+    #[test]
+    fn archive_registration_projection_excludes_mutable_location_state() {
+        let broker_keypair = KeyPair::try_from_seed(vec![52; 32], Algorithm::Ed25519)
+            .expect("broker fixture keypair");
+        let broker = AccountId::new(broker_keypair.public_key().clone());
+        let binding = seed_ingress_binding(broker);
+        let payload = MusubiSeedIngressReceiptPayloadV1 {
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            binding: binding.clone(),
+            issued_at_ms: 1_000,
+            expires_at_ms: 2_000,
+        };
+        let receipt = MusubiSeedIngressReceiptV1 {
+            approvals: vec![MusubiSeedIngressReceiptApprovalV1 {
+                public_key: broker_keypair.public_key().clone(),
+                signature: SignatureOf::try_from_hash(
+                    broker_keypair.private_key(),
+                    payload.signing_hash(),
+                )
+                .expect("sign seed-ingress receipt"),
+            }],
+            payload,
+        };
+        let mut archive = MusubiArchiveRecordV1 {
+            archive_id: binding.archive_id,
+            commitment: archive_commitment(),
+            staging_receipt: receipt,
+            registered_by: binding.publisher,
+            registered_at_height: 7,
+            location_revision: 1,
+            location_ids: Vec::new(),
+        };
+        archive.validate().expect("canonical archive record");
+        let projection = archive.registration_projection();
+        projection
+            .validate()
+            .expect("canonical immutable registration projection");
+
+        archive.location_revision = 9;
+        archive.location_ids = vec![MusubiArchiveLocationIdV1::new([0x31; 32])];
+        assert_eq!(
+            archive.registration_projection(),
+            projection,
+            "renewable location state must not enter historical registration evidence"
+        );
+
+        let decoded =
+            MusubiArchiveRegistrationProjectionV1::decode_all(&mut projection.encode().as_slice())
+                .expect("registration projection Norito roundtrip");
+        assert_eq!(decoded, projection);
+        let mut zero_height = projection;
+        zero_height.registered_at_height = 0;
+        assert!(zero_height.validate().is_err());
     }
 
     #[test]
@@ -5867,6 +6444,7 @@ mod tests {
             genesis_hash: [0xE7; 32],
             items: vec![referenced],
             snapshot: snapshot(),
+            finalized_time_ms: 1_700_000_000_000,
         };
         page.validate()
             .expect("storage changes before the query anchor are valid");
@@ -6256,6 +6834,13 @@ mod tests {
         }
 
         let ordered = MusubiVersionPageV1 {
+            query: MusubiPackagePageQueryV1 {
+                package: package("page-bounds"),
+                page: MusubiPageRequestV1 {
+                    limit: 2,
+                    cursor: None,
+                },
+            },
             items: vec![
                 "1.0.0".parse().expect("version"),
                 "2.0.0".parse().expect("version"),
@@ -6278,6 +6863,7 @@ mod tests {
         };
         let decoded = MusubiVersionPageV1::decode_all(
             &mut MusubiVersionPageV1 {
+                query: ordered.query.clone(),
                 items: vec![malformed],
                 next_cursor: None,
                 snapshot: snapshot(),
@@ -6292,6 +6878,13 @@ mod tests {
         );
 
         let page = MusubiVersionPageV1 {
+            query: MusubiPackagePageQueryV1 {
+                package: package("page-overflow"),
+                page: MusubiPageRequestV1 {
+                    limit: u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("page maximum fits u32"),
+                    cursor: None,
+                },
+            },
             items: vec!["1.0.0".parse().expect("version"); MUSUBI_MAX_PAGE_SIZE_V1 + 1],
             next_cursor: None,
             snapshot: snapshot(),
@@ -6307,6 +6900,14 @@ mod tests {
         assert!(cursor.validate().is_err());
 
         let resolver_page = MusubiResolverIndexPageV1 {
+            query: MusubiResolverIndexQueryV1 {
+                package: package("resolver-page"),
+                requirement: None,
+                page: MusubiPageRequestV1 {
+                    limit: 50,
+                    cursor: None,
+                },
+            },
             chain_id: ChainId::from("musubi-test-chain"),
             genesis_hash: [9; 32],
             items: Vec::new(),
@@ -6326,6 +6927,13 @@ mod tests {
         );
 
         let directory_page = MusubiOrderedPackagePageV1 {
+            query: MusubiOrderedPrefixQueryV1 {
+                prefix: MusubiOrderedPrefixV1::new("sora/").expect("directory prefix"),
+                page: MusubiPageRequestV1 {
+                    limit: 50,
+                    cursor: None,
+                },
+            },
             chain_id: ChainId::from("musubi-test-chain"),
             genesis_hash: [9; 32],
             namespace_binding: MusubiNamespaceBindingV1 {
@@ -6349,6 +6957,207 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn empty_response_pages_retain_their_exact_query_identity() {
+        let package = package("empty-context");
+        let package_query = MusubiPackagePageQueryV1 {
+            package: package.clone(),
+            page: MusubiPageRequestV1 {
+                limit: 7,
+                cursor: None,
+            },
+        };
+        let versions = MusubiVersionPageV1 {
+            query: package_query.clone(),
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot: snapshot(),
+        };
+        versions
+            .validate_for(&package_query)
+            .expect("empty version page retains its package and page controls");
+        let mut other_package_query = package_query.clone();
+        other_package_query.package = package("other-context");
+        assert!(versions.validate_for(&other_package_query).is_err());
+
+        let resolver_query = MusubiResolverIndexQueryV1 {
+            package: package.clone(),
+            requirement: Some("^1.2.3".parse().expect("requirement")),
+            page: MusubiPageRequestV1 {
+                limit: 9,
+                cursor: None,
+            },
+        };
+        let resolver = MusubiResolverIndexPageV1 {
+            query: resolver_query.clone(),
+            chain_id: ChainId::from("musubi-test-chain"),
+            genesis_hash: [9; 32],
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot: snapshot(),
+        };
+        resolver
+            .validate_for(&resolver_query)
+            .expect("empty resolver page retains package, requirement, and page controls");
+        let mut other_resolver_query = resolver_query.clone();
+        other_resolver_query.requirement = Some("~1.2.3".parse().expect("requirement"));
+        assert!(resolver.validate_for(&other_resolver_query).is_err());
+
+        let maintainers = MusubiMaintainerPageV1 {
+            query: package_query.clone(),
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot: snapshot(),
+        };
+        maintainers
+            .validate_for(&package_query)
+            .expect("empty maintainer page retains its package context");
+
+        let alias_query = MusubiAliasQueryV1 {
+            alias: "math".parse().expect("alias"),
+            page: MusubiPageRequestV1 {
+                limit: 11,
+                cursor: None,
+            },
+        };
+        let history = MusubiAliasHistoryPageV1 {
+            query: alias_query.clone(),
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot: snapshot(),
+        };
+        history
+            .validate_for(&alias_query)
+            .expect("empty alias-history page retains its alias context");
+
+        let prefix_query = MusubiOrderedPrefixQueryV1 {
+            prefix: MusubiOrderedPrefixV1::new("sora/math-").expect("prefix"),
+            page: MusubiPageRequestV1 {
+                limit: 13,
+                cursor: None,
+            },
+        };
+        let directory = MusubiOrderedPackagePageV1 {
+            query: prefix_query.clone(),
+            chain_id: ChainId::from("musubi-test-chain"),
+            genesis_hash: [9; 32],
+            namespace_binding: MusubiNamespaceBindingV1 {
+                namespace: "sora".parse().expect("namespace"),
+                home_dataspace: DataSpaceId::new(7),
+                scope: MusubiPackageScopeV1::DataspaceRoot,
+                generation: 1,
+            },
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot: snapshot(),
+        };
+        directory
+            .validate_for(&prefix_query)
+            .expect("empty directory page retains its complete prefix context");
+
+        let search_query = MusubiSearchQueryV1 {
+            query: "arithmetic math".to_owned(),
+            page: MusubiSearchPageRequestV1 {
+                limit: 15,
+                cursor: None,
+            },
+        };
+        let search = MusubiSearchPageV1 {
+            query: search_query.clone(),
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot: MusubiSearchSnapshotV1 {
+                finalized_height: 5,
+                finalized_block_hash: [7; 32],
+                projection_revision: 9,
+            },
+        };
+        search
+            .validate_for(&search_query)
+            .expect("empty first search page retains its exact terms and page controls");
+        let mut other_search_query = search_query.clone();
+        other_search_query.query = "math arithmetic".to_owned();
+        assert!(search.validate_for(&other_search_query).is_err());
+    }
+
+    #[test]
+    fn version_page_cursor_advances_by_structured_semver() {
+        let snapshot = snapshot();
+        let cursor = MusubiFinalizedCursorV1 {
+            snapshot,
+            query_hash: MusubiQueryHashV1::new([0x31; 32]),
+            last_key: "1.2.0".to_owned(),
+            caller: None,
+        };
+        let page = MusubiVersionPageV1 {
+            query: MusubiPackagePageQueryV1 {
+                package: package("semver-cursor"),
+                page: MusubiPageRequestV1 {
+                    limit: 2,
+                    cursor: Some(cursor),
+                },
+            },
+            items: vec!["1.10.0".parse().expect("version")],
+            next_cursor: None,
+            snapshot,
+        };
+        page.validate()
+            .expect("1.10.0 follows 1.2.0 by structured SemVer, not lexical text order");
+
+        let mut prerelease = page;
+        prerelease
+            .query
+            .page
+            .cursor
+            .as_mut()
+            .expect("cursor")
+            .last_key = "2.0.0-alpha.10".to_owned();
+        prerelease.items = vec!["2.0.0-beta.1".parse().expect("prerelease")];
+        prerelease
+            .validate()
+            .expect("prerelease cursor advancement uses structured SemVer ordering");
+    }
+
+    #[test]
+    fn finalized_next_cursor_binds_the_exact_full_page_tail() {
+        let snapshot = snapshot();
+        let query = MusubiPackagePageQueryV1 {
+            package: package("next-cursor"),
+            page: MusubiPageRequestV1 {
+                limit: 1,
+                cursor: None,
+            },
+        };
+        let mut page = MusubiVersionPageV1 {
+            query,
+            items: vec!["1.0.0".parse().expect("version")],
+            next_cursor: Some(MusubiFinalizedCursorV1 {
+                snapshot,
+                query_hash: MusubiQueryHashV1::new([0x41; 32]),
+                last_key: "1.0.0".to_owned(),
+                caller: None,
+            }),
+            snapshot,
+        };
+        page.validate().expect("exact full-page cursor tail");
+        page.next_cursor.as_mut().expect("cursor").last_key = "1.0.1".to_owned();
+        assert!(page.validate().is_err());
+    }
+
+    #[test]
+    fn ordered_prefix_requires_canonical_namespace_and_package_prefix() {
+        for invalid in ["sora", "sora/-math", "sora/math--", "sora/math/extra"] {
+            assert!(
+                MusubiOrderedPrefixV1::new(invalid).is_err(),
+                "invalid ordered prefix `{invalid}` must be rejected"
+            );
+        }
+        let prefix = MusubiOrderedPrefixV1::new("apps.sora/math-").expect("canonical prefix");
+        let (namespace, package_prefix) = prefix.components().expect("prefix components");
+        assert_eq!(namespace.as_str(), "apps.sora");
+        assert_eq!(package_prefix, "math-");
     }
 
     #[test]

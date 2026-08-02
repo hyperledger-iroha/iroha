@@ -1,11 +1,11 @@
 //! Rebuildable Proof-of-Retrievability projection used by Torii.
 //!
 //! The storage node checkpoint is the sole authority for PoR challenge lifecycle
-//! state. Torii installs an atomic projection of that checkpoint for status
-//! queries and weekly reports. Coordinator persistence retains only exact report
-//! publication state once an authoritative projection has been installed.
+//! state. Torii installs that projection at startup, then advances its maps and
+//! indexes in place with exact node-authoritative generation updates. Coordinator
+//! persistence retains only exact report publication state once the projection
+//! has been installed.
 
-use base64::Engine as _;
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -42,12 +42,13 @@ use norito::{
 };
 use parking_lot::{MappedRwLockReadGuard, Mutex, RwLock, RwLockReadGuard};
 use sorafs_manifest::por::{
-    AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
-    POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome,
+    AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1,
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_CHALLENGE_STATUS_VERSION_V1,
+    POR_STATUS_CURSOR_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome,
     PorChallengePublicationV1, PorChallengePublicationValidationError, PorChallengeStatusV1,
     PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
     PorProviderSummaryValidationError, PorReportIsoWeek, PorReportIsoWeekValidationError,
-    PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
+    PorStatusCursorV1, PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
     ProviderVrfSubmissionValidationError, provider_vrf_input,
 };
 #[cfg(feature = "app_api")]
@@ -55,7 +56,8 @@ use sorafs_node::{
     ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError, PorRandomness,
 };
 use sorafs_node::{
-    PorStatusAuthoritySnapshotV1, PorStatusAuthorityUpdateV1, por_repair_source_identity_v1,
+    PorMutationFailureV1, PorStatusAuthoritySnapshotV1, PorStatusAuthorityUpdateV1,
+    por_repair_source_identity_v1,
 };
 use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
@@ -64,14 +66,14 @@ use tokio::time::{MissedTickBehavior, interval};
 
 const POR_STATUS_PAGE_VERSION_V1: u8 = 1;
 const POR_STATUS_EXPORT_PAGE_VERSION_V1: u8 = 1;
-const POR_STATUS_CURSOR_VERSION_V1: u8 = 1;
-const POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1: usize = 256;
 /// Maximum sum of canonical status-record bytes returned by one PoR page.
-pub(crate) const POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1: usize = 4 * 1024 * 1024;
+pub(crate) const POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1: usize =
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1;
 /// Maximum status records materialized and filter-evaluated by one status query.
 pub(crate) const POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1: usize = 512;
 const POR_COORDINATOR_SNAPSHOT_VERSION_V1: u8 = 1;
-const MAX_POR_COORDINATOR_RECORDS: usize = 65_536;
+const MAX_POR_COORDINATOR_RECORDS: usize =
+    iroha_config::parameters::defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX;
 const MAX_POR_COORDINATOR_FORCED_PROVIDERS: usize = 4_096;
 const MAX_POR_COORDINATOR_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_POR_COORDINATOR_DECODE_ALLOCATED_BYTES: usize = 512 * 1024 * 1024;
@@ -202,29 +204,13 @@ impl PorStatusPageLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-struct PorStatusCursorPayloadV1 {
-    version: u8,
-    snapshot_generation: u64,
-    selection_digest: [u8; 32],
-    last_epoch_id: u64,
-    last_issued_at: u64,
-    last_challenge_id: [u8; 32],
-}
-
-impl PorStatusCursorPayloadV1 {
-    fn encode_opaque(self) -> Result<String, PorCoordinatorError> {
-        let bytes = to_bytes(&self).map_err(PorCoordinatorError::PageCursorEncoding)?;
-        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
-    }
-}
-
 /// Opaque, versioned cursor for a PoR status or export page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PorStatusPageCursor {
     /// Start a new snapshot traversal.
     First,
-    /// Continue strictly after one record from an exact generation and selection.
+    /// Continue strictly after one consumed index candidate from an exact
+    /// generation and selection.
     After {
         /// Coordinator generation issued with the cursor.
         snapshot_generation: u64,
@@ -232,9 +218,9 @@ pub(crate) enum PorStatusPageCursor {
         selection_digest: [u8; 32],
         /// Epoch anchor, and the leading order-key component for ranged exports.
         last_epoch_id: u64,
-        /// Issued-at component of the last record's exact order key.
+        /// Issued-at component of the last consumed candidate's exact order key.
         last_issued_at: u64,
-        /// Challenge component of the last record's exact order key.
+        /// Challenge component of the last consumed candidate's exact order key.
         challenge_id: [u8; 32],
     },
 }
@@ -250,40 +236,8 @@ impl PorStatusPageCursor {
         let Some(cursor) = cursor else {
             return Ok(Self::First);
         };
-        if cursor.is_empty() || cursor.len() > POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1 {
-            return Err(PorCoordinatorError::InvalidPageCursor(
-                "cursor length is outside the first-release bound".to_owned(),
-            ));
-        }
-        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(cursor.as_bytes())
-            .map_err(|_| {
-                PorCoordinatorError::InvalidPageCursor(
-                    "cursor is not canonical URL-safe base64".to_owned(),
-                )
-            })?;
-        if base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes) != cursor {
-            return Err(PorCoordinatorError::InvalidPageCursor(
-                "cursor is not canonical URL-safe base64".to_owned(),
-            ));
-        }
-        let payload: PorStatusCursorPayloadV1 = decode_from_bytes(&bytes).map_err(|error| {
-            PorCoordinatorError::InvalidPageCursor(format!(
-                "cursor payload is not canonical Norito: {error}"
-            ))
-        })?;
-        let canonical = to_bytes(&payload).map_err(PorCoordinatorError::PageCursorEncoding)?;
-        if canonical != bytes {
-            return Err(PorCoordinatorError::InvalidPageCursor(
-                "cursor payload is not canonical Norito".to_owned(),
-            ));
-        }
-        if payload.version != POR_STATUS_CURSOR_VERSION_V1 {
-            return Err(PorCoordinatorError::InvalidPageCursor(format!(
-                "unsupported cursor version {}",
-                payload.version
-            )));
-        }
+        let payload = PorStatusCursorV1::decode_opaque(cursor)
+            .map_err(|error| PorCoordinatorError::InvalidPageCursor(error.to_string()))?;
         Ok(Self::After {
             snapshot_generation: payload.snapshot_generation,
             selection_digest: payload.selection_digest,
@@ -314,7 +268,8 @@ pub struct PorStatusPageV1 {
     /// Sparse filter intersections may therefore return no statuses together
     /// with `has_more = true` and a non-empty continuation cursor.
     pub has_more: bool,
-    /// Opaque continuation bound to this generation, selection, and last record.
+    /// Opaque continuation bound to this generation, selection, and last
+    /// consumed candidate.
     #[norito(default)]
     pub next_cursor: Option<String>,
     /// Challenge status records in canonical index order.
@@ -563,7 +518,13 @@ impl PorStatusIndexes {
 struct AuthoritativePorProjectionV1 {
     statuses: BTreeMap<[u8; 32], PorChallengeStatusV1>,
     indexes: PorStatusIndexes,
-    forced_providers: HashMap<[u8; 32], BTreeSet<u64>>,
+    forced_providers: HashMap<[u8; 32], BTreeMap<u64, usize>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthoritativeUpdateAction {
+    Insert,
+    Replace,
 }
 
 fn por_status_identity_is_unchanged(
@@ -596,29 +557,33 @@ fn por_status_lifecycle_advances(
         return false;
     }
 
-    let open_outcome = if previous.forced {
-        PorChallengeOutcome::Forced
-    } else {
-        PorChallengeOutcome::Pending
-    };
-    if previous.status != open_outcome {
-        return false;
-    }
-    if current.status == open_outcome {
-        return previous.failure_reason == current.failure_reason
-            && previous.repair_task_id == current.repair_task_id
-            && previous.verifier_latency_ms == current.verifier_latency_ms;
-    }
-    matches!(
-        current.status,
+    match previous.status {
+        PorChallengeOutcome::AwaitingProof => match current.status {
+            PorChallengeOutcome::ProofSubmitted => true,
+            PorChallengeOutcome::Failed => {
+                // A proof submission is its own durable generation. A direct
+                // deadline-failure transition therefore cannot introduce the
+                // response material that was absent from `AwaitingProof`.
+                current.responded_at.is_none() && current.proof_digest.is_none()
+            }
+            PorChallengeOutcome::AwaitingProof
+            | PorChallengeOutcome::Verified
+            | PorChallengeOutcome::Repaired => false,
+        },
+        PorChallengeOutcome::ProofSubmitted => matches!(
+            current.status,
+            PorChallengeOutcome::Verified
+                | PorChallengeOutcome::Failed
+                | PorChallengeOutcome::Repaired
+        ),
         PorChallengeOutcome::Verified
-            | PorChallengeOutcome::Failed
-            | PorChallengeOutcome::Repaired
-    )
+        | PorChallengeOutcome::Failed
+        | PorChallengeOutcome::Repaired => false,
+    }
 }
 
 fn remove_forced_status(
-    forced_providers: &mut HashMap<[u8; 32], BTreeSet<u64>>,
+    forced_providers: &mut HashMap<[u8; 32], BTreeMap<u64, usize>>,
     status: &PorChallengeStatusV1,
 ) {
     if !status.forced {
@@ -627,7 +592,21 @@ fn remove_forced_status(
     let remove_provider = forced_providers
         .get_mut(&status.provider_id)
         .is_some_and(|epochs| {
-            epochs.remove(&status.epoch_id);
+            let remove_epoch = epochs.get_mut(&status.epoch_id).is_some_and(|count| {
+                if *count > 1 {
+                    *count -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            debug_assert!(
+                epochs.contains_key(&status.epoch_id),
+                "retained forced-provider provenance must contain the removed status"
+            );
+            if remove_epoch {
+                epochs.remove(&status.epoch_id);
+            }
             epochs.is_empty()
         });
     if remove_provider {
@@ -636,20 +615,25 @@ fn remove_forced_status(
 }
 
 fn insert_forced_status(
-    forced_providers: &mut HashMap<[u8; 32], BTreeSet<u64>>,
+    forced_providers: &mut HashMap<[u8; 32], BTreeMap<u64, usize>>,
     status: &PorChallengeStatusV1,
 ) {
     if status.forced {
-        forced_providers
+        let count = forced_providers
             .entry(status.provider_id)
             .or_default()
-            .insert(status.epoch_id);
+            .entry(status.epoch_id)
+            .or_default();
+        *count = count
+            .checked_add(1)
+            .expect("bounded PoR status retention leaves forced-provenance count headroom");
     }
 }
 
 /// Rebuildable PoR read projection and durable weekly-report publisher state.
 #[derive(Debug, Clone)]
 pub struct PorCoordinator {
+    record_limit: usize,
     #[cfg(test)]
     records: Arc<DashMap<[u8; 32], ChallengeRecord>>,
     /// One atomic, rebuildable read projection sourced from the node checkpoint.
@@ -676,7 +660,14 @@ impl PorCoordinator {
     /// Construct an empty coordinator.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_record_limit(MAX_POR_COORDINATOR_RECORDS)
+    }
+
+    /// Construct an empty coordinator with the exact shared configured limit.
+    #[must_use]
+    pub(crate) fn with_record_limit(record_limit: usize) -> Self {
         Self {
+            record_limit: record_limit.clamp(1, MAX_POR_COORDINATOR_RECORDS),
             #[cfg(test)]
             records: Arc::new(DashMap::new()),
             authoritative_projection: Arc::new(RwLock::new(None)),
@@ -703,6 +694,14 @@ impl PorCoordinator {
     /// Returns [`PorPersistenceError`] if the existing persistence records cannot
     /// be loaded from disk.
     pub fn with_persistence<P: Into<PathBuf>>(path: P) -> Result<Self, PorPersistenceError> {
+        Self::with_persistence_and_record_limit(path, MAX_POR_COORDINATOR_RECORDS)
+    }
+
+    /// Load durable report state with the exact shared configured record limit.
+    pub(crate) fn with_persistence_and_record_limit<P: Into<PathBuf>>(
+        path: P,
+        record_limit: usize,
+    ) -> Result<Self, PorPersistenceError> {
         let persistence = Arc::new(PorPersistence::new(path.into()));
         let LoadedPorCoordinatorState {
             records,
@@ -710,6 +709,13 @@ impl PorCoordinator {
             prepared_weekly_report,
             status_generation,
         } = persistence.load()?;
+        let record_limit = record_limit.clamp(1, MAX_POR_COORDINATOR_RECORDS);
+        if records.len() > record_limit {
+            return Err(PorPersistenceError::Decode(format!(
+                "persisted PoR lifecycle count {} exceeds configured limit {record_limit}",
+                records.len()
+            )));
+        }
         #[cfg(test)]
         let status_indexes = {
             let status_indexes = PorStatusIndexes::from_records(&records, status_generation);
@@ -721,6 +727,7 @@ impl PorCoordinator {
         #[cfg(not(test))]
         let _retired_lifecycle_state = (records, forced, status_generation);
         Ok(Self {
+            record_limit,
             #[cfg(test)]
             records,
             authoritative_projection: Arc::new(RwLock::new(None)),
@@ -806,16 +813,22 @@ impl PorCoordinator {
         &self,
         snapshot: PorStatusAuthoritySnapshotV1,
     ) -> Result<(), PorCoordinatorError> {
+        // Snapshot reconciliation is a mutation, not merely validation. Hold
+        // the same fence as incremental deltas from the first generation
+        // check through publication so a concurrent delta cannot be silently
+        // overwritten by a stale startup/recovery snapshot.
+        let _mutation = self.mutation_lock.lock();
         if snapshot.generation == 0 {
             return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
                 "status generation must be non-zero".to_owned(),
             ));
         }
-        if snapshot.statuses.len() > MAX_POR_COORDINATOR_RECORDS {
+        if snapshot.statuses.len() > self.record_limit {
             return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
                 format!(
-                    "status count {} exceeds limit {MAX_POR_COORDINATOR_RECORDS}",
-                    snapshot.statuses.len()
+                    "status count {} exceeds limit {}",
+                    snapshot.statuses.len(),
+                    self.record_limit
                 ),
             ));
         }
@@ -834,7 +847,7 @@ impl PorCoordinator {
 
         let mut statuses = BTreeMap::new();
         let mut previous = None;
-        let mut forced = HashMap::<[u8; 32], BTreeSet<u64>>::new();
+        let mut forced = HashMap::<[u8; 32], BTreeMap<u64, usize>>::new();
         for status in snapshot.statuses {
             status.validate().map_err(|error| {
                 PorCoordinatorError::InvalidAuthoritativeProjection(error.to_string())
@@ -846,10 +859,16 @@ impl PorCoordinator {
             }
             previous = Some(status.challenge_id);
             if status.forced {
-                forced
+                let count = forced
                     .entry(status.provider_id)
                     .or_default()
-                    .insert(status.epoch_id);
+                    .entry(status.epoch_id)
+                    .or_default();
+                *count = count.checked_add(1).ok_or(
+                    PorCoordinatorError::InvalidAuthoritativeProjection(
+                        "forced-provider provenance count overflowed".to_owned(),
+                    ),
+                )?;
             }
             statuses.insert(status.challenge_id, status);
         }
@@ -860,8 +879,27 @@ impl PorCoordinator {
             forced_providers: forced,
         };
 
-        let _mutation = self.mutation_lock.lock();
-        *self.authoritative_projection.write() = Some(projection);
+        let mut installed = self.authoritative_projection.write();
+        if let Some(current) = installed.as_ref() {
+            match snapshot.generation.cmp(&current.indexes.generation) {
+                Ordering::Less => {
+                    return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
+                        format!(
+                            "snapshot generation {} would roll back installed generation {}",
+                            snapshot.generation, current.indexes.generation
+                        ),
+                    ));
+                }
+                Ordering::Equal if current.statuses == projection.statuses => return Ok(()),
+                Ordering::Equal => {
+                    return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
+                        "same-generation snapshot conflicts with installed authority".to_owned(),
+                    ));
+                }
+                Ordering::Greater => {}
+            }
+        }
+        *installed = Some(projection);
         #[cfg(test)]
         self.records.clear();
         Ok(())
@@ -881,88 +919,183 @@ impl PorCoordinator {
         let validation_error = if update.generation == 0 {
             Some("status generation must be non-zero".to_owned())
         } else {
-            update.status.validate().err().map(|error| error.to_string())
+            update
+                .status
+                .validate()
+                .err()
+                .map(|error| error.to_string())
         };
 
         let _mutation = self.mutation_lock.lock();
         let mut installed = self.authoritative_projection.write();
         if let Some(reason) = validation_error {
             *installed = None;
-            return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
-                reason,
-            ));
+            return Err(PorCoordinatorError::InvalidAuthoritativeProjection(reason));
         }
         let Some(current) = installed.as_ref() else {
             return Err(PorCoordinatorError::AuthoritativeProjectionUnavailable);
         };
-        let current_generation = current.indexes.generation;
         let challenge_id = update.status.challenge_id;
-
-        if update.generation == current_generation {
-            if current.statuses.get(&challenge_id) == Some(&update.status) {
-                return Ok(());
-            }
+        if update.removed_challenge_ids.len() > 1
+            || update
+                .removed_challenge_ids
+                .windows(2)
+                .any(|ids| ids[0] >= ids[1])
+            || update
+                .removed_challenge_ids
+                .iter()
+                .any(|removed| *removed == [0; 32] || *removed == challenge_id)
+        {
             *installed = None;
             return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
-                "same-generation status update conflicts with the installed checkpoint"
-                    .to_owned(),
+                "status update removals are not one canonical bounded set".to_owned(),
             ));
         }
-
-        if current_generation.checked_add(1) != Some(update.generation) {
-            *installed = None;
-            return Err(PorCoordinatorError::InvalidAuthoritativeProjection(format!(
-                "status update generation {} does not immediately follow installed generation {current_generation}",
-                update.generation
-            )));
-        }
-
-        let previous = current.statuses.get(&challenge_id);
-        if let Some(previous) = previous {
-            if !por_status_identity_is_unchanged(previous, &update.status)
-                || !por_status_lifecycle_advances(previous, &update.status)
-            {
-                *installed = None;
-                return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
-                    "status update changes immutable challenge identity or regresses lifecycle state"
-                        .to_owned(),
+        let action = (|| {
+            let current_generation = current.indexes.generation;
+            if update.generation == current_generation {
+                let removals_already_absent = update
+                    .removed_challenge_ids
+                    .iter()
+                    .all(|removed| !current.statuses.contains_key(removed));
+                let status_is_exact_or_archived = match current.statuses.get(&challenge_id) {
+                    Some(retained) => retained == &update.status,
+                    None => {
+                        update.removed_challenge_ids.is_empty()
+                            && !matches!(
+                                update.status.status,
+                                PorChallengeOutcome::AwaitingProof
+                                    | PorChallengeOutcome::ProofSubmitted
+                            )
+                    }
+                };
+                return if removals_already_absent && status_is_exact_or_archived {
+                    // The node may authenticate an exact replay from its
+                    // checkpoint-pinned archive after rolling retention has
+                    // already removed that terminal from this projection.
+                    Ok(None)
+                } else {
+                    Err(
+                        "same-generation status update conflicts with retained or archived authority"
+                            .to_owned(),
+                    )
+                };
+            }
+            if current_generation.checked_add(1) != Some(update.generation) {
+                return Err(format!(
+                    "status update generation {} does not immediately follow installed generation {current_generation}",
+                    update.generation
                 ));
             }
-        } else if current.statuses.len() >= MAX_POR_COORDINATOR_RECORDS {
-            *installed = None;
-            return Err(PorCoordinatorError::RetentionExhausted {
-                limit: MAX_POR_COORDINATOR_RECORDS,
-            });
-        }
 
-        let prospective_len = current.statuses.len() + usize::from(previous.is_none());
-        let minimum_generation = u64::try_from(prospective_len)
-            .ok()
-            .and_then(|count| count.checked_add(1))
-            .ok_or(PorCoordinatorError::StatusGenerationExhausted)?;
-        if update.generation < minimum_generation {
-            *installed = None;
-            return Err(PorCoordinatorError::InvalidAuthoritativeProjection(format!(
-                "status update generation {} is below minimum {minimum_generation}",
-                update.generation
-            )));
-        }
+            for removed in &update.removed_challenge_ids {
+                let status = current.statuses.get(removed).ok_or_else(|| {
+                    "status update removes an identity absent from the installed checkpoint"
+                        .to_owned()
+                })?;
+                if matches!(
+                    status.status,
+                    PorChallengeOutcome::AwaitingProof | PorChallengeOutcome::ProofSubmitted
+                ) {
+                    return Err(
+                        "status update may retire only archived terminal identities".to_owned()
+                    );
+                }
+            }
+
+            let action = if let Some(previous) = current.statuses.get(&challenge_id) {
+                if !update.removed_challenge_ids.is_empty() {
+                    return Err(
+                        "lifecycle replacement cannot retire an unrelated status".to_owned()
+                    );
+                }
+                if !por_status_identity_is_unchanged(previous, &update.status)
+                    || !por_status_lifecycle_advances(previous, &update.status)
+                {
+                    return Err(
+                        "status update changes immutable challenge identity or regresses lifecycle state"
+                            .to_owned(),
+                    );
+                }
+                AuthoritativeUpdateAction::Replace
+            } else {
+                if !update.removed_challenge_ids.is_empty()
+                    && current.statuses.len() < self.record_limit
+                {
+                    return Err(
+                        "status retention may roll only when admitting at the configured bound"
+                            .to_owned(),
+                    );
+                }
+                if current
+                    .statuses
+                    .len()
+                    .saturating_sub(update.removed_challenge_ids.len())
+                    >= self.record_limit
+                {
+                    return Err(format!(
+                        "status count would exceed limit {}",
+                        self.record_limit
+                    ));
+                }
+                AuthoritativeUpdateAction::Insert
+            };
+            let prospective_len = current
+                .statuses
+                .len()
+                .checked_sub(update.removed_challenge_ids.len())
+                .and_then(|count| {
+                    count.checked_add(usize::from(matches!(
+                        action,
+                        AuthoritativeUpdateAction::Insert
+                    )))
+                })
+                .ok_or_else(|| "status update projected length overflowed".to_owned())?;
+            let minimum_generation = u64::try_from(prospective_len)
+                .ok()
+                .and_then(|count| count.checked_add(1))
+                .ok_or_else(|| "status generation floor overflowed".to_owned())?;
+            if update.generation < minimum_generation {
+                return Err(format!(
+                    "status update generation {} is below minimum {minimum_generation}",
+                    update.generation
+                ));
+            }
+            Ok(Some(action))
+        })();
+        let action = match action {
+            Ok(Some(action)) => action,
+            Ok(None) => return Ok(()),
+            Err(reason) => {
+                *installed = None;
+                return Err(PorCoordinatorError::InvalidAuthoritativeProjection(reason));
+            }
+        };
 
         let projection = installed
             .as_mut()
             .expect("installed projection was checked before mutation");
-        if let Some(previous) = projection.statuses.insert(challenge_id, update.status.clone()) {
-            projection.indexes.commit_replace(
-                &previous,
-                &update.status,
-                update.generation,
-            );
+        for removed in &update.removed_challenge_ids {
+            let removed_status = projection
+                .statuses
+                .remove(removed)
+                .expect("validated status removal must remain installed");
+            projection.indexes.remove_status(&removed_status);
+            remove_forced_status(&mut projection.forced_providers, &removed_status);
+        }
+        let previous = projection
+            .statuses
+            .insert(challenge_id, update.status.clone());
+        if let Some(previous) = previous {
+            debug_assert_eq!(action, AuthoritativeUpdateAction::Replace);
+            projection.indexes.remove_status(&previous);
+            projection.indexes.insert_status(&update.status);
             remove_forced_status(&mut projection.forced_providers, &previous);
         } else {
-            projection
-                .indexes
-                .commit_insert(&update.status, update.generation);
+            debug_assert_eq!(action, AuthoritativeUpdateAction::Insert);
+            projection.indexes.insert_status(&update.status);
         }
+        projection.indexes.publish_generation(update.generation);
         insert_forced_status(&mut projection.forced_providers, &update.status);
         Ok(())
     }
@@ -1021,9 +1154,9 @@ impl PorCoordinator {
                 challenge_id_hex: hex::encode(challenge.challenge_id),
             });
         }
-        if self.records.len() >= MAX_POR_COORDINATOR_RECORDS {
+        if self.records.len() >= self.record_limit {
             return Err(PorCoordinatorError::RetentionExhausted {
-                limit: MAX_POR_COORDINATOR_RECORDS,
+                limit: self.record_limit,
             });
         }
         let next_status_generation = self.next_status_generation()?;
@@ -1455,9 +1588,8 @@ impl PorCoordinator {
         let authoritative_guard = self.authoritative_projection.read();
         let authoritative = authoritative_guard.as_ref();
         #[cfg(not(test))]
-        let authoritative = Some(
-            authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?,
-        );
+        let authoritative =
+            Some(authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?);
         #[cfg(test)]
         let legacy_indexes = authoritative.is_none().then(|| self.status_indexes.read());
         #[cfg(not(test))]
@@ -1473,11 +1605,16 @@ impl PorCoordinator {
                     .expect("legacy PoR indexes exist without an authoritative projection")
             });
         let selection_digest = por_status_selection_digest(filter);
-        let after_anchor = self.validate_page_cursor(
-            cursor,
-            indexes.generation,
-            selection_digest,
-        )?;
+        let after_anchor =
+            self.validate_page_cursor(cursor, indexes.generation, selection_digest)?;
+        if let Some(anchor) = after_anchor {
+            let status = self.status_for_indexed_id(authoritative, anchor.challenge_id)?;
+            if status.epoch_id != anchor.epoch_id || status.issued_at != anchor.issued_at {
+                return Err(PorCoordinatorError::PageCursorAnchorMismatch {
+                    challenge_id: anchor.challenge_id,
+                });
+            }
+        }
         let after = after_anchor.map(PorStatusCursorAnchor::status_order_key);
 
         let candidates = self.smallest_status_index(&indexes, filter);
@@ -1574,9 +1711,8 @@ impl PorCoordinator {
         let authoritative_guard = self.authoritative_projection.read();
         let authoritative = authoritative_guard.as_ref();
         #[cfg(not(test))]
-        let authoritative = Some(
-            authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?,
-        );
+        let authoritative =
+            Some(authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?);
         #[cfg(test)]
         let legacy_indexes = authoritative.is_none().then(|| self.status_indexes.read());
         #[cfg(not(test))]
@@ -1592,17 +1728,20 @@ impl PorCoordinator {
                     .expect("legacy PoR indexes exist without an authoritative projection")
             });
         let selection_digest = por_export_selection_digest(range);
-        let after_anchor = self.validate_page_cursor(
-            cursor,
-            indexes.generation,
-            selection_digest,
-        )?;
+        let after_anchor =
+            self.validate_page_cursor(cursor, indexes.generation, selection_digest)?;
         if let (Some((start, end)), Some(anchor)) = (range, after_anchor)
             && !(start..=end).contains(&anchor.epoch_id)
         {
             return Err(PorCoordinatorError::PageCursorAnchorSelectionMismatch);
         }
         if let Some(anchor) = after_anchor {
+            let status = self.status_for_indexed_id(authoritative, anchor.challenge_id)?;
+            if status.epoch_id != anchor.epoch_id || status.issued_at != anchor.issued_at {
+                return Err(PorCoordinatorError::PageCursorAnchorMismatch {
+                    challenge_id: anchor.challenge_id,
+                });
+            }
             let anchor_is_indexed = match range {
                 None => indexes.canonical.contains(&anchor.status_order_key()),
                 Some(_) => indexes.epoch_order.contains(&anchor.epoch_order_key()),
@@ -1642,11 +1781,9 @@ impl PorCoordinator {
                 }
             }
             Some((start, end)) => {
-                let lower =
-                    after_anchor
-                        .map_or(Bound::Included((start, 0, [0; 32])), |status| {
-                            Bound::Excluded(status.epoch_order_key())
-                        });
+                let lower = after_anchor.map_or(Bound::Included((start, 0, [0; 32])), |status| {
+                    Bound::Excluded(status.epoch_order_key())
+                });
                 let upper = Bound::Included((end, u64::MAX, [u8::MAX; 32]));
                 let mut candidates = indexes.epoch_order.range((lower, upper)).peekable();
                 while page.inspected_candidates < POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
@@ -1768,13 +1905,15 @@ impl PorCoordinator {
         let _mutation = self.mutation_lock.lock();
         self.ensure_persistence_healthy()?;
         #[cfg(not(test))]
-        self.require_authoritative_projection()?;
+        let authoritative = self.require_authoritative_projection()?;
         if let Some(prepared) = self.prepared_weekly_report.read().as_ref()
             && prepared.report.cycle == cycle
         {
             return Ok(prepared.report.clone());
         }
         let generated_at = canonical_weekly_report_generated_at(cycle)?;
+        #[cfg(not(test))]
+        drop(authoritative);
         self.weekly_report_at(cycle, generated_at)
     }
 
@@ -1794,7 +1933,7 @@ impl PorCoordinator {
         let _mutation = self.mutation_lock.lock();
         self.ensure_persistence_healthy()?;
         #[cfg(not(test))]
-        self.require_authoritative_projection()?;
+        let authoritative = self.require_authoritative_projection()?;
         let requested_marker = iso_week_marker(cycle);
         if let Some(existing) = self.prepared_weekly_report.read().as_ref() {
             let existing_marker = iso_week_marker(existing.report.cycle);
@@ -1832,6 +1971,8 @@ impl PorCoordinator {
                 })
             })?;
         let generated_at = canonical_weekly_report_generated_at(cycle)?;
+        #[cfg(not(test))]
+        drop(authoritative);
         let prepared_report = PreparedWeeklyReportV1 {
             report: self.weekly_report_at(cycle, generated_at)?,
             published: false,
@@ -1902,9 +2043,8 @@ impl PorCoordinator {
         let authoritative_guard = self.authoritative_projection.read();
         let authoritative = authoritative_guard.as_ref();
         #[cfg(not(test))]
-        let authoritative = Some(
-            authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?,
-        );
+        let authoritative =
+            Some(authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?);
         #[cfg(test)]
         let legacy_indexes = authoritative.is_none().then(|| self.status_indexes.read());
         #[cfg(not(test))]
@@ -1966,8 +2106,7 @@ impl PorCoordinator {
                             Some(status.responded_at.unwrap_or(status.issued_at));
                     }
                 }
-                PorChallengeOutcome::Forced => {}
-                PorChallengeOutcome::Pending => {}
+                PorChallengeOutcome::AwaitingProof | PorChallengeOutcome::ProofSubmitted => {}
             }
         }
 
@@ -2078,7 +2217,7 @@ impl PorCoordinator {
         if let Some(persistence) = &self.persistence {
             #[cfg(not(test))]
             {
-                self.require_authoritative_projection()?;
+                let _authoritative = self.require_authoritative_projection()?;
                 let prepared_weekly_report = self.prepared_weekly_report.read().clone();
                 persistence.store(1, &[], &[], prepared_weekly_report.as_ref())?;
                 return Ok(());
@@ -2193,11 +2332,8 @@ impl PorStatusPageAccumulator {
     }
 
     fn consume_candidate(&mut self, status: &PorChallengeStatusV1) {
-        self.last_consumed_candidate = Some((
-            status.epoch_id,
-            status.issued_at,
-            status.challenge_id,
-        ));
+        self.last_consumed_candidate =
+            Some((status.epoch_id, status.issued_at, status.challenge_id));
     }
 
     fn mark_has_more(&mut self) {
@@ -2248,7 +2384,7 @@ impl PorStatusPageAccumulator {
                         )
                     })
                     .and_then(|(last_epoch_id, last_issued_at, last_challenge_id)| {
-                        PorStatusCursorPayloadV1 {
+                        PorStatusCursorV1 {
                             version: POR_STATUS_CURSOR_VERSION_V1,
                             snapshot_generation: self.snapshot_generation,
                             selection_digest: self.selection_digest,
@@ -2257,6 +2393,7 @@ impl PorStatusPageAccumulator {
                             last_challenge_id,
                         }
                         .encode_opaque()
+                        .map_err(|error| PorCoordinatorError::InvalidPageCursor(error.to_string()))
                     })?,
             )
         } else {
@@ -2375,7 +2512,11 @@ impl ChallengeRecord {
             provider_id: self.challenge.provider_id,
             epoch_id: self.challenge.epoch_id,
             drand_round: self.challenge.drand_round,
-            status: PorChallengeOutcome::Pending,
+            status: if self.proof_digest.is_some() {
+                PorChallengeOutcome::ProofSubmitted
+            } else {
+                PorChallengeOutcome::AwaitingProof
+            },
             sample_count: self.challenge.sample_count,
             forced: self.challenge.forced,
             issued_at: self.challenge.issued_at,
@@ -2395,8 +2536,6 @@ impl ChallengeRecord {
             if verdict.outcome != AuditOutcomeV1::Success {
                 status.failure_reason.clone_from(&verdict.failure_reason);
             }
-        } else if self.challenge.forced {
-            status.status = PorChallengeOutcome::Forced;
         }
 
         status
@@ -4785,7 +4924,7 @@ pub enum PorAutomationError {
     Planner(#[from] PorChallengePlannerError),
     /// Storage backend encountered an error.
     #[error("storage error: {0}")]
-    Storage(#[from] sorafs_node::PorTrackerError),
+    Storage(#[from] PorMutationFailureV1),
     /// Coordinator rejected the requested state change.
     #[error("coordinator error: {0}")]
     Coordinator(#[from] PorCoordinatorError),
@@ -5049,13 +5188,18 @@ impl PorCoordinatorRuntime {
                         .apply_authoritative_update(update)
                         .map_err(PorAutomationError::Coordinator),
                     Err(error) => {
-                        coordinator.invalidate_authoritative_projection();
+                        if error.disposition().invalidates_projection() {
+                            coordinator.invalidate_authoritative_projection();
+                        }
                         Err(PorAutomationError::Storage(error))
                     }
                 }
             })
             .await
-            .map_err(|error| PorAutomationError::BlockingWorker(error.to_string()))??;
+            .map_err(|error| {
+                self.coordinator.invalidate_authoritative_projection();
+                PorAutomationError::BlockingWorker(error.to_string())
+            })??;
             if let Err(err) = self.publisher.publish_challenge(publication) {
                 iroha_logger::error!(
                     ?err,
@@ -5146,11 +5290,12 @@ pub trait PorStorage: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`sorafs_node::PorTrackerError`] when the challenge cannot be persisted.
+    /// Returns a typed mutation failure describing whether authoritative state
+    /// changed when the challenge cannot be persisted.
     fn record_challenge(
         &self,
         challenge: &PorChallengeV1,
-    ) -> Result<PorStatusAuthorityUpdateV1, sorafs_node::PorTrackerError>;
+    ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1>;
 
     /// Return whether a provider currently owns the active local manifest target.
     fn vrf_target_is_active(
@@ -5175,7 +5320,7 @@ impl PorStorage for sorafs_node::NodeHandle {
     fn record_challenge(
         &self,
         challenge: &PorChallengeV1,
-    ) -> Result<PorStatusAuthorityUpdateV1, sorafs_node::PorTrackerError> {
+    ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1> {
         self.record_por_challenge_with_authority_update(challenge)
     }
 
@@ -5325,9 +5470,6 @@ pub enum PorCoordinatorError {
     /// The opaque page cursor is malformed, non-canonical, oversized, or unsupported.
     #[error("invalid PoR page cursor: {0}")]
     InvalidPageCursor(String),
-    /// Encoding a server-issued opaque cursor failed.
-    #[error("failed to encode PoR page cursor: {0}")]
-    PageCursorEncoding(#[source] norito::core::Error),
     /// A continuation was issued for another normalized filter or export range.
     #[error("PoR page cursor does not belong to the requested selection")]
     PageCursorSelectionMismatch,
@@ -6456,14 +6598,10 @@ mod tests {
             let barrier = StdArc::clone(&barrier);
             std::thread::spawn(move || {
                 barrier.wait();
-                for index in 0..500 {
+                for _ in 0..500 {
                     coordinator
-                        .install_authoritative_projection(if index % 2 == 0 {
-                            second.clone()
-                        } else {
-                            first.clone()
-                        })
-                        .expect("swap authoritative projection");
+                        .install_authoritative_projection(second.clone())
+                        .expect("install or exactly replay newer authoritative projection");
                 }
             })
         };
@@ -6496,6 +6634,310 @@ mod tests {
         for reader in readers {
             reader.join().expect("projection reader joins");
         }
+        assert!(matches!(
+            coordinator.install_authoritative_projection(first),
+            Err(PorCoordinatorError::InvalidAuthoritativeProjection(_))
+        ));
+        assert_eq!(
+            coordinator
+                .require_authoritative_projection()
+                .expect("newer projection remains installed")
+                .indexes
+                .generation,
+            200
+        );
+    }
+
+    #[test]
+    fn authoritative_projection_updates_in_place_and_fail_closed_on_generation_gaps() {
+        let coordinator = PorCoordinator::new();
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 1,
+                statuses: Vec::new(),
+            })
+            .expect("install empty authoritative projection");
+        let projection_address = {
+            let projection = coordinator.authoritative_projection.read();
+            projection.as_ref().expect("installed projection")
+                as *const AuthoritativePorProjectionV1 as usize
+        };
+
+        let challenge = sample_challenge(false);
+        let pending_status = ChallengeRecord::from_challenge(challenge.clone()).to_status();
+        let pending_update = PorStatusAuthorityUpdateV1 {
+            generation: 2,
+            status: pending_status.clone(),
+            removed_challenge_ids: Vec::new(),
+        };
+        coordinator
+            .apply_authoritative_update(pending_update.clone())
+            .expect("insert one authoritative status in place");
+        coordinator
+            .apply_authoritative_update(pending_update)
+            .expect("same-generation exact update is idempotent");
+
+        let proof = sample_proof(&challenge);
+        let mut proof_record = ChallengeRecord::from_challenge(challenge);
+        proof_record.proof_digest = Some(proof.proof_digest());
+        proof_record.proof_submitted_at = Some(proof.submitted_at);
+        proof_record.responded_at = Some(proof.submitted_at);
+        let proof_status = proof_record.to_status();
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 3,
+                status: proof_status.clone(),
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect("replace one status and its indexes in place");
+        let projection = coordinator.authoritative_projection.read();
+        assert_eq!(
+            projection.as_ref().expect("projection remains installed")
+                as *const AuthoritativePorProjectionV1 as usize,
+            projection_address,
+            "incremental updates must mutate the installed projection rather than clone history"
+        );
+        assert_eq!(
+            projection
+                .as_ref()
+                .expect("projection remains installed")
+                .statuses
+                .get(&proof_status.challenge_id),
+            Some(&proof_status)
+        );
+        drop(projection);
+
+        let gap = coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 5,
+                status: proof_status.clone(),
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect_err("a skipped authoritative generation must fail closed");
+        assert!(matches!(
+            gap,
+            PorCoordinatorError::InvalidAuthoritativeProjection(_)
+        ));
+        assert!(matches!(
+            coordinator.query_status_page(
+                &PorStatusFilter::default(),
+                PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("page limits"),
+                PorStatusPageCursor::First,
+            ),
+            Err(PorCoordinatorError::AuthoritativeProjectionUnavailable)
+        ));
+
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 3,
+                statuses: vec![proof_status.clone()],
+            })
+            .expect("reinstall authoritative projection after gap");
+        let conflicting_status =
+            ChallengeRecord::from_challenge(sample_challenge(true)).to_status();
+        let conflict = coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 3,
+                status: conflicting_status,
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect_err("only an identical same-generation replay is valid");
+        assert!(matches!(
+            conflict,
+            PorCoordinatorError::InvalidAuthoritativeProjection(_)
+        ));
+        assert!(coordinator.authoritative_projection.read().is_none());
+
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 3,
+                statuses: vec![proof_status.clone()],
+            })
+            .expect("reinstall authoritative projection after conflict");
+        let rollback = coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 2,
+                status: proof_status,
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect_err("an authoritative generation rollback must fail closed");
+        assert!(matches!(
+            rollback,
+            PorCoordinatorError::InvalidAuthoritativeProjection(_)
+        ));
+        assert!(coordinator.authoritative_projection.read().is_none());
+    }
+
+    #[test]
+    fn authoritative_projection_rejects_skipped_proof_submission_generation() {
+        let coordinator = PorCoordinator::new();
+        let awaiting = authoritative_status_snapshot(0x45, 2).statuses.remove(0);
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 2,
+                statuses: vec![awaiting.clone()],
+            })
+            .expect("install awaiting-proof authority");
+
+        let mut skipped = awaiting.clone();
+        skipped.status = PorChallengeOutcome::Failed;
+        skipped.responded_at = Some(skipped.issued_at.saturating_add(1));
+        skipped.proof_digest = Some([0xA5; 32]);
+        skipped.repair_task_id = Some([0xB5; 32]);
+        skipped.failure_reason = Some("invalid proof".to_owned());
+        skipped.validate().expect("locally valid terminal status");
+        assert!(matches!(
+            coordinator.apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 3,
+                status: skipped,
+                removed_challenge_ids: Vec::new(),
+            }),
+            Err(PorCoordinatorError::InvalidAuthoritativeProjection(_))
+        ));
+        assert!(coordinator.authoritative_projection.read().is_none());
+
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 2,
+                statuses: vec![awaiting.clone()],
+            })
+            .expect("restore awaiting-proof authority");
+        let mut deadline_failure = awaiting;
+        deadline_failure.status = PorChallengeOutcome::Failed;
+        deadline_failure.repair_task_id = Some([0xC5; 32]);
+        deadline_failure.failure_reason = Some("deadline expired".to_owned());
+        deadline_failure
+            .validate()
+            .expect("deadline failure without proof material is valid");
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 3,
+                status: deadline_failure,
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect("direct deadline failure is the admitted no-proof transition");
+    }
+
+    #[test]
+    fn forced_provenance_counts_survive_same_provider_epoch_retention() {
+        let coordinator = PorCoordinator::with_record_limit(2);
+        let provider_id = [0xD5; 32];
+        let epoch_id = 55;
+        let mut first = authoritative_status_snapshot(0x52, 10).statuses.remove(0);
+        let mut second = authoritative_status_snapshot(0x54, 10).statuses.remove(0);
+        for status in [&mut first, &mut second] {
+            status.provider_id = provider_id;
+            status.epoch_id = epoch_id;
+            status.forced = true;
+            status.status = PorChallengeOutcome::Verified;
+            status.responded_at = Some(status.issued_at.saturating_add(1));
+            status.proof_digest = Some([0xA5; 32]);
+            status
+                .validate()
+                .expect("forced terminal authority fixture");
+        }
+        let mut statuses = vec![first.clone(), second.clone()];
+        statuses.sort_by_key(|status| status.challenge_id);
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 10,
+                statuses,
+            })
+            .expect("install two forced challenges for one provider epoch");
+        {
+            let projection = coordinator.authoritative_projection.read();
+            assert_eq!(
+                projection
+                    .as_ref()
+                    .expect("projection")
+                    .forced_providers
+                    .get(&provider_id)
+                    .and_then(|epochs| epochs.get(&epoch_id)),
+                Some(&2)
+            );
+        }
+
+        let replacement = authoritative_status_snapshot(0x56, 11).statuses.remove(0);
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 11,
+                status: replacement,
+                removed_challenge_ids: vec![first.challenge_id],
+            })
+            .expect("retire only one same-epoch forced challenge");
+        {
+            let projection = coordinator.authoritative_projection.read();
+            assert_eq!(
+                projection
+                    .as_ref()
+                    .expect("projection")
+                    .forced_providers
+                    .get(&provider_id)
+                    .and_then(|epochs| epochs.get(&epoch_id)),
+                Some(&1),
+                "retiring one challenge must preserve the surviving provenance"
+            );
+        }
+
+        let replacement = authoritative_status_snapshot(0x58, 12).statuses.remove(0);
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 12,
+                status: replacement,
+                removed_challenge_ids: vec![second.challenge_id],
+            })
+            .expect("retire the final same-epoch forced challenge");
+        assert!(
+            !coordinator
+                .authoritative_projection
+                .read()
+                .as_ref()
+                .expect("projection")
+                .forced_providers
+                .contains_key(&provider_id)
+        );
+    }
+
+    #[test]
+    fn authoritative_projection_rolls_terminal_retention_and_accepts_archived_replay_noop() {
+        let coordinator = PorCoordinator::with_record_limit(1);
+        let mut terminal = authoritative_status_snapshot(0x61, 4).statuses.remove(0);
+        let proof_digest = [0xA5; 32];
+        terminal.status = PorChallengeOutcome::Verified;
+        terminal.responded_at = Some(terminal.issued_at.saturating_add(1));
+        terminal.proof_digest = Some(proof_digest);
+        terminal.validate().expect("terminal authority fixture");
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 4,
+                statuses: vec![terminal.clone()],
+            })
+            .expect("install full bounded projection");
+
+        let replacement = authoritative_status_snapshot(0x62, 5).statuses.remove(0);
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 5,
+                status: replacement.clone(),
+                removed_challenge_ids: vec![terminal.challenge_id],
+            })
+            .expect("remove archived terminal and insert replacement atomically");
+
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 5,
+                status: terminal,
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect("authenticated archived exact replay is a projection no-op");
+        let projection = coordinator.authoritative_projection.read();
+        let projection = projection.as_ref().expect("projection remains installed");
+        assert_eq!(projection.statuses.len(), 1);
+        assert_eq!(
+            projection.statuses.get(&replacement.challenge_id),
+            Some(&replacement)
+        );
     }
 
     #[test]
@@ -6660,7 +7102,7 @@ mod tests {
             provider: Some(matching.provider_id),
             ..PorStatusFilter::default()
         };
-        let statuses = coordinator.query_statuses(&filter, Some(1), Some(page_anchor.challenge_id));
+        let statuses = coordinator.query_statuses(&filter, Some(1), None);
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].challenge_id, matching.challenge_id);
     }
@@ -6736,7 +7178,131 @@ mod tests {
             byte_limited.canonical_bytes,
             u64::try_from(first_record_bytes).expect("status length fits u64")
         );
+        assert_eq!(byte_limited.inspected_candidates, 2);
         assert!(byte_limited.has_more);
+        let resumed = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                PorStatusPageLimits::new(3, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("resumed page limits"),
+                PorStatusPageCursor::from_opaque(byte_limited.next_cursor.as_deref())
+                    .expect("byte-limited continuation cursor"),
+            )
+            .expect("resume after the last consumed candidate");
+        assert_eq!(
+            resumed.statuses[0].challenge_id, challenges[1].challenge_id,
+            "the matching record inspected only to discover a byte boundary must be retried"
+        );
+    }
+
+    #[test]
+    fn sparse_status_intersection_is_lookup_bounded_and_cursor_complete() {
+        const STATUS_COUNT: usize = 1_027;
+        const INTERSECTION_INDEX: usize = 513;
+        let selected_manifest = [0xA1; 32];
+        let selected_provider = [0xB1; 32];
+        let mut statuses = Vec::with_capacity(STATUS_COUNT);
+        let mut expected_match = [0_u8; 32];
+        let mut first_cursor_anchor = [0_u8; 32];
+
+        for index in 0..STATUS_COUNT {
+            let mut challenge = sample_challenge(false);
+            challenge.manifest_digest = if index <= INTERSECTION_INDEX {
+                selected_manifest
+            } else {
+                [0xA2; 32]
+            };
+            challenge.provider_id = if index >= INTERSECTION_INDEX {
+                selected_provider
+            } else {
+                [0xB2; 32]
+            };
+            challenge.epoch_id = 10_000 + u64::try_from(index).expect("fixture index fits u64");
+            challenge.issued_at =
+                1_700_000_000 + u64::try_from(index).expect("fixture index fits u64");
+            challenge.deadline_at = challenge.issued_at + 900;
+            challenge.seed = derive_challenge_seed(
+                &challenge.drand_randomness,
+                challenge.vrf_output.as_ref(),
+                &challenge.manifest_digest,
+                challenge.epoch_id,
+            );
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
+            challenge.validate().expect("sparse projection challenge");
+            if index == INTERSECTION_INDEX {
+                expected_match = challenge.challenge_id;
+            }
+            if index + 1 == POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1 {
+                first_cursor_anchor = challenge.challenge_id;
+            }
+            statuses.push(ChallengeRecord::from_challenge(challenge).to_status());
+        }
+        statuses.sort_by_key(|status| status.challenge_id);
+
+        let coordinator = PorCoordinator::new();
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 2_000,
+                statuses,
+            })
+            .expect("install sparse authoritative projection");
+        let filter = PorStatusFilter {
+            manifest: Some(selected_manifest),
+            provider: Some(selected_provider),
+            ..PorStatusFilter::default()
+        };
+        let limits = PorStatusPageLimits::new(10, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("sparse page limits");
+        coordinator
+            .status_page_projection_lookups
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let first = coordinator
+            .query_status_page(&filter, limits, PorStatusPageCursor::First)
+            .expect("first sparse page");
+        assert!(first.statuses.is_empty());
+        assert_eq!(
+            first.inspected_candidates,
+            u32::try_from(POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1)
+                .expect("inspection limit fits u32")
+        );
+        assert_eq!(
+            coordinator
+                .status_page_projection_lookups
+                .load(std::sync::atomic::Ordering::Relaxed),
+            POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
+        );
+        assert!(first.has_more);
+        let first_cursor = PorStatusPageCursor::from_opaque(first.next_cursor.as_deref())
+            .expect("empty sparse page returns an advancing cursor");
+        assert!(matches!(
+            first_cursor,
+            PorStatusPageCursor::After { challenge_id, .. }
+                if challenge_id == first_cursor_anchor
+        ));
+
+        coordinator
+            .status_page_projection_lookups
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let second = coordinator
+            .query_status_page(&filter, limits, first_cursor)
+            .expect("continue sparse index traversal");
+        assert_eq!(second.inspected_candidates, 2);
+        assert_eq!(
+            coordinator
+                .status_page_projection_lookups
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        assert_eq!(second.statuses.len(), 1);
+        assert_eq!(second.statuses[0].challenge_id, expected_match);
+        assert!(!second.has_more);
+        assert!(second.next_cursor.is_none());
     }
 
     #[test]
@@ -6772,8 +7338,30 @@ mod tests {
         let cursor = PorStatusPageCursor::from_opaque(page.next_cursor.as_deref())
             .expect("first page must return a canonical continuation");
 
+        let forged_epoch_cursor = match cursor {
+            PorStatusPageCursor::After {
+                snapshot_generation,
+                selection_digest,
+                last_epoch_id,
+                last_issued_at,
+                challenge_id,
+            } => PorStatusPageCursor::After {
+                snapshot_generation,
+                selection_digest,
+                last_epoch_id: last_epoch_id.saturating_add(1),
+                last_issued_at,
+                challenge_id,
+            },
+            PorStatusPageCursor::First => panic!("continuation cannot be first page"),
+        };
+        assert!(matches!(
+            coordinator
+                .query_status_page(&PorStatusFilter::default(), limits, forged_epoch_cursor,),
+            Err(PorCoordinatorError::PageCursorAnchorMismatch { .. })
+        ));
+
         let overlapping_filter = PorStatusFilter {
-            status: Some(PorChallengeOutcome::Pending),
+            status: Some(PorChallengeOutcome::AwaitingProof),
             ..PorStatusFilter::default()
         };
         assert!(matches!(
@@ -6841,6 +7429,27 @@ mod tests {
         let cursor = PorStatusPageCursor::from_opaque(page.page.next_cursor.as_deref())
             .expect("export page must return a canonical continuation");
 
+        let forged_epoch_cursor = match cursor {
+            PorStatusPageCursor::After {
+                snapshot_generation,
+                selection_digest,
+                last_epoch_id,
+                last_issued_at,
+                challenge_id,
+            } => PorStatusPageCursor::After {
+                snapshot_generation,
+                selection_digest,
+                last_epoch_id: last_epoch_id.saturating_add(1),
+                last_issued_at,
+                challenge_id,
+            },
+            PorStatusPageCursor::First => panic!("continuation cannot be first page"),
+        };
+        assert!(matches!(
+            coordinator.export_status_page(Some((41, 42)), limits, forged_epoch_cursor),
+            Err(PorCoordinatorError::PageCursorAnchorMismatch { .. })
+        ));
+
         assert!(matches!(
             coordinator.export_status_page(Some((41, 43)), limits, cursor),
             Err(PorCoordinatorError::PageCursorSelectionMismatch)
@@ -6857,7 +7466,7 @@ mod tests {
         let limits = PorStatusPageLimits::new(4, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
             .expect("page limits");
         let pending_filter = PorStatusFilter {
-            status: Some(PorChallengeOutcome::Pending),
+            status: Some(PorChallengeOutcome::AwaitingProof),
             ..PorStatusFilter::default()
         };
         assert_eq!(
@@ -6976,7 +7585,7 @@ mod tests {
                     .is_err()
             );
             let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
-            assert_eq!(status[0].status, PorChallengeOutcome::Pending);
+            assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
             assert_eq!(status[0].proof_digest, Some(digest));
         }
 
@@ -7079,7 +7688,7 @@ mod tests {
         );
         coordinator.rollback_verdict(&verdict).unwrap();
         let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
-        assert_eq!(status[0].status, PorChallengeOutcome::Pending);
+        assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
         assert_eq!(status[0].proof_digest, Some(proof.proof_digest()));
     }
 
@@ -7171,7 +7780,8 @@ mod tests {
             Err(PorCoordinatorError::Persistence(_))
         ));
         let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
-        assert_eq!(status[0].status, PorChallengeOutcome::Forced);
+        assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
+        assert!(status[0].forced);
         assert_eq!(status[0].proof_digest, Some(digest));
 
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o700)).unwrap();
@@ -7953,19 +8563,23 @@ mod tests {
             fn record_challenge(
                 &self,
                 challenge: &PorChallengeV1,
-            ) -> Result<PorStatusAuthorityUpdateV1, sorafs_node::PorTrackerError> {
+            ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1> {
                 let mut recorded = self.recorded.lock();
                 match recorded.as_ref() {
                     Some(existing) if existing == challenge => Ok(PorStatusAuthorityUpdateV1 {
                         generation: 2,
                         status: ChallengeRecord::from_challenge(challenge.clone()).to_status(),
+                        removed_challenge_ids: Vec::new(),
                     }),
-                    Some(_) => Err(sorafs_node::PorTrackerError::ChallengeConflict),
+                    Some(_) => Err(PorMutationFailureV1::no_mutation(
+                        sorafs_node::PorTrackerError::ChallengeConflict,
+                    )),
                     None => {
                         *recorded = Some(challenge.clone());
                         Ok(PorStatusAuthorityUpdateV1 {
                             generation: 2,
                             status: ChallengeRecord::from_challenge(challenge.clone()).to_status(),
+                            removed_challenge_ids: Vec::new(),
                         })
                     }
                 }

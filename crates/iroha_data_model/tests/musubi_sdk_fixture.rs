@@ -219,21 +219,24 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
                 record.validate().expect("valid release fixture");
             }
             "resolver-index" => {
-                let _: MusubiResolverIndexQueryV1 = canonical_roundtrip(request);
+                let request: MusubiResolverIndexQueryV1 = canonical_roundtrip(request);
                 let page: MusubiResolverIndexPageV1 = canonical_roundtrip(response);
-                page.validate().expect("valid resolver page fixture");
+                page.validate_for(&request)
+                    .expect("valid resolver page fixture");
                 assert_eq!(page.chain_id.as_str(), "musubi-fixture-chain");
                 assert_eq!(page.genesis_hash, [8; 32]);
             }
             "versions" => {
-                let _: MusubiPackagePageQueryV1 = canonical_roundtrip(request);
+                let request: MusubiPackagePageQueryV1 = canonical_roundtrip(request);
                 let page: MusubiVersionPageV1 = canonical_roundtrip(response);
-                page.validate().expect("valid version page fixture");
+                page.validate_for(&request)
+                    .expect("valid version page fixture");
             }
             "maintainers" => {
-                let _: MusubiPackagePageQueryV1 = canonical_roundtrip(request);
+                let request: MusubiPackagePageQueryV1 = canonical_roundtrip(request);
                 let page: MusubiMaintainerPageV1 = canonical_roundtrip(response);
-                page.validate().expect("valid maintainer page fixture");
+                page.validate_for(&request)
+                    .expect("valid maintainer page fixture");
             }
             "archive-locations" => {
                 let request: MusubiArchiveLocationQueryV1 = canonical_roundtrip(request);
@@ -254,6 +257,7 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
                     .expect("valid archive-retention page fixture");
                 assert_eq!(page.chain_id.as_str(), "musubi-fixture-chain");
                 assert_eq!(page.genesis_hash, [8; 32]);
+                assert_eq!(page.finalized_time_ms, 1_700_000_000_000);
                 assert_eq!(page.items.len(), request.archive_ids.len());
                 assert!(
                     page.items
@@ -278,14 +282,16 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
                     .expect("valid alias fixture");
             }
             "alias-history" => {
-                let _: MusubiAliasQueryV1 = canonical_roundtrip(request);
+                let request: MusubiAliasQueryV1 = canonical_roundtrip(request);
                 let page: MusubiAliasHistoryPageV1 = canonical_roundtrip(response);
-                page.validate().expect("valid alias-history page fixture");
+                page.validate_for(&request)
+                    .expect("valid alias-history page fixture");
             }
             "ordered-prefix" => {
-                let _: MusubiOrderedPrefixQueryV1 = canonical_roundtrip(request);
+                let request: MusubiOrderedPrefixQueryV1 = canonical_roundtrip(request);
                 let page: MusubiOrderedPackagePageV1 = canonical_roundtrip(response);
-                page.validate().expect("valid ordered-prefix page fixture");
+                page.validate_for(&request)
+                    .expect("valid ordered-prefix page fixture");
                 assert_eq!(page.chain_id.as_str(), "musubi-fixture-chain");
                 assert_eq!(page.genesis_hash, [8; 32]);
             }
@@ -293,7 +299,8 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
                 let request: MusubiSearchQueryV1 = canonical_roundtrip(request);
                 request.validate().expect("valid search request fixture");
                 let page: MusubiSearchPageV1 = canonical_roundtrip(response);
-                page.validate().expect("valid search page fixture");
+                page.validate_for(&request)
+                    .expect("valid search page fixture");
             }
             _ => panic!("unexpected Musubi route fixture `{id}`"),
         }
@@ -375,5 +382,6 @@ fn shared_musubi_search_fixture_is_canonical() {
             .get("response")
             .expect("search fixture response is present"),
     );
-    page.validate().expect("valid search page fixture");
+    page.validate_for(&request)
+        .expect("valid search page fixture");
 }

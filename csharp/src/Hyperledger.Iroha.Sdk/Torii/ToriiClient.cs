@@ -2888,40 +2888,6 @@ public sealed partial class ToriiClient : IDisposable
         ToriiVpnJson.ValidateVpnReceipt(response, context);
     }
 
-    private static void ValidateVpnTxInstructions(IReadOnlyList<ToriiVpnTxInstruction>? instructions, string context)
-    {
-        if (instructions is null)
-        {
-            return;
-        }
-
-        for (var index = 0; index < instructions.Count; index++)
-        {
-            var instruction = instructions[index];
-            if (instruction is null)
-            {
-                throw new JsonException($"{context}[{index}] must be an object.");
-            }
-
-            ValidateVpnTxInstruction(instruction, $"{context}[{index}]");
-        }
-    }
-
-    private static void ValidateOptionalVpnTxInstruction(ToriiVpnTxInstruction? instruction, string context)
-    {
-        if (instruction is null)
-        {
-            return;
-        }
-
-        ValidateVpnTxInstruction(instruction, context);
-    }
-
-    private static void ValidateVpnTxInstruction(ToriiVpnTxInstruction instruction, string context)
-    {
-        ToriiVpnJson.ValidateVpnTxInstruction(instruction, context);
-    }
-
     private static void ValidateContractCodeRecord(ToriiContractCodeRecord response, string context)
     {
         ToriiContractMetadataJson.ValidateContractCodeRecord(response, context);

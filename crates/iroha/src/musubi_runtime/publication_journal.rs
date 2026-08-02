@@ -19,10 +19,11 @@ unsafe extern "C" {
 use super::{
     InMemoryMusubiPublicationServiceJournalV1, InMemoryPublicationResultV1,
     MAX_CONTROL_RESPONSE_BYTES, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-    MusubiPublicationIdempotencyKeyV1, MusubiPublicationJournalAttemptV1,
-    MusubiPublicationJournalBeginV1, MusubiPublicationOperationBindingV1,
-    MusubiPublicationRuntimeOperationV1, MusubiPublicationServiceJournalBindingV1,
-    MusubiPublicationServiceJournalErrorV1, MusubiPublicationServiceJournalV1,
+    MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1, MusubiPublicationIdempotencyKeyV1,
+    MusubiPublicationJournalAttemptV1, MusubiPublicationJournalBeginV1,
+    MusubiPublicationOperationBindingV1, MusubiPublicationRuntimeOperationV1,
+    MusubiPublicationServiceJournalBindingV1, MusubiPublicationServiceJournalErrorV1,
+    MusubiPublicationServiceJournalV1, valid_storage_generation_target,
 };
 
 #[cfg(unix)]
@@ -628,7 +629,10 @@ fn candidate_open_error(
 fn results_per_operation() -> usize {
     MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
         .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
-        .and_then(|readbacks| readbacks.checked_add(2))
+        .and_then(|readbacks| readbacks.checked_add(1))
+        .and_then(|with_ingress| {
+            with_ingress.checked_add(MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1)
+        })
         .expect("Musubi result bound is a fixed small constant")
 }
 
@@ -732,7 +736,7 @@ fn validate_candidate_journal(
     }
 
     let mut result_operations = BTreeSet::new();
-    let mut per_operation = BTreeMap::<[u8; 32], (bool, bool, usize)>::new();
+    let mut per_operation = BTreeMap::<[u8; 32], (bool, usize, usize)>::new();
     for (key, result) in &journal.results {
         if !valid_result_key(*key)
             || !journal.operation_bindings.contains_key(&key.operation_id)
@@ -757,8 +761,10 @@ fn validate_candidate_journal(
         let counts = per_operation.entry(key.operation_id).or_default();
         match key.operation {
             MusubiPublicationRuntimeOperationV1::SeedIngress if !counts.0 => counts.0 = true,
-            MusubiPublicationRuntimeOperationV1::StorageCoordination if !counts.1 => {
-                counts.1 = true;
+            MusubiPublicationRuntimeOperationV1::StorageCoordination
+                if counts.1 < MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1 =>
+            {
+                counts.1 += 1;
             }
             MusubiPublicationRuntimeOperationV1::ProviderReadback
                 if counts.2 < maximum_readbacks_per_operation() =>
@@ -978,7 +984,7 @@ fn journal_from_state(
 
     let mut results = BTreeMap::new();
     let mut previous_key = None;
-    let mut per_operation = BTreeMap::<[u8; 32], (bool, bool, usize)>::new();
+    let mut per_operation = BTreeMap::<[u8; 32], (bool, usize, usize)>::new();
     let mut calculated_total_response_bytes = 0_u64;
     let mut calculated_reserved_response_bytes = 0_u64;
     let maximum_response =
@@ -994,8 +1000,10 @@ fn journal_from_state(
         let counts = per_operation.entry(record.key.operation_id).or_default();
         match record.key.operation {
             MusubiPublicationRuntimeOperationV1::SeedIngress if !counts.0 => counts.0 = true,
-            MusubiPublicationRuntimeOperationV1::StorageCoordination if !counts.1 => {
-                counts.1 = true;
+            MusubiPublicationRuntimeOperationV1::StorageCoordination
+                if counts.1 < MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1 =>
+            {
+                counts.1 += 1;
             }
             MusubiPublicationRuntimeOperationV1::ProviderReadback
                 if counts.2 < maximum_readbacks_per_operation() =>
@@ -1113,9 +1121,11 @@ fn valid_result_key(key: MusubiPublicationIdempotencyKeyV1) -> bool {
     digest_is_nonzero(&key.operation_id)
         && match key.operation {
             MusubiPublicationRuntimeOperationV1::ProviderReadback => digest_is_nonzero(&key.target),
-            MusubiPublicationRuntimeOperationV1::SeedIngress
-            | MusubiPublicationRuntimeOperationV1::StorageCoordination => {
+            MusubiPublicationRuntimeOperationV1::SeedIngress => {
                 key.target.iter().all(|byte| *byte == 0)
+            }
+            MusubiPublicationRuntimeOperationV1::StorageCoordination => {
+                valid_storage_generation_target(key.target)
             }
         }
 }
@@ -2112,6 +2122,86 @@ mod tests {
             reopened.begin(&cross_route_replay, 10_002),
             Err(MusubiPublicationServiceJournalErrorV1::Replay)
         );
+    }
+
+    #[test]
+    fn all_storage_location_generations_survive_durable_restart_and_ninth_fails_closed() {
+        let root = private_tempdir();
+        let configuration = configuration();
+        let mut journal = DurableMusubiPublicationServiceJournalV1::initialize(
+            root.path(),
+            journal_binding(&configuration),
+            limits(),
+            limits(),
+        )
+        .expect("initialize journal");
+
+        for generation in 1..=MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1 {
+            let generation = u8::try_from(generation).expect("generation fits u8");
+            let mut generation_attempt = attempt(&configuration, 0x35, 0x40 + generation);
+            generation_attempt.key.operation =
+                MusubiPublicationRuntimeOperationV1::StorageCoordination;
+            generation_attempt.key.target =
+                crate::musubi_runtime::storage_generation_target(generation);
+            generation_attempt.request_digest = [0x50 + generation; 32];
+            assert_eq!(
+                journal
+                    .begin(&generation_attempt, 10_000)
+                    .expect("reserve storage generation"),
+                MusubiPublicationJournalBeginV1::Execute
+            );
+            journal
+                .commit(
+                    generation_attempt.key,
+                    generation_attempt.request_digest,
+                    &[generation],
+                )
+                .expect("commit storage generation");
+        }
+        let revision = journal.revision();
+
+        let mut ninth = attempt(&configuration, 0x35, 0x70);
+        ninth.key.operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
+        ninth.key.target = crate::musubi_runtime::storage_generation_target(
+            u8::try_from(MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1 + 1)
+                .expect("ninth generation fits u8"),
+        );
+        ninth.request_digest = [0x71; 32];
+        assert_eq!(
+            journal.begin(&ninth, 10_001),
+            Err(MusubiPublicationServiceJournalErrorV1::Invalid)
+        );
+
+        let mut malformed = ninth;
+        malformed.key.target = crate::musubi_runtime::storage_generation_target(1);
+        malformed.key.target[1] = 1;
+        malformed.authorization_digest = [0x72; 32];
+        assert_eq!(
+            journal.begin(&malformed, 10_001),
+            Err(MusubiPublicationServiceJournalErrorV1::Invalid)
+        );
+        assert_eq!(journal.revision(), revision);
+        drop(journal);
+
+        let mut reopened = DurableMusubiPublicationServiceJournalV1::open(
+            root.path(),
+            journal_binding(&configuration),
+            limits(),
+        )
+        .expect("reopen all storage generations");
+        for generation in 1..=MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1 {
+            let generation = u8::try_from(generation).expect("generation fits u8");
+            let mut retry = attempt(&configuration, 0x35, 0x80 + generation);
+            retry.key.operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
+            retry.key.target = crate::musubi_runtime::storage_generation_target(generation);
+            retry.request_digest = [0x50 + generation; 32];
+            assert_eq!(
+                reopened
+                    .begin(&retry, 10_002)
+                    .expect("recover cached storage generation"),
+                MusubiPublicationJournalBeginV1::Cached(vec![generation])
+            );
+        }
     }
 
     #[test]

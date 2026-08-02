@@ -1143,9 +1143,21 @@ pub mod sorafs {
     }
 }
 
-/// Permission tokens governing `SoraNet` privacy ingestion.
+/// Permission tokens governing `SoraNet` services.
 pub mod soranet {
     use super::*;
+
+    permission! {
+        /// Permission to authorize accounts and roles that may issue `SoraNet` VPN quotes.
+        #[derive(Copy)]
+        pub struct CanManageSoranetVpnQuoteIssuers;
+    }
+
+    permission! {
+        /// Permission to issue operator-signed `SoraNet` VPN lease quotes.
+        #[derive(Copy)]
+        pub struct CanIssueSoranetVpnQuote;
+    }
 
     permission! {
         /// Permission to ingest `SoraNet` privacy events or shares.

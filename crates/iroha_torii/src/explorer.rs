@@ -1622,24 +1622,72 @@ fn decode_explorer_cursor_key(
     String::from_utf8(frame[HEADER_LEN..].to_vec()).map_err(|_| ExplorerCursorError::InvalidKey)
 }
 
+trait CanonicalExplorerCursorKey: Sized {
+    fn parse_canonical_cursor_key(key: &str) -> Result<Self, ExplorerCursorError>;
+}
+
+fn require_canonical_cursor_text<K: ToString>(
+    key: &str,
+    parsed: K,
+) -> Result<K, ExplorerCursorError> {
+    if parsed.to_string() != key {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
+    Ok(parsed)
+}
+
+impl CanonicalExplorerCursorKey for AccountId {
+    fn parse_canonical_cursor_key(key: &str) -> Result<Self, ExplorerCursorError> {
+        let parsed = Self::parse_encoded(key).map_err(|_| ExplorerCursorError::InvalidKey)?;
+        if parsed.canonical() != key {
+            return Err(ExplorerCursorError::InvalidKey);
+        }
+        Ok(parsed.into_account_id())
+    }
+}
+
+impl CanonicalExplorerCursorKey for DomainId {
+    fn parse_canonical_cursor_key(key: &str) -> Result<Self, ExplorerCursorError> {
+        let parsed =
+            Self::parse_fully_qualified(key).map_err(|_| ExplorerCursorError::InvalidKey)?;
+        require_canonical_cursor_text(key, parsed)
+    }
+}
+
+macro_rules! impl_canonical_explorer_cursor_key_from_str {
+    ($($key:ty),+ $(,)?) => {
+        $(
+            impl CanonicalExplorerCursorKey for $key {
+                fn parse_canonical_cursor_key(key: &str) -> Result<Self, ExplorerCursorError> {
+                    let parsed = key.parse::<Self>()
+                        .map_err(|_| ExplorerCursorError::InvalidKey)?;
+                    require_canonical_cursor_text(key, parsed)
+                }
+            }
+        )+
+    };
+}
+
+impl_canonical_explorer_cursor_key_from_str!(
+    AssetDefinitionId,
+    AssetId,
+    NftId,
+    iroha_data_model::rwa::RwaId,
+);
+
 fn canonical_cursor_key<K>(
     cursor: Option<&str>,
     collection: ExplorerCursorCollection,
     filter_digest: [u8; 32],
 ) -> Result<Option<K>, ExplorerCursorError>
 where
-    K: std::str::FromStr + ToString,
+    K: CanonicalExplorerCursorKey,
 {
     let Some(cursor) = cursor else {
         return Ok(None);
     };
     let key = decode_explorer_cursor_key(cursor, collection, filter_digest)?;
-    let parsed = key
-        .parse::<K>()
-        .map_err(|_| ExplorerCursorError::InvalidKey)?;
-    if parsed.to_string() != key {
-        return Err(ExplorerCursorError::InvalidKey);
-    }
+    let parsed = K::parse_canonical_cursor_key(&key)?;
     Ok(Some(parsed))
 }
 
@@ -2521,6 +2569,65 @@ mod tests {
             )
             .unwrap_err(),
             ExplorerCursorError::InvalidEncoding,
+        );
+    }
+
+    #[test]
+    fn explorer_cursor_uses_canonical_typed_identifier_decoders() {
+        let account_digest =
+            explorer_filter_digest(ExplorerCursorCollection::Accounts, &[None, None]);
+        let noncanonical_account = format!(" {ALICE_ID} ");
+        let account_cursor = encode_explorer_cursor(
+            ExplorerCursorCollection::Accounts,
+            account_digest,
+            &noncanonical_account,
+        )
+        .expect("bounded non-canonical account cursor");
+        assert_eq!(
+            canonical_cursor_key::<AccountId>(
+                Some(&account_cursor),
+                ExplorerCursorCollection::Accounts,
+                account_digest,
+            )
+            .unwrap_err(),
+            ExplorerCursorError::InvalidKey,
+            "cursor decoding must not inherit AccountId parser whitespace normalization",
+        );
+
+        let domain =
+            DomainId::try_new("wonderland", "universal").expect("canonical domain identifier");
+        let domain_digest = explorer_filter_digest(ExplorerCursorCollection::Domains, &[None]);
+        let domain_cursor = encode_explorer_cursor(
+            ExplorerCursorCollection::Domains,
+            domain_digest,
+            &domain.to_string(),
+        )
+        .expect("bounded canonical domain cursor");
+        assert_eq!(
+            canonical_cursor_key::<DomainId>(
+                Some(&domain_cursor),
+                ExplorerCursorCollection::Domains,
+                domain_digest,
+            )
+            .expect("canonical domain cursor")
+            .expect("cursor key"),
+            domain,
+        );
+
+        let noncanonical_domain_cursor = encode_explorer_cursor(
+            ExplorerCursorCollection::Domains,
+            domain_digest,
+            "Wonderland.Universal",
+        )
+        .expect("bounded non-canonical domain cursor");
+        assert_eq!(
+            canonical_cursor_key::<DomainId>(
+                Some(&noncanonical_domain_cursor),
+                ExplorerCursorCollection::Domains,
+                domain_digest,
+            )
+            .unwrap_err(),
+            ExplorerCursorError::InvalidKey,
         );
     }
 

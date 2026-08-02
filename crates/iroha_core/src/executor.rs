@@ -21,7 +21,7 @@ use iroha_data_model::{
     Identifiable as _, ValidationFail,
     account::AccountId,
     asset::{
-        AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, ResolvedAssetDefinitionAliasV1,
+        AssetBalancePolicy, AssetDefinition, ResolvedAssetDefinitionAliasV1,
         id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         value::Asset,
     },
@@ -9175,6 +9175,12 @@ fn initial_permission_capability_root_authority(
             let manager: Permission = executor_permission::sccp::CanManageSccpGovernance.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
+        "CanIssueSoranetVpnQuote" => {
+            let _ = decode!(executor_permission::soranet::CanIssueSoranetVpnQuote);
+            let manager: Permission =
+                executor_permission::soranet::CanManageSoranetVpnQuoteIssuers.into();
+            authority_has_permission(&state_transaction.world, authority, &manager)?
+        }
         _ => return Ok(None),
     };
     Ok(Some(result))
@@ -9207,7 +9213,10 @@ fn initial_permission_delegation_allowed(
             executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(_)
         )
     } else {
-        permission.name() != "CanReadAccountData"
+        !matches!(
+            permission.name().as_ref(),
+            "CanReadAccountData" | "CanIssueSoranetVpnQuote"
+        )
     };
     if holder_delegable
         && authority_has_permission(&state_transaction.world, authority, permission)?
@@ -9796,6 +9805,18 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
         iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
         iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
+    ) {
+        return true;
+    }
+
+    // Native VPN escrow admission is one signed lifecycle surface. Core
+    // validates quote issuance, funding, settlement, and timeout refund; the
+    // Initial executor must admit all three operations together so no lease can
+    // be opened without its terminal paths.
+    if is_any!(
+        iroha_data_model::isi::vpn::OpenVpnLeaseEscrow,
+        iroha_data_model::isi::vpn::SettleVpnLease,
+        iroha_data_model::isi::vpn::RefundExpiredVpnLease,
     ) {
         return true;
     }
@@ -10908,6 +10929,8 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanResolveSorafsCapacityDispute",
     "CanRegisterSorafsProviderOwner",
     "CanUnregisterSorafsProviderOwner",
+    "CanManageSoranetVpnQuoteIssuers",
+    "CanIssueSoranetVpnQuote",
     "CanIngestSoranetPrivacy",
     "CanRegisterOracleFeed",
     "CanProposeOracleChange",
@@ -12825,6 +12848,30 @@ mod tests {
     }
 
     #[test]
+    fn initial_executor_keeps_the_complete_vpn_lifecycle_allowlisted() {
+        let source = include_str!("executor.rs");
+        let start = source
+            .find("// Native VPN escrow admission is one signed lifecycle surface.")
+            .expect("VPN lifecycle allowlist marker");
+        let tail = &source[start..];
+        let end = tail
+            .find("// Cross-border settlement and relays")
+            .expect("VPN lifecycle allowlist terminator");
+        let allowlist = &tail[..end];
+
+        for instruction in [
+            "OpenVpnLeaseEscrow",
+            "SettleVpnLease",
+            "RefundExpiredVpnLease",
+        ] {
+            assert!(
+                allowlist.contains(instruction),
+                "Initial executor VPN lifecycle allowlist omitted {instruction}"
+            );
+        }
+    }
+
+    #[test]
     fn initial_executor_denies_chain_and_foreign_controller_takeover_paths() {
         let attacker = checked_account_id();
         let victim = checked_account_id();
@@ -13453,7 +13500,83 @@ mod tests {
     }
 
     #[test]
+    fn initial_executor_keeps_vpn_quote_issuer_leaf_manager_controlled() {
+        let manager = checked_account_id();
+        let issuer = checked_account_id();
+        let destination = checked_account_id();
+        let domain = DomainId::try_new("vpn_issuer_policy", "universal").expect("domain id");
+        let manager_permission: Permission =
+            executor_permission::soranet::CanManageSoranetVpnQuoteIssuers.into();
+        let issuer_permission: Permission =
+            executor_permission::soranet::CanIssueSoranetVpnQuote.into();
+        let mut world = World::with(
+            [Domain::new(domain).build(&manager)],
+            [
+                Account::new(manager.clone()).build(&manager),
+                Account::new(issuer.clone()).build(&issuer),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [],
+        );
+        world
+            .account_permissions
+            .insert(manager.clone(), BTreeSet::from([manager_permission]));
+        world
+            .account_permissions
+            .insert(issuer.clone(), BTreeSet::from([issuer_permission.clone()]));
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+
+        assert!(
+            !initial_permission_delegation_allowed(
+                &state_transaction,
+                &issuer,
+                &issuer_permission,
+                None,
+            )
+            .expect("issuer-leaf delegation decision")
+        );
+        assert!(
+            initial_permission_delegation_allowed(
+                &state_transaction,
+                &manager,
+                &issuer_permission,
+                None,
+            )
+            .expect("issuer-manager delegation decision")
+        );
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &issuer,
+                Grant::account_permission(issuer_permission.clone(), destination.clone()).into(),
+            )
+            .expect_err("an issuer leaf must not appoint another issuer");
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &manager,
+                Grant::account_permission(issuer_permission.clone(), destination.clone()).into(),
+            )
+            .expect("the issuer manager may appoint an issuer");
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &manager,
+                Revoke::account_permission(issuer_permission, destination).into(),
+            )
+            .expect("the issuer manager may revoke an issuer");
+    }
+
+    #[test]
     fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_guessing() {
+        use iroha_data_model::asset::AssetDefinitionAlias;
         use iroha_executor_data_model::permission::{
             account::{AccountAliasPermissionScope, CanManageAccountAlias},
             asset_definition::{

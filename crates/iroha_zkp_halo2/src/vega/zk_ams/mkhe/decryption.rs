@@ -14,11 +14,13 @@
 //! Consequently neither a signature nor a digest is accepted as a substitute
 //! for the native polynomial relations.
 //!
-//! The frozen release share ceiling is intentionally not silently changed.
-//! Exact accounting below shows that a transparent response for the 1,855-bit
-//! quotient does not fit the current 64 MiB record. Release proving therefore
-//! fails before allocating attacker-sized buffers and the manifest gate stays
-//! false. Tiny-profile tests execute the complete algebra and wire path.
+//! The sole first-release transport is a small authenticated `ZDSM` manifest
+//! followed by two ordered, content-addressed objects: the existing canonical
+//! count-prefixed limb-major polynomial bytes and the standalone native `ZADP`
+//! proof bytes. Both objects fit their unchanged 64 MiB and 32 MiB ceilings.
+//! Reconstruction authenticates the manifest and every statement axis before
+//! hashing or decoding either large object. A private tiny-profile codec exists
+//! only for exhaustive algebra tests and is not part of the public transport.
 
 use core::{cmp::Ordering, mem::size_of};
 use std::sync::Arc;
@@ -41,22 +43,20 @@ use super::{
     wire::{
         ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZkAmsMkheAuthenticationWireV1,
         ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
-        ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheWireBindingV1, derive_wire_length_certificate_v1,
-        governed_roster_digest,
+        ZkAmsMkheRnsPolynomialWireV1, derive_wire_length_certificate_v1, governed_roster_digest,
     },
     zk_ams_mkhe_security_certificate_v1,
 };
 use crate::vega::sponge::{Keccak256, keccak256, shake256};
 
 #[cfg(test)]
-use super::AuthenticationSecret;
+use super::{AuthenticationSecret, wire::ZkAmsMkheWireBindingV1};
 
 const DECRYPTION_PROOF_TAG_V1: [u8; 4] = *b"ZADP";
 const DECRYPTION_SPLIT_MANIFEST_TAG_V1: [u8; 4] = *b"ZDSM";
-// This is deliberately distinct from the release-only `ZADS` frame in
-// `wire.rs`: this private codec exists solely to exercise the complete
-// tiny-profile path without allowing its variable dimensions to be confused
-// with a production decryption-share record.
+// This private codec exists solely to exercise the complete tiny-profile path
+// without allowing its variable dimensions to be confused with the production
+// split decryption-share transport.
 #[cfg(test)]
 const TEST_DECRYPTION_SHARE_TAG_V1: [u8; 4] = *b"ZADT";
 const DECRYPTION_PROOF_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.decryption-proof";
@@ -102,8 +102,11 @@ pub const ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1: usize = 4
     + 32
     + 33
     + 65;
-// Filled only by a genuine release-size split prove/reconstruct/verify KAT.
-const ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1: [u8; 32] = [0; 32];
+/// Digest pinned by a genuine release-size split prove/reconstruct/verify KAT.
+pub const ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1: [u8; 32] = [
+    0xe0, 0x3a, 0x07, 0xa2, 0xea, 0xc5, 0xc5, 0xbe, 0x90, 0x7d, 0x6c, 0x46, 0x82, 0xc8, 0x07, 0xb9,
+    0xfb, 0xf0, 0x00, 0xb5, 0x4f, 0x5e, 0x1d, 0xe9, 0x72, 0x5b, 0xc8, 0x58, 0xc2, 0xdb, 0xdc, 0xbd,
+];
 // tag, version, profile, roster, epoch, transcript, ciphertext, key context,
 // exact public statement binding, sample index, party index, party, level, and
 // proof length. The polynomial byte count below already includes its canonical
@@ -114,10 +117,10 @@ const TEST_DECRYPTION_SHARE_HEADER_BYTES_V1: usize =
 #[cfg(test)]
 const TEST_DECRYPTION_AUTHENTICATION_BYTES_V1: usize = 1 + 32 + 33 + 65;
 
-/// Exact byte accounting for one sound transparent decryption-share record.
+/// Exact byte accounting for the sound transparent split decryption transport.
 ///
-/// The record intentionally reports a failing current ceiling instead of
-/// weakening the smudging proof or changing governance parameters in code.
+/// The hypothetical combined-inline figures document why the release uses two
+/// separately governed content objects; they do not describe a public codec.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDecryptionResourceEvidenceV1 {
     /// Frozen release ring degree.
@@ -148,7 +151,7 @@ pub struct ZkAmsMkheDecryptionResourceEvidenceV1 {
     pub smudge_response_bytes: u64,
     /// Exact proof headers and Fiat--Shamir challenge bytes.
     pub proof_header_bytes: u64,
-    /// Exact proof-system payload carried inside the generic proof envelope.
+    /// Exact standalone native `ZADP` proof bytes.
     pub proof_payload_bytes: u64,
     /// Independent absolute ceiling for the opaque proof-system payload.
     pub governed_proof_payload_ceiling_bytes: u64,
@@ -171,11 +174,14 @@ pub struct ZkAmsMkheDecryptionResourceEvidenceV1 {
     /// Pinned authenticated manifest digest from the exact release-size split KAT.
     pub split_release_kat_digest: [u8; 32],
     /// The exact release-size native prove/verify path and canonical split
-    /// reconstruction have closed the decryption transport readiness gate.
+    /// reconstruction have closed the transport-implementation gate.
+    ///
+    /// This is not a knowledge-soundness claim for the sparse proof and does
+    /// not close the global decryption admission/readiness gate.
     pub split_transport_ready: bool,
-    /// Exact public `ZADS` binding, authentication, lengths, and envelope header bytes.
+    /// Hypothetical inline-record overhead, retained only for resource evidence.
     pub record_overhead_bytes: u64,
-    /// Exact complete canonical share record bytes.
+    /// Hypothetical combined inline-record bytes; no public codec exposes it.
     pub total_share_record_bytes: u64,
     /// Current governed per-share ceiling.
     pub governed_share_ceiling_bytes: u64,
@@ -183,7 +189,7 @@ pub struct ZkAmsMkheDecryptionResourceEvidenceV1 {
     pub minimum_sound_share_ceiling_bytes: u64,
     /// Exact number of bytes by which the current ceiling is short.
     pub ceiling_shortfall_bytes: u64,
-    /// True only if the entire exact record fits the governed ceiling.
+    /// True only if the hypothetical combined inline record fits one ceiling.
     pub share_ceiling_met: bool,
     /// Digest of every field and proof-domain parameter above.
     pub evidence_digest: [u8; 32],
@@ -1999,7 +2005,7 @@ impl ZkAmsMkheAuthenticatedDecryptionShareV1 {
         &self.share.coefficients
     }
 
-    /// Canonical proof bytes suitable for the generic release proof envelope.
+    /// Exact standalone native `ZADP` proof bytes used by the split transport.
     pub fn canonical_proof_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         self.proof.encode()
     }
@@ -2893,11 +2899,9 @@ fn validate_opaque_party_state_context(
 
 /// Create one authenticated native P24-H partial-decryption share.
 ///
-/// The native proof payload is admitted independently because it fits the
-/// governed 32 MiB proof ceiling. Converting the returned share to the public
-/// `ZADS` record still fails closed while the enclosing 64 MiB ceiling is below
-/// the machine-checked minimum reported by
-/// [`zk_ams_mkhe_decryption_resource_evidence_v1`].
+/// Materialize its sole canonical public representation with
+/// [`split_zk_ams_mkhe_decryption_share_v1`]. The polynomial and proof are
+/// admitted independently under their unchanged governed ceilings.
 pub fn prove_zk_ams_mkhe_decryption_share_v1<R: MaskedRelaxedRandomSourceV1>(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
     party_index: usize,
@@ -4157,14 +4161,22 @@ mod tests {
 
         let transport = split_zk_ams_mkhe_decryption_share_v1(statement, &share).unwrap();
         let manifest = transport.manifest_bytes().unwrap();
+        println!(
+            "ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1={}",
+            hex::encode(transport.manifest().manifest_digest())
+        );
+        assert_eq!(
+            transport.manifest().manifest_digest(),
+            ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1
+        );
         assert_eq!(
             manifest.len(),
             ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1
         );
         assert_eq!(transport.polynomial_object().len(), 39_845_892);
         assert_eq!(transport.proof_envelope().len(), 33_030_199);
-        assert!(transport.polynomial_object().len() < 64 * 1024 * 1024);
-        assert!(transport.proof_envelope().len() < 32 * 1024 * 1024);
+        assert!(transport.polynomial_object().len() <= 64 * 1024 * 1024);
+        assert!(transport.proof_envelope().len() <= 32 * 1024 * 1024);
         let components = transport.ordered_components();
         let reconstructed =
             reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &manifest, &components).unwrap();
@@ -4175,6 +4187,7 @@ mod tests {
         // the signed manifest digest. These offsets are fixed by the 498-byte
         // `ZDSM` layout and deliberately exercise each field independently.
         for offset in [
+            0_usize, // tag
             4_usize, // version
             5,       // profile
             37,      // roster
@@ -4189,7 +4202,9 @@ mod tests {
             218,     // party id
             250,     // level
             251,     // component count
+            254,     // polynomial exact byte length
             262,     // polynomial BLAKE3 digest
+            296,     // proof exact byte length
             304,     // proof BLAKE3 digest
             336,     // stored manifest digest
             368,     // authenticated party
@@ -4228,6 +4243,16 @@ mod tests {
         assert!(
             ZkAmsMkheDecryptionTransportManifestV1::decode_exact(statement, &duplicate_pointer,)
                 .is_err()
+        );
+
+        // Manifest authentication is resolved before even the component-list
+        // cardinality is inspected, hence before either large object can be
+        // hashed or decoded.
+        let mut forged_authentication = manifest.clone();
+        *forged_authentication.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &forged_authentication, &[],),
+            Err(ZkAmsMkheErrorV1::InvalidAuthentication)
         );
 
         assert!(reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &manifest, &[]).is_err());
@@ -4576,9 +4601,9 @@ mod tests {
         assert_eq!(
             result.ordered_share_set_digest,
             [
-                0x22, 0xf1, 0x9d, 0x97, 0xca, 0x93, 0xea, 0xdf, 0xb9, 0x23, 0x80, 0xf6, 0x90, 0xd4,
-                0x6f, 0xbc, 0x63, 0x18, 0x28, 0xe6, 0xe8, 0x48, 0xcc, 0x5b, 0xa5, 0x8d, 0xa5, 0x2f,
-                0xe1, 0x59, 0x08, 0xb4,
+                0x29, 0xa8, 0x11, 0x71, 0x08, 0x12, 0x26, 0x8b, 0x3d, 0x6f, 0x34, 0xc5, 0x39, 0x5f,
+                0x2d, 0xf2, 0xc3, 0x28, 0x17, 0xef, 0x42, 0xaa, 0x2f, 0x70, 0xce, 0x1e, 0xdf, 0x1b,
+                0x1b, 0xfb, 0x2c, 0x28,
             ]
         );
         assert!(result.maximum_residual_bits <= TEST_FINAL_RESIDUAL_BITS as u16);
@@ -4595,9 +4620,9 @@ mod tests {
                 assert_eq!(
                     keccak256(&encoded),
                     [
-                        0x35, 0x7d, 0xe7, 0xc8, 0x32, 0x90, 0x55, 0xd6, 0xb7, 0x06, 0x17, 0x58,
-                        0x63, 0xb2, 0x84, 0x87, 0x55, 0x91, 0x20, 0x50, 0xd6, 0xb9, 0x43, 0xe6,
-                        0xe7, 0xba, 0x4d, 0xf8, 0xc9, 0x3f, 0x72, 0xab,
+                        0x53, 0x7a, 0xd4, 0x71, 0xe1, 0xff, 0xed, 0xc2, 0x8c, 0x0a, 0x91, 0xf7,
+                        0xce, 0x31, 0x99, 0xce, 0x26, 0x61, 0x90, 0x07, 0xff, 0xde, 0xef, 0x8b,
+                        0x19, 0x8f, 0x05, 0xfa, 0x0a, 0xa1, 0xac, 0xea,
                     ]
                 );
             }
@@ -4628,7 +4653,7 @@ mod tests {
     }
 
     #[test]
-    fn release_resource_evidence_is_exact_and_gate_must_remain_closed() {
+    fn release_resource_evidence_is_exact_for_split_transport() {
         let evidence = zk_ams_mkhe_decryption_resource_evidence_v1().unwrap();
         evidence.validate().unwrap();
         assert_eq!(evidence.ring_degree, 131_072);
@@ -4658,6 +4683,18 @@ mod tests {
         );
         assert_eq!(evidence.proof_payload_headroom_bytes, 524_233);
         assert!(evidence.proof_payload_ceiling_met);
+        assert_eq!(evidence.split_polynomial_object_bytes, 39_845_892);
+        assert_eq!(evidence.split_proof_envelope_bytes, 33_030_199);
+        assert_eq!(evidence.split_manifest_bytes, 498);
+        assert_eq!(evidence.split_polynomial_headroom_bytes, 27_262_972);
+        assert_eq!(evidence.split_proof_headroom_bytes, 524_233);
+        assert!(evidence.split_component_ceilings_met);
+        assert_eq!(
+            evidence.split_release_kat_digest,
+            ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1
+        );
+        assert_ne!(evidence.split_release_kat_digest, [0; 32]);
+        assert!(evidence.split_transport_ready);
         assert_eq!(evidence.record_overhead_bytes, 432);
         assert_eq!(evidence.total_share_record_bytes, 72_876_523);
         assert_eq!(evidence.governed_share_ceiling_bytes, 64 * 1024 * 1024);
@@ -4667,17 +4704,12 @@ mod tests {
             evidence.minimum_sound_share_ceiling_bytes,
             evidence.total_share_record_bytes
         );
-        assert!(
-            !super::super::manifest::zk_ams_mkhe_readiness_v1()
-                .unwrap()
-                .decryption_share_gate
-        );
         assert_eq!(
             evidence.evidence_digest,
             [
-                0x40, 0xc4, 0xd2, 0x1f, 0xbe, 0x06, 0x8c, 0xfc, 0x26, 0x4f, 0xca, 0x30, 0x6e, 0xfb,
-                0x24, 0x0d, 0x43, 0xaf, 0x4e, 0xfc, 0x45, 0x16, 0x9e, 0x28, 0x64, 0xed, 0xbf, 0x8d,
-                0x39, 0x90, 0xbd, 0x59,
+                0x1a, 0x67, 0x05, 0xd1, 0xad, 0x09, 0xd0, 0x0c, 0x7f, 0x90, 0x2d, 0xf1, 0x9b, 0xff,
+                0xe8, 0xc2, 0x37, 0x35, 0x93, 0x5d, 0x5b, 0x0c, 0x4f, 0x2d, 0xea, 0xd4, 0xb5, 0xf0,
+                0x25, 0xd6, 0xc3, 0x67,
             ]
         );
     }
@@ -4698,6 +4730,18 @@ mod tests {
             decode_decryption_polynomial_object(&polynomial_object[..polynomial_object.len() - 1])
                 .is_err()
         );
+        let mut extended_polynomial = polynomial_object.clone();
+        extended_polynomial.push(0);
+        assert!(decode_decryption_polynomial_object(&extended_polynomial).is_err());
+        drop(extended_polynomial);
+        let mut wrong_polynomial_count = polynomial_object.clone();
+        wrong_polynomial_count[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(decode_decryption_polynomial_object(&wrong_polynomial_count).is_err());
+        drop(wrong_polynomial_count);
+        let mut noncanonical_polynomial = polynomial_object.clone();
+        noncanonical_polynomial[4..12].copy_from_slice(&profile.moduli[0].to_be_bytes());
+        assert!(decode_decryption_polynomial_object(&noncanonical_polynomial).is_err());
+        drop(noncanonical_polynomial);
 
         let proof = DecryptionRelationProofV1 {
             wide_response_bytes: evidence.wide_response_coefficient_bytes,
@@ -4717,6 +4761,34 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
         ));
+        let mut extended_proof = proof_envelope.clone();
+        extended_proof.push(0);
+        assert!(ZkAmsMkheDecryptionProofV1::decode_release_exact(&extended_proof).is_err());
+        drop(extended_proof);
+        for offset in [
+            0_usize, // tag
+            4,       // version
+            5,       // fixed wide-response width
+            7,       // ring degree
+            43,      // secret-response count
+            47,      // public-error-response count
+            51,      // smudge-response count
+        ] {
+            let mut malformed = proof_envelope.clone();
+            malformed[offset] ^= 1;
+            assert!(
+                ZkAmsMkheDecryptionProofV1::decode_release_exact(&malformed).is_err(),
+                "proof header mutation offset {offset} must reject"
+            );
+        }
+        let mut negative_zero = proof_envelope.clone();
+        let first_wide_response = DECRYPTION_PROOF_HEADER_BYTES_V1
+            + profile.ring_degree * 2 * DECRYPTION_SIGNED_SMALL_BYTES_V1;
+        negative_zero
+            [first_wide_response..first_wide_response + usize::from(proof.wide_response_bytes)]
+            .fill(0);
+        negative_zero[first_wide_response] = 0x80;
+        assert!(ZkAmsMkheDecryptionProofV1::decode_release_exact(&negative_zero).is_err());
         let polynomial_pointer = ZkAmsMkheDecryptionTransportPointerV1::from_payload(
             ZkAmsMkheDecryptionTransportComponentKindV1::SharePolynomial,
             &polynomial_object,
@@ -4833,7 +4905,7 @@ mod tests {
     fn every_binding_axis_and_replay_axis_fails_closed() {
         let fixture = fixture(b"decryption-binding-negative");
         let shares = make_shares(&fixture, b"decryption-binding-negative-shares");
-        for axis in 0..10 {
+        for axis in 0..12 {
             let mut mutation = shares[3].clone();
             match axis {
                 0 => mutation.binding.profile_digest[0] ^= 1,
@@ -4842,10 +4914,12 @@ mod tests {
                 3 => mutation.binding.transcript_digest[0] ^= 1,
                 4 => mutation.binding.ciphertext_digest[0] ^= 1,
                 5 => mutation.binding.key_context_digest[0] ^= 1,
-                6 => mutation.binding.sample_index += 1,
-                7 => mutation.binding.party_index = 4,
-                8 => mutation.binding.party = fixture.parties.parties[4],
-                9 => mutation.binding.level = 0,
+                6 => mutation.binding.statement_binding_digest[0] ^= 1,
+                7 => mutation.binding.ciphertext_record_index += 1,
+                8 => mutation.binding.sample_index += 1,
+                9 => mutation.binding.party_index = 4,
+                10 => mutation.binding.party = fixture.parties.parties[4],
+                11 => mutation.binding.level = 0,
                 _ => unreachable!(),
             }
             assert!(

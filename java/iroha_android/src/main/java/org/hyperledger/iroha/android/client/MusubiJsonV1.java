@@ -95,7 +95,7 @@ final class MusubiJsonV1 {
         exactObject(
             parse(payload, "Musubi resolver-index response"),
             "response",
-            keys("chain_id", "genesis_hash", "items", "next_cursor", "snapshot"));
+            keys("query", "chain_id", "genesis_hash", "items", "next_cursor", "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<ResolverReleaseRow> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -104,23 +104,50 @@ final class MusubiJsonV1 {
     final RegistrySnapshot snapshot = parseSnapshot(root.get("snapshot"), "response.snapshot");
     final FinalizedCursor cursor = root.get("next_cursor") == null
         ? null : parseCursor(root.get("next_cursor"), "response.next_cursor");
-    return new ResolverIndexPage(
+    final ResolverIndexPage page = new ResolverIndexPage(
+        (ResolverIndexQuery) decodeQuery(
+            MusubiToriiClientV1.RESOLVER_INDEX_PATH, root.get("query")),
         string(root.get("chain_id"), "response.chain_id"),
         fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
         items,
         cursor,
         snapshot);
+    page.requireMatches(page.query());
+    return page;
   }
 
   static Page<Version> parseVersionPage(final byte[] payload) {
-    return parsePage(parse(payload, "Musubi versions response"), "response", MusubiJsonV1::parseVersion);
+    final Page<Version> page =
+        parsePage(
+            parse(payload, "Musubi versions response"),
+            "response",
+            MusubiToriiClientV1.VERSIONS_PATH,
+            MusubiJsonV1::parseVersion);
+    for (int index = 1; index < page.items().size(); index++) {
+      if (page.items().get(index - 1).compareTo(page.items().get(index)) >= 0) {
+        throw new IllegalArgumentException(
+            "Musubi version page must be sorted and distinct");
+      }
+    }
+    page.requireVersionMatches((PackagePageQuery) page.query());
+    return page;
   }
 
   static Page<MaintainerDirectoryEntry> parseMaintainerPage(final byte[] payload) {
-    return parsePage(
+    final Page<MaintainerDirectoryEntry> page = parsePage(
         parse(payload, "Musubi maintainers response"),
         "response",
+        MusubiToriiClientV1.MAINTAINERS_PATH,
         MusubiJsonV1::parseMaintainerDirectoryEntry);
+    for (int index = 1; index < page.items().size(); index++) {
+      if (MusubiModelsV1.compareMaintainerEntries(
+              page.items().get(index - 1), page.items().get(index)) >= 0) {
+        throw new IllegalArgumentException(
+            "Musubi maintainer page must be sorted and distinct");
+      }
+    }
+    page.requireMaintainerMatches((PackagePageQuery) page.query());
+    return page;
   }
 
   static ArchiveLocationPage parseArchiveLocationPage(final byte[] payload) {
@@ -151,7 +178,7 @@ final class MusubiJsonV1 {
         exactObject(
             parse(payload, "Musubi archive-retention response"),
             "response",
-            keys("chain_id", "genesis_hash", "items", "snapshot"));
+            keys("chain_id", "genesis_hash", "items", "finalized_time_ms", "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<ArchiveRetentionDecision> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -162,6 +189,7 @@ final class MusubiJsonV1 {
         string(root.get("chain_id"), "response.chain_id"),
         fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
         items,
+        u64(root.get("finalized_time_ms"), "response.finalized_time_ms"),
         parseSnapshot(root.get("snapshot"), "response.snapshot"));
   }
 
@@ -170,7 +198,21 @@ final class MusubiJsonV1 {
   }
 
   static Page<AliasHistoryEntry> parseAliasHistoryPage(final byte[] payload) {
-    return parsePage(parse(payload, "Musubi alias-history response"), "response", MusubiJsonV1::parseAliasHistory);
+    final Page<AliasHistoryEntry> page =
+        parsePage(
+            parse(payload, "Musubi alias-history response"),
+            "response",
+            MusubiToriiClientV1.ALIAS_HISTORY_PATH,
+            MusubiJsonV1::parseAliasHistory);
+    for (int index = 1; index < page.items().size(); index++) {
+      if (MusubiModelsV1.compareAliasHistoryEntries(
+              page.items().get(index - 1), page.items().get(index)) >= 0) {
+        throw new IllegalArgumentException(
+            "Musubi alias-history page must be sorted and distinct");
+      }
+    }
+    page.requireAliasHistoryMatches((AliasQuery) page.query());
+    return page;
   }
 
   static OrderedPrefixPage parseOrderedPackagePage(final byte[] payload) {
@@ -179,8 +221,8 @@ final class MusubiJsonV1 {
             parse(payload, "Musubi ordered-prefix response"),
             "response",
             keys(
-                "chain_id", "genesis_hash", "namespace_binding", "items", "next_cursor",
-                "snapshot"));
+                "query", "chain_id", "genesis_hash", "namespace_binding", "items",
+                "next_cursor", "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<OrderedPackageEntry> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -189,13 +231,17 @@ final class MusubiJsonV1 {
     final RegistrySnapshot snapshot = parseSnapshot(root.get("snapshot"), "response.snapshot");
     final FinalizedCursor cursor = root.get("next_cursor") == null
         ? null : parseCursor(root.get("next_cursor"), "response.next_cursor");
-    return new OrderedPrefixPage(
+    final OrderedPrefixPage page = new OrderedPrefixPage(
+        (OrderedPrefixQuery) decodeQuery(
+            MusubiToriiClientV1.ORDERED_PREFIX_PATH, root.get("query")),
         string(root.get("chain_id"), "response.chain_id"),
         fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
         parseNamespaceBinding(root.get("namespace_binding"), "response.namespace_binding"),
         items,
         cursor,
         snapshot);
+    page.requireMatches(page.query());
+    return page;
   }
 
   static SearchPage parseSearchPage(final byte[] payload) {
@@ -203,7 +249,7 @@ final class MusubiJsonV1 {
         exactObject(
             parse(payload, "Musubi search response"),
             "response",
-            keys("items", "next_cursor", "snapshot"));
+            keys("query", "items", "next_cursor", "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<SearchHit> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -213,7 +259,13 @@ final class MusubiJsonV1 {
         parseSearchSnapshot(root.get("snapshot"), "response.snapshot");
     final SearchCursor cursor = root.get("next_cursor") == null
         ? null : parseSearchCursor(root.get("next_cursor"), "response.next_cursor");
-    return new SearchPage(items, cursor, snapshot);
+    final SearchPage page = new SearchPage(
+        (SearchQuery) decodeQuery(MusubiToriiClientV1.SEARCH_PATH, root.get("query")),
+        items,
+        cursor,
+        snapshot);
+    page.requireMatches(page.query());
+    return page;
   }
 
   static WireValue decodeQuery(final String path, final Object value) {
@@ -657,7 +709,11 @@ final class MusubiJsonV1 {
     final String kind = parsePackageRole(root.get("role"), field + ".role");
     return new PackageMember(
         parsePackage(root.get("package"), field + ".package"),
-        string(root.get("account"), field + ".account"), kind, root);
+        string(root.get("account"), field + ".account"),
+        kind,
+        nonZeroU64(root.get("accepted_at_height"), field + ".accepted_at_height"),
+        nonZeroU64(root.get("governance_revision"), field + ".governance_revision"),
+        root);
   }
 
   private static MaintainerInvitation parseMaintainerInvitation(
@@ -794,10 +850,11 @@ final class MusubiJsonV1 {
     list(root.get("provider_attestations"), field + ".provider_attestations");
     u64(root.get("renew_after_epoch"), field + ".renew_after_epoch");
     u64(root.get("expires_at_epoch"), field + ".expires_at_epoch");
-    nonZeroU64(root.get("finalized_height"), field + ".finalized_height");
+    final BigInteger finalizedHeight =
+        nonZeroU64(root.get("finalized_height"), field + ".finalized_height");
     final BigInteger revision = nonZeroU64(root.get("revision"), field + ".revision");
     final String state = taggedUnit(root.get("state"), field + ".state", keys("Pending", "Healthy", "Degraded", "Retired"));
-    return new ArchiveLocation(locationId, archiveId, revision, state, root);
+    return new ArchiveLocation(locationId, archiveId, finalizedHeight, revision, state, root);
   }
 
   private static ArchiveRecord parseArchiveRecord(final Object value, final String field) {
@@ -977,8 +1034,12 @@ final class MusubiJsonV1 {
   }
 
   private static <T extends WireValue> Page<T> parsePage(
-      final Object value, final String field, final ItemParser<T> parser) {
-    final Map<String, Object> root = exactObject(value, field, keys("items", "next_cursor", "snapshot"));
+      final Object value,
+      final String field,
+      final String queryPath,
+      final ItemParser<T> parser) {
+    final Map<String, Object> root =
+        exactObject(value, field, keys("query", "items", "next_cursor", "snapshot"));
     final List<Object> raw = list(root.get("items"), field + ".items");
     final List<T> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -987,7 +1048,7 @@ final class MusubiJsonV1 {
     final RegistrySnapshot snapshot = parseSnapshot(root.get("snapshot"), field + ".snapshot");
     final FinalizedCursor cursor = root.get("next_cursor") == null
         ? null : parseCursor(root.get("next_cursor"), field + ".next_cursor");
-    return new Page<>(items, cursor, snapshot);
+    return new Page<>(decodeQuery(queryPath, root.get("query")), items, cursor, snapshot);
   }
 
   private static Digest32 digest(final Object value, final String field) {

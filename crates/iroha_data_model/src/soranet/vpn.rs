@@ -24,7 +24,7 @@ use norito::codec::{Decode, Encode};
 use norito::json;
 
 use super::RelayId;
-use crate::{account::AccountId, asset::AssetDefinitionId};
+use crate::{ChainId, account::AccountId, asset::AssetDefinitionId};
 
 /// Fixed-length cell size used by the VPN tunnel.
 pub const VPN_CELL_LEN: usize = 1_024;
@@ -46,6 +46,63 @@ const VPN_HEADER_LEN: usize = 42;
 const VPN_SESSION_IPV4_BASE: u32 = u32::from_be_bytes([10, 208, 0, 0]);
 const VPN_SESSION_IPV4_SUBNET_COUNT: u32 = 1 << 18;
 const VPN_SESSION_IPV6_BASE: u128 = 0xfd53_7261_6574_0000_0000_0000_0000_0000u128;
+
+/// Number of disjoint point-to-point address slots available to VPN leases.
+pub const VPN_ADDRESS_SLOT_COUNT_V1: u32 = VPN_SESSION_IPV4_SUBNET_COUNT;
+
+/// Typed index of a deterministic VPN point-to-point address allocation.
+///
+/// The index is signed by the operator and claimed in consensus state. Keeping
+/// it separate from quote and session identifiers makes address uniqueness an
+/// explicit protocol invariant instead of an accidental property of a
+/// truncated hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VpnAddressSlotV1(u32);
+
+impl VpnAddressSlotV1 {
+    /// Construct a slot after checking the V1 allocation range.
+    ///
+    /// # Errors
+    /// Returns [`VpnAddressSlotError`] when `index` is outside the V1 pool.
+    pub const fn new(index: u32) -> Result<Self, VpnAddressSlotError> {
+        if index >= VPN_ADDRESS_SLOT_COUNT_V1 {
+            return Err(VpnAddressSlotError { index });
+        }
+        Ok(Self(index))
+    }
+
+    /// Return the canonical zero-based slot index.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+
+    /// Return whether a decoded slot is inside the V1 allocation pool.
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.0 < VPN_ADDRESS_SLOT_COUNT_V1
+    }
+
+    /// Extract the slot embedded in a canonical V1 session identifier.
+    #[must_use]
+    pub const fn from_session_id(session_id: [u8; 16]) -> Self {
+        let index =
+            ((session_id[0] as u32) << 16) | ((session_id[1] as u32) << 8) | session_id[2] as u32;
+        Self(index & (VPN_ADDRESS_SLOT_COUNT_V1 - 1))
+    }
+}
+
+/// Error returned for an out-of-range VPN address slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("VPN address slot {index} is outside the V1 allocation pool")]
+pub struct VpnAddressSlotError {
+    /// Rejected zero-based slot index.
+    pub index: u32,
+}
 
 /// Deterministic per-session address plan shared by Torii, relays, and local tunnel helpers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -699,27 +756,19 @@ pub struct VpnRouteV1 {
     pub metric: Option<u16>,
 }
 
-/// Derive the deterministic point-to-point address plan for a VPN session.
+/// Derive the deterministic point-to-point address plan for a typed slot.
 #[must_use]
-pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAddressPlanV1 {
-    let digest = blake3::hash(&session_id);
-    let digest_bytes = digest.as_bytes();
-
-    let v4_index = u32::from_be_bytes([
-        digest_bytes[0],
-        digest_bytes[1],
-        digest_bytes[2],
-        digest_bytes[3],
-    ]) % VPN_SESSION_IPV4_SUBNET_COUNT;
+pub fn derive_vpn_address_plan_v1(slot: VpnAddressSlotV1) -> VpnSessionAddressPlanV1 {
+    // Callers that decode untrusted values must reject invalid slots before
+    // reaching this projection. The modulo keeps this total for diagnostics
+    // without giving an invalid slot a distinct consensus claim.
+    let v4_index = slot.index() % VPN_ADDRESS_SLOT_COUNT_V1;
     let v4_network = VPN_SESSION_IPV4_BASE + (v4_index << 2);
     let v4_route = format!("{}/30", Ipv4Addr::from(v4_network));
     let v4_server = format!("{}/30", Ipv4Addr::from(v4_network + 1));
     let v4_client = format!("{}/30", Ipv4Addr::from(v4_network + 2));
 
-    let mut low = [0u8; 8];
-    low.copy_from_slice(&digest_bytes[8..16]);
-    let v6_subnet = u128::from(u64::from_be_bytes(low) >> 2);
-    let v6_network = VPN_SESSION_IPV6_BASE | (v6_subnet << 2);
+    let v6_network = VPN_SESSION_IPV6_BASE | (u128::from(v4_index) << 2);
     let v6_route = format!("{}/126", Ipv6Addr::from(v6_network));
     let v6_server = format!("{}/126", Ipv6Addr::from(v6_network | 1));
     let v6_client = format!("{}/126", Ipv6Addr::from(v6_network | 2));
@@ -729,6 +778,66 @@ pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAdd
         client_tunnel_addresses: vec![v4_client, v6_client],
         session_routes: vec![v4_route, v6_route],
     }
+}
+
+/// Derive a deterministic initial address-slot candidate from a quote id.
+///
+/// Consensus still claims the typed slot explicitly because different quote
+/// ids can share this bounded candidate space.
+#[must_use]
+pub fn derive_vpn_address_slot_v1(quote_id: [u8; 32]) -> VpnAddressSlotV1 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"soranet-vpn-address-slot-v1");
+    hasher.update(&quote_id);
+    let digest = hasher.finalize();
+    let bytes = digest.as_bytes();
+    let index =
+        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) % VPN_ADDRESS_SLOT_COUNT_V1;
+    VpnAddressSlotV1(index)
+}
+
+/// Derive the canonical lease identifier for a chain-bound operator quote.
+#[must_use]
+pub fn derive_vpn_lease_id_v1(
+    chain_id: &ChainId,
+    quote_id: [u8; 32],
+    client_account_id: &AccountId,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"soranet-vpn-lease-id-v1");
+    hasher.update(&chain_id.encode());
+    hasher.update(&quote_id);
+    hasher.update(&client_account_id.encode());
+    *hasher.finalize().as_bytes()
+}
+
+/// Derive the canonical session identifier and embed its address slot.
+#[must_use]
+pub fn derive_vpn_session_id_v1(
+    chain_id: &ChainId,
+    quote_id: [u8; 32],
+    client_account_id: &AccountId,
+    address_slot: VpnAddressSlotV1,
+) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"soranet-vpn-session-id-v1");
+    hasher.update(&chain_id.encode());
+    hasher.update(&quote_id);
+    hasher.update(&client_account_id.encode());
+    hasher.update(&address_slot.index().to_be_bytes());
+    let mut session_id = [0_u8; 16];
+    session_id.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    let slot = address_slot.index();
+    session_id[0] = (slot >> 16) as u8;
+    session_id[1] = (slot >> 8) as u8;
+    session_id[2] = slot as u8;
+    session_id
+}
+
+/// Derive the deterministic point-to-point address plan for a canonical VPN session.
+#[must_use]
+pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAddressPlanV1 {
+    derive_vpn_address_plan_v1(VpnAddressSlotV1::from_session_id(session_id))
 }
 
 /// Client-signed cumulative usage voucher used to release escrowed XOR to an operator.
@@ -889,6 +998,131 @@ pub struct VpnQuotePolicyV1 {
     pub padding_budget_ms: u16,
 }
 
+/// Canonical operator-authored VPN quote admitted by the native lease ISI.
+///
+/// Every economic, identity, trust, lifetime, and address-allocation field is
+/// inside this body. The client submits the signed body as one opaque policy
+/// decision instead of reconstructing security-sensitive fields locally.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VpnQuoteBodyV1 {
+    /// Exact chain on which this quote may open a lease.
+    pub chain_id: ChainId,
+    /// Operator-issued quote identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub quote_id: [u8; 32],
+    /// Canonical chain/client/quote-derived lease identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub lease_id: [u8; 32],
+    /// Canonical chain/client/quote/slot-derived session identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub session_id: [u8; 16],
+    /// Consensus-claimed point-to-point address allocation.
+    pub address_slot: VpnAddressSlotV1,
+    /// Exact client account allowed to fund this quote.
+    pub client_account_id: AccountId,
+    /// Exact operator account that signed and may settle this quote.
+    pub operator_account_id: AccountId,
+    /// Client public key authorized to sign cumulative usage vouchers.
+    pub metering_public_key: PublicKey,
+    /// Asset definition to escrow. V1 native leases require XOR.
+    pub asset_definition: AssetDefinitionId,
+    /// Operator-authored deterministic usage tariff.
+    pub tariff: VpnTariffV1,
+    /// Operator-authored relay, route, and tunnel policy.
+    pub policy: VpnQuotePolicyV1,
+    /// Inclusive lower timestamp bound for opening the quote.
+    pub valid_after_ms: u64,
+    /// Exclusive service and quote expiry timestamp.
+    pub expires_at_ms: u64,
+    /// Additional operator settlement window after service expiry.
+    pub settlement_grace_ms: u64,
+}
+
+/// Operator signature over a canonical, domain-separated VPN quote body.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VpnSignedQuoteV1 {
+    /// Complete quote body covered by the operator signature.
+    pub body: VpnQuoteBodyV1,
+    /// Signature by the single-signatory operator account.
+    pub signature: Signature,
+}
+
+impl VpnSignedQuoteV1 {
+    /// Build and sign a canonical VPN quote.
+    ///
+    /// # Errors
+    /// Returns an error when the private key does not control the quote's
+    /// operator account or when the cryptographic backend rejects signing.
+    pub fn try_sign(
+        body: VpnQuoteBodyV1,
+        private_key: &PrivateKey,
+    ) -> Result<Self, iroha_crypto::Error> {
+        let public_key = PublicKey::from(private_key.clone());
+        if body.operator_account_id.try_signatory() != Some(&public_key) {
+            return Err(iroha_crypto::Error::Other(
+                "VPN quote operator account does not match signing private key".to_owned(),
+            ));
+        }
+        let signature = Signature::try_new(private_key, &vpn_quote_signing_bytes(&body))?;
+        Ok(Self { body, signature })
+    }
+
+    /// Verify the operator signature over the canonical quote body.
+    ///
+    /// # Errors
+    /// Returns [`VpnQuoteSignatureError`] for multisignature operators,
+    /// malformed signatures, or a failed signature check.
+    pub fn verify(&self) -> Result<(), VpnQuoteSignatureError> {
+        let public_key = self
+            .body
+            .operator_account_id
+            .try_signatory()
+            .ok_or(VpnQuoteSignatureError::MultisignatureOperator)?;
+        let signature = match public_key.try_algorithm() {
+            Ok(Algorithm::Ed25519) => {
+                iroha_crypto::ed25519_parse_signature(self.signature.payload())?
+            }
+            Ok(Algorithm::MlDsa) => {
+                iroha_crypto::mldsa65_parse_signature(self.signature.payload())?
+            }
+            _ => Signature::try_from_bytes(self.signature.payload())?,
+        };
+        signature
+            .verify(public_key, &vpn_quote_signing_bytes(&self.body))
+            .map_err(VpnQuoteSignatureError::Signature)
+    }
+}
+
+fn vpn_quote_signing_bytes(body: &VpnQuoteBodyV1) -> Vec<u8> {
+    let encoded = body.encode();
+    let mut bytes = Vec::with_capacity(b"soranet-vpn-operator-quote-v1".len() + encoded.len());
+    bytes.extend_from_slice(b"soranet-vpn-operator-quote-v1");
+    bytes.extend_from_slice(&encoded);
+    bytes
+}
+
+/// Operator-quote signature verification failure.
+#[derive(Debug, thiserror::Error)]
+pub enum VpnQuoteSignatureError {
+    /// The V1 quote format requires one unambiguous operator signatory.
+    #[error("VPN quote operator account must use a single-signature controller")]
+    MultisignatureOperator,
+    /// The opaque signature payload failed admission parsing for the operator's algorithm.
+    #[error("VPN quote signature payload is malformed: {0}")]
+    MalformedSignature(#[from] iroha_crypto::error::ParseError),
+    /// Algorithm-specific signature parsing or cryptographic verification failed.
+    #[error("VPN quote signature verification failed: {0}")]
+    Signature(#[from] iroha_crypto::Error),
+}
+
 impl VpnTariffV1 {
     const MILLIS_PER_MINUTE: u64 = 60_000;
     const BYTES_PER_MIB: u64 = 1_048_576;
@@ -969,7 +1203,7 @@ pub enum VpnLeaseStatusV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct VpnLeaseRecordV1 {
-    /// Caller-selected lease identifier.
+    /// Canonical chain/client/quote-derived lease identifier.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub lease_id: [u8; 32],
     /// Session identifier bound to the tunnel runtime.
@@ -997,6 +1231,10 @@ pub struct VpnLeaseRecordV1 {
     pub tariff: VpnTariffV1,
     /// Durable quote policy fixed at lease opening.
     pub quote_policy: VpnQuotePolicyV1,
+    /// Typed address allocation held while this lease remains active.
+    pub address_slot: VpnAddressSlotV1,
+    /// Exact operator-signed quote admitted when the lease opened.
+    pub signed_quote: VpnSignedQuoteV1,
     /// Hash of the transaction that opened and funded this lease.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub open_tx_hash: [u8; 32],
@@ -1634,6 +1872,68 @@ mod tests {
             .expect("signed 512-bit maximum quantity")
     }
 
+    fn sample_quote_body(
+        chain_id: ChainId,
+        quote_id: [u8; 32],
+        address_slot: VpnAddressSlotV1,
+        client_account_id: AccountId,
+        operator_account_id: AccountId,
+        metering_public_key: PublicKey,
+    ) -> VpnQuoteBodyV1 {
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            crate::domain::DomainId::parse_fully_qualified("universal.universal")
+                .expect("static universal domain"),
+            "xor".parse().expect("static XOR name"),
+        );
+        let lease_id = derive_vpn_lease_id_v1(&chain_id, quote_id, &client_account_id);
+        let session_id =
+            derive_vpn_session_id_v1(&chain_id, quote_id, &client_account_id, address_slot);
+        let address_plan = derive_vpn_address_plan_v1(address_slot);
+        let tariff = VpnTariffV1 {
+            lease_fee: quantity_nanos(10_000),
+            active_fee_per_minute: quantity_nanos(60),
+            ingress_fee_per_mib: quantity_nanos(100),
+            egress_fee_per_mib: quantity_nanos(200),
+        };
+        VpnQuoteBodyV1 {
+            chain_id,
+            quote_id,
+            lease_id,
+            session_id,
+            address_slot,
+            client_account_id,
+            operator_account_id,
+            metering_public_key,
+            asset_definition,
+            tariff,
+            policy: VpnQuotePolicyV1 {
+                exit_class: VpnExitClassV1::Standard,
+                relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
+                relay_id: [0x11; 32],
+                descriptor_commit: [0x22; 32],
+                tls_server_name: "relay.example".to_owned(),
+                relay_tls_spki_sha256: [0x33; 32],
+                relay_certificate_sha256: [0x44; 32],
+                directory_snapshot_digest: [0x55; 32],
+                relay_trust_valid_until_ms: 20_000,
+                lease_secs: 10,
+                meter_family: "soranet.vpn.standard".to_owned(),
+                fee_asset_id: "xor#universal.universal".to_owned(),
+                escrow_account_id: AccountId::new(checked_random_public_key()),
+                route_pushes: vec!["0.0.0.0/0".to_owned(), "::/0".to_owned()],
+                excluded_routes: Vec::new(),
+                dns_servers: vec!["1.1.1.1".to_owned()],
+                tunnel_addresses: address_plan.client_tunnel_addresses,
+                mtu_bytes: u64::from(VPN_DEFAULT_TUNNEL_MTU_BYTES),
+                flow_label_bits: 24,
+                padding_budget_ms: 15,
+            },
+            valid_after_ms: 1_000,
+            expires_at_ms: 11_000,
+            settlement_grace_ms: 1_000,
+        }
+    }
+
     fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
         let metering_key_pair = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -2246,6 +2546,111 @@ mod tests {
             second.client_tunnel_addresses
         );
         assert_ne!(first.session_routes, second.session_routes);
+    }
+
+    #[test]
+    fn typed_address_slot_is_range_checked_and_embedded_in_session_id() {
+        assert!(VpnAddressSlotV1::new(VPN_ADDRESS_SLOT_COUNT_V1).is_err());
+        let slot = VpnAddressSlotV1::new(VPN_ADDRESS_SLOT_COUNT_V1 - 1).expect("last slot");
+        let client = AccountId::new(checked_random_public_key());
+        let session_id =
+            derive_vpn_session_id_v1(&ChainId::from("vpn-slot-chain"), [0xA5; 32], &client, slot);
+        assert_eq!(VpnAddressSlotV1::from_session_id(session_id), slot);
+        assert_eq!(
+            derive_vpn_session_address_plan_v1(session_id),
+            derive_vpn_address_plan_v1(slot)
+        );
+    }
+
+    #[test]
+    fn operator_quote_signature_binds_chain_economics_identity_trust_and_slot() {
+        let operator = checked_random_keypair();
+        let client = AccountId::new(checked_random_public_key());
+        let body = sample_quote_body(
+            ChainId::from("vpn-quote-chain"),
+            [0x71; 32],
+            VpnAddressSlotV1::new(17).expect("fixture slot"),
+            client,
+            AccountId::new(operator.public_key().clone()),
+            checked_random_public_key(),
+        );
+        let quote = VpnSignedQuoteV1::try_sign(body, operator.private_key())
+            .expect("operator signs canonical quote");
+        quote.verify().expect("exact signed quote verifies");
+
+        let mut substitutions = Vec::new();
+        let mut changed = quote.clone();
+        changed.body.chain_id = ChainId::from("different-chain");
+        substitutions.push(changed);
+        let mut changed = quote.clone();
+        changed.body.tariff.lease_fee = quantity_nanos(1);
+        substitutions.push(changed);
+        let mut changed = quote.clone();
+        changed.body.policy.descriptor_commit[0] ^= 1;
+        substitutions.push(changed);
+        let mut changed = quote.clone();
+        changed.body.address_slot = VpnAddressSlotV1::new(18).expect("fixture slot");
+        substitutions.push(changed);
+        let mut changed = quote.clone();
+        changed.body.client_account_id = AccountId::new(checked_random_public_key());
+        substitutions.push(changed);
+        for substituted in substitutions {
+            assert!(
+                substituted.verify().is_err(),
+                "every security-sensitive field substitution must invalidate the quote"
+            );
+        }
+
+        let wrong_signer = checked_random_keypair();
+        assert!(
+            VpnSignedQuoteV1::try_sign(quote.body, wrong_signer.private_key()).is_err(),
+            "a non-operator key must not issue the quote"
+        );
+    }
+
+    #[test]
+    fn operator_quote_reports_malformed_generic_algorithm_signature_payload() {
+        let operator = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
+        let body = sample_quote_body(
+            ChainId::from("vpn-malformed-signature-chain"),
+            [0x73; 32],
+            VpnAddressSlotV1::new(19).expect("fixture slot"),
+            AccountId::new(checked_random_public_key()),
+            AccountId::new(operator.public_key().clone()),
+            checked_random_public_key(),
+        );
+        let mut quote = VpnSignedQuoteV1::try_sign(body, operator.private_key())
+            .expect("secp256k1 operator signs canonical quote");
+        quote.signature = Signature::from_bytes(&[0_u8; 64]);
+
+        assert!(matches!(
+            quote.verify(),
+            Err(VpnQuoteSignatureError::MalformedSignature(_))
+        ));
+    }
+
+    #[test]
+    fn historical_quote_id_collision_fixtures_have_an_explicit_shared_slot_claim() {
+        let mut quote_0009 = [0_u8; 32];
+        quote_0009[31] = 0x09;
+        let mut quote_0198 = [0_u8; 32];
+        quote_0198[30..].copy_from_slice(&[0x01, 0x98]);
+        let slot = VpnAddressSlotV1::new(91).expect("fixture slot");
+        let chain_id = ChainId::from("vpn-collision-chain");
+        let first_client = AccountId::new(checked_random_public_key());
+        let second_client = AccountId::new(checked_random_public_key());
+        let first_session = derive_vpn_session_id_v1(&chain_id, quote_0009, &first_client, slot);
+        let second_session = derive_vpn_session_id_v1(&chain_id, quote_0198, &second_client, slot);
+
+        assert_ne!(
+            first_session, second_session,
+            "session identity stays exact"
+        );
+        assert_eq!(
+            derive_vpn_session_address_plan_v1(first_session),
+            derive_vpn_session_address_plan_v1(second_session),
+            "the bounded address collision is now represented by one typed claim"
+        );
     }
 
     #[test]

@@ -6690,8 +6690,6 @@ final class ToriiClientTests: XCTestCase {
             "mtu_bytes": 1280,
             "meter_family": "vpn-standard",
             "display_billing_label": "standard vpn",
-            "fee_asset_id": "xor#universal.universal",
-            "escrow_account_id": "vpn_escrow",
             "operator_account_id": "vpn_operator",
             "lease_fee": "1000000.25",
             "settlement_grace_secs": 60,
@@ -6738,8 +6736,7 @@ final class ToriiClientTests: XCTestCase {
             "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
             "directory_snapshot_digest_hex": String(repeating: "42", count: 32),
             "metering_public_key_hex": String(repeating: "44", count: 32),
-            "open_lease_instruction": instruction,
-            "tx_instructions": [instruction]
+            "open_lease_instruction": instruction
         ]
     }
 
@@ -6805,8 +6802,7 @@ final class ToriiClientTests: XCTestCase {
             "earned_fee": "700000.125",
             "refunded_fee": "300000.125",
             "lease_id_hex": sessionId,
-            "settle_lease_instruction": NSNull(),
-            "tx_instructions": []
+            "settle_lease_instruction": NSNull()
         ]
     }
 
@@ -6910,9 +6906,6 @@ final class ToriiClientTests: XCTestCase {
             ("nullable quote instruction", vpnQuoteResponsePayload(), "open_lease_instruction", {
                 _ = try decoder.decode(ToriiVpnQuote.self, from: $0)
             }),
-            ("required quote instruction list", vpnQuoteResponsePayload(), "tx_instructions", {
-                _ = try decoder.decode(ToriiVpnQuote.self, from: $0)
-            }),
             ("required session route list", vpnSessionResponsePayload(), "route_pushes", {
                 _ = try decoder.decode(ToriiVpnSession.self, from: $0)
             }),
@@ -6969,23 +6962,14 @@ final class ToriiClientTests: XCTestCase {
             )
         }
 
-        let instruction = try XCTUnwrap(
-            vpnQuoteResponsePayload()["open_lease_instruction"] as? [String: Any]
-        )
-        let invalidQuoteInstructionLists: [[[String: Any]]] = [
-            [],
-            [instruction, instruction]
-        ]
-        for instructions in invalidQuoteInstructionLists {
-            var quote = vpnQuoteResponsePayload()
-            quote["tx_instructions"] = instructions
-            XCTAssertThrowsError(
-                try decoder.decode(
-                    ToriiVpnQuote.self,
-                    from: JSONSerialization.data(withJSONObject: quote)
-                )
+        var quoteWithRetiredInstructions = vpnQuoteResponsePayload()
+        quoteWithRetiredInstructions["tx_instructions"] = []
+        XCTAssertThrowsError(
+            try decoder.decode(
+                ToriiVpnQuote.self,
+                from: JSONSerialization.data(withJSONObject: quoteWithRetiredInstructions)
             )
-        }
+        )
 
         for (field, value) in [("exit_class", "unsupported"), ("status", "settled")] {
             var session = vpnSessionResponsePayload()
@@ -6999,14 +6983,10 @@ final class ToriiClientTests: XCTestCase {
             )
         }
 
-        let receiptInstruction: [String: Any] = [
-            "wire_id": "SettleVpnLease",
-            "payload_hex": "abcd"
-        ]
         let invalidReceipts: [(String, Any)] = [
             ("status", "active"),
             ("receipt_source", "operator"),
-            ("tx_instructions", [receiptInstruction, receiptInstruction])
+            ("tx_instructions", [])
         ]
         for (field, value) in invalidReceipts {
             var receipt = vpnReceiptResponsePayload()
@@ -7057,8 +7037,6 @@ final class ToriiClientTests: XCTestCase {
                 "mtu_bytes": 1280,
                 "meter_family": "vpn-standard",
                 "display_billing_label": "standard vpn",
-                "fee_asset_id": "xor#universal.universal",
-                "escrow_account_id": "vpn_escrow",
                 "operator_account_id": "vpn_operator",
                 "lease_fee": "1000000.25",
                 "settlement_grace_secs": 60,
@@ -7077,7 +7055,6 @@ final class ToriiClientTests: XCTestCase {
         }
         let profile = try await makeClient().getVpnProfile()
         XCTAssertTrue(profile.available)
-        XCTAssertEqual(profile.feeAssetId, "xor#universal.universal")
         XCTAssertEqual(profile.leaseFee, "1000000.25")
         XCTAssertEqual(profile.dnsPushIntervalSecs, 60)
         XCTAssertEqual(profile.flowLabelBits, 24)
@@ -7098,8 +7075,6 @@ final class ToriiClientTests: XCTestCase {
             "mtu_bytes": 1280,
             "meter_family": "vpn-standard",
             "display_billing_label": "standard vpn",
-            "fee_asset_id": "xor#universal.universal",
-            "escrow_account_id": "vpn_escrow",
             "operator_account_id": "vpn_operator",
             "lease_fee": "1000000.25",
             "settlement_grace_secs": 60,
@@ -7219,9 +7194,6 @@ final class ToriiClientTests: XCTestCase {
                 "open_lease_instruction": [
                     "wire_id": "OpenVpnLeaseEscrow",
                     "payload_hex": "abcd"
-                ],
-                "tx_instructions": [
-                    ["wire_id": "OpenVpnLeaseEscrow", "payload_hex": "abcd"]
                 ]
             ]
             let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil,
@@ -7234,8 +7206,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(quote.quoteId, quoteId)
         XCTAssertEqual(quote.leaseFee, "1000000.25")
-        XCTAssertEqual(quote.openLeaseInstruction?.wireId, "OpenVpnLeaseEscrow")
-        XCTAssertEqual(quote.txInstructions.count, 1)
+        XCTAssertEqual(quote.openLeaseInstruction.wireId, "OpenVpnLeaseEscrow")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -7450,8 +7421,7 @@ final class ToriiClientTests: XCTestCase {
             "earned_fee": "700000.125",
             "refunded_fee": "300000.125",
             "lease_id_hex": quoteId,
-            "settle_lease_instruction": settle,
-            "tx_instructions": [settle]
+            "settle_lease_instruction": settle
         ]
         var callCount = 0
         StubURLProtocol.handler = { request in
@@ -7489,7 +7459,7 @@ final class ToriiClientTests: XCTestCase {
         let deleted = try await client.deleteVpnSession(sessionId: quoteId, canonicalAuth: auth)
         XCTAssertEqual(submitted.settleLeaseInstruction?.wireId, "SettleVpnLease")
         XCTAssertEqual(list.items.first?.earnedFee, "700000.125")
-        XCTAssertEqual(deleted?.txInstructions.first?.payloadHex, "cafe")
+        XCTAssertEqual(deleted?.settleLeaseInstruction?.payloadHex, "cafe")
     }
 
     @available(iOS 15.0, macOS 12.0, *)

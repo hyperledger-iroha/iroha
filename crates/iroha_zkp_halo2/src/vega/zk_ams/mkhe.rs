@@ -21,6 +21,8 @@ use super::MaskedRelaxedRandomSourceV1;
 
 #[path = "mkhe/active.rs"]
 mod active;
+#[path = "mkhe/active_exact_binding.rs"]
+mod active_exact_binding;
 #[path = "mkhe/cks.rs"]
 mod cks;
 #[path = "mkhe/collective.rs"]
@@ -31,6 +33,8 @@ mod collective_eval_keys;
 mod collective_keys;
 #[path = "mkhe/decryption.rs"]
 mod decryption;
+#[path = "mkhe/direct_collective_eval_ceremony.rs"]
+mod direct_collective_eval_ceremony;
 #[path = "mkhe/manifest.rs"]
 mod manifest;
 #[path = "mkhe/noise.rs"]
@@ -43,6 +47,8 @@ mod phase23;
 mod phase23_encrypted;
 #[path = "mkhe/phase23_ingress.rs"]
 mod phase23_ingress;
+#[path = "mkhe/phase23_mask_proof.rs"]
+mod phase23_mask_proof;
 #[path = "mkhe/resource.rs"]
 mod resource;
 #[path = "mkhe/security.rs"]
@@ -80,17 +86,49 @@ pub use collective::{
     ZkAmsMkheCollectivePublicKeyV1, aggregate_zk_ams_mkhe_collective_public_key_v1,
     encrypt_zk_ams_mkhe_collective_packed_v1, generate_zk_ams_mkhe_collective_party_state_v1,
 };
+pub use collective_eval_keys::{
+    ZK_AMS_MKHE_EVIDENCE_CHUNK_BYTES_V1, ZkAmsMkheCollectiveCksDigitEvidenceV1,
+    ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1, ZkAmsMkheCollectiveEvaluatedKeyProviderV1,
+    ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1,
+    ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1,
+    ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1, ZkAmsMkheCollectiveEvidenceRecordFooterV1,
+    ZkAmsMkheCollectiveEvidenceRecordHeaderV1, ZkAmsMkheCollectiveEvidenceRecordKindV1,
+    ZkAmsMkheCollectiveEvidenceSetFooterV1, ZkAmsMkheCollectiveEvidenceSetHeaderV1,
+    ZkAmsMkheCollectiveEvidenceSetKindV1, ZkAmsMkheCollectiveSourceProofEvidenceV1,
+    ZkAmsMkheCollectiveSourceStatementEvidenceV1, ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1,
+    ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1,
+    ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1, ZkAmsMkheSeekableEvaluatedKeyAccountingV1,
+    zk_ams_mkhe_compact_key_switch_ring_multiplications_v1,
+    zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
+};
 pub use collective_keys::{
     ZkAmsMkheCollectiveEvaluatedKeyEntryV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
     ZkAmsMkheCollectiveEvaluatedKeyPurposeV1, ZkAmsMkheEvaluatedKeySorafsPointerV1,
 };
 pub use decryption::{
-    ZkAmsMkheAuthenticatedDecryptionShareV1, ZkAmsMkheDecryptedPlaintextV1,
-    ZkAmsMkheDecryptionAbortReasonV1, ZkAmsMkheDecryptionProofV1,
-    ZkAmsMkheDecryptionResourceEvidenceV1, ZkAmsMkheDecryptionStatementV1,
+    ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1,
+    ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1, ZkAmsMkheAuthenticatedDecryptionShareV1,
+    ZkAmsMkheDecryptedPlaintextV1, ZkAmsMkheDecryptionAbortReasonV1, ZkAmsMkheDecryptionProofV1,
+    ZkAmsMkheDecryptionResourceEvidenceV1, ZkAmsMkheDecryptionSplitTransportV1,
+    ZkAmsMkheDecryptionStatementV1, ZkAmsMkheDecryptionTransportComponentKindV1,
+    ZkAmsMkheDecryptionTransportManifestV1, ZkAmsMkheDecryptionTransportPointerV1,
     ZkAmsMkheFullRosterDecryptionResultV1, ZkAmsMkheIdentifiableDecryptionAbortV1,
-    prove_zk_ams_mkhe_decryption_share_v1, verify_combine_decode_zk_ams_mkhe_decryption_v1,
+    prove_zk_ams_mkhe_decryption_share_v1, reconstruct_zk_ams_mkhe_decryption_share_v1,
+    split_zk_ams_mkhe_decryption_share_v1, verify_combine_decode_zk_ams_mkhe_decryption_v1,
     verify_zk_ams_mkhe_decryption_share_v1, zk_ams_mkhe_decryption_resource_evidence_v1,
+};
+pub use direct_collective_eval_ceremony::{
+    ZkAmsMkheDirectAdmittedContributionSetV1, ZkAmsMkheDirectCeremonyContextV1,
+    ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheDirectCoordinatorV1,
+    ZkAmsMkheDirectEvaluatedKeySetAdmissionV1, ZkAmsMkheDirectEvaluatedKeyTargetV1,
+    ZkAmsMkheDirectNoiseCertificateV1, ZkAmsMkheDirectNoiseIntegrationCertificateV1,
+    ZkAmsMkheDirectPolynomialRoleV1, ZkAmsMkheDirectPolynomialStreamReceiptV1,
+    ZkAmsMkheDirectPolynomialStreamV1, ZkAmsMkheDirectProofAuditV1,
+    ZkAmsMkheDirectResourceCertificateV1, ZkAmsMkheDirectVerifiedContributionProviderV1,
+    ZkAmsMkheDirectVerifiedContributionV1, admit_zk_ams_mkhe_direct_contribution_set_v1,
+    zk_ams_mkhe_direct_noise_certificate_v1, zk_ams_mkhe_direct_noise_integration_certificate_v1,
+    zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1, zk_ams_mkhe_direct_proof_audit_v1,
+    zk_ams_mkhe_direct_resource_certificate_v1,
 };
 pub(super) use manifest::require_release_ready_v1;
 pub use manifest::{
@@ -105,17 +143,20 @@ pub use packing::{
     ZK_AMS_T256_GALOIS_KEY_COUNT_V1, ZK_AMS_T256_GALOIS_KEY_SCHEDULE_DIGEST_V1,
     ZK_AMS_T256_MAX_LOGICAL_VALUES_V1, ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1,
     ZK_AMS_T256_RELEASE_PACKED_OUTPUT_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1,
     ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1,
     ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1,
     ZK_AMS_T256_RELEASE_TRANSFORMED_RNS_KAT_DIGEST_V1, ZkAmsT256GaloisKeyScheduleEntryV1,
     ZkAmsT256GaloisKeyScheduleV1, ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
-    ZkAmsT256RotationCertificateV1, ZkAmsT256RotationDirectionV1, ZkAmsT256RotationV1,
-    decode_zk_ams_t256_packed_plaintext_v1, encode_zk_ams_t256_packed_plaintext_v1,
-    permute_zk_ams_t256_slots_v1, rotate_zk_ams_t256_packed_plaintext_v1,
-    validate_zk_ams_t256_galois_key_exponents_v1, validate_zk_ams_t256_galois_key_schedule_v1,
-    zk_ams_t256_galois_key_schedule_v1, zk_ams_t256_packing_layout_v1,
-    zk_ams_t256_rotation_certificate_v1, zk_ams_t256_rotation_exponent_for_direction_v1,
-    zk_ams_t256_rotation_exponent_v1, zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
+    ZkAmsT256ReleasePackingCertificateV1, ZkAmsT256RotationCertificateV1,
+    ZkAmsT256RotationDirectionV1, ZkAmsT256RotationV1, decode_zk_ams_t256_packed_plaintext_v1,
+    encode_zk_ams_t256_packed_plaintext_v1, permute_zk_ams_t256_slots_v1,
+    rotate_zk_ams_t256_packed_plaintext_v1, validate_zk_ams_t256_galois_key_exponents_v1,
+    validate_zk_ams_t256_galois_key_schedule_v1, zk_ams_t256_galois_key_schedule_v1,
+    zk_ams_t256_packed_subfield_conjugation_exponent_v1, zk_ams_t256_packing_layout_v1,
+    zk_ams_t256_release_packing_certificate_v1, zk_ams_t256_rotation_certificate_v1,
+    zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
+    zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
 };
 pub use phase23::{
     ZkAmsPhase23EquationCertificateV1, zk_ams_phase23_cross_term_v1,
@@ -162,10 +203,9 @@ pub use terminal::{
 };
 pub use wire::{
     ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZkAmsMkheAuthenticationWireV1, ZkAmsMkheCksContributionWireV1,
-    ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheDecryptionShareWireV1,
-    ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1,
-    ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheSeededRkgKeyWireV1, ZkAmsMkheWireBindingV1,
-    zk_ams_mkhe_cks_statement_digest_v1, zk_ams_mkhe_decryption_share_statement_digest_v1,
+    ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
+    ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1, ZkAmsMkheRnsPolynomialWireV1,
+    ZkAmsMkheSeededRkgKeyWireV1, ZkAmsMkheWireBindingV1, zk_ams_mkhe_cks_statement_digest_v1,
 };
 
 const MKHE_VERSION_V1: u8 = 1;
@@ -2742,23 +2782,6 @@ fn phase23_rotation_ring_multiplication_count(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
-/// Exact multiplication count for a compact collective hybrid key switch.
-///
-/// Offline RKG/CKS converts every evaluated-key digit to one two-polynomial
-/// ciphertext under the aggregate secret `s = sum(s_i)`.  Runtime therefore
-/// multiplies the decomposed input by exactly two key polynomials per digit;
-/// roster size must never reappear in this release accounting.
-fn compact_collective_key_switch_ring_multiplication_count(
-    profile: &BgvProfile,
-    key_switch_count: usize,
-) -> Result<usize, ZkAmsMkheErrorV1> {
-    profile
-        .gadget_digits
-        .checked_mul(2)
-        .and_then(|value| value.checked_mul(key_switch_count))
-        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
-}
-
 fn checked_ring_multiplication_work(
     profile: &BgvProfile,
     multiplication_count: usize,
@@ -3335,7 +3358,15 @@ impl WideUint {
     }
 
     fn bits_at(self, offset: usize, width: usize) -> Result<u64, ZkAmsMkheErrorV1> {
-        if width == 0 || width > 32 || offset >= WIDE_LIMBS * 64 {
+        let bit_capacity = WIDE_LIMBS
+            .checked_mul(64)
+            .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+        if width == 0
+            || width > 63
+            || offset
+                .checked_add(width)
+                .is_none_or(|end| end > bit_capacity)
+        {
             return Err(ZkAmsMkheErrorV1::InvalidProfile);
         }
         let limb = offset / 64;
@@ -3529,6 +3560,41 @@ mod tests {
     }
 
     #[test]
+    fn wide_bit_extraction_accepts_1_through_63_and_rejects_every_boundary_overrun() {
+        let mut value = WideUint::zero();
+        value.limbs[0] = 0xfedc_ba98_7654_3211;
+        value.limbs[1] = 0x0123_4567_89ab_cdef;
+        value.limbs[WIDE_LIMBS - 1] = 1_u64 << 63;
+        let expected = |offset: usize, width: usize| {
+            let limb = offset / 64;
+            let shift = offset % 64;
+            let mut bits = value.limbs[limb] >> shift;
+            if shift + width > 64 {
+                bits |= value.limbs[limb + 1] << (64 - shift);
+            }
+            bits & ((1_u64 << width) - 1)
+        };
+        for (offset, width) in [(0, 1), (4, 32), (4, 60), (63, 63), (64, 32)] {
+            assert_eq!(
+                value.bits_at(offset, width).unwrap(),
+                expected(offset, width)
+            );
+        }
+        let last_bit = WIDE_LIMBS * 64 - 1;
+        assert_eq!(value.bits_at(last_bit, 1).unwrap(), 1);
+        assert_eq!(value.bits_at(0, 0), Err(ZkAmsMkheErrorV1::InvalidProfile));
+        assert_eq!(value.bits_at(0, 64), Err(ZkAmsMkheErrorV1::InvalidProfile));
+        assert_eq!(
+            value.bits_at(last_bit, 2),
+            Err(ZkAmsMkheErrorV1::InvalidProfile)
+        );
+        assert_eq!(
+            value.bits_at(WIDE_LIMBS * 64, 1),
+            Err(ZkAmsMkheErrorV1::InvalidProfile)
+        );
+    }
+
+    #[test]
     fn centered_t256_lift_boundaries_and_automorphism_are_exact() {
         const HALF: [u8; 32] = T256_CENTERED_MAX_BE_V1;
         const HALF_PLUS_ONE: [u8; 32] = [
@@ -3702,9 +3768,9 @@ mod tests {
             48_452_611_616
         );
         assert_eq!(resource.proof_envelope_header_wire_bytes, 151);
-        assert_eq!(resource.streamed_hybrid_workspace_bytes, 122_683_404);
-        assert_eq!(resource.max_composed_rotation_work_units, 54_509_174_784);
-        assert!(resource.composed_rotation_work_ceiling_met);
+        assert_eq!(resource.streamed_hybrid_workspace_bytes, 161_481_912);
+        assert_eq!(resource.max_composed_rotation_work_units, 177_154_818_048);
+        assert!(!resource.composed_rotation_work_ceiling_met);
         assert!(!resource.evaluated_key_artifact_transport_certified);
         assert!(!resource.is_release_ready());
         assert_eq!(
@@ -3722,7 +3788,7 @@ mod tests {
         assert!(!readiness.wire_gate);
         assert!(!readiness.malicious_party_gate);
         assert!(!readiness.decryption_share_gate);
-        assert!(!readiness.packing_gate);
+        assert!(readiness.packing_gate);
         assert!(!readiness.phase23_gate);
         assert!(!readiness.release_kat_gate);
         assert!(!readiness.is_ready());

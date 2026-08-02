@@ -1907,7 +1907,7 @@ where
             RegisterBox::Account(r) => add_account_rw(&mut set, r.object.id()),
             RegisterBox::AssetDefinition(r) => {
                 add_asset_def_rw(&mut set, r.object.id(), state_ro);
-                if let Some(alias) = r.object.alias().as_ref()
+                if let Some(alias) = r.object.alias.as_ref()
                     && let Some(domain_name) = alias.domain_segment()
                     && let Ok(domain) = DomainId::try_new(domain_name, alias.dataspace_segment())
                 {

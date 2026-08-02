@@ -398,15 +398,6 @@ struct NetworkArgs {
     /// Explicit platform Iroha client configuration path.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
-    /// Wait for finalized success/failure.
-    #[arg(long)]
-    wait: bool,
-}
-
-impl NetworkArgs {
-    fn observe_boundary(&self) {
-        let _ = (&self.config, self.wait);
-    }
 }
 
 #[derive(Args, Debug)]
@@ -2545,7 +2536,6 @@ fn package_diagnostic(error: PackageError) -> Diagnostic {
 }
 
 fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandResult {
-    args.network.observe_boundary();
     if let Some(operation_id) = args.resume {
         if args.mode.effective_offline() {
             return Err(Diagnostic::new(
@@ -3493,7 +3483,6 @@ fn run_alias(args: &AliasArgs) -> CommandResult {
 }
 
 fn load_registry_reader(network: &NetworkArgs) -> Result<RegistryReadClientV1, Diagnostic> {
-    network.observe_boundary();
     RegistryReadClientV1::load(network.config.as_deref())
         .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))
 }
@@ -4083,8 +4072,9 @@ mod tests {
         musubi::{
             MusubiDescriptionV1, MusubiInvitationStateV1, MusubiKeywordV1,
             MusubiMaintainerInvitationV1, MusubiNamespaceBindingV1, MusubiOrderedPackageEntryV1,
-            MusubiOrderedPackagePageV1, MusubiPackageIdV1, MusubiPackageMemberV1,
-            MusubiPackageScopeV1, MusubiRegistrySnapshotV1, MusubiSearchHitV1, MusubiSearchPageV1,
+            MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
+            MusubiPackageIdV1, MusubiPackageMemberV1, MusubiPackageScopeV1,
+            MusubiRegistrySnapshotV1, MusubiSearchHitV1, MusubiSearchPageV1,
             MusubiSearchSnapshotV1,
         },
         nexus::DataSpaceId,
@@ -4113,6 +4103,17 @@ mod tests {
             aliases.extend(command_aliases(subcommand));
         }
         aliases
+    }
+
+    fn command_long_options(command: &clap::Command) -> BTreeSet<String> {
+        let mut options = command
+            .get_arguments()
+            .filter_map(|argument| argument.get_long().map(str::to_owned))
+            .collect::<BTreeSet<_>>();
+        for subcommand in command.get_subcommands() {
+            options.extend(command_long_options(subcommand));
+        }
+        options
     }
 
     fn create_test_package(temp: &TempDir) -> (PathBuf, PathBuf) {
@@ -4237,6 +4238,7 @@ mod tests {
                 })
                 .collect(),
             snapshot,
+            finalized_time_ms: 1_700_000_000_000,
         }
     }
 
@@ -4465,9 +4467,38 @@ mod tests {
             vec!["musubi", "cache", "list"],
             vec!["musubi", "cache", "import"],
             vec!["musubi", "cache", "fetch"],
+            vec!["musubi", "publish", "--wait"],
         ] {
             let invocation = invoke(argv);
             assert_eq!(invocation.output.exit_code(), ErrorCode::Usage.exit_code());
+        }
+    }
+
+    #[test]
+    fn argv_has_no_secret_or_arbitrary_cache_source_controls() {
+        let options = command_long_options(&Cli::command());
+        for secret_fragment in [
+            "authorization",
+            "credential",
+            "password",
+            "private-key",
+            "provider-url",
+            "secret",
+            "source-plan",
+            "token",
+        ] {
+            assert!(
+                options
+                    .iter()
+                    .all(|option| !option.contains(secret_fragment)),
+                "secret-bearing --*{secret_fragment}* option is reachable"
+            );
+        }
+        for forbidden in ["cache-dir", "cache-path", "cache-root"] {
+            assert!(
+                !options.contains(forbidden),
+                "arbitrary cache control --{forbidden} is reachable"
+            );
         }
     }
 
@@ -4498,6 +4529,13 @@ mod tests {
     fn search_uses_the_signer_free_finalized_projection_route() {
         let selector: MusubiPackageSelectorV1 = "apps.sora/proofs".parse().expect("selector");
         let page = MusubiSearchPageV1 {
+            query: MusubiSearchQueryV1 {
+                query: "proof systems".to_owned(),
+                page: MusubiSearchPageRequestV1 {
+                    limit: 1,
+                    cursor: None,
+                },
+            },
             items: vec![MusubiSearchHitV1 {
                 package: MusubiPackageIdV1::new(
                     DataSpaceId::new(7),
@@ -4802,6 +4840,13 @@ mod tests {
             index_revision: 11,
         };
         let directory = MusubiOrderedPackagePageV1 {
+            query: MusubiOrderedPrefixQueryV1 {
+                prefix: MusubiOrderedPrefixV1::new("apps.sora/").expect("namespace prefix"),
+                page: MusubiPageRequestV1 {
+                    limit: 1,
+                    cursor: None,
+                },
+            },
             chain_id: ChainId::from("musubi-owner-list-test"),
             genesis_hash: [8; 32],
             namespace_binding: binding,
@@ -4827,7 +4872,7 @@ mod tests {
             }),
             MusubiMaintainerDirectoryEntryV1::PendingInvitation(MusubiMaintainerInvitationV1 {
                 invite_id: MusubiInviteIdV1::new([5; 32]),
-                package,
+                package: package.clone(),
                 invited_by: owner,
                 invited_account: invited,
                 role: MusubiPackageRoleV1::Maintainer(MusubiMaintainerPermissionsV1 {
@@ -4843,6 +4888,13 @@ mod tests {
         ];
         entries.sort_by_key(MusubiMaintainerDirectoryEntryV1::key);
         let maintainers = iroha_data_model::musubi::MusubiMaintainerPageV1 {
+            query: MusubiPackagePageQueryV1 {
+                package,
+                page: MusubiPageRequestV1 {
+                    limit: 50,
+                    cursor: None,
+                },
+            },
             items: entries,
             next_cursor: None,
             snapshot,

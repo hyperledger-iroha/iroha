@@ -51,42 +51,66 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
     public func findExactPackage(
         _ request: MusubiExactPackageQueryV1
     ) async throws -> MusubiPackageRecordV1 {
-        try await post(Self.exactPackagePath, request: request)
+        let record: MusubiPackageRecordV1 = try await post(Self.exactPackagePath, request: request)
+        try record.requireMatches(request)
+        return record
     }
 
     /// Fetches one exact immutable release and its mutable projections.
     public func findExactRelease(
         _ request: MusubiExactReleaseQueryV1
     ) async throws -> MusubiReleaseRecordV1 {
-        try await post(Self.exactReleasePath, request: request)
+        let record: MusubiReleaseRecordV1 = try await post(Self.exactReleasePath, request: request)
+        try record.requireMatches(request)
+        return record
     }
 
     /// Reads the finalized universal sparse resolver index.
     public func findResolverIndex(
         _ request: MusubiResolverIndexQueryV1
     ) async throws -> MusubiResolverIndexPageV1 {
-        try await post(Self.resolverIndexPath, request: request)
+        let page: MusubiResolverIndexPageV1 = try await post(
+            Self.resolverIndexPath,
+            request: request
+        )
+        try page.requireMatches(request)
+        return page
     }
 
     /// Lists exact structured versions for a package.
     public func findVersions(
         _ request: MusubiPackagePageQueryV1
     ) async throws -> MusubiPageV1<MusubiVersionV1> {
-        try await post(Self.versionsPath, request: request)
+        let page: MusubiPageV1<MusubiVersionV1> = try await post(
+            Self.versionsPath,
+            request: request
+        )
+        try page.requireMatches(request)
+        return page
     }
 
     /// Lists accepted owners/maintainers and pending invitations for a package.
     public func findMaintainers(
         _ request: MusubiPackagePageQueryV1
     ) async throws -> MusubiPageV1<MusubiMaintainerDirectoryEntryV1> {
-        try await post(Self.maintainersPath, request: request)
+        let page: MusubiPageV1<MusubiMaintainerDirectoryEntryV1> = try await post(
+            Self.maintainersPath,
+            request: request
+        )
+        try page.requireMatches(request)
+        return page
     }
 
     /// Lists renewable SoraFS locations for an archive.
     public func findArchiveLocations(
         _ request: MusubiArchiveLocationQueryV1
     ) async throws -> MusubiArchiveLocationPageV1 {
-        try await post(Self.archiveLocationsPath, request: request)
+        let page: MusubiArchiveLocationPageV1 = try await post(
+            Self.archiveLocationsPath,
+            request: request
+        )
+        try page.requireMatches(request)
+        return page
     }
 
     /// Classifies a bounded exact archive batch for fail-closed cache retention.
@@ -103,26 +127,40 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     /// Resolves one paid permanent global alias.
     public func findAlias(_ request: MusubiAliasQueryV1) async throws -> MusubiAliasRecordV1 {
-        try await post(Self.aliasPath, request: request)
+        let record: MusubiAliasRecordV1 = try await post(Self.aliasPath, request: request)
+        try record.requireMatches(request)
+        return record
     }
 
     /// Lists immutable history for one permanent global alias.
     public func findAliasHistory(
         _ request: MusubiAliasQueryV1
     ) async throws -> MusubiPageV1<MusubiAliasHistoryEntryV1> {
-        try await post(Self.aliasHistoryPath, request: request)
+        let page: MusubiPageV1<MusubiAliasHistoryEntryV1> = try await post(
+            Self.aliasHistoryPath,
+            request: request
+        )
+        try page.requireMatches(request)
+        return page
     }
 
     /// Scans the deterministic public package directory by byte prefix.
     public func findOrderedPrefix(
         _ request: MusubiOrderedPrefixQueryV1
     ) async throws -> MusubiOrderedPrefixPageV1 {
-        try await post(Self.orderedPrefixPath, request: request)
+        let page: MusubiOrderedPrefixPageV1 = try await post(
+            Self.orderedPrefixPath,
+            request: request
+        )
+        try page.requireMatches(request)
+        return page
     }
 
     /// Searches the rebuildable finalized-event package metadata projection.
     public func search(_ request: MusubiSearchQueryV1) async throws -> MusubiSearchPageV1 {
-        try await post(Self.searchPath, request: request)
+        let page: MusubiSearchPageV1 = try await post(Self.searchPath, request: request)
+        try page.requireMatches(request)
+        return page
     }
 
     private func post<Request: Encodable, Response: Decodable>(

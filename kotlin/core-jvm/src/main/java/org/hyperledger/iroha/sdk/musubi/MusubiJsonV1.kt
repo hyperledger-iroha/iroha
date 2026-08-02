@@ -45,7 +45,7 @@ internal object MusubiJsonV1 {
         val root = exactObject(
             parse(payload, "Musubi resolver-index response"),
             "response",
-            setOf("chain_id", "genesis_hash", "items", "next_cursor", "snapshot"),
+            setOf("query", "chain_id", "genesis_hash", "items", "next_cursor", "snapshot"),
         )
         val snapshot = parseSnapshot(root["snapshot"], "response.snapshot")
         val cursor = root["next_cursor"]?.let { parseCursor(it, "response.next_cursor") }
@@ -53,23 +53,45 @@ internal object MusubiJsonV1 {
             parseResolverRow(item, "response.items[$index]")
         }
         return MusubiResolverIndexPageV1(
+            decodeQuery("/v1/musubi/queries/resolver-index", root["query"])
+                as MusubiResolverIndexQueryV1,
             string(root["chain_id"], "response.chain_id"),
             fixedBytes(root["genesis_hash"], "response.genesis_hash"),
             items,
             cursor,
             snapshot,
-        )
+        ).also { it.requireMatches(it.query) }
     }
 
-    fun parseVersionPage(payload: ByteArray): MusubiPageV1<MusubiVersionV1> =
-        parsePage(parse(payload, "Musubi versions response"), "response", ::parseVersion)
+    fun parseVersionPage(payload: ByteArray): MusubiPageV1<MusubiVersionV1> {
+        val page = parsePage(
+            parse(payload, "Musubi versions response"),
+            "response",
+            "/v1/musubi/queries/versions",
+            ::parseVersion,
+        )
+        require(page.items.zipWithNext().all { (left, right) -> left < right }) {
+            "Musubi version page must be sorted and distinct"
+        }
+        page.requireVersionMatches(page.query as MusubiPackagePageQueryV1)
+        return page
+    }
 
-    fun parseMaintainerPage(payload: ByteArray): MusubiPageV1<MusubiMaintainerDirectoryEntryV1> =
-        parsePage(
+    fun parseMaintainerPage(
+        payload: ByteArray,
+    ): MusubiPageV1<MusubiMaintainerDirectoryEntryV1> {
+        val page = parsePage(
             parse(payload, "Musubi maintainers response"),
             "response",
+            "/v1/musubi/queries/maintainers",
             ::parseMaintainerDirectoryEntry,
         )
+        require(page.items.zipWithNext().all { (left, right) ->
+            MusubiValidationV1.compareMaintainerEntries(left, right) < 0
+        }) { "Musubi maintainer page must be sorted and distinct" }
+        page.requireMaintainerMatches(page.query as MusubiPackagePageQueryV1)
+        return page
+    }
 
     fun parseArchiveLocationPage(payload: ByteArray): MusubiArchiveLocationPageV1 {
         val root = exactObject(
@@ -96,7 +118,7 @@ internal object MusubiJsonV1 {
         val root = exactObject(
             parse(payload, "Musubi archive-retention response"),
             "response",
-            setOf("chain_id", "genesis_hash", "items", "snapshot"),
+            setOf("chain_id", "genesis_hash", "items", "finalized_time_ms", "snapshot"),
         )
         val items = list(root["items"], "response.items").mapIndexed { index, item ->
             parseArchiveRetentionDecision(item, "response.items[$index]")
@@ -105,6 +127,7 @@ internal object MusubiJsonV1 {
             string(root["chain_id"], "response.chain_id"),
             fixedBytes(root["genesis_hash"], "response.genesis_hash"),
             items,
+            u64(root["finalized_time_ms"], "response.finalized_time_ms"),
             parseSnapshot(root["snapshot"], "response.snapshot"),
         )
     }
@@ -112,16 +135,28 @@ internal object MusubiJsonV1 {
     fun parseAlias(payload: ByteArray): MusubiAliasRecordV1 =
         parseAliasRecord(parse(payload, "Musubi alias response"), "response")
 
-    fun parseAliasHistoryPage(payload: ByteArray): MusubiPageV1<MusubiAliasHistoryEntryV1> =
-        parsePage(parse(payload, "Musubi alias-history response"), "response", ::parseAliasHistory)
+    fun parseAliasHistoryPage(payload: ByteArray): MusubiPageV1<MusubiAliasHistoryEntryV1> {
+        val page = parsePage(
+            parse(payload, "Musubi alias-history response"),
+            "response",
+            "/v1/musubi/queries/alias-history",
+            ::parseAliasHistory,
+        )
+        require(page.items.zipWithNext().all { (left, right) ->
+            val aliasOrder = MusubiValidationV1.compareUtf8(left.alias, right.alias)
+            aliasOrder < 0 || aliasOrder == 0 && left.revision < right.revision
+        }) { "Musubi alias-history page must be sorted and distinct" }
+        page.requireAliasHistoryMatches(page.query as MusubiAliasQueryV1)
+        return page
+    }
 
     fun parseOrderedPackagePage(payload: ByteArray): MusubiOrderedPrefixPageV1 {
         val root = exactObject(
             parse(payload, "Musubi ordered-prefix response"),
             "response",
             setOf(
-                "chain_id", "genesis_hash", "namespace_binding", "items", "next_cursor",
-                "snapshot",
+                "query", "chain_id", "genesis_hash", "namespace_binding", "items",
+                "next_cursor", "snapshot",
             ),
         )
         val snapshot = parseSnapshot(root["snapshot"], "response.snapshot")
@@ -130,20 +165,22 @@ internal object MusubiJsonV1 {
             parseOrderedEntry(item, "response.items[$index]")
         }
         return MusubiOrderedPrefixPageV1(
+            decodeQuery("/v1/musubi/queries/ordered-prefix", root["query"])
+                as MusubiOrderedPrefixQueryV1,
             string(root["chain_id"], "response.chain_id"),
             fixedBytes(root["genesis_hash"], "response.genesis_hash"),
             parseNamespaceBinding(root["namespace_binding"], "response.namespace_binding"),
             items,
             cursor,
             snapshot,
-        )
+        ).also { it.requireMatches(it.query) }
     }
 
     fun parseSearchPage(payload: ByteArray): MusubiSearchPageV1 {
         val root = exactObject(
             parse(payload, "Musubi search response"),
             "response",
-            setOf("items", "next_cursor", "snapshot"),
+            setOf("query", "items", "next_cursor", "snapshot"),
         )
         val snapshot = parseSearchSnapshot(root["snapshot"], "response.snapshot")
         val cursor = root["next_cursor"]?.let {
@@ -152,7 +189,13 @@ internal object MusubiJsonV1 {
         val items = list(root["items"], "response.items").mapIndexed { index, item ->
             parseSearchHit(item, "response.items[$index]")
         }
-        return MusubiSearchPageV1(items, cursor, snapshot)
+        return MusubiSearchPageV1(
+            decodeQuery("/v1/musubi/queries/search", root["query"])
+                as MusubiSearchQueryV1,
+            items,
+            cursor,
+            snapshot,
+        ).also { it.requireMatches(it.query) }
     }
 
     fun decodeQuery(path: String, value: Any?): MusubiWireValueV1 {
@@ -678,7 +721,7 @@ internal object MusubiJsonV1 {
         )
         val roleKind = parsePackageRole(root["role"], "$field.role")
         val account = string(root["account"], "$field.account")
-        MusubiValidationV1.requireExactText(account, "$field.account")
+        MusubiValidationV1.canonicalAccountPayload(account, "$field.account")
         return MusubiPackageMemberV1(
             parsePackage(root["package"], "$field.package"),
             account,
@@ -705,8 +748,8 @@ internal object MusubiJsonV1 {
         require(inviteId.bytes().any { it.toInt() != 0 }) { "$field.invite_id must not be inert" }
         val invitedBy = string(root["invited_by"], "$field.invited_by")
         val invitedAccount = string(root["invited_account"], "$field.invited_account")
-        MusubiValidationV1.requireExactText(invitedBy, "$field.invited_by")
-        MusubiValidationV1.requireExactText(invitedAccount, "$field.invited_account")
+        MusubiValidationV1.canonicalAccountPayload(invitedBy, "$field.invited_by")
+        MusubiValidationV1.canonicalAccountPayload(invitedAccount, "$field.invited_account")
         val roleKind = parsePackageRole(root["role"], "$field.role")
         val stateKind = taggedUnit(root["state"], "$field.state", setOf("Pending"))
         return MusubiMaintainerInvitationV1(
@@ -835,7 +878,7 @@ internal object MusubiJsonV1 {
         list(root["provider_attestations"], "$field.provider_attestations")
         u64(root["renew_after_epoch"], "$field.renew_after_epoch")
         u64(root["expires_at_epoch"], "$field.expires_at_epoch")
-        nonZeroU64(root["finalized_height"], "$field.finalized_height")
+        val finalizedHeight = nonZeroU64(root["finalized_height"], "$field.finalized_height")
         val revision = nonZeroU64(root["revision"], "$field.revision")
         val state = taggedUnit(
             root["state"],
@@ -846,7 +889,14 @@ internal object MusubiJsonV1 {
         require(root["pin_manifest"] != null && root["replication_order"] != null) {
             "$field must carry pin and replication-order identities"
         }
-        return MusubiArchiveLocationV1(location, archive, revision, state, root)
+        return MusubiArchiveLocationV1(
+            location,
+            archive,
+            finalizedHeight,
+            revision,
+            state,
+            root,
+        )
     }
 
     private fun parseArchiveRecord(value: Any?, field: String): MusubiArchiveRecordV1 {
@@ -1045,15 +1095,16 @@ internal object MusubiJsonV1 {
     private fun <T : MusubiWireValueV1> parsePage(
         value: Any?,
         field: String,
+        queryPath: String,
         parser: (Any?, String) -> T,
     ): MusubiPageV1<T> {
-        val root = exactObject(value, field, setOf("items", "next_cursor", "snapshot"))
+        val root = exactObject(value, field, setOf("query", "items", "next_cursor", "snapshot"))
         val items = list(root["items"], "$field.items").mapIndexed { index, item ->
             parser(item, "$field.items[$index]")
         }
         val snapshot = parseSnapshot(root["snapshot"], "$field.snapshot")
         val cursor = root["next_cursor"]?.let { parseCursor(it, "$field.next_cursor") }
-        return MusubiPageV1(items, cursor, snapshot)
+        return MusubiPageV1(decodeQuery(queryPath, root["query"]), items, cursor, snapshot)
     }
 
     private fun digest(value: Any?, field: String): MusubiDigest32V1 {

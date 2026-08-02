@@ -23,7 +23,6 @@ use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
-    codec::{Decode, Encode},
     core::{self as ncore, Archived},
 };
 use thiserror::Error;
@@ -546,6 +545,7 @@ impl DomainSelector {
             .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))
     }
 
+    #[cfg(test)]
     fn is_default_domain(domain: &DomainId) -> Result<bool, AccountAddressError> {
         let canonical_name = name::canonicalize_domain_label(domain.name().as_ref())
             .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))?;
@@ -554,6 +554,7 @@ impl DomainSelector {
         Ok(canonical_name == DEFAULT_DOMAIN_NAME && canonical_dataspace == "universal")
     }
 
+    #[cfg(test)]
     fn from_domain(domain: &DomainId) -> Result<Self, AccountAddressError> {
         let canonical = Self::canonical_domain(domain)?;
         if Self::is_default_domain(domain)? {

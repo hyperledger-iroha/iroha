@@ -29,21 +29,23 @@ use sorafs_car::{
     CarBuildPlan, CarWriter, chunker_registry, compute_chunk_plan_digest_sha3, compute_por_root,
     fetch_plan::{chunk_fetch_plan_from_json, chunk_fetch_plan_to_string},
 };
+use sorafs_manifest::por::{
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+    POR_STATUS_CURSOR_VERSION_V1, PorStatusCursorV1,
+};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GOVERNANCE_LOG_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceDagSubmissionOriginV1,
     GovernanceDagSubmissionProvenanceV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
     GovernanceLogSignatureV1, GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder,
-    ManifestV1, POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
-    POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_CHALLENGE_STATUS_VERSION_V1,
-    POR_WEEKLY_REPORT_VERSION_V1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
-    PorProviderSummaryV1, PorReportIsoWeek, PorSlashingEventV1, PorWeeklyReportV1,
-    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-    ReputationSnapshotV1, ReputationWeightsV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
-    SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
-    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1, StorageClass, StreamTokenBodyV1,
-    StreamTokenV1, XorQuantity, build_reputation_snapshot,
+    ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
+    PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
+    PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1,
+    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SoraFsAppealFinanceAccountFlowV1,
+    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
     governance_dag_submission_account_digest_v1, validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
@@ -113,18 +115,66 @@ fn test_por_status_page(
         .sum::<usize>();
     TestPorStatusPageV1 {
         version: 1,
-        snapshot_generation: 1,
+        snapshot_generation: u64::try_from(statuses.len())
+            .expect("fixture status count fits u64")
+            .checked_add(1)
+            .expect("fixture generation does not overflow"),
         record_limit: u32::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1)
             .expect("PoR page limit fits u32"),
-        canonical_byte_limit: u64::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+        canonical_byte_limit: u64::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1)
             .expect("PoR byte limit fits u64"),
         canonical_bytes: u64::try_from(canonical_bytes).expect("fixture byte total fits u64"),
-        inspected_candidates: u32::try_from(statuses.len())
-            .expect("fixture status count fits u32"),
+        inspected_candidates: u32::try_from(statuses.len()).expect("fixture status count fits u32"),
         has_more: next_cursor.is_some(),
         next_cursor,
         statuses,
     }
+}
+
+fn test_por_cursor(
+    snapshot_generation: u64,
+    epoch_id: u64,
+    issued_at: u64,
+    challenge_id: [u8; 32],
+) -> String {
+    PorStatusCursorV1 {
+        version: POR_STATUS_CURSOR_VERSION_V1,
+        snapshot_generation,
+        selection_digest: [0xA5; 32],
+        last_epoch_id: epoch_id,
+        last_issued_at: issued_at,
+        last_challenge_id: challenge_id,
+    }
+    .encode_opaque()
+    .expect("encode canonical PoR cursor fixture")
+}
+
+fn large_por_status_page() -> TestPorStatusPageV1 {
+    let statuses = (0..512)
+        .map(|index| {
+            let ordinal = u64::try_from(index + 1).expect("fixture ordinal fits u64");
+            let mut challenge_id = [0x11; 32];
+            challenge_id[..8].copy_from_slice(&ordinal.to_be_bytes());
+            PorChallengeStatusV1 {
+                version: POR_CHALLENGE_STATUS_VERSION_V1,
+                challenge_id,
+                manifest_digest: [0x22; 32],
+                provider_id: [0x33; 32],
+                epoch_id: 42,
+                drand_round: 100 + ordinal,
+                status: PorChallengeOutcome::AwaitingProof,
+                sample_count: 64,
+                forced: false,
+                issued_at: 1_700_000_000 + ordinal,
+                responded_at: None,
+                proof_digest: None,
+                repair_task_id: None,
+                failure_reason: None,
+                verifier_latency_ms: None,
+            }
+        })
+        .collect();
+    test_por_status_page(statuses, None)
 }
 
 fn tempdir() -> std::io::Result<CanonicalTempDir> {
@@ -403,7 +453,7 @@ fn por_status_outputs_table() {
         provider_id: [0x33; 32],
         epoch_id: 42,
         drand_round: 100,
-        status: PorChallengeOutcome::Pending,
+        status: PorChallengeOutcome::AwaitingProof,
         sample_count: 64,
         forced: false,
         issued_at: 1_700_000_000,
@@ -436,8 +486,8 @@ fn por_status_outputs_table() {
         .clone();
     let stdout = String::from_utf8(output).expect("stdout utf8");
     assert!(
-        stdout.contains("pending"),
-        "expected status output to mention pending status:\n{stdout}"
+        stdout.contains("awaiting_proof"),
+        "expected status output to mention awaiting-proof status:\n{stdout}"
     );
 }
 
@@ -487,6 +537,142 @@ fn por_status_outputs_json() {
 }
 
 #[test]
+fn por_status_accepts_empty_sparse_page_with_advancing_cursor() {
+    let server = MockServer::start();
+    let cursor = test_por_cursor(1, 42, 1_700_000_000, [0x11; 32]);
+    let mut page = test_por_status_page(Vec::new(), Some(cursor.clone()));
+    page.inspected_candidates = 512;
+    let body = to_bytes(&page).expect("encode empty sparse status page");
+    server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/por/status");
+        then.status(200)
+            .header("content-type", "application/x-norito")
+            .body(body);
+    });
+
+    let stderr = sorafs_cli_cmd()
+        .arg("por")
+        .arg("status")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains(&format!("next_cursor={cursor}")),
+        "empty sparse page must expose its advancing cursor:\n{stderr}"
+    );
+}
+
+#[test]
+fn por_status_and_export_accept_fields_above_legacy_64k_limit() {
+    let server = MockServer::start();
+    let page = large_por_status_page();
+    let status_body = to_bytes(&page).expect("encode large bounded status page");
+    assert!(
+        status_body.len() > 64 * 1024,
+        "fixture must exceed the retired decoder field ceiling"
+    );
+    assert!(
+        status_body.len() <= POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 64 * 1024,
+        "fixture must remain within the Torii response envelope"
+    );
+    server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/por/status");
+        then.status(200)
+            .header("content-type", "application/x-norito")
+            .body(status_body);
+    });
+
+    sorafs_cli_cmd()
+        .arg("por")
+        .arg("status")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .assert()
+        .success();
+
+    let export_body = to_bytes(&TestPorStatusExportPageV1 {
+        version: 1,
+        start_epoch: None,
+        end_epoch: None,
+        page,
+    })
+    .expect("encode large bounded status export");
+    assert!(
+        export_body.len() > 64 * 1024,
+        "nested export page must exceed the retired field ceiling"
+    );
+    assert!(
+        export_body.len() <= POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 64 * 1024,
+        "export fixture must remain within the Torii response envelope"
+    );
+    server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/por/export");
+        then.status(200)
+            .header("content-type", "application/octet-stream")
+            .body(export_body);
+    });
+
+    let tempdir = tempdir().expect("tempdir");
+    let out_path = tempdir.path().join("large-por-export.norito");
+    sorafs_cli_cmd()
+        .arg("por")
+        .arg("export")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--out={}", out_path.display()))
+        .assert()
+        .success();
+    assert!(out_path.exists());
+}
+
+#[test]
+fn por_status_and_export_reject_record_byte_limit_above_torii_contract() {
+    let server = MockServer::start();
+    let above = POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 1;
+    let expected =
+        format!("`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1}");
+
+    let status_stderr = sorafs_cli_cmd()
+        .arg("por")
+        .arg("status")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--max-bytes={above}"))
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(
+        String::from_utf8(status_stderr)
+            .expect("status stderr utf8")
+            .contains(&expected)
+    );
+
+    let tempdir = tempdir().expect("tempdir");
+    let export_stderr = sorafs_cli_cmd()
+        .arg("por")
+        .arg("export")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!(
+            "--out={}",
+            tempdir.path().join("unused.to").display()
+        ))
+        .arg(format!("--max-bytes={above}"))
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(
+        String::from_utf8(export_stderr)
+            .expect("export stderr utf8")
+            .contains(&expected)
+    );
+}
+
+#[test]
 fn por_status_rejects_record_outside_requested_filters_before_output() {
     let server = MockServer::start();
     let status = PorChallengeStatusV1 {
@@ -496,7 +682,7 @@ fn por_status_rejects_record_outside_requested_filters_before_output() {
         provider_id: [0x33; 32],
         epoch_id: 42,
         drand_round: 100,
-        status: PorChallengeOutcome::Pending,
+        status: PorChallengeOutcome::AwaitingProof,
         sample_count: 64,
         forced: false,
         issued_at: 1_700_000_000,
@@ -516,7 +702,7 @@ fn por_status_rejects_record_outside_requested_filters_before_output() {
             .query_param("manifest", manifest_hex.as_str())
             .query_param("provider", provider_hex.as_str())
             .query_param("epoch", "42")
-            .query_param("status", "pending");
+            .query_param("status", "awaiting_proof");
         then.status(200)
             .header("content-type", "application/x-norito")
             .body(body);
@@ -529,7 +715,7 @@ fn por_status_rejects_record_outside_requested_filters_before_output() {
         .arg(format!("--manifest={manifest_hex}"))
         .arg(format!("--provider={provider_hex}"))
         .arg("--epoch=42")
-        .arg("--status=pending")
+        .arg("--status=awaiting_proof")
         .output()
         .expect("command executes");
 
@@ -587,7 +773,7 @@ fn por_export_writes_file() {
         provider_id: [0x43; 32],
         epoch_id: 10,
         drand_round: 101,
-        status: PorChallengeOutcome::Pending,
+        status: PorChallengeOutcome::AwaitingProof,
         sample_count: 32,
         forced: false,
         issued_at: 1_700_000_200,
@@ -597,11 +783,12 @@ fn por_export_writes_file() {
         failure_reason: None,
         verifier_latency_ms: None,
     };
+    let next_cursor = test_por_cursor(2, status.epoch_id, status.issued_at, status.challenge_id);
     let payload = to_bytes(&TestPorStatusExportPageV1 {
         version: 1,
         start_epoch: Some(10),
         end_epoch: Some(10),
-        page: test_por_status_page(vec![status], None),
+        page: test_por_status_page(vec![status], Some(next_cursor.clone())),
     })
     .expect("encode bounded PoR export page");
     server.mock(|when, then| {
@@ -633,6 +820,7 @@ fn por_export_writes_file() {
         stdout.contains("exported"),
         "expected export command to report success:\n{stdout}"
     );
+    assert!(stdout.contains(&format!("next_cursor={next_cursor}")));
     let written = fs::read(&out_path).expect("read export file");
     assert_eq!(written, payload);
 }
@@ -647,7 +835,7 @@ fn por_export_rejects_noncanonical_response_cursor_without_writing() {
         provider_id: [0x53; 32],
         epoch_id: 10,
         drand_round: 102,
-        status: PorChallengeOutcome::Pending,
+        status: PorChallengeOutcome::AwaitingProof,
         sample_count: 32,
         forced: false,
         issued_at: 1_700_000_300,
@@ -694,7 +882,7 @@ fn por_export_rejects_noncanonical_response_cursor_without_writing() {
     assert!(
         String::from_utf8(stderr)
             .expect("stderr utf8")
-            .contains("canonical unpadded base64url")
+            .contains("bounded canonical PoR cursor")
     );
     assert!(!out_path.exists());
 }

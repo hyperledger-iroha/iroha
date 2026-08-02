@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.android.client;
 
-import java.util.List;
 import java.util.Objects;
 
 /** VPN receipt response including earned/refunded XOR and native settlement instructions. */
@@ -27,7 +26,6 @@ public final class VpnReceipt {
   private final String refundedFee;
   private final String leaseIdHex;
   private final VpnTxInstruction settleLeaseInstruction;
-  private final List<VpnTxInstruction> txInstructions;
 
   public VpnReceipt(
       final String sessionId,
@@ -51,8 +49,7 @@ public final class VpnReceipt {
       final String earnedFee,
       final String refundedFee,
       final String leaseIdHex,
-      final VpnTxInstruction settleLeaseInstruction,
-      final List<VpnTxInstruction> txInstructions) {
+      final VpnTxInstruction settleLeaseInstruction) {
     this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
     this.accountId = Objects.requireNonNull(accountId, "accountId");
     this.exitClass = Objects.requireNonNull(exitClass, "exitClass");
@@ -75,7 +72,6 @@ public final class VpnReceipt {
     this.refundedFee = Objects.requireNonNull(refundedFee, "refundedFee");
     this.leaseIdHex = Objects.requireNonNull(leaseIdHex, "leaseIdHex");
     this.settleLeaseInstruction = settleLeaseInstruction;
-    this.txInstructions = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(Objects.requireNonNull(txInstructions, "txInstructions")));
   }
 
   public String sessionId() { return sessionId; }
@@ -100,5 +96,4 @@ public final class VpnReceipt {
   public String refundedFee() { return refundedFee; }
   public String leaseIdHex() { return leaseIdHex; }
   public VpnTxInstruction settleLeaseInstruction() { return settleLeaseInstruction; }
-  public List<VpnTxInstruction> txInstructions() { return txInstructions; }
 }

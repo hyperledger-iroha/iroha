@@ -51,9 +51,14 @@ Producer boundaries are deliberately strict. The private publication service
 increments an ingest deadletter only after request authentication and only for
 a terminal seed-storage rejection, invalid broker receipt, or conflicting
 receipt/idempotency binding. An authenticated storage-coordination request with
-an invalid or future-skewed staging receipt records `receipt_invalid`; an
-expired staging receipt records `receipt_expired`. Retryable backend outages
-and rejected unauthenticated requests are not deadletters. Authenticated CAR
+an invalid or future-skewed staging receipt records `receipt_invalid`.
+Receipt freshness is consumed by archive-registration admission: before an
+intent exists the publisher refreshes an expired receipt, while an exact
+finalized archive remains eligible for storage coordination after its embedded
+receipt expires. `receipt_expired` is retained as a bounded telemetry category
+for deployment adapters, but the in-tree coordinator does not emit it for a
+finalized archive. Retryable backend outages and rejected unauthenticated
+requests are not deadletters. Authenticated CAR
 commitment, composite storage-coordination evidence, and
 full-provider-readback mismatches increment the archive-commitment, bounded
 fallback, and provider-readback integrity surfaces respectively; a later
@@ -109,10 +114,54 @@ and latency: V1 commits complete snapshots and deliberately performs full-state
 validation rather than claiming a database-scale journal implementation.
 
 The phase-age gauge requires a long-lived worker to project the oldest active
-operation from the secret-free publication journal. The one-shot CLI is not a
-Prometheus producer. Likewise, cache-corruption and cache-capacity gauges need
-a long-lived cache service, and the storage pair must describe one explicitly
-selected root; do not mirror aggregate SoraFS capacity into a Musubi-only gauge.
+operation from the publisher-owned secret-free publication journal. No such
+owner exists in-tree today: `musubi publish` and `musubi publish --resume` open
+that state root only for one command, while the long-lived private-service
+journal owns replay state for three authenticated HTTP routes and neither sees
+the seven publisher phases nor their transitions. The publisher journal also
+does not yet retain a phase-entry time or expose a bounded, complete snapshot
+of every active operation. File modification time is not protocol evidence and
+must not be used as a substitute.
+
+The deployment integration must satisfy all of the following before it calls
+`reset_publication_phase_ages` or `set_publication_phase_age`:
+
+1. One long-lived deployment worker is the sole projection owner for one
+   configured publisher journal root and the Prometheus registry that exports
+   its projection. It must finish restart recovery and a complete journal scan
+   before publishing the first phase-age series, then refresh the projection
+   at a bounded cadence so age continues to advance without journal writes.
+2. Every durable phase transition records a positive
+   `phase_entered_at_unix_ms` from an injected, deployment-qualified,
+   non-regressing clock in the same atomic journal replacement as the new
+   phase. Pending polls and retries within one phase do not change this value;
+   an actual transition back to seed ingress does. Completed operations are
+   excluded.
+3. The journal store supplies a bounded snapshot API that enumerates active
+   records using the same no-follow, ownership, size, canonical-decode, and
+   operation-lock checks as an ordinary load. The snapshot is complete or an
+   error; a skipped, locked, malformed, over-capacity, or concurrently changed
+   record must fail the projection rather than turn its phase into zero.
+4. The worker computes all seven oldest-entry timestamps into a temporary
+   bounded snapshot, rejects a clock earlier than any retained phase-entry
+   time, and only then replaces the metric projection. The telemetry sink needs
+   one projection/withdraw operation serialized with Prometheus exposition;
+   calling the existing per-label reset/set primitives during a scrape is not
+   an atomic snapshot. A phase with no active operation becomes zero only after
+   that complete successful snapshot. Loss of journal ownership, clock
+   qualification, or snapshot completeness must withdraw or mark the
+   projection unavailable instead of retaining a misleading healthy zero.
+5. Focused qualification covers restart in every phase, pending polls that do
+   not reset age, real phase transitions that do, multiple operations selecting
+   the oldest timestamp, completed-operation exclusion, clock rollback,
+   concurrent transition during scanning, malformed/linked/oversized records,
+   bounded-capacity failure, and absence of all seven series before the first
+   successful post-restart projection.
+
+The one-shot CLI is not a Prometheus producer. Likewise, cache-corruption and
+cache-capacity gauges need a long-lived cache service, and the storage pair
+must describe one explicitly selected root; do not mirror aggregate SoraFS
+capacity into a Musubi-only gauge.
 The authenticated production fetch runtime carries the closed
 `archive_commitment` integrity surface on provider manifest, plan, CAR, and
 chunk errors because each is checked against the exact registry commitment.
@@ -176,6 +225,34 @@ resume process through compare-and-set.
 4. Resume the exact operation. The workflow revalidates every retained receipt,
    archive/pin result, completion, readback, AMX transaction, and finalized row
    before advancing.
+   Before any intent exists, an expired staging receipt may be discarded and
+   restaged. Once an intent exists, recover or resubmit its exact signed
+   transaction identity—even after receipt expiry—and query the exact
+   authoritative archive record. Never rotate an absent, unknown, pending, or
+   generically rejected transaction. A finalized `RetainUnknown` archive
+   decision may append terminal evidence only when paired with authoritative
+   `Expired` status or when its consensus-committed finalized block time is
+   strictly later than the exact transaction/receipt validity deadline. A
+   cache-only expiry or local wall clock is insufficient. That proof may return
+   the workflow to seed ingress and create the next bounded attempt. Once an
+   archive record is journaled, resume pin and location coordination from that
+   record.
+   Location mutation is also split across a durable cut: first persist the
+   exact signed CAS intent, then submit or recover only that transaction. An
+   identical already-active Add is a no-op, so it may be replayed after a lost
+   response. If the requested location is absent, the publisher ignores the
+   coordinator's cached revision and signs against the complete finalized
+   location page. Never rotate on a coordinator assertion, an absent/pending
+   transaction status, or a lagging page. A finalized rejection plus a covering
+   later CAS revision, authoritative expiry plus finalized absence, or an
+   applied transaction followed by a covering later retirement may append
+   terminal evidence. The next of at most eight location generations must use a
+   new stable ID and a preparation page at or after that terminal state.
+   Replication, readback, and release submission recheck the active finalized
+   location. If a later complete page proves retirement, the workflow preserves
+   the prior intent/application/terminal history, clears replication and
+   readbacks, and coordinates the replacement. A healthy same-ID renewal uses
+   its current finalized pin, order, epochs, and exact provider attestations.
 5. If a retained object differs, stop. Preserve the journal and evidence as an
    integrity incident; do not start a same-version publication with different
    commitments.
@@ -220,8 +297,18 @@ resume process through compare-and-set.
    HSM/signer, seed-ingress backend, permanent pin/replication coordinator, and
    provider readback adapters independently. Use the durable journal for
    restart-persistent service state; the bundled in-memory journal remains only
-   for development/tests. Do not move credentials into node configuration,
-   argv, a project, or an incident log.
+   for development/tests. The storage backend must independently query
+   finalized chain state, retrieve the authenticated transaction, prove its
+   sole instruction is the matching archive registration finalized by the named
+   snapshot, and match the immutable archive-registration projection against a
+   finalized exact archive read; byte binding supplied by the publisher is not
+   itself a finality proof. The projection deliberately excludes mutable
+   location revision and location identities, so the latest exact public
+   archive page can reproduce it without a historical WSV. The stock tree still
+   supplies no production storage/finality backend; keep publication unavailable
+   until a deployment provides authoritative inclusion and projection checks.
+   Do not move credentials
+   into node configuration, argv, a project, or an incident log.
 3. Record only the clock's stable, path-free startup code. Keep the service
    offline for `MUSUBI_PUBLICATION_CLOCK_UNSUPPORTED_PLATFORM`,
    `MUSUBI_PUBLICATION_CLOCK_UNSAFE_ROOT`,
@@ -258,9 +345,11 @@ resume process through compare-and-set.
    different chain or genesis incarnation, publisher, archive, CAR
    digest/length, route request, or provider target is an equivocation and must
    remain rejected.
-   If the exact completed seed receipt alone expired, use a fresh authorization
-   to trigger the journaled refresh path; the backend must idempotently confirm
-   the same CAR before the broker replaces that receipt.
+   If the exact completed seed-ingress service response alone expired, use a
+   fresh authorization to trigger that service journal's refresh path; the seed
+   backend must idempotently confirm the same CAR before the broker replaces the
+   response. This does not authorize replacing a receipt already bound into a
+   publisher archive-registration intent or authoritative archive record.
 7. For authorization incidents, compare only bounded error classes. Verify
    canonical encoding, exact request digest, controller signature, expiry,
    future-clock skew, and replay status without logging the authorization

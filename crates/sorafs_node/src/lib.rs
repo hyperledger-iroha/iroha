@@ -114,13 +114,13 @@ pub use por::{
     PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1,
     PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveProofBoundsV1,
     PorFinalizedReplayArchiveReadbackV1, PorFinalizedReplayArchiveReceiptV1,
-    PorFinalizedReplayArchiveRecordV1, PorFinalizedReplayArchiveV1, PorPendingRepairWorkV1,
-    PorProtocolMetricsSnapshot, PorRandomness, PorRepairHandoff, PorRepairHandoffAckOutcomeV1,
-    PorRepairHandoffError, PorRepairReconcileErrorV1, PorRepairReconcileOutcomeV1,
-    PorReputationTerminalAckOutcomeV1, PorReputationTerminalWorkV1, PorStatusAuthoritySnapshotV1,
-    PorStatusAuthorityUpdateV1, PorTracker, PorTrackerError, PorVerdictStats,
-    build_por_challenge_for_manifest, canonical_por_failure_repair_report_v1,
-    por_repair_source_identity_v1,
+    PorFinalizedReplayArchiveRecordV1, PorFinalizedReplayArchiveV1, PorMutationDispositionV1,
+    PorMutationFailureV1, PorPendingRepairWorkV1, PorProtocolMetricsSnapshot, PorRandomness,
+    PorRepairHandoff, PorRepairHandoffAckOutcomeV1, PorRepairHandoffError,
+    PorRepairReconcileErrorV1, PorRepairReconcileOutcomeV1, PorReputationTerminalAckOutcomeV1,
+    PorReputationTerminalWorkV1, PorStatusAuthoritySnapshotV1, PorStatusAuthorityUpdateV1,
+    PorTracker, PorTrackerError, PorVerdictStats, build_por_challenge_for_manifest,
+    canonical_por_failure_repair_report_v1, por_repair_source_identity_v1,
 };
 pub use potr::{
     POTR_EXPORT_MAX_RECORDS_V1, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1,
@@ -12551,21 +12551,23 @@ impl NodeHandle {
                 "encode auxiliary runtime checkpoint: {err}"
             ))
         })?;
-        let mut write_result = write_local_checkpoint_atomic_bounded(
+        let write_result = write_local_checkpoint_atomic_bounded(
             path,
             &bytes,
             self.config.runtime_retention().checkpoint_max_bytes(),
         );
         #[cfg(test)]
-        if write_result.is_ok()
+        let write_result = if write_result.is_ok()
             && self
                 .fail_after_next_auxiliary_checkpoint_publication
                 .swap(false, std::sync::atomic::Ordering::SeqCst)
         {
-            write_result = Err(LocalCheckpointWriteError::committed(io::Error::other(
+            Err(LocalCheckpointWriteError::committed(io::Error::other(
                 "injected post-publication auxiliary checkpoint failure",
-            )));
-        }
+            )))
+        } else {
+            write_result
+        };
         self.finish_local_checkpoint_write("auxiliary runtime", path, write_result)
     }
 
@@ -12747,6 +12749,24 @@ impl NodeHandle {
 
         let mut por_history = HashMap::with_capacity(checkpoint.por_history.len());
         for entry in checkpoint.por_history {
+            if entry.manifest_digest == [0; 32]
+                || entry.provider_id == [0; 32]
+                || entry
+                    .last_success_unix
+                    .is_some_and(|timestamp| timestamp == 0)
+                || entry
+                    .last_failure_unix
+                    .is_some_and(|timestamp| timestamp == 0)
+                || (entry.last_success_unix.is_none() && entry.last_failure_unix.is_none())
+                || entry.consecutive_failures > entry.failures_total
+                || (entry.failures_total == 0
+                    && (entry.last_failure_unix.is_some() || entry.consecutive_failures != 0))
+                || (entry.failures_total != 0 && entry.last_failure_unix.is_none())
+            {
+                return Err(GovernancePublishError::other(
+                    "invalid PoR history entry in auxiliary checkpoint",
+                ));
+            }
             let key = (entry.manifest_digest, entry.provider_id);
             if por_history
                 .insert(
@@ -14855,21 +14875,21 @@ impl NodeHandle {
         self.schedulers.clone()
     }
 
-    /// Record a governance-issued PoR challenge from the trusted scheduler.
-    ///
-    /// External callers must not treat structural challenge validation as
-    /// beacon or VRF authentication. Torii retires direct challenge ingestion;
-    /// the coordinator scheduler is the production authority for this method.
-    pub fn record_por_challenge(&self, challenge: &PorChallengeV1) -> Result<(), PorTrackerError> {
+    /// Compatibility-only internal wrapper that discards the authority delta.
+    pub(crate) fn record_por_challenge(
+        &self,
+        challenge: &PorChallengeV1,
+    ) -> Result<(), PorTrackerError> {
         self.record_por_challenge_with_authority_update(challenge)
             .map(drop)
+            .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     /// Durably record a challenge and return its exact bounded status update.
     pub fn record_por_challenge_with_authority_update(
         &self,
         challenge: &PorChallengeV1,
-    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
+    ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1> {
         let replay_archive = self
             .por_finalized_replay_archive
             .as_ref()
@@ -14878,44 +14898,70 @@ impl NodeHandle {
     }
 
     /// Record or replay a challenge using the checkpoint-pinned archive.
-    pub fn record_por_challenge_with_replay_archive(
+    pub(crate) fn record_por_challenge_with_replay_archive(
         &self,
         challenge: &PorChallengeV1,
         replay_archive: &dyn PorFinalizedReplayArchiveV1,
     ) -> Result<(), PorTrackerError> {
         self.record_por_challenge_with_optional_replay_archive(challenge, Some(replay_archive))
             .map(drop)
+            .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     fn record_por_challenge_with_optional_replay_archive(
         &self,
         challenge: &PorChallengeV1,
         replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
-    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
+    ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1> {
         let proof_bounds = match (self.config.por_replay_archive_policy(), replay_archive) {
             (Some(policy), Some(archive)) => {
-                verify_por_replay_archive_provider(policy, archive)?;
+                verify_por_replay_archive_provider(policy, archive).map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?;
                 Some(policy.proof_bounds())
             }
-            (Some(_), None) => return Err(PorTrackerError::ReplayArchiveRequired),
-            (None, Some(_)) => return Err(PorTrackerError::ReplayArchiveBindingMismatch),
+            (Some(_), None) => {
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::ReplayArchiveRequired,
+                    PorMutationDispositionV1::NoMutation,
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::ReplayArchiveBindingMismatch,
+                    PorMutationDispositionV1::NoMutation,
+                ));
+            }
             (None, None) => None,
         };
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
-            PorTrackerError::RuntimeCheckpoint(
-                "auxiliary checkpoint transaction lock poisoned".to_owned(),
+            PorMutationFailureV1::new(
+                PorTrackerError::RuntimeCheckpoint(
+                    "auxiliary checkpoint transaction lock poisoned".to_owned(),
+                ),
+                PorMutationDispositionV1::NoMutation,
             )
         })?;
         self.ensure_durability_healthy()
-            .map_err(PorTrackerError::RuntimeCheckpoint)?;
+            .map_err(PorTrackerError::RuntimeCheckpoint)
+            .map_err(|error| {
+                PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+            })?;
         let previous = self.por.checkpoint();
         let outcome = match replay_archive {
-            Some(replay_archive) => self.por.record_challenge_with_archive_and_bounds(
-                challenge,
-                replay_archive,
-                proof_bounds.expect("configured archive has proof bounds"),
-            )?,
-            None => self.por.record_challenge(challenge)?,
+            Some(replay_archive) => self
+                .por
+                .record_challenge_with_archive_and_bounds(
+                    challenge,
+                    replay_archive,
+                    proof_bounds.expect("configured archive has proof bounds"),
+                )
+                .map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?,
+            None => self.por.record_challenge(challenge).map_err(|error| {
+                PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+            })?,
         };
         if let (Some(policy), Some(replay_archive)) =
             (self.config.por_replay_archive_policy(), replay_archive)
@@ -14926,37 +14972,77 @@ impl NodeHandle {
                     "failed to roll back PoR challenge after replay-archive provider drift",
                     rollback,
                 );
-                return Err(PorTrackerError::RuntimeCheckpoint(message));
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(message),
+                    PorMutationDispositionV1::RollbackFailed,
+                ));
             }
-            return Err(error);
+            return Err(PorMutationFailureV1::new(
+                error,
+                PorMutationDispositionV1::RolledBack,
+            ));
         }
-        if outcome == por::PorChallengeRecordOutcomeV1::ExactReplay {
-            return self.por.status_authority_update(challenge.challenge_id);
+        if let por::PorChallengeRecordOutcomeV1::ExactReplay(status) = outcome {
+            return self
+                .por
+                .status_authority_replay_update(status)
+                .map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                });
         }
+        let authority_update = match self.por.status_authority_update(challenge.challenge_id) {
+            Ok(update) => update,
+            Err(error) => {
+                if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back PoR challenge after authority-delta validation",
+                        rollback,
+                    );
+                    return Err(PorMutationFailureV1::new(
+                        PorTrackerError::RuntimeCheckpoint(message),
+                        PorMutationDispositionV1::RollbackFailed,
+                    ));
+                }
+                return Err(PorMutationFailureV1::new(
+                    error,
+                    PorMutationDispositionV1::RolledBack,
+                ));
+            }
+        };
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
-                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(err.to_string()),
+                    PorMutationDispositionV1::CommitUncertain,
+                ));
             }
             if let Err(rollback) = self.por.restore_checkpoint(previous) {
                 let message = self.record_unrecoverable_rollback(
                     "failed to roll back PoR challenge after checkpoint error",
                     rollback,
                 );
-                return Err(PorTrackerError::RuntimeCheckpoint(message));
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(message),
+                    PorMutationDispositionV1::RollbackFailed,
+                ));
             }
-            return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            return Err(PorMutationFailureV1::new(
+                PorTrackerError::RuntimeCheckpoint(err.to_string()),
+                PorMutationDispositionV1::RolledBack,
+            ));
         }
-        self.por.status_authority_update(challenge.challenge_id)
+        Ok(authority_update)
     }
 
     /// Record a provider PoR proof response bound to its admitted provider key.
-    pub fn record_por_proof(
+    pub(crate) fn record_por_proof(
         &self,
         proof: &PorProofV1,
         admitted_provider_key: &[u8],
     ) -> Result<(), PorTrackerError> {
         self.record_por_proof_with_authority_update(proof, admitted_provider_key)
             .map(drop)
+            .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     /// Durably record a proof and return its exact bounded status update.
@@ -14964,33 +15050,134 @@ impl NodeHandle {
         &self,
         proof: &PorProofV1,
         admitted_provider_key: &[u8],
-    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
+    ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1> {
+        let replay_archive = self
+            .por_finalized_replay_archive
+            .as_ref()
+            .map(|archive| archive.0.as_ref());
+        let proof_bounds = match (self.config.por_replay_archive_policy(), replay_archive) {
+            (Some(policy), Some(archive)) => {
+                verify_por_replay_archive_provider(policy, archive).map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?;
+                Some(policy.proof_bounds())
+            }
+            (Some(_), None) => {
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::ReplayArchiveRequired,
+                    PorMutationDispositionV1::NoMutation,
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::ReplayArchiveBindingMismatch,
+                    PorMutationDispositionV1::NoMutation,
+                ));
+            }
+            (None, None) => None,
+        };
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
-            PorTrackerError::RuntimeCheckpoint(
-                "auxiliary checkpoint transaction lock poisoned".to_owned(),
+            PorMutationFailureV1::new(
+                PorTrackerError::RuntimeCheckpoint(
+                    "auxiliary checkpoint transaction lock poisoned".to_owned(),
+                ),
+                PorMutationDispositionV1::NoMutation,
             )
         })?;
         self.ensure_durability_healthy()
-            .map_err(PorTrackerError::RuntimeCheckpoint)?;
+            .map_err(PorTrackerError::RuntimeCheckpoint)
+            .map_err(|error| {
+                PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+            })?;
         let previous = self.por.checkpoint();
-        let outcome = self.por.record_proof(proof, admitted_provider_key)?;
-        if outcome == por::PorProofRecordOutcomeV1::ExactReplay {
-            return self.por.status_authority_update(proof.challenge_id);
+        let outcome = match replay_archive {
+            Some(replay_archive) => self
+                .por
+                .record_proof_with_archive_and_bounds(
+                    proof,
+                    admitted_provider_key,
+                    replay_archive,
+                    proof_bounds.expect("configured archive has proof bounds"),
+                )
+                .map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?,
+            None => self
+                .por
+                .record_proof(proof, admitted_provider_key)
+                .map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?,
+        };
+        if let (Some(policy), Some(replay_archive)) =
+            (self.config.por_replay_archive_policy(), replay_archive)
+            && let Err(error) = verify_por_replay_archive_provider(policy, replay_archive)
+        {
+            if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR proof after replay-archive provider drift",
+                    rollback,
+                );
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(message),
+                    PorMutationDispositionV1::RollbackFailed,
+                ));
+            }
+            return Err(PorMutationFailureV1::new(
+                error,
+                PorMutationDispositionV1::RolledBack,
+            ));
         }
+        if let por::PorProofRecordOutcomeV1::ExactReplay(status) = outcome {
+            return self
+                .por
+                .status_authority_replay_update(status)
+                .map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                });
+        }
+        let authority_update = match self.por.status_authority_update(proof.challenge_id) {
+            Ok(update) => update,
+            Err(error) => {
+                if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back PoR proof after authority-delta validation",
+                        rollback,
+                    );
+                    return Err(PorMutationFailureV1::new(
+                        PorTrackerError::RuntimeCheckpoint(message),
+                        PorMutationDispositionV1::RollbackFailed,
+                    ));
+                }
+                return Err(PorMutationFailureV1::new(
+                    error,
+                    PorMutationDispositionV1::RolledBack,
+                ));
+            }
+        };
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
-                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(err.to_string()),
+                    PorMutationDispositionV1::CommitUncertain,
+                ));
             }
             if let Err(rollback) = self.por.restore_checkpoint(previous) {
                 let message = self.record_unrecoverable_rollback(
                     "failed to roll back PoR proof after checkpoint error",
                     rollback,
                 );
-                return Err(PorTrackerError::RuntimeCheckpoint(message));
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(message),
+                    PorMutationDispositionV1::RollbackFailed,
+                ));
             }
-            return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            return Err(PorMutationFailureV1::new(
+                PorTrackerError::RuntimeCheckpoint(err.to_string()),
+                PorMutationDispositionV1::RolledBack,
+            ));
         }
-        self.por.status_authority_update(proof.challenge_id)
+        Ok(authority_update)
     }
 
     /// Return process-local PoR latency, VRF, and seed-binding metrics.
@@ -15243,7 +15430,7 @@ impl NodeHandle {
     }
 
     /// Record an audit verdict and update telemetry counters accordingly.
-    pub fn record_por_verdict(
+    pub(crate) fn record_por_verdict(
         &self,
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
@@ -15255,6 +15442,7 @@ impl NodeHandle {
             auditor_threshold,
         )
         .map(|(outcome, _update)| outcome)
+        .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     /// Durably record a verdict and return its exact bounded status update.
@@ -15263,7 +15451,7 @@ impl NodeHandle {
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
-    ) -> Result<(PorVerdictOutcome, PorStatusAuthorityUpdateV1), PorTrackerError> {
+    ) -> Result<(PorVerdictOutcome, PorStatusAuthorityUpdateV1), PorMutationFailureV1> {
         let replay_archive = self
             .por_finalized_replay_archive
             .as_ref()
@@ -15277,7 +15465,7 @@ impl NodeHandle {
     }
 
     /// Record or exactly replay a verdict using the checkpoint-pinned archive.
-    pub fn record_por_verdict_with_replay_archive(
+    pub(crate) fn record_por_verdict_with_replay_archive(
         &self,
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
@@ -15291,6 +15479,7 @@ impl NodeHandle {
             Some(replay_archive),
         )
         .map(|(outcome, _update)| outcome)
+        .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     fn record_por_verdict_with_optional_replay_archive(
@@ -15299,48 +15488,71 @@ impl NodeHandle {
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
         replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
-    ) -> Result<(PorVerdictOutcome, PorStatusAuthorityUpdateV1), PorTrackerError> {
+    ) -> Result<(PorVerdictOutcome, PorStatusAuthorityUpdateV1), PorMutationFailureV1> {
         let proof_bounds = match (self.config.por_replay_archive_policy(), replay_archive) {
             (Some(policy), Some(archive)) => {
-                verify_por_replay_archive_provider(policy, archive)?;
+                verify_por_replay_archive_provider(policy, archive).map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?;
                 Some(policy.proof_bounds())
             }
-            (Some(_), None) => return Err(PorTrackerError::ReplayArchiveRequired),
-            (None, Some(_)) => return Err(PorTrackerError::ReplayArchiveBindingMismatch),
+            (Some(_), None) => {
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::ReplayArchiveRequired,
+                    PorMutationDispositionV1::NoMutation,
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::ReplayArchiveBindingMismatch,
+                    PorMutationDispositionV1::NoMutation,
+                ));
+            }
             (None, None) => None,
         };
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
-            PorTrackerError::RuntimeCheckpoint(
-                "auxiliary checkpoint transaction lock poisoned".to_owned(),
+            PorMutationFailureV1::new(
+                PorTrackerError::RuntimeCheckpoint(
+                    "auxiliary checkpoint transaction lock poisoned".to_owned(),
+                ),
+                PorMutationDispositionV1::NoMutation,
             )
         })?;
         self.ensure_durability_healthy()
-            .map_err(PorTrackerError::RuntimeCheckpoint)?;
-        {
-            let history = self.por_history.read().map_err(|_| {
-                PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
+            .map_err(PorTrackerError::RuntimeCheckpoint)
+            .map_err(|error| {
+                PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
             })?;
-            let key = (verdict.manifest_digest, verdict.provider_id);
-            let limit = self.config.runtime_retention().state_entry_limit();
-            if !history.contains_key(&key) && history.len() >= limit {
-                return Err(PorTrackerError::RuntimeCheckpoint(format!(
-                    "PoR history retention exhausted (limit {limit})"
-                )));
-            }
-        }
+        let previous_history = self
+            .por_history
+            .read()
+            .map_err(|_| {
+                PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned()),
+                    PorMutationDispositionV1::NoMutation,
+                )
+            })?
+            .clone();
         let previous_tracker = self.por.checkpoint();
         let transition = match replay_archive {
-            Some(replay_archive) => self.por.record_verdict_durable_with_archive_and_bounds(
-                verdict,
-                trusted_auditor_keys,
-                auditor_threshold,
-                replay_archive,
-                proof_bounds.expect("configured archive has proof bounds"),
-            )?,
-            None => {
-                self.por
-                    .record_verdict_durable(verdict, trusted_auditor_keys, auditor_threshold)?
-            }
+            Some(replay_archive) => self
+                .por
+                .record_verdict_durable_with_archive_and_bounds(
+                    verdict,
+                    trusted_auditor_keys,
+                    auditor_threshold,
+                    replay_archive,
+                    proof_bounds.expect("configured archive has proof bounds"),
+                )
+                .map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?,
+            None => self
+                .por
+                .record_verdict_durable(verdict, trusted_auditor_keys, auditor_threshold)
+                .map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?,
         };
         if let (Some(policy), Some(replay_archive)) =
             (self.config.por_replay_archive_policy(), replay_archive)
@@ -15351,9 +15563,15 @@ impl NodeHandle {
                     "failed to roll back PoR verdict after replay-archive provider drift",
                     rollback,
                 );
-                return Err(PorTrackerError::RuntimeCheckpoint(message));
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(message),
+                    PorMutationDispositionV1::RollbackFailed,
+                ));
             }
-            return Err(error);
+            return Err(PorMutationFailureV1::new(
+                error,
+                PorMutationDispositionV1::RolledBack,
+            ));
         }
         let stats = transition.stats;
         let reputation_work = transition.reputation_work;
@@ -15362,7 +15580,10 @@ impl NodeHandle {
                 .por_history
                 .read()
                 .map_err(|_| {
-                    PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
+                    PorMutationFailureV1::new(
+                        PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned()),
+                        PorMutationDispositionV1::NoMutation,
+                    )
                 })?
                 .get(&(verdict.manifest_digest, verdict.provider_id))
                 .map_or(0, |entry| entry.consecutive_failures);
@@ -15372,16 +15593,14 @@ impl NodeHandle {
                 consecutive_failures,
                 reputation_work,
             };
-            let update = self.por.status_authority_update(verdict.challenge_id)?;
+            let update = self
+                .por
+                .status_authority_replay_update(transition.authority_status)
+                .map_err(|error| {
+                    PorMutationFailureV1::new(error, PorMutationDispositionV1::NoMutation)
+                })?;
             return Ok((outcome, update));
         }
-        let previous_history = self
-            .por_history
-            .read()
-            .map_err(|_| {
-                PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
-            })?
-            .clone();
         let consecutive_failures = match self.update_por_history_entry(verdict) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -15392,14 +15611,44 @@ impl NodeHandle {
                         "failed to roll back finalized PoR state after bookkeeping error",
                         rollback,
                     );
-                    return Err(PorTrackerError::RuntimeCheckpoint(message));
+                    return Err(PorMutationFailureV1::new(
+                        PorTrackerError::RuntimeCheckpoint(message),
+                        PorMutationDispositionV1::RollbackFailed,
+                    ));
                 }
-                return Err(error);
+                return Err(PorMutationFailureV1::new(
+                    error,
+                    PorMutationDispositionV1::RolledBack,
+                ));
+            }
+        };
+        let authority_update = match self.por.status_authority_update(verdict.challenge_id) {
+            Ok(update) => update,
+            Err(error) => {
+                if let Err(rollback) =
+                    self.rollback_por_verdict_state(previous_tracker, previous_history)
+                {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back finalized PoR state after authority-delta validation",
+                        rollback,
+                    );
+                    return Err(PorMutationFailureV1::new(
+                        PorTrackerError::RuntimeCheckpoint(message),
+                        PorMutationDispositionV1::RollbackFailed,
+                    ));
+                }
+                return Err(PorMutationFailureV1::new(
+                    error,
+                    PorMutationDispositionV1::RolledBack,
+                ));
             }
         };
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
-                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(err.to_string()),
+                    PorMutationDispositionV1::CommitUncertain,
+                ));
             }
             if let Err(rollback) =
                 self.rollback_por_verdict_state(previous_tracker, previous_history)
@@ -15408,9 +15657,15 @@ impl NodeHandle {
                     "failed to roll back finalized PoR state after checkpoint error",
                     rollback,
                 );
-                return Err(PorTrackerError::RuntimeCheckpoint(message));
+                return Err(PorMutationFailureV1::new(
+                    PorTrackerError::RuntimeCheckpoint(message),
+                    PorMutationDispositionV1::RollbackFailed,
+                ));
             }
-            return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            return Err(PorMutationFailureV1::new(
+                PorTrackerError::RuntimeCheckpoint(err.to_string()),
+                PorMutationDispositionV1::RolledBack,
+            ));
         }
         if stats.success_samples > 0 {
             self.meter.record_por_samples(stats.success_samples, 0);
@@ -15426,8 +15681,7 @@ impl NodeHandle {
             consecutive_failures,
             reputation_work,
         };
-        let update = self.por.status_authority_update(verdict.challenge_id)?;
-        Ok((outcome, update))
+        Ok((outcome, authority_update))
     }
 
     /// Attach stripe layout and chunk-role metadata to a stored manifest.
@@ -16107,12 +16361,30 @@ impl NodeHandle {
     }
 
     fn update_por_history_entry(&self, verdict: &AuditVerdictV1) -> Result<u64, PorTrackerError> {
+        let key = (verdict.manifest_digest, verdict.provider_id);
+        let limit = self.config.runtime_retention().state_entry_limit();
+        let protected = self.por.protected_history_keys();
         let mut history = self.por_history.write().map_err(|_| {
             PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
         })?;
-        let entry = history
-            .entry((verdict.manifest_digest, verdict.provider_id))
-            .or_default();
+        if !history.contains_key(&key) && history.len() >= limit {
+            let retired = history
+                .iter()
+                .filter(|(candidate, _)| !protected.contains(*candidate))
+                .min_by_key(|(candidate, entry)| {
+                    (
+                        entry
+                            .last_success_unix
+                            .max(entry.last_failure_unix)
+                            .unwrap_or(0),
+                        **candidate,
+                    )
+                })
+                .map(|(candidate, _)| *candidate)
+                .ok_or(PorTrackerError::HistoryRetentionExhausted { limit })?;
+            history.remove(&retired);
+        }
+        let entry = history.entry(key).or_default();
         match verdict.outcome {
             AuditOutcomeV1::Success | AuditOutcomeV1::Repaired => {
                 entry.last_success_unix = Some(verdict.decided_at);
@@ -16410,6 +16682,7 @@ mod tests {
     use super::*;
     use crate::config::RuntimeRetentionPolicy;
     use crate::por::test_support::{
+        resign_sample_proof as resign_por_sample_proof,
         resign_sample_verdict as resign_por_sample_verdict,
         sample_auditor_keys as por_sample_auditor_keys, sample_challenge as por_sample_challenge,
         sample_proof as por_sample_proof, sample_provider_key as por_sample_provider_key,
@@ -25889,7 +26162,10 @@ mod tests {
             .expect("durably record challenge with bounded authority update");
         assert_eq!(challenge_update.generation, 2);
         assert_eq!(challenge_update.status.challenge_id, challenge.challenge_id);
-        assert_eq!(challenge_update.status.status, PorChallengeOutcome::Pending);
+        assert_eq!(
+            challenge_update.status.status,
+            sorafs_manifest::por::PorChallengeOutcome::AwaitingProof
+        );
         assert_eq!(
             handle
                 .record_por_challenge_with_authority_update(&challenge)
@@ -25907,14 +26183,13 @@ mod tests {
 
         let verdict = por_sample_verdict(&challenge, proof.proof_digest());
         let (_outcome, verdict_update) = handle
-            .record_por_verdict_with_authority_update(
-                &verdict,
-                &por_sample_auditor_keys(),
-                1,
-            )
+            .record_por_verdict_with_authority_update(&verdict, &por_sample_auditor_keys(), 1)
             .expect("durably record verdict with bounded authority update");
         assert_eq!(verdict_update.generation, 4);
-        assert_eq!(verdict_update.status.status, PorChallengeOutcome::Verified);
+        assert_eq!(
+            verdict_update.status.status,
+            sorafs_manifest::por::PorChallengeOutcome::Verified
+        );
         let visible = handle
             .por_status_authority_snapshot()
             .expect("read complete authority after incremental mutations");
@@ -25928,6 +26203,37 @@ mod tests {
                 .expect("restart restores the same authoritative checkpoint"),
             visible
         );
+    }
+
+    #[test]
+    fn por_validation_failures_report_no_mutation_for_projection_preservation() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let challenge = por_sample_challenge();
+        handle
+            .record_por_challenge_with_authority_update(&challenge)
+            .expect("record authority challenge");
+        let before = handle.por_status_authority_snapshot().unwrap();
+
+        let mut unknown = por_sample_proof(&challenge);
+        unknown.challenge_id = [0xE1; 32];
+        resign_por_sample_proof(&mut unknown);
+        let error = handle
+            .record_por_proof_with_authority_update(&unknown, &por_sample_provider_key())
+            .expect_err("valid signed unknown proof is rejected before mutation");
+        assert_eq!(error.disposition(), PorMutationDispositionV1::NoMutation);
+        assert!(!error.disposition().invalidates_projection());
+        assert_eq!(handle.por_status_authority_snapshot().unwrap(), before);
+
+        let mut mismatched = por_sample_proof(&challenge);
+        mismatched.manifest_digest = [0xE2; 32];
+        resign_por_sample_proof(&mut mismatched);
+        let error = handle
+            .record_por_proof_with_authority_update(&mismatched, &por_sample_provider_key())
+            .expect_err("valid signed mismatched proof is rejected before mutation");
+        assert_eq!(error.disposition(), PorMutationDispositionV1::NoMutation);
+        assert!(!error.disposition().invalidates_projection());
+        assert_eq!(handle.por_status_authority_snapshot().unwrap(), before);
     }
 
     #[test]
@@ -26149,6 +26455,55 @@ mod tests {
         assert_eq!(provider.consecutive_failures, 1);
         assert_eq!(provider.last_failure_unix, Some(verdict.decided_at));
         assert!(provider.last_success_unix.is_none());
+    }
+
+    #[test]
+    fn por_history_rolls_oldest_unprotected_entry_and_preserves_live_lifecycle_keys() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
+            .build();
+        let handle = NodeHandle::new(cfg);
+        let challenge = por_sample_challenge();
+        let first = por_sample_verdict(&challenge, [0x44; 32]);
+        handle
+            .update_por_history_entry(&first)
+            .expect("first history key fits");
+
+        let mut replacement = first.clone();
+        replacement.manifest_digest = [0x91; 32];
+        replacement.provider_id = [0x92; 32];
+        replacement.decided_at = replacement.decided_at.saturating_add(1);
+        handle
+            .update_por_history_entry(&replacement)
+            .expect("oldest unprotected history key rolls out");
+        let history = handle.por_history.read().expect("history lock");
+        assert_eq!(history.len(), 1);
+        assert!(history.contains_key(&(replacement.manifest_digest, replacement.provider_id)));
+        drop(history);
+
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
+            .build();
+        let protected = NodeHandle::new(cfg);
+        protected
+            .record_por_challenge(&challenge)
+            .expect("retain live lifecycle key");
+        protected
+            .update_por_history_entry(&first)
+            .expect("record protected history key");
+        assert!(matches!(
+            protected.update_por_history_entry(&replacement),
+            Err(PorTrackerError::HistoryRetentionExhausted { limit: 1 })
+        ));
+        let history = protected.por_history.read().expect("history lock");
+        assert_eq!(history.len(), 1);
+        assert!(history.contains_key(&(challenge.manifest_digest, challenge.provider_id)));
     }
 
     #[test]
@@ -27251,12 +27606,17 @@ mod tests {
     }
 
     fn weekly_rollup_publish_index_entry(root: &Path) -> JsonValue {
-        let index_path = root.join("governance").join("publish-index.json");
-        let index = norito::json::from_slice::<JsonValue>(
-            &fs::read(&index_path).expect("read governance publish index"),
+        let publication_state_path = root
+            .join("governance")
+            .join("governance-publication-state-v1.json");
+        let publication_state = norito::json::from_slice::<JsonValue>(
+            &fs::read(&publication_state_path)
+                .expect("read authoritative governance publication state"),
         )
-        .expect("decode governance publish index");
-        index
+        .expect("decode authoritative governance publication state");
+        publication_state
+            .get("publish_index")
+            .expect("governance publication state publish index")
             .get("entries")
             .and_then(JsonValue::as_array)
             .expect("governance publish-index entries")

@@ -934,9 +934,9 @@ quote = client.create_vpn_quote(
     canonical_auth=auth,
 )
 
-# Submit quote.open_lease_instruction or quote.tx_instructions as a normal signed
-# transaction that moves the XOR lease fee into native VPN escrow, then pass the
-# committed transaction hash back to Torii.
+# Submit quote.open_lease_instruction as a normal signed transaction that moves
+# the XOR lease fee into native VPN escrow, then pass the committed transaction
+# hash back to Torii.
 session = client.create_vpn_session(
     VpnSessionCreateRequest(
         quote_id=quote.quote_id,
@@ -951,7 +951,7 @@ print(session.helper_ticket_hex)
 
 Relay operators submit signed receipts with `submit_vpn_receipt`; the response
 returns earned/refund XOR fields plus a `SettleVpnLease` instruction skeleton in
-`settle_lease_instruction` and `tx_instructions`.
+the optional `settle_lease_instruction` field.
 
 ## Transaction helpers
 
