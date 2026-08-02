@@ -4039,6 +4039,16 @@ impl SumeragiV2Adapter {
         self.reducer.current_tag()
     }
 
+    /// Inspect the pure reducer body state without exposing its mutable core.
+    #[cfg(test)]
+    pub(crate) fn body_state_for_test(
+        &self,
+        round: reducer::Round,
+        subject: reducer::Subject,
+    ) -> reducer::BodyState {
+        self.reducer.body_state(round, subject)
+    }
+
     /// Actor-global ordinal source shared with every replacement height
     /// adapter owned by this runtime actor.
     pub(crate) const fn deferred_admission_ordinal_source(
@@ -5255,14 +5265,14 @@ impl SumeragiV2Adapter {
         )
     }
 
-    /// Restore a body-store validation marker into the replayed wire registry.
+    /// Bind an exact body-store validation marker into the wire registry.
     ///
-    /// Proposal intent persistence deliberately precedes signing. On restart,
-    /// the safety WAL reconstructs that intent while the exact execution
-    /// commitment remains in the independently fsynced body store. Reassociating
-    /// those same-round durable records before dispatching startup effects lets
-    /// the replayed proposal continue directly into its Prepare vote.
-    pub(crate) fn recover_validated_body(
+    /// This monotone authority update is independent of the reducer consumer
+    /// incarnation. A validation worker can finish after its view-local
+    /// consumer was retired; the obsolete reducer event must remain a
+    /// stutter, but the independently fsynced execution commitment must still
+    /// release authenticated votes for this exact `(round, subject)`.
+    pub(crate) fn bind_validated_body(
         &mut self,
         manifest: &wire::PayloadManifest,
         validated_receipt: &ValidatedBodyReceipt,
@@ -5278,8 +5288,9 @@ impl SumeragiV2Adapter {
         }
         validated_receipt.execution_commitment().validate()?;
 
-        // Stage registry expansion so any mismatch leaves replayed authority
-        // unchanged and causes startup to fail closed at the caller.
+        // Stage registry expansion so any mismatch leaves canonical authority
+        // unchanged. Registration is idempotent for the exact receipt and
+        // rejects a conflicting commitment before mutation.
         let mut registry = self.registry.clone();
         let core_manifest = registry.manifest_to_core(manifest, &self.wire_context)?;
         let round = registry.round_to_core(manifest.round, &self.wire_context)?;
@@ -5290,6 +5301,21 @@ impl SumeragiV2Adapter {
         )?;
         self.registry = registry;
         Ok(())
+    }
+
+    /// Restore a body-store validation marker into the replayed wire registry.
+    ///
+    /// Proposal intent persistence deliberately precedes signing. On restart,
+    /// the safety WAL reconstructs that intent while the exact execution
+    /// commitment remains in the independently fsynced body store. Reassociating
+    /// those same-round durable records before dispatching startup effects lets
+    /// the replayed proposal continue directly into its Prepare vote.
+    pub(crate) fn recover_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), AdapterError> {
+        self.bind_validated_body(manifest, validated_receipt)
     }
 
     /// Complete a body reconstruction requested by [`AdapterEffect::FetchBody`].
@@ -5942,12 +5968,17 @@ impl SumeragiV2Adapter {
         Ok(())
     }
 
-    fn rollback_deferred_conflicting_proposal(
-        &mut self,
+    fn deferred_conflicting_proposal_owner(
+        &self,
         round: reducer::Round,
         subject: reducer::Subject,
         canonical: &wire::PayloadManifest,
-    ) -> bool {
+    ) -> Option<(
+        wire::PayloadManifest,
+        wire::Proposal,
+        IngressSemanticKey,
+        IngressEquivocationRecord,
+    )> {
         // Busy authenticated ingress deliberately retains its staged registry
         // expansion. A canonical body completion may overtake that deferred
         // proposal, but may roll back only the exact proposal-owned manifest;
@@ -5955,19 +5986,19 @@ impl SumeragiV2Adapter {
         // registered for subsequent progress.
         let key = (round, subject);
         let Some(registered_manifest) = self.registry.manifests.get(&key).cloned() else {
-            return false;
+            return None;
         };
         if registered_manifest == *canonical {
-            return false;
+            return None;
         }
         let Some(registered_proposal) = self.registry.proposals.get(&key).cloned() else {
-            return false;
+            return None;
         };
         if registered_proposal.round != canonical.round
             || registered_proposal.subject != canonical.subject
             || registered_proposal.manifest != registered_manifest
         {
-            return false;
+            return None;
         }
         let admission_key = IngressSemanticKey::Proposal {
             round: registered_proposal.round,
@@ -5977,10 +6008,10 @@ impl SumeragiV2Adapter {
             IngressFingerprint::Proposal(Hash::new(registered_proposal.signature_preimage()));
         let Some(registered_equivocation) = self.ingress_equivocations.get(&admission_key).copied()
         else {
-            return false;
+            return None;
         };
         if registered_equivocation.fingerprint != expected_fingerprint {
-            return false;
+            return None;
         }
         let owns_conflict = |input: &DeferredInput| {
             Self::deferred_input_owns_registered_proposal(
@@ -5991,8 +6022,40 @@ impl SumeragiV2Adapter {
             )
         };
         if !self.deferred_inputs.iter().any(owns_conflict) {
-            return false;
+            return None;
         }
+        Some((
+            registered_manifest,
+            registered_proposal,
+            admission_key,
+            registered_equivocation,
+        ))
+    }
+
+    fn rollback_deferred_conflicting_proposal(
+        &mut self,
+        round: reducer::Round,
+        subject: reducer::Subject,
+        canonical: &wire::PayloadManifest,
+    ) -> bool {
+        let Some((
+            registered_manifest,
+            registered_proposal,
+            admission_key,
+            registered_equivocation,
+        )) = self.deferred_conflicting_proposal_owner(round, subject, canonical)
+        else {
+            return false;
+        };
+        let key = (round, subject);
+        let owns_conflict = |input: &DeferredInput| {
+            Self::deferred_input_owns_registered_proposal(
+                input,
+                round,
+                subject,
+                &registered_proposal,
+            )
+        };
 
         self.deferred_inputs.retain(|input| !owns_conflict(input));
         self.retire_unowned_deferred_producer_continuations();
@@ -6229,6 +6292,17 @@ impl SumeragiV2Adapter {
                 AdapterCommand::BodyAvailable { manifest } => {
                     let round = registry.round_to_core(manifest.round, &self.wire_context)?;
                     let subject = registry.register_subject(manifest.subject)?;
+                    if self
+                        .deferred_conflicting_proposal_owner(round, subject, manifest)
+                        .is_some()
+                    {
+                        // Mirror the exact dispatch-side rollback in the
+                        // cloned preflight registry. No live proposal,
+                        // delivery, equivocation, or deferred owner is retired
+                        // until the admitted callback actually dispatches.
+                        registry.proposals.remove(&(round, subject));
+                        registry.manifests.remove(&(round, subject));
+                    }
                     let core_manifest = registry.manifest_to_core(manifest, &self.wire_context)?;
                     if core_manifest.subject() != subject {
                         return Err(AdapterError::DurableBodyMismatch);
@@ -15065,6 +15139,29 @@ mod tests {
                 generation: deferred_tag.generation(),
                 locked_commit_progress: false,
             },
+        );
+        let body_command = super::v2_runtime::AdapterCommand::BodyAvailable {
+            manifest: canonical_manifest.clone(),
+        };
+        adapter
+            .deferred_inputs
+            .front_mut()
+            .expect("the conflicting proposal remains deferred")
+            .retag_authenticated_ingress = false;
+        assert_eq!(
+            adapter.preflight_runtime_command_admission(deferred_tag, &body_command),
+            super::v2_runtime::RuntimeCommandAdmissionPreflight::Reject,
+            "a generic deferred item cannot authorize proposal-registry rollback"
+        );
+        adapter
+            .deferred_inputs
+            .front_mut()
+            .expect("the conflicting proposal remains deferred")
+            .retag_authenticated_ingress = true;
+        assert_eq!(
+            adapter.preflight_runtime_command_admission(deferred_tag, &body_command),
+            super::v2_runtime::RuntimeCommandAdmissionPreflight::Admit,
+            "preflight must project the exact rollback supported by dispatch"
         );
 
         let retained_qc = wire::QuorumCertificate {

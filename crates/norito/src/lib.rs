@@ -10014,22 +10014,40 @@ where
     core::to_bytes(value)
 }
 
+const CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER: usize = 63;
+const CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES: usize = 256 * 1024 * 1024;
+const CANONICAL_DECODE_FIXED_ALLOCATION_BYTES: usize = 64 * 1024;
+
 /// Return conservative decode limits derived from one complete encoded value.
 ///
 /// Packed boolean sequences may carry eight logical elements per encoded byte,
 /// so sequence and cumulative element budgets use an eightfold allowance.
-/// Allocation is capped at 34 times the encoded length plus a fixed 64 KiB floor
-/// for small structural values. The extra linear allowance covers owned
-/// container bookkeeping in large canonical values while the independent
-/// field, element, and nesting limits remain in force. Saturating arithmetic
-/// keeps malformed length inputs fail-closed.
+/// Allocation includes the encoded length, up to 63 further encoded lengths for
+/// heterogeneous owned object graphs and nested canonical values, and a fixed
+/// 64 KiB floor for small structural values. The amplified extra is capped at
+/// 256 MiB, so small reviewed frames retain the `64 * length + 64 KiB` envelope
+/// while large configured archives cannot multiply their complete size by 64.
+/// Independent field, element, and nesting limits remain in force.
+///
+/// Saturating arithmetic prevents integer wrap; safety also relies on the
+/// archive maximum and protocol frame-size limits rejecting excessive encoded
+/// inputs before this decoder policy is applied.
 #[must_use]
 pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
+    let amplified_extra = payload_len.saturating_mul(CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER);
+    let amplified_extra = if amplified_extra < CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES {
+        amplified_extra
+    } else {
+        CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES
+    };
+    let allocation_limit = payload_len
+        .saturating_add(amplified_extra)
+        .saturating_add(CANONICAL_DECODE_FIXED_ALLOCATION_BYTES);
     DecodeLimits::new(
         payload_len.saturating_mul(8),
         payload_len,
         payload_len.saturating_mul(8),
-        payload_len.saturating_mul(34).saturating_add(64 * 1024),
+        allocation_limit,
         core::MAX_OWNED_VALUE_DECODE_DEPTH,
     )
 }
@@ -10159,7 +10177,7 @@ mod canonical_codec_tests {
 
         let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
 
-        assert_eq!(allocation_budget, PAYLOAD_BYTES * 34 + 64 * 1024);
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
         assert!(allocation_budget >= ACCOUNTED_ALLOCATION_BYTES);
     }
 
@@ -10173,12 +10191,74 @@ mod canonical_codec_tests {
 
         let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
 
-        assert_eq!(allocation_budget, PAYLOAD_BYTES * 34 + 64 * 1024);
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
         assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
     }
 
     #[test]
-    fn generic_canonical_decode_rejects_forged_sequence_length() {
+    fn canonical_allocation_budget_covers_live_consensus_peer_payload() {
+        // Exact first rejected reserve observed for a legitimate high-stream
+        // consensus frame. This proves the former 34x policy insufficient; it
+        // is not a measurement of the allocation required to complete decode.
+        const PAYLOAD_BYTES: usize = 42_241;
+        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_543_396;
+        const LEGACY_ALLOCATION_BUDGET: usize = PAYLOAD_BYTES * 34 + 64 * 1024;
+
+        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
+
+        assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_501_730);
+        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
+        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
+    }
+
+    #[test]
+    fn canonical_allocation_policy_exceeds_rejected_live_consensus_reserve() {
+        // Exact first rejected reserve from the legitimate consensus value
+        // carried by the 42,716-byte P2P frame. This observation proves that the
+        // former 35x policy was insufficient; it is not a measurement of the
+        // allocation required to complete the decode.
+        const PAYLOAD_BYTES: usize = 42_241;
+        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_584_958;
+        const LEGACY_ALLOCATION_BUDGET: usize = PAYLOAD_BYTES * 35 + 64 * 1024;
+
+        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
+
+        assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_543_971);
+        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
+        assert_eq!(allocation_budget, 2_768_960);
+        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
+    }
+
+    #[test]
+    fn canonical_allocation_policy_exceeds_rejected_queue_journal_reserve() {
+        // Exact first rejected reserve from peer 2's legitimate queue-plan Put.
+        // This independently proves the former 35x policy insufficient for the
+        // durable journal path, but does not claim that the rejected reserve was
+        // the decoder's final allocation.
+        const PAYLOAD_BYTES: usize = 43_074;
+        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_614_849;
+        const LEGACY_ALLOCATION_BUDGET: usize = PAYLOAD_BYTES * 35 + 64 * 1024;
+
+        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
+
+        assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_573_126);
+        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
+        assert_eq!(allocation_budget, 2_822_272);
+        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
+    }
+
+    #[test]
+    fn generic_canonical_policy_is_linear_and_rejects_forged_resources() {
+        const POLICY_PROBE_BYTES: usize = 1024;
+        let limits = canonical_decode_limits(POLICY_PROBE_BYTES);
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            POLICY_PROBE_BYTES * 64 + 64 * 1024
+        );
+
         const FORGED_LENGTH: u64 = 1 << 40;
         let bare = FORGED_LENGTH.to_le_bytes();
         let frame =
@@ -10189,6 +10269,59 @@ mod canonical_codec_tests {
             decode_canonical::<Vec<u64>>(&frame),
             Err(Error::SequenceLengthExceeded { .. }) | Err(Error::TotalElementsExceeded { .. })
         ));
+
+        let forged_allocation = limits
+            .max_total_allocated_bytes()
+            .checked_add(1)
+            .expect("bounded policy probe fits usize");
+        let forged_allocation_u64 =
+            u64::try_from(forged_allocation).expect("bounded policy probe fits u64");
+        let allocation_limit_u64 = u64::try_from(limits.max_total_allocated_bytes())
+            .expect("bounded policy limit fits u64");
+        let error = with_decode_limits(limits, || {
+            core::reserve_decode_allocation(forged_allocation)
+        })
+        .expect_err("one byte beyond the linear allocation policy must fail before allocation");
+        assert!(matches!(
+            error,
+            Error::TotalAllocationExceeded { attempted, limit }
+                if attempted == forged_allocation_u64 && limit == allocation_limit_u64
+        ));
+    }
+
+    #[test]
+    fn canonical_allocation_policy_caps_amplified_extra() {
+        const LAST_UNCAPPED_PAYLOAD_BYTES: usize = CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES
+            / CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER;
+        const FIRST_CAPPED_PAYLOAD_BYTES: usize = LAST_UNCAPPED_PAYLOAD_BYTES + 1;
+        const ONE_GIB: usize = 1024 * 1024 * 1024;
+
+        let last_uncapped_extra = LAST_UNCAPPED_PAYLOAD_BYTES
+            .checked_mul(CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER)
+            .expect("cap-transition fixture fits usize");
+        let first_uncapped_extra = FIRST_CAPPED_PAYLOAD_BYTES
+            .checked_mul(CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER)
+            .expect("cap-transition fixture fits usize");
+        assert!(last_uncapped_extra <= CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES);
+        assert!(first_uncapped_extra > CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES);
+        assert_eq!(
+            canonical_decode_limits(LAST_UNCAPPED_PAYLOAD_BYTES).max_total_allocated_bytes(),
+            LAST_UNCAPPED_PAYLOAD_BYTES
+                + last_uncapped_extra
+                + CANONICAL_DECODE_FIXED_ALLOCATION_BYTES
+        );
+        assert_eq!(
+            canonical_decode_limits(FIRST_CAPPED_PAYLOAD_BYTES).max_total_allocated_bytes(),
+            FIRST_CAPPED_PAYLOAD_BYTES
+                + CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES
+                + CANONICAL_DECODE_FIXED_ALLOCATION_BYTES
+        );
+        assert_eq!(
+            canonical_decode_limits(ONE_GIB).max_total_allocated_bytes(),
+            ONE_GIB
+                + CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES
+                + CANONICAL_DECODE_FIXED_ALLOCATION_BYTES
+        );
     }
 
     #[test]

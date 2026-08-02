@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 818
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 831
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "0be88ecc9810d15528624015bacbf57924fedabea220ff5873b2374bbcfb6de8"
+        "b93aa49018bdca8a1da50dff6b982b17faf3a8d8e8921aa6616a0e758b028cbc"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "605b12fa4be0556fc9eb79e887b1646d1cedd62864dcef4338863daa851f53a5"
+        "b84d29e9434a25ff72125e8b4c5129e24a81e6c3df1faadf1e60d1185e32bf59"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
@@ -150,15 +150,15 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 818
+    assert receipt_module._PRODUCTION_TEST_COUNT == 831
     assert receipt_module._G_UNIT_TEST_COUNT == 309
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 818
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 831
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
     }
-    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 68
-    assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 58
+    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 71
+    assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 68
     assert receipt_module_counts["sumeragi::v2_worker::tests"] == 131
     assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 309
 
@@ -1391,6 +1391,74 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             effects_source,
         ),
     )
+    deterministic_ownership_inventory_additions = (
+        (
+            "sumeragi::v2_effects::tests::",
+            "exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+            effects_source,
+        ),
+        (
+            "sumeragi::v2_effects::tests::",
+            "fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
+            effects_source,
+        ),
+        (
+            "sumeragi::v2_effects::tests::",
+            "adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
+            effects_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "certified_body_pipeline_retains_statement_and_owner_across_stage_kinds",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "body_pipeline_acquires_commit_authority_monotonically_under_one_owner",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "drained_internal_ignore_uses_exact_durable_tombstone_before_readmission",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "queued_body_completion_coalesces_only_its_incumbent_owner",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "restored_serve_high_watermark_precedes_startup_runtime_owner",
+            runtime_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "full_runtime_churn_cannot_cross_an_exact_serve_ordinal",
+            runtime_source,
+        ),
+    )
+    assert len(deterministic_ownership_inventory_additions) == 13
     production_inventory_additions = tuple(
         item
         for item in (
@@ -1402,6 +1470,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             + route_lifecycle_inventory_additions
             + latest_h_geometry_and_daemon_inventory_additions
             + apply_authority_inventory_additions
+            + deterministic_ownership_inventory_additions
         )
         if f"{item[0]}{item[1]}"
         not in module._PRODUCTION_LIVENESS_RETIRED_REGRESSIONS
@@ -1532,8 +1601,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 818
-    assert len(set(production_inventory)) == 818
+    assert len(production_inventory) == 831
+    assert len(set(production_inventory)) == 831
     leader_wire_slot_product_regression = (
         "sumeragi::serviced_candidate_store::tests::"
         "leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots"
@@ -1600,7 +1669,17 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert final_replenishment_lasso_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert "readonly expected_production_liveness_test_count=818" in release_source
+    deterministic_ownership_regressions = {
+        f"{module_name}{test_name}"
+        for module_name, test_name, _ in deterministic_ownership_inventory_additions
+    }
+    assert len(deterministic_ownership_regressions) == 13
+    assert deterministic_ownership_regressions <= set(production_inventory)
+    assert deterministic_ownership_regressions <= set(
+        module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+    )
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 401
+    assert "readonly expected_production_liveness_test_count=831" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -1610,7 +1689,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 818" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 831" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -1620,7 +1699,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 818
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 831
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -2240,7 +2319,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=818"
+    canonical_declaration = "readonly canonical_production_test_count=831"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -2262,8 +2341,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=818"
-    weakened = "readonly expected_production_liveness_test_count=812"
+    canonical = "readonly expected_production_liveness_test_count=831"
+    weakened = "readonly expected_production_liveness_test_count=830"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
     baseline = subprocess.run(
@@ -2313,28 +2392,33 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     guard_mutations = (
         (
             canonical_declaration,
-            "readonly canonical_production_test_count=812",
-            "must seal exactly 818 production tests",
+            "readonly canonical_production_test_count=830",
+            "must seal exactly 831 production tests",
         ),
         (
-            '    "sumeragi::v2_effects::tests": 68,',
-            '    "sumeragi::v2_effects::tests": 66,',
+            '    "sumeragi::v2_effects::tests": 71,',
+            '    "sumeragi::v2_effects::tests": 70,',
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "0be88ecc9810d15528624015bacbf579"',
+            '    "sumeragi::v2_runtime::tests": 68,',
+            '    "sumeragi::v2_runtime::tests": 67,',
+            "changed-module counts must equal the exact reviewed release inventory",
+        ),
+        (
+            '    "b93aa49018bdca8a1da50dff6b982b17"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),
         (
             "readonly expected_production_liveness_test_count="
             '${canonical_production_test_count}"',
-            "readonly expected_production_liveness_test_count=812\"",
+            "readonly expected_production_liveness_test_count=830\"",
             "must bind the release-runner production count exactly once",
         ),
         (
             '_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"',
-            '_PRODUCTION_TEST_COUNT = 812"',
+            '_PRODUCTION_TEST_COUNT = 830"',
             "must bind the receipt-writer production count exactly once",
         ),
         (

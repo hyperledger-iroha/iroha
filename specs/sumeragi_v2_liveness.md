@@ -1170,7 +1170,8 @@ logical owner across its physical retries.
 Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
 regressions produce the 813-test checkpoint. Five admission/coalescing, Busy
 pre-runtime ownership, and reconstructed-chunk terminality regressions bring
-the current source-bound inventory to 818 exact tests across
+the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
+high-water regressions bring the current source-bound inventory to 831 exact tests across
 39 modules and 82 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1179,7 +1180,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`0be88ecc9810d15528624015bacbf57924fedabea220ff5873b2374bbcfb6de8`.
+`b93aa49018bdca8a1da50dff6b982b17faf3a8d8e8921aa6616a0e758b028cbc`.
 Nine of those legs execute the separate 309-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 310 TSV lines and has SHA-256
 `b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
@@ -1427,7 +1428,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 818-test inventory is a mechanically checked
+The current 831-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1617,7 +1618,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 818 exact production
+Before those longer scenarios, the PR gate inventories 831 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 309-test
 focus inventory. The
@@ -1763,7 +1764,9 @@ the inventory to the 806-test checkpoint without adding another module or leg.
 Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
 regressions produce the 813-test checkpoint. Five admission/coalescing, Busy
 pre-runtime ownership, and reconstructed-chunk terminality regressions bring
-the current inventory to 818 tests, again without adding a module or leg. The
+the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
+high-water regressions bring the current inventory to 831 tests, again without
+adding a module or leg. The
 rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -2005,6 +2008,14 @@ invocation passes those protected paths and digests explicitly, for example:
   --runner-tool-manifest /protected/runner-tools.json \
   --expected-runner-tool-manifest-sha256 <sha256> \
   --bash-bin /protected/bash --expected-bash-sha256 <sha256> \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST=/authenticated/scaling/scaling_evidence.json \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256=<sha256> \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256=<sha256> \
+  --runner-environment IROHA_RELEASE_SCALING_IROHAD_SHA256=<sha256> \
+  --runner-environment IROHA_RELEASE_SCALING_IROHA_CLI_SHA256=<sha256> \
   --expected-signer-fingerprint SHA256:<fingerprint> \
   --ssh-allowed-signers /protected/allowed_signers \
   --expected-ssh-allowed-signers-sha256 <sha256> \
@@ -2040,13 +2051,20 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 82 pre-network corridor legs and
-their exact 818-test production inventory, the separate 309-test G-UNIT
-inventory, semantic test names/counts, commands, logs, source-bound localnet
-binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
-toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
-completion/log; and the exact-identity Taira completion/canonical JSON/full run
-log. It independently revalidates matrix, chaos, and Taira libtest markers and
-runs the Taira evidence checker against the archived canonical JSON.
+their exact 831-test production inventory, the separate 309-test G-UNIT
+inventory, semantic test names/counts, commands, logs, the exact source-bound
+prebuilt binary bundle, and resolved tool identities. Formal evidence includes
+the completion, pinned harness lock and toolchain, proof ledger/evidence/log,
+multilane Apalache evidence, and the TLAPS resource JSONL and summary. The
+receipt also carries all 160 matrix logs; exact G-4P completion, summary, and
+four run logs; exact deterministic G-12 seed completion, summary, and ten run
+logs; the two-hour G-12 fault-soak completion and log; the closed multilane
+scaling bundle, retained validator, four authenticated digest anchors, retained
+tool inventory, and repository-root binding; the chaos completion/log; and the
+exact-identity Taira completion/canonical JSON/full run log. It independently
+revalidates the matrix, G-4P, G-12, scaling, chaos, and Taira evidence, including
+replaying the retained scaling and Taira validators against the archived
+artifacts.
 
 Every retained matrix localnet also has a canonical descriptor-relative
 manifest containing each regular file's relative path, byte length, and

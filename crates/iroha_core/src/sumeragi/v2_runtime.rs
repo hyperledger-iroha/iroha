@@ -47,11 +47,12 @@ use super::v2_core::{
     RUNTIME_EFFECT_KIND_STORE_BODY, RUNTIME_EFFECT_KIND_VALIDATE_BODY, SERVICE_CLASS_COMPLETION,
     SERVICE_CLASS_NONE, SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
     check_production_body_service_effective_lock_transition,
-    check_production_effect_to_candidate_transition,
     check_production_ingress_reservation_materialization_transition,
     check_production_ingress_transition, classify_exact_body_completion_ownership,
     select_bounded_service_class,
 };
+#[cfg(test)]
+use super::v2_core::check_production_effect_to_candidate_transition;
 use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode as _, Encode as _};
 
@@ -2064,6 +2065,7 @@ impl RuntimeEffectOwnership {
         self.binding.as_ref()
     }
 
+    #[cfg(test)]
     pub(crate) fn candidate_identity(&self) -> Option<iroha_crypto::Hash> {
         self.binding
             .as_ref()
@@ -4486,9 +4488,44 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     /// stage before this FIFO spends a fresh physical admission position.
     ///
     /// A carried ordinal must have been minted by this exact shared source.
-    /// Causal siblings may reuse it only with the identical immutable root;
-    /// an unrelated queued, reserved, or restart-dormant owner cannot alias
-    /// the position.
+    /// Ordinary causal siblings may reuse it only with the identical immutable
+    /// root. Distinct restored producer stages may share it only when their
+    /// durable lifecycle key and every frozen ingress/root field agree; their
+    /// stage-specific command identity remains distinct. An unrelated queued,
+    /// reserved, or restart-dormant owner cannot alias the position.
+    fn restored_successor_shares_lifecycle(
+        existing: &TaggedCommand<C>,
+        candidate: &TaggedCommand<C>,
+    ) -> bool {
+        let (Some(existing_stage), Some(candidate_stage)) = (
+            existing.restored_producer_stage,
+            candidate.restored_producer_stage,
+        ) else {
+            return false;
+        };
+        let existing_origin = &existing.causal_origin;
+        let candidate_origin = &candidate.causal_origin;
+        existing_stage != candidate_stage
+            && existing.tag == candidate.tag
+            && existing.class == candidate.class
+            && existing.ingress_ownership == candidate.ingress_ownership
+            && existing_origin.validate_exact()
+            && candidate_origin.validate_exact()
+            && existing_origin.restored_producer_lifecycle_key.is_some()
+            && existing_origin.restored_producer_lifecycle_key
+                == candidate_origin.restored_producer_lifecycle_key
+            && existing_origin.lifecycle_key == candidate_origin.lifecycle_key
+            && existing_origin.root_tag == candidate_origin.root_tag
+            && existing_origin.root_class == candidate_origin.root_class
+            && existing_origin.root_ingress_identity == candidate_origin.root_ingress_identity
+            && existing_origin.root_ingress_physical_ownership
+                == candidate_origin.root_ingress_physical_ownership
+            && existing_origin.leader_wire_lifecycle_key
+                == candidate_origin.leader_wire_lifecycle_key
+            && existing_origin.root_lifecycle_ordinal
+                == candidate_origin.root_lifecycle_ordinal
+    }
+
     fn validate_preassigned_lifecycle_owner(
         &self,
         command: &TaggedCommand<C>,
@@ -4509,6 +4546,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         for existing in self.commands.iter().chain(staged.iter()) {
             if existing.lifecycle_ordinal == Some(lifecycle_ordinal)
                 && existing.causal_origin != command.causal_origin
+                && !Self::restored_successor_shares_lifecycle(existing, command)
             {
                 return Err(EnqueueError::FailClosed);
             }
@@ -4567,22 +4605,47 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         dormant_replacements: usize,
         additions: usize,
     ) -> Result<(), EnqueueError> {
-        let limit = match class {
-            CommandClass::Normal => self.config.normal_limit(),
-            CommandClass::Progress => self.config.progress_limit(),
-            CommandClass::Completion => self.config.capacity,
-        };
+        if dormant_replacements != 0 && class != CommandClass::Completion {
+            return Err(EnqueueError::FailClosed);
+        }
         let occupied = self.occupied_with_dormant_reservations()?;
         let occupied_after = occupied
             .checked_sub(dormant_replacements)
             .and_then(|occupied| occupied.checked_add(additions))
             .ok_or(EnqueueError::FailClosed)?;
-        if occupied_after > limit {
-            return Err(if occupied_after > self.config.capacity {
-                EnqueueError::Full
-            } else {
-                EnqueueError::ReservedCapacity
-            });
+        if occupied_after > self.config.capacity {
+            return Err(EnqueueError::Full);
+        }
+
+        // Reservations are class allocations, not arrival-order allocations.
+        // A Completion which arrived first cannot consume a Normal or Progress
+        // prefix, although every class still consumes one position in the
+        // common physical bound.  Counting total occupancy against each lower
+        // class limit made the same multiset admissible or inadmissible solely
+        // according to enqueue order.
+        let normal_before = self
+            .commands
+            .iter()
+            .filter(|queued| queued.class == CommandClass::Normal)
+            .count();
+        let progress_before = self
+            .commands
+            .iter()
+            .filter(|queued| queued.class == CommandClass::Progress)
+            .count();
+        let normal_after = normal_before
+            .checked_add(usize::from(class == CommandClass::Normal) * additions)
+            .ok_or(EnqueueError::FailClosed)?;
+        let progress_after = progress_before
+            .checked_add(usize::from(class == CommandClass::Progress) * additions)
+            .ok_or(EnqueueError::FailClosed)?;
+        let noncompletion_after = normal_after
+            .checked_add(progress_after)
+            .ok_or(EnqueueError::FailClosed)?;
+        if normal_after > self.config.normal_limit()
+            || noncompletion_after > self.config.progress_limit()
+        {
+            return Err(EnqueueError::ReservedCapacity);
         }
         Ok(())
     }
@@ -8479,10 +8542,41 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             || proposal_round.view != reservation.tag.view()
             || !reservation.ownership.validate_exact()
             || !ownership.validate_exact()
-            || reservation.ownership.owner() != ownership.owner()
         {
             self.latch_fail_closed("Proposal fanout changed its active-view producer");
             return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+        }
+
+        if reservation.ownership.owner() != ownership.owner() {
+            let owner = ownership.owner();
+            let fresh_kind = self
+                .dormant_fresh_lifecycle_owners
+                .iter()
+                .find_map(|((kind, _), candidate)| (candidate == owner).then_some(*kind));
+            if owner.causal_origin().root_tag != reservation.tag {
+                self.latch_fail_closed("Proposal fanout changed its active-view producer");
+                return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+            }
+            match fresh_kind {
+                // Recovery can restore a durable Proposal signing request before
+                // live clocks mint the process-local producer reservation. Its
+                // eventual fanout is the original Proposal terminal, not a
+                // competing producer, so it consumes the reservation.
+                Some(RuntimeFreshRootKind::StartupRecovery) => {}
+                // Periodic control retransmission has its own scheduler owner.
+                // It neither creates nor completes the active view's one-shot
+                // local Proposal producer.
+                Some(RuntimeFreshRootKind::Retransmit) => return Ok(()),
+                Some(
+                    RuntimeFreshRootKind::Timeout
+                    | RuntimeFreshRootKind::HistoricalLockedRetransmit
+                    | RuntimeFreshRootKind::LocalProposalAdmission,
+                )
+                | None => {
+                    self.latch_fail_closed("Proposal fanout changed its active-view producer");
+                    return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+                }
+            }
         }
         self.active_view_producer = None;
         Ok(())
@@ -11269,6 +11363,23 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .recover_validated_body(manifest, validated_receipt)
     }
 
+    /// Bind one live, independently durable validation marker without
+    /// delivering an obsolete reducer event.
+    ///
+    /// Effect completions call this inside the same serialized actor turn as
+    /// their catalog update. The registry mutation is exact and monotone; it
+    /// does not retag or otherwise revive a retired reducer consumer.
+    pub(crate) fn bind_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), AdapterError> {
+        if self.fail_closed {
+            return Err(AdapterError::FailClosed);
+        }
+        self.driver.bind_validated_body(manifest, validated_receipt)
+    }
+
     /// Authenticate and enqueue one reducer-directed network message.
     ///
     /// Traffic which passes the bounded capacity check, exactly matches an
@@ -11282,6 +11393,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         message: wire::ConsensusMessageV2,
         ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<EventTag, NetworkIngressError> {
+        if !ingress_ownership.validate_exact() {
+            self.latch_fail_closed(
+                "network ingress changed its authenticated fair-queue ownership",
+            );
+            return Err(NetworkIngressError::FailClosed);
+        }
         let observed_physical_cut = ingress_ownership.runtime_physical_cut().ok_or_else(|| {
             self.latch_fail_closed(
                 "network ingress omitted its checked receiver physical admission cut",
@@ -11826,8 +11943,20 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             manifest: manifest.clone(),
         };
         let already_owned = self.body_pipeline_completion_is_owned(tag, &evidence)?;
-        if already_owned && self.ingress.reserved_body_available.is_none() {
-            return Ok(BodyAvailableReservation::coalesced(tag, manifest));
+        if already_owned {
+            if self.ingress.reserved_body_available.is_none() {
+                return Ok(BodyAvailableReservation::coalesced(tag, manifest));
+            }
+            let result = self.ingress.reserve_canonical_body_available_internal(
+                tag, manifest, None, None, None,
+            );
+            if matches!(
+                result,
+                Err(EnqueueError::FailClosed | EnqueueError::DuplicateCompletionOwnership)
+            ) {
+                self.latch_fail_closed("body-available reservation ownership validation failed");
+            }
+            return result;
         }
         let command = AdapterCommand::BodyAvailable {
             manifest: manifest.clone(),
@@ -11890,8 +12019,24 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             manifest: manifest.clone(),
         };
         let already_owned = self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?;
-        if already_owned && self.ingress.reserved_body_available.is_none() {
-            return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
+        if already_owned {
+            if self.ingress.reserved_body_available.is_none() {
+                return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
+            }
+            let result = self.ingress.reserve_canonical_body_available_internal(
+                tag,
+                manifest,
+                Some(ownership.owner()),
+                ownership.candidate_semantic_statement(),
+                None,
+            );
+            if matches!(
+                result,
+                Err(EnqueueError::FailClosed | EnqueueError::DuplicateCompletionOwnership)
+            ) {
+                self.latch_fail_closed("owned body-available reservation validation failed");
+            }
+            return result;
         }
         let command = AdapterCommand::BodyAvailable {
             manifest: manifest.clone(),
@@ -12668,7 +12813,7 @@ fn network_admission_class(payload: &wire::ConsensusMessageV2Payload) -> Option<
 mod tests {
     use std::collections::VecDeque;
 
-    use crate::sumeragi::v2_core::Generation;
+    use crate::sumeragi::v2_core::{Generation, Round, Subject};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::peer::PeerId;
     use iroha_p2p::network::{
@@ -13482,6 +13627,27 @@ mod tests {
             production_adapter_effect_candidate_semantic_identity(&changed_apply),
             "execution commitment remains part of the normalized statement"
         );
+
+        let three_candidates = vec![store.clone(), first_route.clone(), apply.clone()];
+        let three_owners = (1_u128..=3)
+            .map(|ordinal| RuntimeEffectOwnership::fresh_for_test(tag, 90 + ordinal))
+            .collect();
+        let three_bound =
+            bind_adapter_effect_batch_ownership(&three_candidates, three_owners)
+                .expect("exactly three causal successors remain within the bound");
+        assert_eq!(three_bound.len(), 3);
+        for (index, (effect, ownership)) in
+            three_candidates.iter().zip(&three_bound).enumerate()
+        {
+            let position = u8::try_from(index + 1).expect("three positions fit in u8");
+            assert!(ownership.validate_bound_exact());
+            let projection = production_adapter_effect_candidate_trace_projection(
+                effect, ownership, position, 3, position, 3, 0, 1, true,
+            )
+            .expect("recompute one of three exact first-admission projections");
+            assert!(check_production_effect_to_candidate_transition(projection).is_some());
+            assert!(projection.candidate_owner_admitted);
+        }
 
         let four_candidates = vec![store.clone(), store.clone(), store.clone(), store.clone()];
         let four_owners = (1_u128..=4)
@@ -14678,6 +14844,91 @@ mod tests {
     }
 
     #[test]
+    fn replayed_proposal_fanout_consumes_the_live_producer_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xAA);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct replay runtime");
+        let replay_owner = runtime
+            .mint_fresh_lifecycle_owner(
+                initial,
+                CommandClass::Progress,
+                RuntimeFreshRootKind::StartupRecovery,
+                b"replayed-proposal-signature",
+            )
+            .expect("mint exact startup recovery owner");
+        let replay_ownership =
+            RuntimeEffectOwnership::fresh(replay_owner, RuntimeFreshRootKind::StartupRecovery);
+        runtime
+            .reconcile_active_view_producer(initial, true)
+            .expect("reserve live producer after replay work was restored");
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm clocks after replay restoration");
+
+        runtime
+            .complete_active_view_producer_after_proposal_fanout(proposal.round, &replay_ownership)
+            .expect("replayed original Proposal fanout consumes the live reservation");
+        assert!(runtime.active_view_producer.is_none());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn retransmitted_proposal_fanout_preserves_the_live_producer_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xAB);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct retransmit runtime");
+        runtime
+            .reconcile_active_view_producer(initial, true)
+            .expect("reserve live producer");
+        let retransmit_owner = runtime
+            .mint_fresh_lifecycle_owner(
+                initial,
+                CommandClass::Progress,
+                RuntimeFreshRootKind::Retransmit,
+                b"periodic-retransmit",
+            )
+            .expect("mint exact retransmit owner");
+        let retransmit_ownership =
+            RuntimeEffectOwnership::fresh(retransmit_owner, RuntimeFreshRootKind::Retransmit);
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm clocks after producer reservation");
+
+        runtime
+            .complete_active_view_producer_after_proposal_fanout(
+                proposal.round,
+                &retransmit_ownership,
+            )
+            .expect("periodic Proposal fanout is not the live producer terminal");
+        assert!(runtime.active_view_producer.is_some());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
     fn proposal_fanout_cannot_replace_active_view_producer_owner() {
         let (context, keys) = authenticated_runtime_context();
         let message = signed_runtime_proposal(&context, &keys, 0xA8);
@@ -15633,18 +15884,18 @@ mod tests {
             .set_external_lifecycle_owners(vec![prepare_effect_ownership[0].owner().clone()])
             .expect("publish pending Prepare signer owner");
 
-        // The body pipeline leaves the fair-ingress cursor at Progress. An
-        // exact authenticated retransmission is consumed below the reducer
-        // fence and advances that cursor normally, so Completion owns the
-        // first slot once the signature and newer ingress arrive together.
+        // The exact authenticated retransmission is physically admitted after
+        // the pending Prepare signer. It retains that later position while the
+        // signer is external; neither its class nor its duplicate semantics
+        // may move it ahead of the incumbent lifecycle.
         runtime
             .enqueue_network(proposal)
             .expect("enqueue exact authenticated retransmission");
         assert!(matches!(
             runtime
                 .step_and_take_scheduler_ownership_for_test(before_timeout)
-                .expect("coalesce exact authenticated retransmission"),
-            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+                .expect("retain exact authenticated retransmission behind its signer"),
+            RuntimeStep::Idle
         ));
         assert_eq!(runtime.ingress.next_class, CommandClass::Completion);
 
@@ -15676,7 +15927,7 @@ mod tests {
         runtime
             .enqueue_network(signed_runtime_proposal(&context, &keys, 0xE2))
             .expect("enqueue newer authenticated ingress");
-        assert_eq!(runtime.queued_commands(), 2);
+        assert_eq!(runtime.queued_commands(), 3);
 
         let prepare_broadcast = runtime
             .step_and_take_scheduler_ownership_for_test(deadline)
@@ -15698,8 +15949,20 @@ mod tests {
         ));
         assert_eq!(
             runtime.queued_commands(),
+            2,
+            "the exact retransmission and newer ingress remain owned after signature completion"
+        );
+
+        assert!(matches!(
+            runtime
+                .step_and_take_scheduler_ownership_for_test(deadline)
+                .expect("coalesce the exact retransmission at its frozen position"),
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+        ));
+        assert_eq!(
+            runtime.queued_commands(),
             1,
-            "newer ingress remains owned after signature completion"
+            "the newer ingress remains after the exact retransmission stutters"
         );
 
         let timeout_macro_step = runtime
@@ -16244,7 +16507,8 @@ mod tests {
         }
         assert_eq!(
             runtime.driver.delivered,
-            vec![(initial, 4), (initial, 3), (initial, 1), (initial, 2)]
+            vec![(initial, 1), (initial, 2), (initial, 3), (initial, 4)],
+            "class reserves protect admission capacity but cannot overtake an older lifecycle"
         );
     }
 
@@ -16257,20 +16521,41 @@ mod tests {
             start,
             RuntimeQueueConfig::new(6, 2, 1),
         );
-        enqueue_fake(
-            &mut runtime,
+        let lifecycle_ordinal = runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("reserve one shared causal lifecycle");
+        let root_command = FakeCommand::record(1);
+        let mut causal_origin = RuntimeCandidateCausalOrigin::mint(
             owner_tag,
             CommandClass::Normal,
-            FakeCommand::record(1),
-        )
-        .expect("normal owner fits");
-        enqueue_fake(
-            &mut runtime,
-            owner_tag,
-            CommandClass::Progress,
-            FakeCommand::record(9),
-        )
-        .expect("progress owner fits");
+            &root_command,
+            None,
+        );
+        assert!(causal_origin.bind_lifecycle_ordinal(lifecycle_ordinal));
+        let causal_command = |class, command| {
+            TaggedCommand::with_causal_origin(
+                owner_tag,
+                class,
+                command,
+                start,
+                causal_origin.clone(),
+                lifecycle_ordinal,
+            )
+            .expect("construct an exact causal sibling")
+        };
+        runtime
+            .ingress
+            .enqueue(causal_command(CommandClass::Normal, root_command))
+            .expect("normal causal owner fits");
+        runtime
+            .ingress
+            .enqueue(causal_command(
+                CommandClass::Progress,
+                FakeCommand::record(9),
+            ))
+            .expect("progress causal owner fits");
 
         assert!(matches!(runtime.step(start), Ok(RuntimeStep::Advanced(_))));
         let evidence = runtime
@@ -16307,9 +16592,12 @@ mod tests {
         assert_eq!(candidate.kind, RuntimeCommandKind::Test);
         assert_eq!(candidate.class, SERVICE_CLASS_PROGRESS);
         assert_eq!(candidate.tag, owner_tag);
-        assert_eq!(candidate.admission_ordinal, 2);
-        assert_eq!(candidate.lifecycle_ordinal, 2);
-        assert_eq!(candidate.causal_origin.root_lifecycle_ordinal, Some(2));
+        assert_eq!(candidate.admission_ordinal, 3);
+        assert_eq!(candidate.lifecycle_ordinal, lifecycle_ordinal);
+        assert_eq!(
+            candidate.causal_origin.root_lifecycle_ordinal,
+            Some(lifecycle_ordinal)
+        );
         assert_eq!(candidate.fifo_position, 1);
         assert_eq!(candidate.eligible_skips_before, 0);
         assert_eq!(candidate.eligible_skips_after, 0);
@@ -16860,6 +17148,9 @@ mod tests {
                 .live_mode
         );
         assert!(recovery.take_last_scheduler_ownership().is_some());
+        recovery
+            .take_effect_ownership(1)
+            .expect("the recovery executor consumes the delivered effect owner");
         assert!(matches!(
             recovery.step_recovery(start),
             Ok(RuntimeStep::Idle)
@@ -18389,7 +18680,7 @@ mod tests {
             driver,
             started_at,
             Duration::from_secs(10),
-            RuntimeQueueConfig::new(5, 1, 1),
+            RuntimeQueueConfig::new(6, 1, 2),
             Vec::new(),
             lifecycle_ordinals,
         )
@@ -18400,7 +18691,7 @@ mod tests {
             .expect("arm the restarted runtime without advancing its latent owner");
         assert_eq!(
             runtime.remaining_completion_capacity(),
-            4,
+            5,
             "the dormant Local stage consumes one physical completion slot"
         );
         let later_serve = runtime
@@ -18415,7 +18706,7 @@ mod tests {
             "the restart-dormant owner must remain ahead of later Serve work"
         );
 
-        for value in [1, 2] {
+        for value in [1, 2, 3] {
             enqueue_fake(
                 &mut runtime,
                 owner_tag,
@@ -18429,7 +18720,7 @@ mod tests {
                 &mut runtime,
                 owner_tag,
                 CommandClass::Normal,
-                FakeCommand::record(3),
+                FakeCommand::record(4),
             ),
             Err(EnqueueError::ReservedCapacity),
             "normal churn cannot acquire the dormant target's slot"
@@ -18438,14 +18729,14 @@ mod tests {
             &mut runtime,
             owner_tag,
             CommandClass::Progress,
-            FakeCommand::record(4),
+            FakeCommand::record(5),
         )
         .expect("progress fills its existing prefix");
         enqueue_fake(
             &mut runtime,
             owner_tag,
             CommandClass::Completion,
-            FakeCommand::record(5),
+            FakeCommand::record(6),
         )
         .expect("a trusted completion fills the last unreserved position");
         assert_eq!(runtime.remaining_completion_capacity(), 0);
@@ -18477,7 +18768,7 @@ mod tests {
         )
         .expect("exact retry atomically replaces its latent slot at full capacity");
         assert!(runtime.ingress.dormant_local_fifo_reservations.is_empty());
-        assert_eq!(runtime.queued_commands(), 5);
+        assert_eq!(runtime.queued_commands(), 6);
         assert_eq!(runtime.remaining_completion_capacity(), 0);
         assert_eq!(
             runtime.minimum_active_lifecycle_ordinal(),
@@ -18497,7 +18788,7 @@ mod tests {
             FakeCommand::record(9),
         )
         .expect("duplicate exact retry coalesces with the one physical owner");
-        assert_eq!(runtime.queued_commands(), 5);
+        assert_eq!(runtime.queued_commands(), 6);
         assert_eq!(
             runtime.ingress.next_admission_ordinal, next_after_replay,
             "coalescing cannot mint another physical admission ordinal"
@@ -18509,17 +18800,20 @@ mod tests {
         else {
             panic!("the exact replacement must dispatch before younger queued work");
         };
-        assert!(effects.is_empty());
+        assert_eq!(effects, vec![FakeEffect::other()]);
         let selected = runtime
             .take_last_scheduler_ownership()
             .expect("the replacement dispatch retains exact FIFO ownership");
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("the executor consumes the restored target's effect owner");
         assert_eq!(selected.selected, RuntimeSelectedOwnerKind::Fifo);
         assert_eq!(
             runtime.driver.delivered,
             vec![(owner_tag, 9)],
             "the restored target dispatches before every younger physical command"
         );
-        assert_eq!(runtime.queued_commands(), 4);
+        assert_eq!(runtime.queued_commands(), 5);
 
         assert_eq!(
             enqueue_fake(
@@ -18534,7 +18828,7 @@ mod tests {
         assert!(runtime.fail_closed);
         assert_eq!(
             runtime.queued_commands(),
-            4,
+            5,
             "rejected resurrection cannot install another physical owner"
         );
     }
@@ -18982,11 +19276,34 @@ mod tests {
         assert_eq!(first.command.record, Some(1));
         assert_eq!(ingress.next_class, CommandClass::Completion);
 
+        let lifecycle_ordinal = ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("reserve one causal lifecycle for both ready classes");
+        let root = FakeCommand::record(2);
+        let mut causal_origin = RuntimeCandidateCausalOrigin::mint(
+            initial,
+            CommandClass::Normal,
+            &root,
+            None,
+        );
+        assert!(causal_origin.bind_lifecycle_ordinal(lifecycle_ordinal));
+        let causal = |class, command| {
+            TaggedCommand::with_causal_origin(
+                initial,
+                class,
+                command,
+                admitted_at,
+                causal_origin.clone(),
+                lifecycle_ordinal,
+            )
+            .expect("construct an exact same-lifecycle class sibling")
+        };
         ingress
-            .enqueue(queued(CommandClass::Normal, 2))
+            .enqueue(causal(CommandClass::Normal, root))
             .expect("second normal command fits the bounded ingress");
         ingress
-            .enqueue(queued(CommandClass::Completion, 3))
+            .enqueue(causal(CommandClass::Completion, FakeCommand::record(3)))
             .expect("completion reserve remains available");
         let second = ingress.pop_next().expect("completion class is selected");
         assert_eq!(second.command.record, Some(3));
@@ -19020,6 +19337,18 @@ mod tests {
                 );
                 let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(6, 2, 1));
                 ingress.next_class = cursor;
+                let lifecycle_ordinal = ingress
+                    .lifecycle_ordinals
+                    .reserve_one()
+                    .expect("reserve one lifecycle shared by the ready mask");
+                let root = FakeCommand::record(0);
+                let mut causal_origin = RuntimeCandidateCausalOrigin::mint(
+                    initial,
+                    CommandClass::Normal,
+                    &root,
+                    None,
+                );
+                assert!(causal_origin.bind_lifecycle_ordinal(lifecycle_ordinal));
                 for (class, ready) in [
                     (CommandClass::Normal, normal_ready),
                     (CommandClass::Progress, progress_ready),
@@ -19027,12 +19356,15 @@ mod tests {
                 ] {
                     if ready {
                         ingress
-                            .enqueue(TaggedCommand::new(
+                            .enqueue(TaggedCommand::with_causal_origin(
                                 initial,
                                 class,
                                 FakeCommand::record(class.service_code()),
                                 admitted_at,
-                            ))
+                                causal_origin.clone(),
+                                lifecycle_ordinal,
+                            )
+                            .expect("construct one exact same-lifecycle ready class"))
                             .expect("one command per ready class fits reserved ingress");
                     }
                 }
@@ -19124,12 +19456,11 @@ mod tests {
             (tag(2), other.clone()),
         ] {
             ingress
-                .enqueue(TaggedCommand::new(
+                .enqueue_authenticated(
                     command_tag,
                     CommandClass::Normal,
-                    AdapterCommand::Authenticated(authenticated_proposal_for_test(manifest)),
-                    Instant::now(),
-                ))
+                    authenticated_proposal_for_test(manifest),
+                )
                 .expect("queue authenticated proposal");
         }
 
@@ -20092,11 +20423,35 @@ mod tests {
             .arm_live_clocks(now)
             .expect("arm runtime before authenticated ingress");
         let round_tag = runtime.round_tag();
-        let timeout_effects = runtime
-            .driver
-            .timeout_elapsed(round_tag)
-            .expect("install a local signing fence")
-            .into_effects();
+        let message = signed_runtime_proposal(&context, &keys, 0x78);
+        let semantic_origin = PeerId::new(keys[0].public_key().clone());
+        let request_lifecycle_ordinal = runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("preown the authenticated request before timeout signing");
+        let ownership_a = fair_runtime_ownership_at_lifecycle(
+            fair_runtime_ownership(
+                &message,
+                semantic_origin.clone(),
+                PeerId::new(keys[1].public_key().clone()),
+            ),
+            request_lifecycle_ordinal,
+        );
+        let deadline = now + runtime.round_timeout();
+        let timeout_step = runtime
+            .step(deadline)
+            .expect("install a runtime-owned local signing fence");
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("timeout dispatch retains exact scheduler ownership");
+        let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+            panic!("timeout dispatch unexpectedly idled")
+        };
+        let timeout_effect_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("timeout Sign retains its lifecycle owner");
+        assert_eq!(timeout_effect_ownership.len(), 1);
         let (signature_tag, signature_preimage) = match timeout_effects.as_slice() {
             [
                 AdapterEffect::Sign {
@@ -20106,19 +20461,15 @@ mod tests {
             ] => (*tag, vote.signature_preimage()),
             effects => panic!("unexpected timeout effects: {effects:?}"),
         };
+        runtime
+            .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
+            .expect("publish the pending timeout signer owner");
 
-        let message = signed_runtime_proposal(&context, &keys, 0x78);
-        let semantic_origin = PeerId::new(keys[0].public_key().clone());
-        let ownership_a = fair_runtime_ownership(
-            &message,
-            semantic_origin.clone(),
-            PeerId::new(keys[1].public_key().clone()),
-        );
         runtime
             .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
             .expect("first source enters runtime ingress");
         assert!(matches!(
-            runtime.step(now),
+            runtime.step(deadline),
             Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
         ));
         let queued_owner = runtime
@@ -20134,10 +20485,13 @@ mod tests {
         let projection_before_alternate =
             runtime.deferred_ingress_ownership[&admission_ordinal].projection_hash;
 
-        let ownership_b = fair_runtime_ownership(
-            &message,
-            semantic_origin,
-            PeerId::new(keys[2].public_key().clone()),
+        let ownership_b = fair_runtime_ownership_at_lifecycle(
+            fair_runtime_ownership(
+                &message,
+                semantic_origin,
+                PeerId::new(keys[2].public_key().clone()),
+            ),
+            request_lifecycle_ordinal,
         );
         assert_eq!(
             runtime
@@ -20156,16 +20510,26 @@ mod tests {
             .payload()
             .to_vec();
         runtime
-            .enqueue_signature(signature_tag, signature)
+            .enqueue_signature_with_owner(
+                signature_tag,
+                signature,
+                &timeout_effect_ownership[0],
+            )
             .expect("enqueue the exact signing completion");
+        runtime
+            .set_external_lifecycle_owners(Vec::new())
+            .expect("retire the pending signer after completion enqueue");
         assert!(matches!(
-            runtime.step(now),
+            runtime.step(deadline),
             Ok(RuntimeStep::Advanced(ref effects))
                 if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
         ));
         assert!(runtime.take_last_scheduler_ownership().is_some());
+        runtime
+            .take_effect_ownership(1)
+            .expect("the executor consumes the TimeoutVote broadcast owner");
 
-        let deferred_effects = match runtime.step(now) {
+        let deferred_effects = match runtime.step(deadline) {
             Ok(RuntimeStep::Advanced(effects)) => effects,
             other => panic!("deferred owner did not receive its service turn: {other:?}"),
         };
@@ -20180,6 +20544,9 @@ mod tests {
         let deferred_owner = runtime
             .take_last_scheduler_ownership()
             .expect("deferred service hands off its exact owner");
+        runtime
+            .take_effect_ownership(deferred_effects.len())
+            .expect("the executor consumes the deferred proposal effect owner");
         let RuntimeSelectedCandidateOwnership::ExactDeferred(deferred) = &deferred_owner.candidate
         else {
             panic!("expected exact deferred scheduler ownership")
@@ -20576,11 +20943,29 @@ mod tests {
             .arm_live_clocks(now)
             .expect("arm runtime before authenticated ingress");
         let owner_tag = runtime.round_tag();
-        let timeout_effects = runtime
-            .driver
-            .timeout_elapsed(owner_tag)
-            .expect("install a local signing fence")
-            .into_effects();
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ));
+        let request_lifecycle_ordinal = runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("preown the exact TC before timeout signing");
+        let deadline = now + runtime.round_timeout();
+        let timeout_step = runtime
+            .step(deadline)
+            .expect("install a runtime-owned local signing fence");
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("timeout dispatch retains exact scheduler ownership");
+        let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+            panic!("timeout dispatch unexpectedly idled")
+        };
+        let timeout_effect_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("timeout Sign retains its lifecycle owner");
+        assert_eq!(timeout_effect_ownership.len(), 1);
         let (signature_tag, signature_preimage) = match timeout_effects.as_slice() {
             [
                 AdapterEffect::Sign {
@@ -20590,17 +20975,22 @@ mod tests {
             ] => (*tag, vote.signature_preimage()),
             effects => panic!("unexpected timeout effects: {effects:?}"),
         };
-        let message =
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
-                signed_runtime_timeout_certificate(&context, &keys),
-            ));
+        runtime
+            .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
+            .expect("publish the pending timeout signer owner");
 
         for source in &keys[..2] {
             assert_eq!(
                 runtime
                     .enqueue_network_with_ingress_ownership(
                         message.clone(),
-                        fair_network_ownership(&message, PeerId::new(source.public_key().clone()),),
+                        fair_runtime_ownership_at_lifecycle(
+                            fair_network_ownership(
+                                &message,
+                                PeerId::new(source.public_key().clone()),
+                            ),
+                            request_lifecycle_ordinal,
+                        ),
                     )
                     .expect("each authenticated TC carrier coalesces"),
                 owner_tag
@@ -20617,7 +21007,7 @@ mod tests {
         assert!(queued.validate_exact());
 
         assert!(matches!(
-            runtime.step(now),
+            runtime.step(deadline),
             Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
         ));
         let fifo_owner = runtime
@@ -20637,7 +21027,13 @@ mod tests {
             runtime
                 .enqueue_network_with_ingress_ownership(
                     message.clone(),
-                    fair_network_ownership(&message, PeerId::new(keys[2].public_key().clone()),),
+                    fair_runtime_ownership_at_lifecycle(
+                        fair_network_ownership(
+                            &message,
+                            PeerId::new(keys[2].public_key().clone()),
+                        ),
+                        request_lifecycle_ordinal,
+                    ),
                 )
                 .expect("a later authenticated carrier merges into the Busy TC"),
             owner_tag
@@ -20658,18 +21054,36 @@ mod tests {
             .payload()
             .to_vec();
         runtime
-            .enqueue_signature(signature_tag, signature)
+            .enqueue_signature_with_owner(
+                signature_tag,
+                signature,
+                &timeout_effect_ownership[0],
+            )
             .expect("enqueue the exact signing completion");
+        runtime
+            .set_external_lifecycle_owners(Vec::new())
+            .expect("retire the pending signer after completion enqueue");
         assert!(matches!(
-            runtime.step(now),
+            runtime.step(deadline),
             Ok(RuntimeStep::Advanced(ref effects))
                 if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
         ));
         assert!(runtime.take_last_scheduler_ownership().is_some());
-        assert!(matches!(runtime.step(now), Ok(RuntimeStep::Advanced(_))));
+        runtime
+            .take_effect_ownership(1)
+            .expect("the executor consumes the TimeoutVote broadcast owner");
+        let deferred_step = runtime
+            .step(deadline)
+            .expect("service the exact deferred TC owner");
+        let RuntimeStep::Advanced(deferred_effects) = deferred_step else {
+            panic!("deferred TC service unexpectedly idled")
+        };
         let deferred_owner = runtime
             .take_last_scheduler_ownership()
             .expect("deferred TC service hands off its exact owner");
+        runtime
+            .take_effect_ownership(deferred_effects.len())
+            .expect("the executor consumes the deferred TC effect owner");
         assert!(deferred_owner.validate_exact().is_ok());
         let RuntimeSelectedCandidateOwnership::ExactDeferred(deferred) = &deferred_owner.candidate
         else {
@@ -21234,14 +21648,29 @@ mod tests {
             ] => (*tag, manifest.clone()),
             effects => panic!("unexpected proposal effects: {effects:?}"),
         };
+        let proposal_effect_ownership = runtime
+            .take_effect_ownership(proposal_effects.len())
+            .expect("FetchBody retains the proposal lifecycle owner");
+        assert_eq!(proposal_effect_ownership.len(), 1);
 
+        let body_reservation = runtime
+            .reserve_body_available_with_owner(
+                source_tag,
+                manifest.clone(),
+                &proposal_effect_ownership[0],
+            )
+            .expect("reserve body reconstruction under the FetchBody owner");
         runtime
-            .enqueue_body_available(source_tag, manifest.clone())
-            .expect("enqueue body reconstruction completion");
+            .commit_body_available(body_reservation)
+            .expect("publish the owned body reconstruction completion");
+        let RuntimeStep::Advanced(body_effects) =
+            runtime.step(now).expect("dispatch body reconstruction")
+        else {
+            panic!("body reconstruction unexpectedly idled")
+        };
         assert!(matches!(
-            runtime.step(now).expect("dispatch body reconstruction"),
-            RuntimeStep::Advanced(ref effects)
-                if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
+            body_effects.as_slice(),
+            [AdapterEffect::StoreBody { .. }]
         ));
         assert_eq!(
             runtime
@@ -21250,6 +21679,10 @@ mod tests {
                 .selected,
             RuntimeSelectedOwnerKind::Fifo
         );
+        let body_effect_ownership = runtime
+            .take_effect_ownership(body_effects.len())
+            .expect("StoreBody retains the FetchBody lifecycle owner");
+        assert_eq!(body_effect_ownership.len(), 1);
         let durable = DurableBodyReceipt::for_test(
             context.id(),
             manifest.round,
@@ -21257,17 +21690,23 @@ mod tests {
             HashOf::new(&manifest),
         );
         runtime
-            .enqueue_body_stored(
+            .enqueue_body_stored_with_owner(
                 source_tag,
                 manifest.round,
                 manifest.subject,
                 durable.clone(),
+                &body_effect_ownership[0],
             )
             .expect("enqueue durable-store completion");
+        let RuntimeStep::Advanced(store_effects) = runtime
+            .step(now)
+            .expect("dispatch durable-store completion")
+        else {
+            panic!("durable-store completion unexpectedly idled")
+        };
         assert!(matches!(
-            runtime.step(now).expect("dispatch durable-store completion"),
-            RuntimeStep::Advanced(ref effects)
-                if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
+            store_effects.as_slice(),
+            [AdapterEffect::ValidateBody { .. }]
         ));
         assert_eq!(
             runtime
@@ -21276,19 +21715,32 @@ mod tests {
                 .selected,
             RuntimeSelectedOwnerKind::Fifo
         );
+        let store_effect_ownership = runtime
+            .take_effect_ownership(store_effects.len())
+            .expect("ValidateBody retains the body pipeline lifecycle owner");
+        assert_eq!(store_effect_ownership.len(), 1);
         runtime
-            .enqueue_validation_succeeded(
+            .enqueue_validation_succeeded_with_owner(
                 source_tag,
                 manifest.round,
                 manifest.subject,
                 ValidatedBodyReceipt::for_test(durable),
+                &store_effect_ownership[0],
             )
             .expect("enqueue validation completion");
-        assert!(matches!(
-            runtime.step(now).expect("dispatch validation completion"),
-            RuntimeStep::Advanced(ref effects)
-                if matches!(effects.as_slice(), [AdapterEffect::Sign { .. }])
-        ));
+        let RuntimeStep::Advanced(validation_effects) = runtime
+            .step(now)
+            .expect("dispatch validation completion")
+        else {
+            panic!("validation completion unexpectedly idled")
+        };
+        let (sign_tag, sign_preimage) = match validation_effects.as_slice() {
+            [AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            }] => (*tag, vote.signature_preimage()),
+            effects => panic!("unexpected validation effects: {effects:?}"),
+        };
         assert_eq!(
             runtime
                 .take_last_scheduler_ownership()
@@ -21296,6 +21748,13 @@ mod tests {
                 .selected,
             RuntimeSelectedOwnerKind::Fifo
         );
+        let sign_effect_ownership = runtime
+            .take_effect_ownership(validation_effects.len())
+            .expect("Prepare Sign retains the body pipeline lifecycle owner");
+        assert_eq!(sign_effect_ownership.len(), 1);
+        runtime
+            .set_external_lifecycle_owners(vec![sign_effect_ownership[0].owner().clone()])
+            .expect("publish the pending Prepare signer owner");
 
         let rebound = EventTag::new(
             source_tag.height(),
@@ -21420,6 +21879,22 @@ mod tests {
             "retirement cannot leave the drained Busy owner at the global minimum"
         );
         assert!(runtime.deferred_ingress_ownership.is_empty());
+        let signature = Signature::new(keys[0].private_key(), &sign_preimage)
+            .payload()
+            .to_vec();
+        runtime
+            .enqueue_signature_with_owner(sign_tag, signature, &sign_effect_ownership[0])
+            .expect("complete the retained Prepare signer under its original owner");
+        runtime
+            .set_external_lifecycle_owners(Vec::new())
+            .expect("retire the external signer after its completion is admitted");
+        assert!(matches!(
+            runtime
+                .step_and_take_scheduler_ownership_for_test(now)
+                .expect("dispatch the retained Prepare completion"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
+        ));
 
         // Exercise the opposite coalescing direction: a Busy source loses to
         // an already-installed FIFO destination. The adapter occurrence and
@@ -22365,6 +22840,10 @@ mod tests {
         let directory = TempDir::new().expect("temporary runtime tombstone directory");
         let (mut runtime, context, _keys) =
             authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before draining the ownerless completion");
         let tag = runtime.round_tag();
         let manifest = runtime_manifest(&context, 0x9D);
         let ordinal_before_first = runtime.ingress.next_admission_ordinal;
@@ -22380,7 +22859,7 @@ mod tests {
         );
         assert!(matches!(
             runtime
-                .step_and_take_scheduler_ownership_for_test(Instant::now())
+                .step_and_take_scheduler_ownership_for_test(now)
                 .expect("drain the first ownerless completion"),
             RuntimeStep::Advanced(ref effects) if effects.is_empty()
         ));
@@ -23778,24 +24257,6 @@ mod tests {
         );
         let validated = ValidatedBodyReceipt::for_test(durable.clone());
         let commitment = validated.execution_commitment();
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::LocalProposalReady {
-                manifest: manifest.clone(),
-                durable_receipt: durable.clone(),
-                validated_receipt: validated.clone(),
-            },
-        );
-        runtime
-            .enqueue_local_proposal(
-                owner_tag,
-                manifest.clone(),
-                durable.clone(),
-                validated.clone(),
-            )
-            .expect("an exact trusted retry coalesces with its existing owner");
-        assert_eq!(runtime.queued_commands(), 1);
         let decision = wire::QuorumCertificate {
             round: manifest.round,
             proposal_round: manifest.round,
@@ -23814,7 +24275,28 @@ mod tests {
                     wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
                 )),
             )
-            .expect("enqueue the CommitQC progress item");
+            .expect("enqueue the older CommitQC progress item");
+        // The completion is admitted second. The class cursor may select
+        // between siblings of one lifecycle, but it cannot move this later
+        // local callback ahead of the already-admitted Decision.
+        stage_completion_for_queue_test(
+            &mut runtime,
+            owner_tag,
+            AdapterCommand::LocalProposalReady {
+                manifest: manifest.clone(),
+                durable_receipt: durable.clone(),
+                validated_receipt: validated.clone(),
+            },
+        );
+        runtime
+            .enqueue_local_proposal(
+                owner_tag,
+                manifest.clone(),
+                durable.clone(),
+                validated.clone(),
+            )
+            .expect("an exact trusted retry coalesces with its existing owner");
+        assert_eq!(runtime.queued_commands(), 2);
         runtime.ingress.next_class = CommandClass::Progress;
         let now = Instant::now();
         runtime.arm_live_clocks(now).expect("arm runtime clocks");
@@ -24117,9 +24599,27 @@ mod tests {
             );
             assert!(!runtime.fail_closed);
 
+            let reducer_round = Round::new(manifest.round.height, manifest.round.view);
+            let reducer_subject = Subject::new(Hash::new(manifest.subject.encode()).into());
+            let reducer_tag_before_binding = runtime.driver.current_tag();
+            let reducer_body_before_binding = runtime
+                .driver
+                .body_state_for_test(reducer_round, reducer_subject);
             runtime
-                .recover_validated_body(&manifest, &validated)
-                .expect("local validation establishes canonical commitment authority");
+                .bind_validated_body(&manifest, &validated)
+                .expect("live validation establishes canonical commitment authority");
+            assert_eq!(
+                runtime.driver.current_tag(),
+                reducer_tag_before_binding,
+                "wire-authority binding cannot retag the reducer"
+            );
+            assert_eq!(
+                runtime
+                    .driver
+                    .body_state_for_test(reducer_round, reducer_subject),
+                reducer_body_before_binding,
+                "wire-authority binding cannot revive a reducer consumer"
+            );
             assert!(
                 runtime.can_admit_network_message(&signed_vote),
                 "the retained fair-ingress {phase:?} vote becomes drainable after validation"
@@ -25291,6 +25791,9 @@ mod tests {
         ));
         assert_eq!(runtime.round_tag(), next);
         assert!(runtime.driver.retransmits.is_empty());
+        runtime
+            .reconcile_active_view_producer(next, false)
+            .expect("the nonleader test peer retires the positional view producer");
         assert!(matches!(
             runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9)),
             Ok(RuntimeStep::Idle)
@@ -25329,10 +25832,16 @@ mod tests {
             effects,
             vec![FakeEffect::enter_view(next), FakeEffect::other()]
         );
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("the startup executor consumes both returned effect owners");
         assert!(matches!(
             runtime.step(start + Duration::from_secs(100)),
             Err(RuntimeError::ClocksNotArmed)
         ));
+        runtime
+            .reconcile_active_view_producer(next, false)
+            .expect("the nonleader startup peer retires the positional producer");
         runtime
             .arm_live_clocks(start + Duration::from_secs(100))
             .expect("arm after startup effects are dispatched");

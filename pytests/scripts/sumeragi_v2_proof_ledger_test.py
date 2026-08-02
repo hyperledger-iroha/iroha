@@ -1659,25 +1659,52 @@ def complete_ledger(module):
     return ledger
 
 
-def build_test_evidence(module, tmp_path: Path):
-    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
-    shutil.copytree(module.FORMAL_DIR, formal_dir)
-    log_dir = tmp_path / "target" / "formal" / "sumeragi_v2" / "tlaps"
-    log_dir.mkdir(parents=True)
+def write_tlaps_fixture_logs(
+    module, formal_dir: Path, root_dir: Path, log_dir: Path
+):
+    """Write canonical positive module and exact-target logs for unit fixtures."""
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "targets").mkdir(parents=True, exist_ok=True)
     source_manifest_sha256 = module._formal_source_manifest(
-        formal_dir, tmp_path
+        formal_dir, root_dir
     )["sha256"]
+    ledger_sha256 = module._proof_ledger_sha256(formal_dir)
     for name in module.RELEASE_PROOF_MODULES:
         (log_dir / f"{name}.preflight.log").write_text(
             "frontend summary passed\n"
-            f"{module._tlapm_preflight_marker(name, source_manifest_sha256)}\n",
+            f"{module._tlapm_preflight_marker(name, source_manifest_sha256, ledger_sha256)}\n",
             encoding="utf-8",
         )
         (log_dir / f"{name}.log").write_text(
             "[INFO]: All 1 obligation proved.\n"
-            f"{module._tlapm_runner_marker(name, source_manifest_sha256)}\n",
+            f"{module._tlapm_runner_marker(name, source_manifest_sha256, ledger_sha256)}\n",
             encoding="utf-8",
         )
+    for target in module._promotion_target_entries(formal_dir, root_dir):
+        (log_dir / "targets" / f"{target['obligation_id']}.log").write_text(
+            "[INFO]: All 1 obligation proved.\n"
+            + module._tlapm_target_marker(
+                target,
+                obligations_proved=1,
+                source_manifest_sha256=source_manifest_sha256,
+                ledger_sha256=ledger_sha256,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    return source_manifest_sha256, ledger_sha256
+
+
+def build_test_evidence(module, tmp_path: Path):
+    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    (formal_dir / "proof_coverage.json").write_text(
+        json.dumps(complete_ledger(module), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    log_dir = tmp_path / "target" / "formal" / "sumeragi_v2" / "tlaps"
+    write_tlaps_fixture_logs(module, formal_dir, tmp_path, log_dir)
     evidence = module.build_release_evidence(
         tlapm_version=module.TLAPM_COMMIT[:7],
         log_dir=log_dir,
@@ -1949,21 +1976,7 @@ def build_cross_tool_fixture(module, tmp_path: Path):
     )
 
     log_dir = tmp_path / "target" / "formal" / "sumeragi_v2" / "tlaps"
-    log_dir.mkdir(parents=True)
-    formal_manifest_sha256 = module._formal_source_manifest(
-        formal_dir, tmp_path
-    )["sha256"]
-    for name in module.RELEASE_PROOF_MODULES:
-        (log_dir / f"{name}.preflight.log").write_text(
-            "frontend summary passed\n"
-            f"{module._tlapm_preflight_marker(name, formal_manifest_sha256)}\n",
-            encoding="utf-8",
-        )
-        (log_dir / f"{name}.log").write_text(
-            "[INFO]: All 1 obligation proved.\n"
-            f"{module._tlapm_runner_marker(name, formal_manifest_sha256)}\n",
-            encoding="utf-8",
-        )
+    write_tlaps_fixture_logs(module, formal_dir, tmp_path, log_dir)
     tlaps_evidence = module.build_release_evidence(
         tlapm_version=module.TLAPM_COMMIT[:7],
         log_dir=log_dir,
@@ -2090,9 +2103,10 @@ def test_release_evidence_rejects_stale_or_marker_stuffed_logs(tmp_path: Path) -
     first_log = log_dir / f"{first_module}.log"
 
     stale_manifest = "0" * 64
+    ledger_sha256 = module._proof_ledger_sha256(formal_dir)
     first_log.write_text(
         "[INFO]: All 1 obligation proved.\n"
-        f"{module._tlapm_runner_marker(first_module, stale_manifest)}\n",
+        f"{module._tlapm_runner_marker(first_module, stale_manifest, ledger_sha256)}\n",
         encoding="utf-8",
     )
     evidence["modules"][0]["log_sha256"] = module._sha256_file(first_log)
@@ -2131,6 +2145,196 @@ def test_release_evidence_requires_exact_pinned_tool_identity(tmp_path: Path) ->
             formal_dir=formal_dir,
             root_dir=tmp_path,
         )
+
+
+def test_promotion_target_contract_rejects_mapping_and_order_mutations(
+    monkeypatch,
+) -> None:
+    module = load_checker()
+    original = module.PROMOTION_PROOF_TARGET_CONTRACTS
+    expected_ids = (
+        *module.PROMOTION_TLAPS_TARGET_IDS,
+        *module.PROMOTION_CROSS_TOOL_TARGET_IDS,
+    )
+    assert tuple(target.obligation_id for target in original) == expected_ids
+    assert [target.kind for target in original] == ["tlaps"] * 9 + [
+        "cross_tool"
+    ] * 3
+    assert all(target.expected_obligations is None for target in original)
+    entries = module._promotion_target_entries()
+    for entry in entries:
+        assert entry["start_line"] <= entry["end_line"]
+        assert entry["invocation"][:3] == [
+            "--toolbox",
+            str(entry["start_line"]),
+            str(entry["end_line"]),
+        ]
+        assert "--strict" in entry["invocation"]
+        assert "--nofp" in entry["invocation"]
+
+    mutants = (
+        original[:-1],
+        (*original[:-1], original[0]),
+        (original[1], original[0], *original[2:]),
+        (
+            replace(
+                original[0],
+                provider_module="SumeragiV2AsyncTemporalClosureProofs",
+            ),
+            *original[1:],
+        ),
+        (
+            *original[:-1],
+            replace(
+                original[-1],
+                theorem=(
+                    module.CROSS_TOOL_REFINEMENT_BY_ID[
+                        original[-1].obligation_id
+                    ].ledger_symbol
+                ),
+            ),
+        ),
+    )
+    expected_fragments = (
+        "canonical 9 + 3 order",
+        "duplicate",
+        "canonical 9 + 3 order",
+        "provider must be",
+        "exact cross-tool bridge",
+    )
+    for mutant, fragment in zip(mutants, expected_fragments):
+        monkeypatch.setattr(module, "PROMOTION_PROOF_TARGET_CONTRACTS", mutant)
+        assert any(
+            fragment in error
+            for error in module._promotion_target_contract_errors()
+        )
+    monkeypatch.setattr(module, "PROMOTION_PROOF_TARGET_CONTRACTS", original)
+
+
+def test_promotion_target_evidence_rejects_every_range_log_and_digest_mutation(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    assert module.EVIDENCE_SCHEMA_VERSION == 3
+    ledger = complete_ledger(module)
+    formal_dir, _, evidence = build_test_evidence(module, tmp_path)
+
+    def errors_for(mutant):
+        return module._release_evidence_errors(
+            ledger,
+            mutant,
+            formal_dir=formal_dir,
+            root_dir=tmp_path,
+        )
+
+    assert errors_for(evidence) == []
+
+    omitted = copy.deepcopy(evidence)
+    omitted["promotion_targets"].pop()
+    assert any("canonical 9 + 3 order" in error for error in errors_for(omitted))
+
+    duplicated = copy.deepcopy(evidence)
+    duplicated["promotion_targets"][-1] = copy.deepcopy(
+        duplicated["promotion_targets"][0]
+    )
+    duplicate_errors = errors_for(duplicated)
+    assert any("must not repeat" in error for error in duplicate_errors)
+
+    reordered = copy.deepcopy(evidence)
+    reordered["promotion_targets"][0], reordered["promotion_targets"][1] = (
+        reordered["promotion_targets"][1],
+        reordered["promotion_targets"][0],
+    )
+    assert any("canonical 9 + 3 order" in error for error in errors_for(reordered))
+
+    field_mutations = {
+        "kind": "cross_tool",
+        "ledger_module": "MutatedLedgerModule",
+        "provider_module": "SumeragiV2AsyncTemporalClosureProofs",
+        "theorem": "EffectiveLockBodyAcquisitionProductionRefinementObligation",
+        "start_line": evidence["promotion_targets"][0]["start_line"] + 1,
+        "end_line": evidence["promotion_targets"][0]["end_line"] + 1,
+        "source": "formal/sumeragi_v2/MutatedProvider.tla",
+        "source_sha256": "0" * 64,
+        "proof_span_sha256": "1" * 64,
+        "invocation_sha256": "2" * 64,
+        "expected_obligations": (
+            1
+            if evidence["promotion_targets"][0]["expected_obligations"] is None
+            else evidence["promotion_targets"][0]["expected_obligations"] + 1
+        ),
+    }
+    for field, value in field_mutations.items():
+        mutant = copy.deepcopy(evidence)
+        mutant["promotion_targets"][0][field] = value
+        assert any(
+            f"wrong {field}" in error for error in errors_for(mutant)
+        )
+
+    zero = copy.deepcopy(evidence)
+    zero["promotion_targets"][0]["obligations_proved"] = 0
+    assert any("no positive proved count" in error for error in errors_for(zero))
+
+    forged_count = copy.deepcopy(evidence)
+    forged_count["promotion_targets"][0]["obligations_proved"] = 999
+    assert any("does not match log" in error for error in errors_for(forged_count))
+
+    weakened_invocation = copy.deepcopy(evidence)
+    weakened_invocation["promotion_targets"][0]["invocation"].remove("--nofp")
+    assert any(
+        "wrong invocation" in error for error in errors_for(weakened_invocation)
+    )
+
+    wrong_schema = copy.deepcopy(evidence)
+    wrong_schema["schema_version"] = 2
+    assert any(
+        "proof evidence schema_version must equal 3" in error
+        for error in errors_for(wrong_schema)
+    )
+
+    swapped_log = copy.deepcopy(evidence)
+    first, second = swapped_log["promotion_targets"][:2]
+    first["log"] = second["log"]
+    assert any("must use log" in error for error in errors_for(swapped_log))
+
+    stale_target_log_digest = copy.deepcopy(evidence)
+    stale_target_log_digest["promotion_targets"][0]["log_sha256"] = "4" * 64
+    assert any(
+        "target log digest mismatch" in error
+        for error in errors_for(stale_target_log_digest)
+    )
+
+    stale_target_ledger = copy.deepcopy(evidence)
+    stale_target_ledger["promotion_targets"][0]["ledger_sha256"] = "5" * 64
+    assert any(
+        "not bound to the current proof ledger" in error
+        for error in errors_for(stale_target_ledger)
+    )
+
+    stale_ledger = copy.deepcopy(evidence)
+    stale_ledger["ledger_sha256"] = "2" * 64
+    for entry in stale_ledger["modules"]:
+        entry["ledger_sha256"] = "2" * 64
+    for entry in stale_ledger["promotion_targets"]:
+        entry["ledger_sha256"] = "2" * 64
+    stale_errors = errors_for(stale_ledger)
+    assert any("byte-exact proof ledger" in error for error in stale_errors)
+
+    stale_source = copy.deepcopy(evidence)
+    stale_source["promotion_targets"][0]["source_manifest_sha256"] = "3" * 64
+    assert any(
+        "current source manifest" in error for error in errors_for(stale_source)
+    )
+
+    # Even a semantically identical ledger rewrite invalidates every first-pass
+    # transcript because promotion is a byte-level source change.
+    (formal_dir / "proof_coverage.json").write_text(
+        json.dumps(ledger, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    assert any(
+        "byte-exact proof ledger" in error for error in errors_for(evidence)
+    )
 
 
 def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
@@ -2419,7 +2623,7 @@ def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
     """Thirteen total claims own exactly eighteen distinct checked gates."""
 
     module = load_checker()
-    assert module.CROSS_TOOL_EVIDENCE_SCHEMA_VERSION == 3
+    assert module.CROSS_TOOL_EVIDENCE_SCHEMA_VERSION == 4
     claims = [
         claim
         for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
@@ -4108,7 +4312,7 @@ def test_cross_tool_release_requires_linked_evidence(tmp_path: Path) -> None:
     assert (
         cross_tool_evidence["schema_version"]
         == module.CROSS_TOOL_EVIDENCE_SCHEMA_VERSION
-        == 2
+        == 4
     )
     assert module._release_evidence_errors(
         ledger,
@@ -4306,7 +4510,7 @@ def test_cross_tool_evidence_rejects_tool_log_manifest_and_ledger_substitution(
 
     first_log = (
         tmp_path
-        / cross_tool_evidence["obligations"][0]["tla"]["log"]
+        / cross_tool_evidence["obligations"][0]["tla"]["proof_target"]["log"]
     )
     first_log.write_text(first_log.read_text(encoding="utf-8") + "stale\n")
     assert errors_for()
@@ -7066,7 +7270,7 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     (
         ledger,
         formal_dir,
-        baseline_tlaps_evidence,
+        _baseline_tlaps_evidence,
         verus_evidence,
         cross_tool_evidence,
         workspace_manifest,
@@ -7098,30 +7302,13 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     log_dir = tmp_path / "target" / "formal" / "sumeragi_v2" / "tlaps"
 
     def fresh_tlaps_evidence():
-        source_manifest = module._formal_source_manifest(formal_dir, tmp_path)
-        manifest = source_manifest["sha256"]
-        for name in module.RELEASE_PROOF_MODULES:
-            (log_dir / f"{name}.preflight.log").write_text(
-                "frontend summary passed\n"
-                f"{module._tlapm_preflight_marker(name, manifest)}\n",
-                encoding="utf-8",
-            )
-            (log_dir / f"{name}.log").write_text(
-                "[INFO]: All 1 obligation proved.\n"
-                f"{module._tlapm_runner_marker(name, manifest)}\n",
-                encoding="utf-8",
-            )
-        evidence = copy.deepcopy(baseline_tlaps_evidence)
-        evidence["source_manifest"] = source_manifest
-        for entry in evidence["modules"]:
-            name = entry["module"]
-            preflight_path = log_dir / f"{name}.preflight.log"
-            proof_path = log_dir / f"{name}.log"
-            entry["source_manifest_sha256"] = manifest
-            entry["preflight_log_sha256"] = module._sha256_file(preflight_path)
-            entry["log_sha256"] = module._sha256_file(proof_path)
-            entry["obligations_proved"] = 1
-        return evidence
+        write_tlaps_fixture_logs(module, formal_dir, tmp_path, log_dir)
+        return module.build_release_evidence(
+            tlapm_version=module.TLAPM_COMMIT[:7],
+            log_dir=log_dir,
+            formal_dir=formal_dir,
+            root_dir=tmp_path,
+        )
 
     def restore_provider_sources() -> None:
         for path, source in canonical_sources.items():

@@ -121,7 +121,7 @@ use super::{
         LeaderWireRuntimeTerminal, NetworkIngressError, RetiredBodyPipelineCompletions,
         RuntimeCandidateAdmissionDisposition, RuntimeClockError, RuntimeEffectOwnership,
         RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep,
-        SerializedV2Runtime, bind_adapter_effect_batch_ownership,
+        SerializedV2Runtime,
         production_adapter_effect_candidate_admission_disposition,
         production_adapter_effect_candidate_semantic_identity,
         production_adapter_effect_candidate_trace_projection,
@@ -133,6 +133,8 @@ use super::{
         authenticate_certified_body_request, authenticate_payload_chunk,
     },
 };
+#[cfg(test)]
+use super::v2_runtime::bind_adapter_effect_batch_ownership;
 use crate::kura::KuraV2CommitReceipt;
 
 /// Stable identifier for one asynchronous effect invocation.
@@ -2472,6 +2474,16 @@ pub(crate) trait EffectRuntime {
         )>,
         String,
     >;
+    /// Bind an independently durable validation receipt to the adapter's
+    /// exact-round execution authority without reviving a stale reducer
+    /// consumer.
+    fn bind_validated_body(
+        &mut self,
+        _manifest: &wire::PayloadManifest,
+        _validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), String> {
+        Err("runtime does not support validated-body authority binding".to_owned())
+    }
     #[cfg_attr(not(test), allow(dead_code))]
     fn enqueue_body_available(
         &mut self,
@@ -2765,6 +2777,15 @@ impl EffectRuntime for SerializedV2Runtime {
         String,
     > {
         self.replayed_decision_key()
+            .map_err(|error| error.to_string())
+    }
+
+    fn bind_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), String> {
+        SerializedV2Runtime::bind_validated_body(self, manifest, validated_receipt)
             .map_err(|error| error.to_string())
     }
 
@@ -5232,6 +5253,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.ensure_open()?;
         let Some(pending) = self.pending_validations.get(&completion.work_id()).cloned() else {
             if let Some(validated) = completion.validated_receipt() {
+                if let Err(error) = self.preflight_validated_body(validated) {
+                    return Err(self.close(error, services));
+                }
+                if let Err(error) = self.bind_validated_body(validated) {
+                    return Err(self.close(error, services));
+                }
                 if let Err(error) = self.record_validated_body(validated.clone()) {
                     return Err(self.close(error, services));
                 }
@@ -5291,6 +5318,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             if let Err(error) = self.preflight_validated_body(&validated) {
+                return Err(self.close(error, services));
+            }
+            // The durable validation result is wire-authentication authority,
+            // not a view-local reducer effect. Bind it before the optional
+            // reducer completion so a retired consumer or stale-tag coalesce
+            // cannot leave an exact early Vote permanently waiting on
+            // evidence already fsynced by this node.
+            if let Err(error) = self.bind_validated_body(&validated) {
                 return Err(self.close(error, services));
             }
             let admission = match &pending.consumer {
@@ -8819,6 +8854,28 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
+    fn bind_validated_body(
+        &mut self,
+        validated: &ValidatedBodyReceipt,
+    ) -> Result<(), EffectExecutorError> {
+        let durable = validated.durable();
+        let key = (durable.round(), durable.subject());
+        let (manifest, recovered) = self.recovered_bodies.get(&key).ok_or_else(|| {
+            EffectExecutorError::BodyStore(
+                "validated body has no exact recovered manifest authority".to_owned(),
+            )
+        })?;
+        if recovered != durable || HashOf::new(manifest) != durable.manifest_hash() {
+            return Err(EffectExecutorError::BodyStore(
+                "validated body differs from its recovered manifest authority".to_owned(),
+            ));
+        }
+        let manifest = manifest.clone();
+        self.runtime
+            .bind_validated_body(&manifest, validated)
+            .map_err(EffectExecutorError::Runtime)
+    }
+
     fn preflight_rejected_body(
         &self,
         key: (wire::ConsensusRound, wire::BlockSubject),
@@ -9389,9 +9446,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             })
             .transpose()?;
         let manifest_hash = HashOf::new(manifest);
-        let mut reuses_existing_stage = false;
-        let mut ready_release = None;
-        if let Some(receipt) = self.durable_bodies.get(&key).cloned() {
+        let (reuses_existing_stage, ready_release) = if let Some(receipt) =
+            self.durable_bodies.get(&key).cloned()
+        {
             let recovered_conflicts = self.recovered_bodies.get(&key).is_some_and(
                 |(recovered_manifest, recovered_receipt)| {
                     recovered_manifest != manifest || recovered_receipt != &receipt
@@ -9412,13 +9469,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     services,
                 ));
             }
-            if self.ready_bodies.contains_key(&key) {
-                ready_release = Some(
+            let ready_release = if self.ready_bodies.contains_key(&key) {
+                Some(
                     self.plan_ready_body_release(key)
                         .map_err(|error| self.fail_closed_transport(error, services))?,
-                );
-            }
-            reuses_existing_stage = true;
+                )
+            } else {
+                None
+            };
+            (true, ready_release)
         } else if let Some(ready) = self.ready_bodies.get(&key) {
             if &ready.manifest != manifest || ready.bytes.as_ref() != bytes.as_ref() {
                 return Err(self.fail_closed_transport(
@@ -9426,8 +9485,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     services,
                 ));
             }
-            reuses_existing_stage = true;
-        }
+            (true, None)
+        } else {
+            (false, None)
+        };
         let runtime_manifest = manifest.clone();
         let ready = if reuses_existing_stage {
             let mut union = self
@@ -10448,6 +10509,7 @@ mod tests {
     struct FakeRuntime {
         steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
         completions: Vec<RuntimeCompletion>,
+        bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
         reserved_body_available: Option<BodyAvailableReservation>,
         decided_body: Option<DurableDecision>,
         decision_on_next_step: Option<DurableDecision>,
@@ -10498,6 +10560,7 @@ mod tests {
             BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
         rejected_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
         runtime_completions: Vec<RuntimeCompletion>,
+        runtime_bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
         runtime_body_reservation: Option<BodyAvailableReservation>,
     }
 
@@ -10522,6 +10585,7 @@ mod tests {
                 validated_bodies: self.validated_bodies.clone(),
                 rejected_bodies: self.rejected_bodies.clone(),
                 runtime_completions: self.runtime.completions.clone(),
+                runtime_bound_validations: self.runtime.bound_validations.clone(),
                 runtime_body_reservation: self.runtime.reserved_body_available.clone(),
             }
         }
@@ -10729,6 +10793,33 @@ mod tests {
 
         fn decided_body(&self) -> Result<Option<DurableDecision>, String> {
             Ok(self.decided_body)
+        }
+
+        fn bind_validated_body(
+            &mut self,
+            manifest: &wire::PayloadManifest,
+            validated_receipt: &ValidatedBodyReceipt,
+        ) -> Result<(), String> {
+            let durable = validated_receipt.durable();
+            if durable.round() != manifest.round
+                || durable.subject() != manifest.subject
+                || durable.manifest_hash() != HashOf::new(manifest)
+            {
+                return Err("fake validated binding differs from its manifest".to_owned());
+            }
+            if let Some((bound_manifest, bound_receipt)) =
+                self.bound_validations.iter().find(|(bound_manifest, _)| {
+                    bound_manifest.round == manifest.round
+                        && bound_manifest.subject == manifest.subject
+                })
+            {
+                return (bound_manifest == manifest && bound_receipt == validated_receipt)
+                    .then_some(())
+                    .ok_or_else(|| "fake validated binding conflicts with authority".to_owned());
+            }
+            self.bound_validations
+                .push((manifest.clone(), validated_receipt.clone()));
+            Ok(())
         }
 
         fn enqueue_body_available(
@@ -18406,6 +18497,35 @@ mod tests {
         );
         assert_eq!(services.cancelled_stores, vec![store_id]);
         assert_eq!(services.cancelled_validations, vec![validation_id]);
+
+        let late_validation = services.execute_validation(validation_id);
+        let late_receipt = late_validation
+            .validated_receipt()
+            .expect("late validation succeeds deterministically")
+            .clone();
+        executor.runtime.completions.clear();
+        assert_eq!(
+            executor
+                .complete_body_validation(late_validation, &mut services)
+                .expect("late durable validation binds wire authority"),
+            CompletionDisposition::Stale
+        );
+        assert!(
+            executor.runtime.completions.is_empty(),
+            "a retired reducer consumer must not be resurrected"
+        );
+        assert_eq!(
+            executor.runtime.bound_validations,
+            vec![(fixture.manifest.clone(), late_receipt.clone())],
+            "the exact fsynced receipt must still release matching wire votes"
+        );
+        assert_eq!(
+            executor
+                .validated_bodies
+                .get(&(fixture.manifest.round, fixture.manifest.subject)),
+            Some(&late_receipt)
+        );
+        assert!(!executor.status().fail_closed);
     }
 
     #[test]

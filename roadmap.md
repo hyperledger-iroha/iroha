@@ -139,9 +139,10 @@ evidence.
 
 ## Sumeragi V2 production multilane release closure
 
-On the current tree, the independent 82-leg release inventory guard passes at
-818 production tests across 39 modules, 309 G-UNIT rows, and four mandatory
-four-peer gates; the aggregate proof checker now hash-binds that guard. The
+On the current tree, the independent 82-leg release inventory contract is
+sealed at 831 production tests across 39 modules, 309 G-UNIT rows, and four
+mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
+Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
 test-only `v2_core/refinement_cases.rs` source split and reject additional,
 parent-relative, non-test, or skipped-verifier mutations. Its focused pytest
@@ -191,9 +192,9 @@ multilane binding ledger keeps this as
 reservation, queue-order, Kura persistence/recovery, runner, and release
 receipt consumers, and requires a distinct fifth layout-only Apalache result
 after the four refinement rows. The schema-4 structural/source-binding checks,
-exact 818-test production inventory, 309-test G-UNIT source inventory, 12
+exact 831-test production inventory, 309-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
-contract controls are fresh and green. The G-UNIT inventory has 310 TSV lines
+contract controls require a fresh source-bound rerun. The G-UNIT inventory has 310 TSV lines
 and SHA-256
 `b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
@@ -231,7 +232,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 818-test,
+  mutations before promotion, then finish the remaining 831-test,
   39-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -26158,7 +26159,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and their exact
-818-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+831-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -26464,7 +26465,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  818-test target above supersedes that checkpoint. The 39-module pre-network
+  831-test target above supersedes that checkpoint. The 39-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

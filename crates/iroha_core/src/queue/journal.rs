@@ -37,17 +37,16 @@ const QUEUE_PLAN_JOURNAL_FRAME_COMMIT: [u8; 8] = *b"IRQPEND4";
 const QUEUE_PLAN_JOURNAL_FRAME_FORMAT_VERSION: u16 = 4;
 const FRAME_HEADER_BYTES: u64 = 8 + 2 + 4 + 4;
 const FRAME_TRAILER_BYTES: u64 = Hash::LENGTH as u64 + 8;
-// Norito's cumulative element counter for canonical V4 frames stays below the
-// wire length. Keep the production allowance at that exact linear bound; the
-// calibration tests below independently measure payload-heavy and
-// allocation-dense frames.
-const FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT: usize = 1;
-// Owned decoding retains the canonical archive while materializing nested
-// transaction and routing values. Calibrate both a payload-heavy frame and an
-// allocation-dense frame, then exercise the latter at the maximum admitted
-// instruction count, so this multiplier is not based on one object-graph
-// shape.
-const FRAME_DECODE_ALLOCATION_AMPLIFICATION_LIMIT: usize = 26;
+// Native deployment frames contain a nested instruction archive whose decoded
+// element walk is just under twice the authenticated wire payload. The generic
+// canonical decoder independently applies its own payload-derived ceiling.
+const FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT: usize = 2;
+// Keep the journal-specific allocation envelope above Norito's canonical
+// envelope so an evolving valid InstructionBox shape is governed by the
+// codec-wide resource policy rather than an older journal calibration. Nested
+// decode-limit scopes take the stricter bound, so the canonical decoder remains
+// the effective allocation-bomb boundary.
+const FRAME_DECODE_ALLOCATION_AMPLIFICATION_LIMIT: usize = 64;
 const FRAME_DECODE_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 64 * 1024;
 
 /// Version of durable queue plan journal records.
@@ -2557,13 +2556,10 @@ fn decode_frame(
         ))
     })?;
     let payload_budget = payload.len();
-    // Norito retains an aligned archive copy while constructing the owned
-    // entrypoint and routing plan. Bound that deterministic wire-to-owned
-    // amplification separately from element counts. Small transactions have
-    // a comparatively large fixed object-graph cost, so reserve 64 KiB for
-    // decoder-owned archive and container metadata instead of leaving small
-    // frames unaccounted. Allocation bombs remain capped by a fixed allowance
-    // plus the calibrated multiple of the already bounded frame length.
+    // A Put frame contains an open InstructionBox. Keep its schema-specific
+    // element bound calibrated to valid admitted instructions, but do not let a
+    // stale journal allocation multiplier undercut Norito's canonical envelope.
+    // Both limits remain linear in the already authenticated frame length.
     let aggregate_element_budget =
         payload_budget.saturating_mul(FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT);
     let aggregate_allocation_budget = frame_decode_allocation_budget(payload_budget)
@@ -4057,7 +4053,10 @@ mod tests {
     use std::fs::{self, OpenOptions};
 
     use iroha_data_model::{
-        isi::{InstructionBox, Log},
+        isi::{
+            InstructionBox, Log,
+            smart_contract_code::{SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk},
+        },
         transaction::TransactionBuilder,
     };
     use iroha_logger::Level;
@@ -6844,6 +6843,78 @@ mod tests {
             error
                 .to_string()
                 .contains("exceeds the configured frame limit")
+        );
+    }
+
+    #[test]
+    fn decode_budget_covers_maximum_native_contract_upload_chunk() {
+        // This is the production shape emitted for every non-final native
+        // contract artifact chunk. Its 64 KiB byte vector is wrapped by a
+        // dynamic InstructionBox inside a signed transaction, which exercises
+        // more owned decode bookkeeping than the Log and flat-vector fixtures.
+        let chunk = vec![0xA5; SMART_CONTRACT_CODE_CHUNK_BYTES];
+        let frame = QueuePlanJournalFrameV4::Put(record_with_instructions(
+            "native-contract-upload",
+            [InstructionBox::from(UploadSmartContractCodeChunk {
+                code_hash: Hash::new(b"native-contract-upload-artifact"),
+                total_size: u64::try_from(SMART_CONTRACT_CODE_CHUNK_BYTES * 2)
+                    .expect("fixture size fits u64"),
+                chunk_index: 0,
+                chunk_count: 2,
+                chunk,
+            })],
+        ));
+        let payload =
+            norito::encode_canonical(&frame).expect("encode native contract upload journal frame");
+        assert!(
+            payload.len() > SMART_CONTRACT_CODE_CHUNK_BYTES,
+            "fixture must include the complete signed transaction and journal envelope"
+        );
+
+        let canonical_limits = norito::canonical_decode_limits(payload.len());
+        let legacy_element_budget = payload.len();
+        let legacy_allocation_budget = payload
+            .len()
+            .checked_mul(26)
+            .and_then(|bytes| bytes.checked_add(64 * 1024))
+            .expect("legacy fixture allocation budget");
+        assert!(
+            matches!(
+                decode_frame_with_budgets(
+                    &payload,
+                    legacy_element_budget,
+                    canonical_limits.max_total_allocated_bytes(),
+                ),
+                Err(norito::Error::TotalElementsExceeded { .. })
+            ),
+            "the former one-element-per-wire-byte envelope must reproduce its native-upload rejection"
+        );
+        assert!(
+            matches!(
+                decode_frame_with_budgets(
+                    &payload,
+                    canonical_limits.max_total_elements(),
+                    legacy_allocation_budget,
+                ),
+                Err(norito::Error::TotalAllocationExceeded { .. })
+            ),
+            "the former 26x-plus-64-KiB envelope must reproduce its native-upload rejection"
+        );
+
+        let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
+        let exact_limits = QueuePlanJournalLimits::new(
+            1,
+            payload_len,
+            payload_len
+                .checked_add(FRAME_HEADER_BYTES)
+                .and_then(|bytes| bytes.checked_add(FRAME_TRAILER_BYTES))
+                .expect("fixture framed length fits u64"),
+            1,
+        );
+        assert_eq!(
+            decode_frame(&payload, exact_limits)
+                .expect("decode maximum native upload chunk at production limits"),
+            frame
         );
     }
 

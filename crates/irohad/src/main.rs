@@ -9862,13 +9862,22 @@ impl Iroha {
             require_sm_handshake_match: config.network.require_sm_handshake_match,
             require_sm_openssl_preview_match: config.network.require_sm_openssl_preview_match,
         };
-        let (network, child) = IrohaNetwork::start_with_crypto(
+        let initial_trusted_sources = config
+            .common
+            .trusted_peers
+            .value()
+            .others
+            .iter()
+            .map(|peer| peer.id().clone())
+            .collect();
+        let (network, child) = IrohaNetwork::start_with_crypto_and_initial_trusted_sources(
             config.common.key_pair.clone(),
             config.network.clone(),
             config.common.chain.clone(),
             Some(consensus_caps.clone()),
             Some(confidential_caps),
             Some(crypto_caps),
+            initial_trusted_sources,
             supervisor.shutdown_signal(),
         )
         .await

@@ -64,6 +64,115 @@ NON_RELEASE_THEOREM_MODULES = {
     ),
 }
 
+
+# These are the only theorem ranges whose strict transcripts may support the
+# final nine TLAPS and three cross-tool promotions.  Ledger-facing facade names
+# remain explicit, while ``provider_module`` identifies the physical theorem
+# declaration that TLAPM must select.  The three cross-tool records name the
+# bridge theorem, never the operator-only ledger obligation.
+PROMOTION_TLAPS_TARGET_IDS = (
+    "post-gst-deadlock-freedom",
+    "post-gst-starvation-freedom",
+    "timeout-view-liveness",
+    "rotating-leader-liveness",
+    "locked-body-reproposal",
+    "application-liveness",
+    "successor-activation-starvation-freedom",
+    "genesis-height-successor-handoff",
+    "height-liveness",
+)
+PROMOTION_CROSS_TOOL_TARGET_IDS = (
+    "effective-lock-body-acquisition-production-refinement",
+    "progress-witness-production-refinement",
+    "successor-activation-exact-recovery-production-refinement",
+)
+PROMOTION_PROOF_TARGET_CONTRACTS = (
+    PromotionProofTargetContract(
+        "post-gst-deadlock-freedom",
+        "tlaps",
+        "SumeragiV2AsyncLivenessProofs",
+        "SumeragiV2AsyncDeadlockProofs",
+        "DeadlockFreedomObligation",
+    ),
+    PromotionProofTargetContract(
+        "post-gst-starvation-freedom",
+        "tlaps",
+        "SumeragiV2AsyncLivenessProofs",
+        "SumeragiV2AsyncDeadlockProofs",
+        "StarvationFreedomObligation",
+    ),
+    PromotionProofTargetContract(
+        "timeout-view-liveness",
+        "tlaps",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressObligation",
+    ),
+    PromotionProofTargetContract(
+        "rotating-leader-liveness",
+        "tlaps",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureRotatingLeaderProgressObligation",
+    ),
+    PromotionProofTargetContract(
+        "locked-body-reproposal",
+        "tlaps",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureLockedBodyReproposalProgressObligation",
+    ),
+    PromotionProofTargetContract(
+        "application-liveness",
+        "tlaps",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureApplicationCompletionProgressObligation",
+    ),
+    PromotionProofTargetContract(
+        "successor-activation-starvation-freedom",
+        "tlaps",
+        "SumeragiV2SuccessorActivationRefinementProofs",
+        "SumeragiV2SuccessorActivationRefinementProofs",
+        "SuccessorActivationStarvationFreedomObligation",
+    ),
+    PromotionProofTargetContract(
+        "genesis-height-successor-handoff",
+        "tlaps",
+        "SumeragiV2ChainEpochRefinement",
+        "SumeragiV2ChainEpochRefinement",
+        "GenesisHeightSuccessorHandoffObligation",
+    ),
+    PromotionProofTargetContract(
+        "height-liveness",
+        "tlaps",
+        "SumeragiV2ChainLivenessProofs",
+        "SumeragiV2ChainLivenessProofs",
+        "HeightLivenessObligation",
+    ),
+    PromotionProofTargetContract(
+        "effective-lock-body-acquisition-production-refinement",
+        "cross_tool",
+        "SumeragiV2AsyncLivenessProofs",
+        "SumeragiV2AsyncStage4RefinementProofs",
+        "EffectiveLockBodyAcquisitionCrossToolRefinement",
+    ),
+    PromotionProofTargetContract(
+        "progress-witness-production-refinement",
+        "cross_tool",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ProgressWitnessCrossToolRefinement",
+    ),
+    PromotionProofTargetContract(
+        "successor-activation-exact-recovery-production-refinement",
+        "cross_tool",
+        "SumeragiV2ChainEpochRefinement",
+        "SumeragiV2ChainEpochRefinement",
+        "SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement",
+    ),
+)
+
 # Reviewed release obligation inventory.  Keeping this independent from the
 # checked-in ledger makes removing, adding, reordering, or retargeting an
 # obligation an explicit proof-gate change rather than a self-authorizing JSON

@@ -16185,7 +16185,7 @@ mod tests {
     use tokio::io::AsyncWrite;
 
     use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
-    use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, RelayRole};
+    use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, ConsensusMode, RelayRole};
 
     fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         ConsensusConfigCaps {

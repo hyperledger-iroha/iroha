@@ -25,8 +25,8 @@ LEDGER_PATH = FORMAL_DIR / "proof_coverage.json"
 VERUS_SOURCE_DIR = ROOT_DIR / "crates" / "iroha_sumeragi_core" / "src"
 TLAPM_COMMIT = "3ab43c7ff31db4ced850619d4746fa4c841a7681"
 LEDGER_SCHEMA_VERSION = 2
-EVIDENCE_SCHEMA_VERSION = 2
-CROSS_TOOL_EVIDENCE_SCHEMA_VERSION = 3
+EVIDENCE_SCHEMA_VERSION = 3
+CROSS_TOOL_EVIDENCE_SCHEMA_VERSION = 4
 
 _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_async_contracts.py",
@@ -286,6 +286,21 @@ class CrossToolObligationContract:
     ledger_declaration_kind: str | None = None
     ledger_statement: str | None = None
     tla_proof: str | None = None
+
+
+@dataclass(frozen=True)
+class PromotionProofTargetContract:
+    """One exact theorem whose strict range run can support promotion."""
+
+    obligation_id: str
+    kind: str
+    ledger_module: str
+    provider_module: str
+    theorem: str
+    # The first non-promotional pass records only a positive count.  A reviewer
+    # may freeze the observed count here after that pass; evidence generation
+    # never edits this code-owned contract.
+    expected_obligations: int | None = None
 
 
 _execute_checker_component("sumeragi_v2_proof_ledger_cross_tool_contracts.py")
@@ -1875,6 +1890,7 @@ TLAPM_COMPLETE_RE = re.compile(
 )
 TLAPM_RUNNER_MARKER_PREFIX = "SUMERAGI_TLAPS_BACKEND_COMPLETE"
 TLAPM_PREFLIGHT_MARKER_PREFIX = "SUMERAGI_TLAPS_FRONTEND_COMPLETE"
+TLAPM_TARGET_MARKER_PREFIX = "SUMERAGI_TLAPS_TARGET_COMPLETE"
 
 
 class DuplicateKeyError(ValueError):
@@ -3104,33 +3120,54 @@ def _formal_source_manifest(
     return {"sha256": aggregate.hexdigest(), "files": files}
 
 
-def _tlapm_runner_marker(module: str, source_manifest_sha256: str) -> str:
+def _proof_ledger_sha256(formal_dir: Path = FORMAL_DIR) -> str:
+    """Return the byte-exact digest of the source-owned proof ledger."""
+
+    path = formal_dir / "proof_coverage.json"
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"proof ledger is not a regular file: {path}")
+    return _sha256_file(path)
+
+
+def _tlapm_runner_marker(
+    module: str, source_manifest_sha256: str, ledger_sha256: str
+) -> str:
     """Return the exact marker appended only after a strict TLAPM run succeeds."""
 
     return (
         f"{TLAPM_RUNNER_MARKER_PREFIX} module={module} commit={TLAPM_COMMIT} "
-        f"source_manifest_sha256={source_manifest_sha256}"
+        f"source_manifest_sha256={source_manifest_sha256} "
+        f"ledger_sha256={ledger_sha256}"
     )
 
 
-def _tlapm_preflight_marker(module: str, source_manifest_sha256: str) -> str:
+def _tlapm_preflight_marker(
+    module: str, source_manifest_sha256: str, ledger_sha256: str
+) -> str:
     """Return the source-bound marker for a successful strict frontend pass."""
 
     return (
         f"{TLAPM_PREFLIGHT_MARKER_PREFIX} module={module} commit={TLAPM_COMMIT} "
-        f"source_manifest_sha256={source_manifest_sha256}"
+        f"source_manifest_sha256={source_manifest_sha256} "
+        f"ledger_sha256={ledger_sha256}"
     )
 
 
 def _valid_tlapm_preflight_log(
-    log_source: str, *, module: str, source_manifest_sha256: str
+    log_source: str,
+    *,
+    module: str,
+    source_manifest_sha256: str,
+    ledger_sha256: str,
 ) -> bool:
     """Require one nonempty frontend transcript and its exact final marker."""
 
     if not log_source.endswith("\n"):
         return False
     lines = log_source.splitlines()
-    expected = _tlapm_preflight_marker(module, source_manifest_sha256)
+    expected = _tlapm_preflight_marker(
+        module, source_manifest_sha256, ledger_sha256
+    )
     return (
         len(lines) >= 2
         and lines[-1] == expected
@@ -3140,7 +3177,11 @@ def _valid_tlapm_preflight_log(
 
 
 def _tlapm_obligation_count(
-    log_source: str, *, module: str, source_manifest_sha256: str
+    log_source: str,
+    *,
+    module: str,
+    source_manifest_sha256: str,
+    ledger_sha256: str,
 ) -> int | None:
     """Validate a pinned TLAPM log and return its exact proved count.
 
@@ -3153,7 +3194,9 @@ def _tlapm_obligation_count(
     if not log_source.endswith("\n"):
         return None
     lines = log_source.splitlines()
-    expected_marker = _tlapm_runner_marker(module, source_manifest_sha256)
+    expected_marker = _tlapm_runner_marker(
+        module, source_manifest_sha256, ledger_sha256
+    )
     if len(lines) < 2 or lines[-1] != expected_marker:
         return None
     if sum(line.startswith(TLAPM_RUNNER_MARKER_PREFIX) for line in lines) != 1:
@@ -3169,6 +3212,270 @@ def _tlapm_obligation_count(
     if completion is None:
         return None
     return int(completion.group(1))
+
+
+def _promotion_target_invocation(
+    contract: PromotionProofTargetContract, start_line: int, end_line: int
+) -> list[str]:
+    """Return the exact code-owned TLAPM argument vector for one target."""
+
+    # Pinned tlapm_args.ml defines --toolbox START END as an inclusive locus
+    # selection.  Pinned tlapm_lib.ml retains an obligation only when its whole
+    # start/stop locus lies inside that interval; --strict exits 12 when an
+    # explicit selection contains no obligations.
+    return [
+        "--toolbox",
+        str(start_line),
+        str(end_line),
+        "--strict",
+        "--nofp",
+        "--threads",
+        "1",
+        "--cache-dir",
+        (
+            "../../target/formal/sumeragi_v2/tlaps-cache/targets/"
+            f"{contract.obligation_id}"
+        ),
+        f"{contract.provider_module}.tla",
+    ]
+
+
+def _resolve_promotion_target(
+    contract: PromotionProofTargetContract,
+    *,
+    formal_dir: Path,
+    root_dir: Path,
+) -> dict[str, Any]:
+    """Resolve one contract to its unique physical theorem and exact span."""
+
+    matches: list[tuple[Path, str, tuple[int, int]]] = []
+    for path in sorted(formal_dir.glob("*.tla")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        source = path.read_text(encoding="utf-8")
+        span = _top_level_declaration_span(
+            source, contract.theorem, kind="theorem"
+        )
+        if span is not None:
+            matches.append((path, source, span))
+    if len(matches) != 1:
+        providers = [path.stem for path, _, _ in matches]
+        raise ValueError(
+            f"promotion target {contract.obligation_id} theorem {contract.theorem} "
+            f"must have one physical provider; found {providers!r}"
+        )
+    path, source, (start, end) = matches[0]
+    if path.stem != contract.provider_module:
+        raise ValueError(
+            f"promotion target {contract.obligation_id} provider must be "
+            f"{contract.provider_module}, found {path.stem}"
+        )
+    header = MODULE_HEADER_RE.search(source)
+    if header is None or header.group(1) != contract.provider_module:
+        raise ValueError(
+            f"promotion target provider {path} must declare module "
+            f"{contract.provider_module}"
+        )
+    body_with_line = _top_level_theorem_body(
+        source, contract.theorem, preserve_string_contents=True
+    )
+    if body_with_line is None:
+        raise ValueError(
+            f"promotion target {contract.obligation_id} has no theorem body"
+        )
+    body, _ = body_with_line
+    proof = THEOREM_PROOF_MARKER_RE.search(body)
+    if proof is None or not body[proof.end() :].strip():
+        raise ValueError(
+            f"promotion target {contract.obligation_id} must have a nonempty proof"
+        )
+    if proof.group(0).strip().upper() == "OBVIOUS":
+        raise ValueError(
+            f"promotion target {contract.obligation_id} may not use OBVIOUS"
+        )
+    start_line = source.count("\n", 0, start) + 1
+    end_line = source.count("\n", 0, end)
+    if end_line < start_line:
+        raise ValueError(
+            f"promotion target {contract.obligation_id} has an empty source span"
+        )
+    invocation = _promotion_target_invocation(contract, start_line, end_line)
+    return {
+        "obligation_id": contract.obligation_id,
+        "kind": contract.kind,
+        "ledger_module": contract.ledger_module,
+        "provider_module": contract.provider_module,
+        "theorem": contract.theorem,
+        "start_line": start_line,
+        "end_line": end_line,
+        "source": _relative_to_root(path, root_dir),
+        "source_sha256": _sha256_file(path),
+        "proof_span_sha256": hashlib.sha256(
+            source[start:end].encode("utf-8")
+        ).hexdigest(),
+        "invocation": invocation,
+        "invocation_sha256": _canonical_json_sha256(invocation),
+        "expected_obligations": contract.expected_obligations,
+    }
+
+
+def _promotion_target_contract_errors(
+    formal_dir: Path = FORMAL_DIR, root_dir: Path = ROOT_DIR
+) -> list[str]:
+    """Reject drift in the ordered 9 + 3 exact theorem target contract."""
+
+    errors: list[str] = []
+    expected_ids = (*PROMOTION_TLAPS_TARGET_IDS, *PROMOTION_CROSS_TOOL_TARGET_IDS)
+    observed_ids = tuple(
+        contract.obligation_id for contract in PROMOTION_PROOF_TARGET_CONTRACTS
+    )
+    if observed_ids != expected_ids:
+        errors.append(
+            "promotion proof targets must preserve the canonical 9 + 3 order; "
+            f"expected {expected_ids!r}, found {observed_ids!r}"
+        )
+    if len(set(observed_ids)) != len(observed_ids):
+        errors.append("promotion proof targets must not contain duplicate IDs")
+    for index, contract in enumerate(PROMOTION_PROOF_TARGET_CONTRACTS):
+        expected_kind = (
+            "tlaps"
+            if index < len(PROMOTION_TLAPS_TARGET_IDS)
+            else "cross_tool"
+        )
+        if contract.kind != expected_kind:
+            errors.append(
+                f"promotion target {contract.obligation_id} kind must be "
+                f"{expected_kind}, found {contract.kind!r}"
+            )
+        reviewed = REQUIRED_PROOF_OBLIGATION_INVENTORY.get(contract.obligation_id)
+        if reviewed is None:
+            errors.append(
+                f"promotion target {contract.obligation_id} is absent from the "
+                "reviewed proof inventory"
+            )
+        else:
+            reviewed_module, reviewed_symbol = reviewed
+            if contract.ledger_module != reviewed_module:
+                errors.append(
+                    f"promotion target {contract.obligation_id} ledger module must "
+                    f"be {reviewed_module}, found {contract.ledger_module}"
+                )
+            if contract.kind == "tlaps" and contract.theorem != reviewed_symbol:
+                errors.append(
+                    f"promotion target {contract.obligation_id} theorem must be "
+                    f"{reviewed_symbol}, found {contract.theorem}"
+                )
+        if contract.kind == "cross_tool":
+            cross_contract = CROSS_TOOL_REFINEMENT_BY_ID.get(contract.obligation_id)
+            if cross_contract is None:
+                errors.append(
+                    f"promotion target {contract.obligation_id} has no reviewed "
+                    "cross-tool contract"
+                )
+            elif (
+                contract.ledger_module != cross_contract.module
+                or contract.theorem != cross_contract.tla_theorem
+            ):
+                errors.append(
+                    f"promotion target {contract.obligation_id} must select exact "
+                    f"cross-tool bridge {cross_contract.module}!"
+                    f"{cross_contract.tla_theorem}"
+                )
+        if contract.provider_module not in RELEASE_PROOF_MODULES:
+            errors.append(
+                f"promotion target {contract.obligation_id} provider "
+                f"{contract.provider_module} is outside the strict release modules"
+            )
+        expected = contract.expected_obligations
+        if expected is not None and (
+            not isinstance(expected, int) or isinstance(expected, bool) or expected <= 0
+        ):
+            errors.append(
+                f"promotion target {contract.obligation_id} expected obligation "
+                "count must be positive or unset"
+            )
+        try:
+            _resolve_promotion_target(
+                contract, formal_dir=formal_dir, root_dir=root_dir
+            )
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            errors.append(str(error))
+    return errors
+
+
+def _promotion_target_entries(
+    formal_dir: Path = FORMAL_DIR, root_dir: Path = ROOT_DIR
+) -> list[dict[str, Any]]:
+    """Return canonical resolved target metadata in reviewed execution order."""
+
+    errors = _promotion_target_contract_errors(formal_dir, root_dir)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return [
+        _resolve_promotion_target(
+            contract, formal_dir=formal_dir, root_dir=root_dir
+        )
+        for contract in PROMOTION_PROOF_TARGET_CONTRACTS
+    ]
+
+
+def _tlapm_target_marker(
+    target: dict[str, Any],
+    *,
+    obligations_proved: int,
+    source_manifest_sha256: str,
+    ledger_sha256: str,
+) -> str:
+    """Return the exact suffix marker for one strict theorem-range run."""
+
+    return (
+        f"{TLAPM_TARGET_MARKER_PREFIX} "
+        f"obligation_id={target['obligation_id']} "
+        f"provider_module={target['provider_module']} theorem={target['theorem']} "
+        f"start_line={target['start_line']} end_line={target['end_line']} "
+        f"obligations_proved={obligations_proved} commit={TLAPM_COMMIT} "
+        f"source_manifest_sha256={source_manifest_sha256} "
+        f"ledger_sha256={ledger_sha256} "
+        f"source_sha256={target['source_sha256']} "
+        f"proof_span_sha256={target['proof_span_sha256']} "
+        f"invocation_sha256={target['invocation_sha256']}"
+    )
+
+
+def _tlapm_target_obligation_count(
+    log_source: str,
+    *,
+    target: dict[str, Any],
+    source_manifest_sha256: str,
+    ledger_sha256: str,
+) -> int | None:
+    """Validate one strict range transcript and return its nonzero count."""
+
+    if not log_source.endswith("\n"):
+        return None
+    lines = log_source.splitlines()
+    if len(lines) < 2:
+        return None
+    completion = TLAPM_COMPLETE_RE.fullmatch(lines[-2])
+    if completion is None:
+        return None
+    count = int(completion.group(1))
+    expected_marker = _tlapm_target_marker(
+        target,
+        obligations_proved=count,
+        source_manifest_sha256=source_manifest_sha256,
+        ledger_sha256=ledger_sha256,
+    )
+    if lines[-1] != expected_marker:
+        return None
+    if sum(line.startswith(TLAPM_TARGET_MARKER_PREFIX) for line in lines) != 1:
+        return None
+    completion_lines = [
+        line for line in lines if TLAPM_COMPLETE_RE.fullmatch(line) is not None
+    ]
+    if len(completion_lines) != 1:
+        return None
+    return count
 
 
 def _canonical_json_sha256(value: Any) -> str:
@@ -5189,6 +5496,11 @@ def _cross_tool_tla_payload(
         raise ValueError(
             "cross-tool TLAPS evidence is stale relative to the current formal sources"
         )
+    expected_ledger_sha256 = _proof_ledger_sha256(formal_dir)
+    if tlaps_evidence.get("ledger_sha256") != expected_ledger_sha256:
+        raise ValueError(
+            "cross-tool TLAPS evidence is stale relative to the byte-exact ledger"
+        )
     if tlaps_evidence.get("backend_verification") is not True:
         raise ValueError("cross-tool TLAPS evidence is not backend verified")
 
@@ -5302,47 +5614,36 @@ def _cross_tool_tla_payload(
             "and ledger consequent"
         )
 
-    modules = tlaps_evidence.get("modules")
-    if not isinstance(modules, list):
-        raise ValueError("cross-tool TLAPS evidence modules must be an array")
+    target_errors = _promotion_target_evidence_errors(
+        tlaps_evidence, formal_dir=formal_dir, root_dir=root_dir
+    )
+    if target_errors:
+        raise ValueError(
+            "cross-tool TLAPS target evidence is invalid: "
+            + "; ".join(target_errors)
+        )
+    targets = tlaps_evidence.get("promotion_targets")
+    if not isinstance(targets, list):
+        raise ValueError("cross-tool TLAPS promotion_targets must be an array")
     matching = [
         entry
-        for entry in modules
-        if isinstance(entry, dict) and entry.get("module") == theorem_module
+        for entry in targets
+        if isinstance(entry, dict)
+        and entry.get("obligation_id") == contract.obligation_id
     ]
     if len(matching) != 1:
         raise ValueError(
             f"cross-tool TLAPS evidence must contain exactly one "
-            f"{theorem_module} provider log"
+            f"{contract.obligation_id} target log"
         )
     entry = matching[0]
-    expected_log = f"target/formal/sumeragi_v2/tlaps/{theorem_module}.log"
-    if entry.get("log") != expected_log:
+    if (
+        entry.get("provider_module") != theorem_module
+        or entry.get("theorem") != contract.tla_theorem
+    ):
         raise ValueError(
-            f"cross-tool TLAPS evidence must use strict log {expected_log}"
-        )
-    manifest_sha256 = expected_manifest["sha256"]
-    if entry.get("source_manifest_sha256") != manifest_sha256:
-        raise ValueError(
-            f"cross-tool TLAPS log for {theorem_module} is stale"
-        )
-    log_path = root_dir / expected_log
-    if not log_path.is_file() or log_path.is_symlink():
-        raise ValueError(f"cross-tool TLAPS log is not a regular file: {log_path}")
-    log_sha256 = _sha256_file(log_path)
-    if entry.get("log_sha256") != log_sha256:
-        raise ValueError(
-            f"cross-tool TLAPS log digest mismatch for {theorem_module}"
-        )
-    proved = _tlapm_obligation_count(
-        log_path.read_text(encoding="utf-8"),
-        module=theorem_module,
-        source_manifest_sha256=manifest_sha256,
-    )
-    if proved is None or proved <= 0 or entry.get("obligations_proved") != proved:
-        raise ValueError(
-            f"cross-tool TLAPS log for {theorem_module} lacks a fresh strict "
-            "successful result"
+            f"cross-tool TLAPS evidence must select exact bridge "
+            f"{theorem_module}!{contract.tla_theorem}"
         )
     return {
         "module": contract.module,
@@ -5372,9 +5673,7 @@ def _cross_tool_tla_payload(
             expanded_consequent.encode("utf-8")
         ).hexdigest(),
         "source_sha256": _sha256_file(theorem_path),
-        "log": expected_log,
-        "log_sha256": log_sha256,
-        "obligations_proved": proved,
+        "proof_target": entry,
     }
 
 
@@ -8797,7 +9096,7 @@ def build_cross_tool_evidence(
         "schema_version": CROSS_TOOL_EVIDENCE_SCHEMA_VERSION,
         "protocol": "sumeragi-v2",
         "backend_verification": True,
-        "ledger_sha256": _canonical_json_sha256(ledger),
+        "ledger_sha256": _sha256_file(canonical_ledger_path),
         "component_evidence": {
             "tlaps_sha256": _canonical_json_sha256(tlaps_evidence),
             "verus_sha256": _canonical_json_sha256(verus_evidence),
@@ -8914,6 +9213,7 @@ def build_release_evidence(
         )
     source_manifest = _formal_source_manifest(formal_dir, root_dir)
     source_manifest_sha256 = source_manifest["sha256"]
+    ledger_sha256 = _proof_ledger_sha256(formal_dir)
     modules: list[dict[str, Any]] = []
     for module in RELEASE_PROOF_MODULES:
         preflight_path = log_dir / f"{module}.preflight.log"
@@ -8924,6 +9224,7 @@ def build_release_evidence(
             preflight_source,
             module=module,
             source_manifest_sha256=source_manifest_sha256,
+            ledger_sha256=ledger_sha256,
         ):
             raise ValueError(
                 "TLAPM preflight log lacks the exact manifest-bound successful "
@@ -8937,6 +9238,7 @@ def build_release_evidence(
             source,
             module=module,
             source_manifest_sha256=source_manifest_sha256,
+            ledger_sha256=ledger_sha256,
         )
         if count is None or count <= 0:
             raise ValueError(
@@ -8952,6 +9254,42 @@ def build_release_evidence(
                 "log": _relative_to_root(log_path, root_dir),
                 "log_sha256": _sha256_file(log_path),
                 "source_manifest_sha256": source_manifest_sha256,
+                "ledger_sha256": ledger_sha256,
+            }
+        )
+    promotion_targets: list[dict[str, Any]] = []
+    for target in _promotion_target_entries(formal_dir, root_dir):
+        log_path = log_dir / "targets" / f"{target['obligation_id']}.log"
+        if not log_path.is_file() or log_path.is_symlink():
+            raise ValueError(
+                f"missing regular TLAPM target proof log: {log_path}"
+            )
+        source = log_path.read_text(encoding="utf-8")
+        count = _tlapm_target_obligation_count(
+            source,
+            target=target,
+            source_manifest_sha256=source_manifest_sha256,
+            ledger_sha256=ledger_sha256,
+        )
+        if count is None or count <= 0:
+            raise ValueError(
+                "TLAPM target proof log lacks the exact source- and ledger-bound "
+                f"successful suffix: {log_path}"
+            )
+        expected = target["expected_obligations"]
+        if expected is not None and count != expected:
+            raise ValueError(
+                f"TLAPM target {target['obligation_id']} proved {count} "
+                f"obligations, expected frozen count {expected}"
+            )
+        promotion_targets.append(
+            {
+                **target,
+                "obligations_proved": count,
+                "log": _relative_to_root(log_path, root_dir),
+                "log_sha256": _sha256_file(log_path),
+                "source_manifest_sha256": source_manifest_sha256,
+                "ledger_sha256": ledger_sha256,
             }
         )
     return {
@@ -8964,7 +9302,9 @@ def build_release_evidence(
             "version": version,
         },
         "source_manifest": source_manifest,
+        "ledger_sha256": ledger_sha256,
         "modules": modules,
+        "promotion_targets": promotion_targets,
         "facade_providers": _facade_provider_entries(formal_dir, root_dir),
     }
 
@@ -89028,8 +89368,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 388:
-        errors.append("internal release-regression seal must contain exactly 388 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 401:
+        errors.append("internal release-regression seal must contain exactly 401 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -89702,21 +90042,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory to 818 tests across 39 modules.\n"
+            "current inventory to 831 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 818-test,\n39-module inventory. The complete source-sealed\n"
+            "current 831-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory to 818 exact tests "
+            "current source-bound inventory to 831 exact tests "
             "across\n39 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
@@ -89734,6 +90074,161 @@ def _production_liveness_release_inventory_errors(
                     f"{path}: release inventory documentation must contain exact "
                     f"claim {claim!r}"
                 )
+    return errors
+
+
+def _promotion_target_evidence_errors(
+    evidence: dict[str, Any],
+    *,
+    formal_dir: Path = FORMAL_DIR,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Validate the canonical ordered strict transcript for every 9 + 3 target."""
+
+    errors: list[str] = []
+    if evidence.get("schema_version") != EVIDENCE_SCHEMA_VERSION:
+        errors.append(
+            f"proof evidence schema_version must equal {EVIDENCE_SCHEMA_VERSION}"
+        )
+    if evidence.get("protocol") != "sumeragi-v2":
+        errors.append("promotion targets require protocol sumeragi-v2")
+    if evidence.get("backend_verification") is not True:
+        errors.append("promotion targets require backend-verified TLAPS evidence")
+    expected_tool = {
+        "name": "TLAPM",
+        "commit": TLAPM_COMMIT,
+        "version": TLAPM_COMMIT[:7],
+    }
+    if evidence.get("tool") != expected_tool:
+        errors.append("promotion targets require the exact pinned TLAPM identity")
+    expected_manifest = _formal_source_manifest(formal_dir, root_dir)
+    if evidence.get("source_manifest") != expected_manifest:
+        errors.append(
+            "promotion targets are stale relative to the current formal sources"
+        )
+    source_manifest_sha256 = expected_manifest["sha256"]
+    try:
+        ledger_sha256 = _proof_ledger_sha256(formal_dir)
+    except (OSError, ValueError) as error:
+        errors.append(f"promotion targets cannot bind the proof ledger: {error}")
+        ledger_sha256 = ""
+    if evidence.get("ledger_sha256") != ledger_sha256:
+        errors.append(
+            "promotion targets are stale relative to the byte-exact proof ledger"
+        )
+    try:
+        expected_targets = _promotion_target_entries(formal_dir, root_dir)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        return errors + [f"promotion target contract cannot be resolved: {error}"]
+    targets = evidence.get("promotion_targets")
+    if not isinstance(targets, list):
+        return errors + ["proof evidence promotion_targets must be an array"]
+    observed_ids = [
+        entry.get("obligation_id") if isinstance(entry, dict) else None
+        for entry in targets
+    ]
+    expected_ids = [entry["obligation_id"] for entry in expected_targets]
+    if observed_ids != expected_ids:
+        errors.append(
+            "proof evidence promotion targets must preserve canonical 9 + 3 "
+            f"order; expected {expected_ids!r}, found {observed_ids!r}"
+        )
+    if len({value for value in observed_ids if isinstance(value, str)}) != len(
+        [value for value in observed_ids if isinstance(value, str)]
+    ):
+        errors.append("proof evidence promotion targets must not repeat an ID")
+    if len(targets) != len(expected_targets):
+        return errors
+    dynamic_fields = {
+        "obligations_proved",
+        "log",
+        "log_sha256",
+        "source_manifest_sha256",
+        "ledger_sha256",
+    }
+    for index, expected_target in enumerate(expected_targets):
+        entry = targets[index]
+        obligation_id = expected_target["obligation_id"]
+        if not isinstance(entry, dict):
+            errors.append(
+                f"proof evidence promotion target {obligation_id} must be an object"
+            )
+            continue
+        if set(entry) != set(expected_target) | dynamic_fields:
+            errors.append(
+                f"proof evidence promotion target {obligation_id} fields are not "
+                "canonical"
+            )
+        for field, expected_value in expected_target.items():
+            if entry.get(field) != expected_value:
+                errors.append(
+                    f"proof evidence promotion target {obligation_id} has wrong "
+                    f"{field}"
+                )
+        proved = entry.get("obligations_proved")
+        if not isinstance(proved, int) or isinstance(proved, bool) or proved <= 0:
+            errors.append(
+                f"proof evidence promotion target {obligation_id} has no positive "
+                "proved count"
+            )
+        frozen_count = expected_target["expected_obligations"]
+        if frozen_count is not None and proved != frozen_count:
+            errors.append(
+                f"proof evidence promotion target {obligation_id} does not match "
+                f"frozen obligation count {frozen_count}"
+            )
+        if entry.get("source_manifest_sha256") != source_manifest_sha256:
+            errors.append(
+                f"proof evidence promotion target {obligation_id} is not bound "
+                "to the current source manifest"
+            )
+        if entry.get("ledger_sha256") != ledger_sha256:
+            errors.append(
+                f"proof evidence promotion target {obligation_id} is not bound "
+                "to the current proof ledger"
+            )
+        expected_log = (
+            "target/formal/sumeragi_v2/tlaps/targets/"
+            f"{obligation_id}.log"
+        )
+        if entry.get("log") != expected_log:
+            errors.append(
+                f"proof evidence promotion target {obligation_id} must use log "
+                f"{expected_log}"
+            )
+            continue
+        log_path = root_dir / expected_log
+        if not log_path.is_file() or log_path.is_symlink():
+            errors.append(
+                f"proof evidence target log is not a regular file: {log_path}"
+            )
+            continue
+        if entry.get("log_sha256") != _sha256_file(log_path):
+            errors.append(
+                f"proof evidence target log digest mismatch for {obligation_id}"
+            )
+            continue
+        try:
+            log_source = log_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            errors.append(f"proof evidence target log is not UTF-8: {log_path}")
+            continue
+        actual_count = _tlapm_target_obligation_count(
+            log_source,
+            target=expected_target,
+            source_manifest_sha256=source_manifest_sha256,
+            ledger_sha256=ledger_sha256,
+        )
+        if actual_count is None:
+            errors.append(
+                "proof evidence target log lacks the exact range-, source-, and "
+                f"ledger-bound successful suffix for {obligation_id}"
+            )
+        if actual_count != proved:
+            errors.append(
+                f"proof evidence target proved count does not match log for "
+                f"{obligation_id}"
+            )
     return errors
 
 
@@ -89778,7 +90273,9 @@ def _release_evidence_errors(
         "backend_verification",
         "tool",
         "source_manifest",
+        "ledger_sha256",
         "modules",
+        "promotion_targets",
         "facade_providers",
     }
     if set(evidence) != expected_top_level_keys:
@@ -89813,6 +90310,29 @@ def _release_evidence_errors(
     if evidence.get("source_manifest") != expected_manifest:
         errors.append("proof evidence source manifest does not match current TLA+ sources")
     source_manifest_sha256 = expected_manifest["sha256"]
+    canonical_ledger_path = formal_dir / "proof_coverage.json"
+    try:
+        canonical_ledger = load_ledger(canonical_ledger_path)
+        expected_ledger_sha256 = _proof_ledger_sha256(formal_dir)
+    except (OSError, json.JSONDecodeError, DuplicateKeyError, ValueError) as error:
+        errors.append(f"proof evidence cannot resolve source-bound ledger: {error}")
+        expected_ledger_sha256 = ""
+    else:
+        if canonical_ledger != ledger:
+            errors.append(
+                "release proof ledger differs from the source-bound canonical "
+                "proof_coverage.json"
+            )
+    if evidence.get("ledger_sha256") != expected_ledger_sha256:
+        errors.append(
+            "proof evidence ledger digest does not match byte-exact "
+            "proof_coverage.json"
+        )
+    errors.extend(
+        _promotion_target_evidence_errors(
+            evidence, formal_dir=formal_dir, root_dir=root_dir
+        )
+    )
 
     modules = evidence.get("modules")
     if not isinstance(modules, list):
@@ -89831,6 +90351,7 @@ def _release_evidence_errors(
             "log",
             "log_sha256",
             "source_manifest_sha256",
+            "ledger_sha256",
         }:
             errors.append("proof evidence module fields are not canonical")
         module = entry.get("module")
@@ -89849,6 +90370,11 @@ def _release_evidence_errors(
         if entry.get("source_manifest_sha256") != source_manifest_sha256:
             errors.append(
                 f"proof evidence module {module} is not bound to the current source manifest"
+            )
+        if entry.get("ledger_sha256") != expected_ledger_sha256:
+            errors.append(
+                f"proof evidence module {module} is not bound to the current "
+                "proof ledger"
             )
 
         preflight_value = entry.get("preflight_log")
@@ -89880,6 +90406,7 @@ def _release_evidence_errors(
                         preflight_source,
                         module=module,
                         source_manifest_sha256=source_manifest_sha256,
+                        ledger_sha256=expected_ledger_sha256,
                     ):
                         errors.append(
                             "proof evidence preflight log lacks the exact "
@@ -89908,6 +90435,7 @@ def _release_evidence_errors(
             log_source,
             module=module,
             source_manifest_sha256=source_manifest_sha256,
+            ledger_sha256=expected_ledger_sha256,
         )
         if actual_count is None:
             errors.append(
@@ -89981,6 +90509,11 @@ def validate_ledger(
 
     module_sources, module_errors = _module_sources(formal_dir)
     errors.extend(module_errors)
+    errors.extend(
+        _promotion_target_contract_errors(
+            formal_dir, _formal_repo_root(formal_dir)
+        )
+    )
     errors.extend(_shared_tlc_result_contract_source_fidelity_errors(ROOT_DIR))
     errors.extend(_release_proof_dependency_coverage_errors(formal_dir))
     errors.extend(_resume_vote_witness_errors(formal_dir))
@@ -90438,6 +90971,24 @@ def _parser() -> argparse.ArgumentParser:
         help="print the current canonical TLA+ source-manifest digest and exit",
     )
     mode.add_argument(
+        "--print-proof-ledger-sha256",
+        action="store_true",
+        help="print the byte-exact proof_coverage.json digest and exit",
+    )
+    mode.add_argument(
+        "--print-promotion-targets-tsv",
+        action="store_true",
+        help="print the ordered exact 9 + 3 theorem-range contract and exit",
+    )
+    mode.add_argument(
+        "--print-promotion-target-counts",
+        action="store_true",
+        help=(
+            "validate --evidence and print observed target counts for explicit "
+            "review; never edits or promotes the code-owned contract"
+        ),
+    )
+    mode.add_argument(
         "--print-cross-tool-obligations",
         action="store_true",
         help=(
@@ -90463,6 +91014,68 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.print_source_manifest_sha256:
         print(_formal_source_manifest()["sha256"])
+        return 0
+    if args.print_proof_ledger_sha256:
+        if not args.ledger.is_file() or args.ledger.is_symlink():
+            print(
+                f"proof ledger is not a regular file: {args.ledger}",
+                file=sys.stderr,
+            )
+            return 1
+        print(_sha256_file(args.ledger))
+        return 0
+    if args.print_promotion_targets_tsv:
+        try:
+            targets = _promotion_target_entries()
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            print(f"promotion target contract is invalid: {error}", file=sys.stderr)
+            return 1
+        fields = (
+            "obligation_id",
+            "kind",
+            "ledger_module",
+            "provider_module",
+            "theorem",
+            "start_line",
+            "end_line",
+            "source",
+            "source_sha256",
+            "proof_span_sha256",
+            "invocation_sha256",
+            "expected_obligations",
+        )
+        for target in targets:
+            print(
+                "\t".join(
+                    "-" if target[field] is None else str(target[field])
+                    for field in fields
+                )
+            )
+        return 0
+    if args.print_promotion_target_counts:
+        if args.evidence is None:
+            print(
+                "--print-promotion-target-counts requires --evidence",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            evidence = load_ledger(args.evidence)
+        except (OSError, json.JSONDecodeError, DuplicateKeyError) as error:
+            print(f"proof evidence load failed: {error}", file=sys.stderr)
+            return 1
+        if not isinstance(evidence, dict):
+            print("proof evidence must be a JSON object", file=sys.stderr)
+            return 1
+        errors = _promotion_target_evidence_errors(evidence)
+        if errors:
+            for error in errors:
+                print(f"error: {error}", file=sys.stderr)
+            return 1
+        for target in evidence["promotion_targets"]:
+            print(
+                f"{target['obligation_id']}\t{target['obligations_proved']}"
+            )
         return 0
     if args.print_cross_tool_obligations:
         try:

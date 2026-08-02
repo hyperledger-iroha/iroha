@@ -1149,7 +1149,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 818 tests across thirty-nine Rust
+The current pre-network release inventory names 831 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1245,7 +1245,9 @@ quarantine regressions bind one logical owner across every physical retry,
 yielding the 806-test checkpoint. Seven physical-cut, adapter-capability,
 aggregate-rebase, and ineligible-driver regressions yield the 813-test
 checkpoint. Five admission/coalescing, Busy pre-runtime ownership, and
-reconstructed-chunk terminality regressions yield the current 818-test,
+reconstructed-chunk terminality regressions yield the 818-test checkpoint.
+Thirteen exact admission, retry, tombstone, and high-water regressions yield the
+current 831-test,
 39-module inventory. The complete source-sealed
 pre-network corridor
 contains 82 legs. Six source-sealed command legs and the G-SCALE
@@ -1317,7 +1319,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`0be88ecc9810d15528624015bacbf57924fedabea220ff5873b2374bbcfb6de8`.
+`b93aa49018bdca8a1da50dff6b982b17faf3a8d8e8921aa6616a0e758b028cbc`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1381,7 +1383,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 818-name tree still requires a clean committed, detached,
+names; the current 831-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

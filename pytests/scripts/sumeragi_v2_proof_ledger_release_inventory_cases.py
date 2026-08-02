@@ -6,17 +6,39 @@
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 818 tests",
+            "must contain exactly 831 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "  peer::shared_byte_budget_tests::authenticated_source_count_registry_bounds_identity_churn_and_capacity_drift\n",
             "production liveness inventory repeats tests",
         ),
+        *(
+            (
+                f"  {test_name}\n",
+                "",
+                f"production ownership regression {test_name} must be pinned exactly once; found 0",
+            )
+            for test_name in (
+                "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+                "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
+                "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
+                "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
+                "sumeragi::v2_runtime::tests::certified_body_pipeline_retains_statement_and_owner_across_stage_kinds",
+                "sumeragi::v2_runtime::tests::body_pipeline_acquires_commit_authority_monotonically_under_one_owner",
+                "sumeragi::v2_runtime::tests::applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome",
+                "sumeragi::v2_runtime::tests::applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation",
+                "sumeragi::v2_runtime::tests::drained_internal_ignore_uses_exact_durable_tombstone_before_readmission",
+                "sumeragi::v2_runtime::tests::queued_body_completion_coalesces_only_its_incumbent_owner",
+                "sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal",
+                "sumeragi::v2_runtime::tests::restored_serve_high_watermark_precedes_startup_runtime_owner",
+                "sumeragi::v2_runtime::tests::full_runtime_churn_cannot_cross_an_exact_serve_ordinal",
+            )
+        ),
         (
-            "readonly expected_production_liveness_test_count=818",
-            "readonly expected_production_liveness_test_count=812",
-            "production liveness source count must be sealed as 818",
+            "readonly expected_production_liveness_test_count=831",
+            "readonly expected_production_liveness_test_count=830",
+            "production liveness source count must be sealed as 831",
         ),
         (
             "readonly expected_typed_rollover_formal_mutation_count=45",
@@ -428,27 +450,27 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 818 tests across 39 modules.\n"
+            "current inventory to 831 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 82 legs.",
-            "current inventory to 818 tests across 39 modules.\n"
+            "current inventory to 831 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 81 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 818-test,\n39-module inventory. The complete source-sealed\n"
+            "current 831-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 82 legs",
-            "current 818-test,\n39-module inventory. The complete source-sealed\n"
+            "current 831-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 81 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current source-bound inventory to 818 exact tests "
+            "current source-bound inventory to 831 exact tests "
             "across\n39 modules and 82 pre-network legs.",
-            "current source-bound inventory to 818 exact tests "
+            "current source-bound inventory to 831 exact tests "
             "across\n39 modules and 81 pre-network legs.",
         ),
     ),
@@ -499,9 +521,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 818",
-            "_PRODUCTION_TEST_COUNT = 812",
-            "production test count must equal the exact shell inventory count 818",
+            "_PRODUCTION_TEST_COUNT = 831",
+            "_PRODUCTION_TEST_COUNT = 830",
+            "production test count must equal the exact shell inventory count 831",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -521,8 +543,14 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-runtime", "sumeragi::v2_runtime::tests", 58),',
-            '("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),',
+            '("production-v2-effects", "sumeragi::v2_effects::tests", 71),',
+            '("production-v2-effects", "sumeragi::v2_effects::tests", 70),',
+            "production module receipt tuple must equal the exact shell",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),',
+            '("production-v2-runtime", "sumeragi::v2_runtime::tests", 67),',
             "production module receipt tuple must equal the exact shell",
         ),
         (

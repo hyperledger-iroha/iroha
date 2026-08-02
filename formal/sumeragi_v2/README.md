@@ -1103,7 +1103,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 818 named tests
+Before network startup, the executable wrapper inventories 831 named tests
 across 39 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1201,8 +1201,9 @@ restart, provenance, and quarantine regressions bind the actor-global logical
 owner separately from every physical queue occurrence. Seven physical-cut,
 adapter-capability, aggregate-rebase, and ineligible-driver regressions produce
 the 813-test checkpoint. Five admission/coalescing, Busy pre-runtime ownership,
-and reconstructed-chunk terminality regressions bring the
-current inventory to 818 tests across 39 modules.
+and reconstructed-chunk terminality regressions bring the 818-test checkpoint.
+Thirteen exact admission, retry, tombstone, and high-water regressions bring the
+current inventory to 831 tests across 39 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 82 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1277,7 +1278,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`0be88ecc9810d15528624015bacbf57924fedabea220ff5873b2374bbcfb6de8`.
+`b93aa49018bdca8a1da50dff6b982b17faf3a8d8e8921aa6616a0e758b028cbc`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1400,7 +1401,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and the exact
-818-test inventory, the pinned harness lock and resolved toolchain, the formal
+831-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

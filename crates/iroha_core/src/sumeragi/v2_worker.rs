@@ -15844,8 +15844,33 @@ impl ProductionV2Services {
         &self,
         message: &BlockMessage,
     ) -> Result<ExactOutputRolloverClaim, String> {
-        let Some((proposal_height, _)) = lane_output_identity(message) else {
-            return Err("Sumeragi v2 lane output has no typed lane identity".to_owned());
+        let (proposal_height, rollover_claim) = if let Some((proposal_height, _)) =
+            lane_output_identity(message)
+        {
+            (
+                proposal_height,
+                ExactOutputRolloverClaim::Lane(self.exact_output_scope()),
+            )
+        } else {
+            // Executable payload and NewView messages are authenticated lane
+            // transport, but they are not independently reconstructible lane
+            // consensus output. Keep them exact until actor admission instead
+            // of incorrectly requiring a durable lane-artifact witness.
+            let proposal_height = match message {
+                BlockMessage::LaneExecutablePayload(payload) => {
+                    payload.origin_proposal.descriptor.proposal_height
+                }
+                BlockMessage::LaneBlockNewViewVote(vote) => vote.body.proposal_height,
+                BlockMessage::LaneBlockNewViewCertificate(certificate) => {
+                    certificate.body.proposal_height
+                }
+                _ => {
+                    return Err(
+                        "Sumeragi v2 lane output has no typed lane transport identity".to_owned(),
+                    );
+                }
+            };
+            (proposal_height, ExactOutputRolloverClaim::Exact)
         };
         if proposal_height != self.context.height {
             return Err(format!(
@@ -15853,7 +15878,7 @@ impl ProductionV2Services {
                 self.context.height
             ));
         }
-        Ok(ExactOutputRolloverClaim::Lane(self.exact_output_scope()))
+        Ok(rollover_claim)
     }
 
     /// Retry every currently schedulable exact semantic-output target.
@@ -16590,6 +16615,9 @@ impl ProductionV2Services {
         if !matches!(
             message,
             BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneBlockNewViewVote(_)
+                | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneBlockCertificate(_)
@@ -16997,6 +17025,9 @@ impl ProductionV2Services {
         let rollover_claim = match &message {
             BlockMessage::V2(_) => ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
             BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneExecutablePayload(_)
+            | BlockMessage::LaneBlockNewViewVote(_)
+            | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::LaneBlockCertificate(_) => {
@@ -17038,6 +17069,9 @@ impl ProductionV2Services {
         let rollover_claim = match &message {
             BlockMessage::V2(_) => ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
             BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneExecutablePayload(_)
+            | BlockMessage::LaneBlockNewViewVote(_)
+            | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::LaneBlockCertificate(_) => {
@@ -24529,6 +24563,205 @@ pub(super) mod tests {
             CertifiedServeCommit::Queued
         ));
         assert_eq!(ingress.len(), 1);
+    }
+
+    #[test]
+    fn selected_serve_request_unblocks_matching_body_dependent_control() {
+        let (service, keys) = fixture_with_block_payload();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let requester = request.request().requester.clone();
+        let voter = service.context.roster[0].validator.clone();
+        let vote = wire::Vote {
+            round: proposal.round,
+            proposal_round: proposal.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: proposal.subject,
+            execution_commitment: request.request().certificate.execution_commitment,
+            signer: 0,
+            signature: vec![0xA5; 48],
+        };
+        let vote_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(vote),
+        ));
+        let qc_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(
+                request.request().certificate.clone(),
+            ),
+        ));
+        let proposal_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+        ));
+
+        for (case, control_message) in [
+            ("proposal", proposal_message),
+            ("vote", vote_message),
+            ("prepare-qc", qc_message),
+        ] {
+            let (command_tx, command_rx, _admission) = test_io_command_channel(4);
+            let ingress = FairV2Ingress::new(
+                128,
+                128 * 1024 * 1024,
+                64 * 1024 * 1024,
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+            );
+            let roster = service
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<BTreeSet<_>>();
+            ingress
+                .configure_roster_for_context(
+                    roster.iter().cloned(),
+                    &service.context.chain_id,
+                    service.context.da_layout,
+                )
+                .expect("configure production-shaped combined ingress");
+            ingress.require_certified_serve_gate();
+            ingress.require_leader_wire_lifecycle_gate();
+
+            let directory = TempDir::new().expect("temporary combined ingress gate");
+            let wal_path = directory
+                .path()
+                .join(format!("{case}-serve-body-recovery.wal"));
+            let owner = [0xAA; 32];
+            let capacity = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                service.context.da_layout.max_chunk_count,
+            )
+            .expect("derive finite leader lifecycle capacity");
+            let recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                service.context.id(),
+                service.context.height,
+                owner,
+                0,
+                false,
+            );
+            let (leader_gate, restore) =
+                super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                    &wal_path,
+                    service.context.id(),
+                    service.context.height,
+                    owner,
+                    roster,
+                    capacity,
+                    service.context.da_layout.max_chunk_count,
+                    recovery_authority,
+                    &[],
+                    &[],
+                )
+                .expect("open production-shaped leader lifecycle gate");
+            let serve_gate = CertifiedServeIngressGate {
+                queue: Arc::clone(&command_tx.queue),
+            };
+            ingress
+                .bind_certified_serve_gate(serve_gate.clone())
+                .expect("bind exact Serve ingress gate");
+            ingress
+                .bind_leader_wire_lifecycle_gate(
+                    Arc::clone(&leader_gate),
+                    restore,
+                    command_tx.queue.lifecycle_ordinals.clone(),
+                    service.context.id(),
+                    service.context.height,
+                )
+                .expect("bind leader gate to the same actor-global ordinal source");
+            ingress.open().expect("open combined production ingress");
+
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(
+                    control_message,
+                    Some(voter.clone()),
+                )),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), voter.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let serve_barrier = serve_gate
+                .selected_barrier()
+                .expect("inspect the bound Serve gate")
+                .expect("the body-recovery request owns the selected Serve barrier");
+            assert_eq!(serve_barrier.scheduler_ordinal(), 2, "case={case}");
+            assert_eq!(serve_barrier.carrier_ordinal(), 2, "case={case}");
+            assert_eq!(
+                leader_gate
+                    .earliest_ingress_scheduler_ordinal()
+                    .expect("inspect the retained control owner"),
+                Some(1),
+                "case={case}"
+            );
+
+            let mut prepared = None;
+            let mut body_request = ingress
+                .try_recv_if_checked(|inbound| {
+                    let is_matching_request = matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                            ..
+                        }) if candidate.round == proposal.round
+                            && candidate.subject == proposal.subject
+                            && HashOf::new(candidate) == request.request_hash()
+                    );
+                    if is_matching_request {
+                        prepared = Some(
+                            command_tx
+                                .prepare_reserved_serve(
+                                    CertifiedServeOwnerKey::Roster(requester.clone()),
+                                    request.clone(),
+                                )
+                                .expect("prepare the exact selected body-recovery request"),
+                        );
+                    }
+                    is_matching_request
+                })
+                .expect("checked selector preserves both durable gates")
+                .unwrap_or_else(|| {
+                    panic!("selected Serve request crosses blocked matching control: {case}")
+                });
+            let admission = prepared.expect("predicate prepared the exact Serve reservation");
+            let ingress_ownership = body_request
+                .take_ingress_ownership()
+                .expect("body-recovery request retains fair-ingress ownership");
+            let (_, _, reply_routes) = body_request.into_message_sender_and_reply_routes();
+            assert!(matches!(
+                command_tx
+                    .commit_serve(
+                        &admission,
+                        reply_routes.expect("body-recovery request retains its reply route"),
+                        ingress_ownership,
+                    )
+                    .expect("commit the exact body-recovery Serve request"),
+                CertifiedServeCommit::Queued
+            ));
+            assert!(matches!(
+                command_rx.try_recv(),
+                Ok(V2IoCommand::Serve { lifecycle_id, .. })
+                    if lifecycle_id == admission.lifecycle_id
+            ));
+            assert_eq!(
+                ingress.len(),
+                1,
+                "retained control is not displaced: {case}"
+            );
+            assert_eq!(
+                leader_gate
+                    .earliest_ingress_scheduler_ordinal()
+                    .expect("control remains the durable leader-wire owner"),
+                Some(1),
+                "case={case}"
+            );
+        }
     }
 
     #[test]
