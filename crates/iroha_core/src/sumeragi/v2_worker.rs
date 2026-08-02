@@ -12029,6 +12029,28 @@ impl PendingExactOutput {
         Ok(None)
     }
 
+    /// Return whether a FIFO head is waiting for an external reply-route event.
+    ///
+    /// A later fanout for the same source remains locally dispatchable while
+    /// its older head is parked for reconnect or owns a pending writer-flush
+    /// acknowledgement. That is a valid quiescent state, not a missing-head
+    /// invariant failure.
+    fn has_quiescent_fifo_head(&self) -> Result<bool, String> {
+        for (fanout_index, fanout) in self.fanouts.iter().enumerate() {
+            for (target_index, target) in fanout.targets.iter().enumerate() {
+                if fanout.target_is_complete(target_index)
+                    || (!target.parked && target.pending_flush.is_none())
+                {
+                    continue;
+                }
+                if self.target_is_global_head(fanout_index, target_index)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     fn next_inactive_reply_target(&self) -> Option<(usize, usize)> {
         let fanout_count = self.fanouts.len();
         for fanout_offset in 0..fanout_count {
@@ -12332,12 +12354,15 @@ impl PendingExactOutput {
                 {
                     return Ok(ExactOutputDriveOutcome::Drained);
                 }
-                return closest_backpressure_rank
-                    .map(|closest_rank| ExactOutputDriveOutcome::Backpressured { closest_rank })
-                    .ok_or_else(|| {
-                        "Sumeragi v2 exact-output scheduler found no per-target FIFO head"
-                            .to_owned()
-                    });
+                if let Some(closest_rank) = closest_backpressure_rank {
+                    return Ok(ExactOutputDriveOutcome::Backpressured { closest_rank });
+                }
+                if self.has_quiescent_fifo_head()? {
+                    return Ok(ExactOutputDriveOutcome::Drained);
+                }
+                return Err(
+                    "Sumeragi v2 exact-output scheduler found no per-target FIFO head".to_owned(),
+                );
             };
             let inactive_reply = self
                 .fanouts
@@ -19352,6 +19377,67 @@ pub(super) mod tests {
     }
 
     include!("tests/v2_worker_reply_route_cases.rs");
+
+    #[test]
+    fn pending_reply_flush_fifo_head_quiesces_later_same_source_fanout() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let route = routes.mint(peer.clone());
+        let routed = |message| {
+            PendingExactFanout::new_with_routes(
+                vec![message],
+                vec![peer.clone()],
+                vec![ExactTargetRoute::Reply(route.clone())],
+            )
+            .expect("one exact reply fanout")
+        };
+        let mut pending =
+            PendingExactOutput::new(2, 1, 1, &[]).expect("two same-source reply fanouts fit");
+        assert_eq!(
+            pending.enqueue(routed(merge_share_message(b"older pending flush"))),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+
+        let mut flush_control = None;
+        assert_eq!(
+            pending.drive_with_budget_ack(1, |post, ticket, attempted, timeout_attempt| {
+                assert!(ticket.is_none());
+                let ExactTargetRoute::Reply(attempted) = attempted else {
+                    panic!("exact reply changed route kind")
+                };
+                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
+                    &post,
+                    attempted,
+                    timeout_attempt,
+                );
+                flush_control = Some(control);
+                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
+            }),
+            Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                closest_backpressure_rank: None,
+            })
+        );
+        assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
+        assert_eq!(
+            pending.enqueue(routed(merge_share_message(b"later same source"))),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+
+        assert_eq!(
+            pending.drive_with_budget_ack(
+                usize::MAX,
+                |_post, _ticket, _route, _timeout_attempt| {
+                    panic!("a later same-source fanout must wait behind its pending flush head")
+                },
+            ),
+            Ok(ExactOutputDriveOutcome::Drained)
+        );
+        assert_eq!(pending.fanouts.len(), 2);
+        assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
+        assert!(pending.fanouts[1].has_dispatchable_target());
+        drop(flush_control);
+    }
 
     #[test]
     fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses() {
