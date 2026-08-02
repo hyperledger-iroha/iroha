@@ -6271,6 +6271,11 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
         recovered.body_state(prepare.round(), subject),
         BodyState::Missing
     );
+    let signed = complete_signature(&mut recovered, 0x7d);
+    assert!(signed.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::Broadcast(ConsensusMessageV2::Vote(vote)) if vote.vote() == commit_vote
+    )));
 
     let rebound_available = recovered
         .step(Event::BodyAvailable {
@@ -6283,6 +6288,19 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
         rebound_available.effects(),
         [Effect::StoreBody { tag, .. }] if *tag == current_tag
     ));
+    let store_retry = recovered
+        .step(Event::RetransmitElapsed { tag: current_tag })
+        .expect("retransmission rebinds available locked storage to the current view");
+    assert!(store_retry.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::StoreBody {
+            tag,
+            round,
+            subject: stored_subject,
+        } if *tag == current_tag
+            && *round == prepare.round()
+            && *stored_subject == subject
+    )));
     let rebound_stored = recovered
         .step(Event::BodyStored {
             tag: current_tag,

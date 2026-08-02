@@ -3122,13 +3122,16 @@ impl Reducer {
                         ..
                     } if event_round == round && event_subject == subject
                 );
-                let decided_retry = matches!(event, Event::RetransmitElapsed { .. })
-                    && after.durable.decision().is_some_and(|decision| {
+                let certified_retry = matches!(event, Event::RetransmitElapsed { .. })
+                    && (after.durable.decision().is_some_and(|decision| {
                         after.decision_body_round(decision) == *round
                             && decision.subject() == *subject
-                    });
+                    }) || (after.durable.decision().is_none()
+                        && after.durable.locked().is_some_and(|locked| {
+                            locked.round() == *round && locked.subject() == *subject
+                        })));
                 (after.body_state(*round, *subject) == BodyState::Available
-                    && (newly_available || decided_retry))
+                    && (newly_available || certified_retry))
                     .then(|| EffectCapabilityKey {
                         kind: EFFECT_STORE,
                         tag: Self::tag_projection(after.current_tag()),
@@ -3147,13 +3150,16 @@ impl Reducer {
                         ..
                     } if event_round == round && event_subject == subject
                 );
-                let decided_retry = matches!(event, Event::RetransmitElapsed { .. })
-                    && after.durable.decision().is_some_and(|decision| {
+                let certified_retry = matches!(event, Event::RetransmitElapsed { .. })
+                    && (after.durable.decision().is_some_and(|decision| {
                         after.decision_body_round(decision) == *round
                             && decision.subject() == *subject
-                    });
+                    }) || (after.durable.decision().is_none()
+                        && after.durable.locked().is_some_and(|locked| {
+                            locked.round() == *round && locked.subject() == *subject
+                        })));
                 (after.body_state(*round, *subject) == BodyState::Durable
-                    && (newly_durable || decided_retry))
+                    && (newly_durable || certified_retry))
                     .then(|| EffectCapabilityKey {
                         kind: EFFECT_VALIDATE,
                         tag: Self::tag_projection(after.current_tag()),
