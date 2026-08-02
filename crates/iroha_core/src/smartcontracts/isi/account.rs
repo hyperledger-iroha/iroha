@@ -791,6 +791,17 @@ pub mod isi {
             let account_id = self.destination().clone();
             let permission = self.object().clone();
 
+            if !crate::alias::asset_definition_alias_permission_targets_active_binding(
+                &state_transaction.world,
+                &permission,
+                state_transaction.block_unix_timestamp_ms(),
+            ) {
+                return Err(Error::InvariantViolation(
+                    "exact asset-definition alias permission does not target its current live binding"
+                        .into(),
+                ));
+            }
+
             if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                 state_transaction,
                 &permission,

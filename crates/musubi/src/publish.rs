@@ -183,7 +183,8 @@ impl PublicationRequestV1 {
                 });
             }
         }
-        if self.genesis_block_hash.iter().all(|byte| *byte == 0)
+        if self.chain_id.as_str().is_empty()
+            || self.genesis_block_hash.iter().all(|byte| *byte == 0)
             || self.seed_provider.as_bytes().iter().all(|byte| *byte == 0)
             || self.nonce.iter().all(|byte| *byte == 0)
             || self.expected_policy_revision == 0
@@ -321,7 +322,7 @@ impl PublicationValidationEvidenceV1 {
 /// Idempotent archive-registration and permanent pin/order result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveRegistrationV1 {
-    /// Finalized authoritative archive record retaining this operation's exact staging receipt.
+    /// Finalized archive retaining a verified receipt for this exact operation binding.
     pub archive: MusubiArchiveRecordV1,
     /// Stable location identity reserved for this publication.
     pub location_id: MusubiArchiveLocationIdV1,
@@ -354,7 +355,7 @@ impl PublicationArchiveRegistrationV1 {
             .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
         if self.archive.archive_id != request.archive_commitment.archive_id()
             || &self.archive.commitment != &request.archive_commitment
-            || &self.archive.staging_receipt != staging_receipt
+            || registered_binding != &staging_receipt.payload.binding
             || &registered_binding.chain_id != &request.chain_id
             || registered_binding.genesis_block_hash != request.genesis_block_hash
             || registered_binding.semantic_release_manifest_digest
@@ -371,7 +372,7 @@ impl PublicationArchiveRegistrationV1 {
             return Err(PublicationError::InvalidEvidence {
                 phase: PublicationPhaseV1::ArchiveRegistration,
                 reason:
-                    "archive registration, exact staging receipt, or permanent pin was substituted"
+                    "archive registration, operation-bound staging receipt, or permanent pin was substituted"
                         .to_owned(),
             });
         }
@@ -468,6 +469,10 @@ impl PublicationAmxSubmissionV1 {
 /// Exact finalized home-dataspace and universal-index publication result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationFinalEvidenceV1 {
+    /// Deployment-selected chain identity returned with the universal-index row.
+    pub chain_id: ChainId,
+    /// Exact genesis block hash returned with the universal-index row.
+    pub genesis_block_hash: [u8; 32],
     /// Finalized universal registry snapshot used for the exact verification.
     pub snapshot: MusubiRegistrySnapshotV1,
     /// Exact authoritative release record in the stable home dataspace.
@@ -489,7 +494,10 @@ impl PublicationFinalEvidenceV1 {
             .map_err(|error| invalid(PublicationPhaseV1::FinalVerification, error))?;
         let manifest = &request.publication.manifest;
         let row = &self.universal_release;
-        if self.snapshot.finalized_height < request.publication.resolution.snapshot.finalized_height
+        if self.chain_id != request.chain_id
+            || self.genesis_block_hash != request.genesis_block_hash
+            || self.snapshot.finalized_height
+                < request.publication.resolution.snapshot.finalized_height
             || self.snapshot.index_revision < request.publication.resolution.snapshot.index_revision
             || &self.home_release.manifest != manifest
             || self.home_release.release_digest != manifest.release_digest()
@@ -651,7 +659,8 @@ impl PublicationJournalV1 {
                 &self.request,
                 self.staging_receipt.as_ref().ok_or_else(|| {
                     PublicationError::InvalidJournal(
-                        "archive registration is missing its exact staging receipt".to_owned(),
+                        "archive registration is missing its operation-bound staging receipt"
+                            .to_owned(),
                     )
                 })?,
             )?;
@@ -995,7 +1004,7 @@ pub trait PublicationBackend {
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError>;
 
     /// Idempotently register/reuse the archive and create/reuse its permanent pin and order.
-    /// The returned archive record must retain the exact supplied staging receipt.
+    /// The returned archive must retain a verified receipt with the supplied operation binding.
     fn ensure_archive_and_permanent_pin(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -2214,6 +2223,14 @@ mod tests {
         submissions: usize,
     }
 
+    struct ArchiveRegistrationCrashBackend {
+        complete: CompleteBackend,
+        now_ms: u64,
+        archive_committed: bool,
+        registration_attempts: usize,
+        staged_receipts: Vec<MusubiSeedIngressReceiptV1>,
+    }
+
     impl EarlyBackend {
         fn unsupported() -> PublicationBackendError {
             PublicationBackendError::permanent("UNEXPECTED_TEST_PHASE")
@@ -2398,6 +2415,101 @@ mod tests {
         }
     }
 
+    impl PublicationBackend for ArchiveRegistrationCrashBackend {
+        fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError> {
+            Ok(self.now_ms)
+        }
+
+        fn validate_clean_package(
+            &mut self,
+            operation_id: PublicationOperationIdV1,
+            request: &PublicationRequestV1,
+            car: &mut dyn Read,
+        ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError> {
+            self.complete
+                .validate_clean_package(operation_id, request, car)
+        }
+
+        fn stage_authenticated_seed_ingress(
+            &mut self,
+            _operation_id: PublicationOperationIdV1,
+            expected: &MusubiSeedIngressReceiptBindingV1,
+            _car: &mut dyn Read,
+        ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
+            let receipt = signed_receipt_at(
+                expected,
+                &self.complete.broker,
+                self.now_ms,
+                self.now_ms + 1_000,
+            );
+            self.staged_receipts.push(receipt.clone());
+            Ok(receipt)
+        }
+
+        fn ensure_archive_and_permanent_pin(
+            &mut self,
+            _operation_id: PublicationOperationIdV1,
+            request: &PublicationRequestV1,
+            receipt: &MusubiSeedIngressReceiptV1,
+        ) -> Result<PublicationArchiveRegistrationV1, PublicationBackendError> {
+            self.registration_attempts += 1;
+            if !self.archive_committed {
+                self.archive_committed = true;
+                self.now_ms = receipt.payload.expires_at_ms + 1;
+                return Err(PublicationBackendError::retryable(
+                    "CRASH_AFTER_ARCHIVE_COMMIT",
+                ));
+            }
+            let registration = registration(request, &self.complete.broker);
+            assert_eq!(
+                registration.archive.staging_receipt,
+                self.staged_receipts[0]
+            );
+            assert_ne!(registration.archive.staging_receipt, *receipt);
+            Ok(registration)
+        }
+
+        fn finalized_replication(
+            &mut self,
+            operation_id: PublicationOperationIdV1,
+            request: &PublicationRequestV1,
+            registration: &PublicationArchiveRegistrationV1,
+        ) -> Result<Option<MusubiArchiveLocationV1>, PublicationBackendError> {
+            self.complete
+                .finalized_replication(operation_id, request, registration)
+        }
+
+        fn readback_provider(
+            &mut self,
+            operation_id: PublicationOperationIdV1,
+            request: &PublicationRequestV1,
+            location: &MusubiArchiveLocationV1,
+            provider: ProviderId,
+        ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
+            self.complete
+                .readback_provider(operation_id, request, location, provider)
+        }
+
+        fn submit_release_native_amx(
+            &mut self,
+            operation_id: PublicationOperationIdV1,
+            instruction: &PublishMusubiReleaseV1,
+        ) -> Result<PublicationAmxSubmissionV1, PublicationBackendError> {
+            self.complete
+                .submit_release_native_amx(operation_id, instruction)
+        }
+
+        fn finalized_release_and_index(
+            &mut self,
+            operation_id: PublicationOperationIdV1,
+            request: &PublicationRequestV1,
+            submission: &PublicationAmxSubmissionV1,
+        ) -> Result<Option<PublicationFinalEvidenceV1>, PublicationBackendError> {
+            self.complete
+                .finalized_release_and_index(operation_id, request, submission)
+        }
+    }
+
     fn account(seed: u8) -> (AccountId, KeyPair) {
         let keypair =
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixture keypair");
@@ -2510,11 +2622,20 @@ mod tests {
         binding: &MusubiSeedIngressReceiptBindingV1,
         broker: &KeyPair,
     ) -> MusubiSeedIngressReceiptV1 {
+        signed_receipt_at(binding, broker, 1_000, 2_000)
+    }
+
+    fn signed_receipt_at(
+        binding: &MusubiSeedIngressReceiptBindingV1,
+        broker: &KeyPair,
+        issued_at_ms: u64,
+        expires_at_ms: u64,
+    ) -> MusubiSeedIngressReceiptV1 {
         let payload = MusubiSeedIngressReceiptPayloadV1 {
             version: MUSUBI_REGISTRY_VERSION_V1,
             binding: binding.clone(),
-            issued_at_ms: 1_000,
-            expires_at_ms: 2_000,
+            issued_at_ms,
+            expires_at_ms,
         };
         MusubiSeedIngressReceiptV1 {
             approvals: vec![MusubiSeedIngressReceiptApprovalV1 {
@@ -2676,6 +2797,8 @@ mod tests {
             index_revision: snapshot.index_revision,
         };
         PublicationFinalEvidenceV1 {
+            chain_id: request.chain_id.clone(),
+            genesis_block_hash: request.genesis_block_hash,
             snapshot,
             home_release,
             universal_release,
@@ -2802,6 +2925,71 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn archive_commit_crash_resumes_after_receipt_refresh_without_changing_operation() {
+        let temp = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, broker) = request();
+        let operation_id = request.operation_id();
+        let source = BytesSource(b"canonical-car".to_vec());
+        let mut backend = ArchiveRegistrationCrashBackend {
+            complete: CompleteBackend {
+                broker,
+                replication_pending_once: false,
+                finality_pending_once: false,
+                substitute_readback: false,
+                submissions: 0,
+            },
+            now_ms: 1_000,
+            archive_committed: false,
+            registration_attempts: 0,
+            staged_receipts: Vec::new(),
+        };
+
+        let error = engine
+            .publish(request, &source, &mut backend)
+            .expect_err("simulated crash loses the first registration response");
+        assert!(matches!(
+            error,
+            PublicationError::Backend(ref backend_error)
+                if backend_error.code() == "CRASH_AFTER_ARCHIVE_COMMIT"
+        ));
+        let interrupted = store.load(operation_id).expect("interrupted journal");
+        assert_eq!(
+            interrupted.phase,
+            PublicationPhaseV1::ArchiveRegistration
+        );
+        let registered_receipt = interrupted
+            .staging_receipt
+            .clone()
+            .expect("original receipt remains durable");
+
+        let completed = engine
+            .resume(operation_id, &source, &mut backend)
+            .expect("resume with a refreshed operation-bound receipt");
+        assert!(matches!(completed, PublicationAdvanceV1::Complete(_)));
+        assert_eq!(backend.registration_attempts, 2);
+        assert_eq!(backend.staged_receipts.len(), 2);
+        assert_eq!(backend.staged_receipts[0], registered_receipt);
+        assert_ne!(backend.staged_receipts[0], backend.staged_receipts[1]);
+        assert_eq!(
+            backend.staged_receipts[0].payload.binding,
+            backend.staged_receipts[1].payload.binding
+        );
+        let persisted = store.load(operation_id).expect("completed journal");
+        assert_eq!(
+            persisted
+                .archive_registration
+                .expect("archive registration evidence")
+                .archive
+                .staging_receipt,
+            registered_receipt,
+            "authoritative archive retains its first receipt"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn trait_backed_readback_substitution_stops_before_amx() {
         let temp = tempdir().expect("state root");
         let store = PublicationJournalStore::open(temp.path()).expect("journal store");
@@ -2919,6 +3107,29 @@ mod tests {
     }
 
     #[test]
+    fn journal_accepts_a_refreshed_receipt_for_the_registered_operation_binding() {
+        let (request, broker) = request();
+        let registration = registration(&request, &broker);
+        let registered_receipt = registration.archive.staging_receipt.clone();
+        let refreshed_receipt = signed_receipt_at(
+            &registered_receipt.payload.binding,
+            &broker,
+            registered_receipt.payload.expires_at_ms + 1,
+            registered_receipt.payload.expires_at_ms + 1_001,
+        );
+        assert_ne!(registered_receipt, refreshed_receipt);
+
+        let mut journal = PublicationJournalV1::new(request).expect("publication journal");
+        journal.validation = Some(validation_evidence(&journal.request));
+        journal.staging_receipt = Some(refreshed_receipt);
+        journal.archive_registration = Some(registration);
+        journal.phase = PublicationPhaseV1::Replication;
+        journal
+            .validate()
+            .expect("receipt refresh with the exact operation binding must resume");
+    }
+
+    #[test]
     fn replication_requires_three_exact_finalized_provider_attestations() {
         let (request, broker) = request();
         let registration = registration(&request, &broker);
@@ -3007,6 +3218,12 @@ mod tests {
         exact_final
             .validate_for(&request)
             .expect("exact finalized home and universal records");
+        let mut wrong_chain = exact_final.clone();
+        wrong_chain.chain_id = ChainId::from("another-musubi-chain");
+        assert!(wrong_chain.validate_for(&request).is_err());
+        let mut wrong_genesis = exact_final.clone();
+        wrong_genesis.genesis_block_hash = [0x74; 32];
+        assert!(wrong_genesis.validate_for(&request).is_err());
         let mut substituted_index = exact_final;
         substituted_index.universal_release.source_digest = MusubiContentDigestV1::new([0x73; 32]);
         assert!(substituted_index.validate_for(&request).is_err());
@@ -3024,5 +3241,18 @@ mod tests {
                 .parse::<PublicationOperationIdV1>()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn publication_request_rejects_an_empty_chain_identity() {
+        let (mut request, _) = request();
+        request.chain_id = ChainId::from("");
+        assert!(matches!(
+            request.validate(),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Validation,
+                ..
+            })
+        ));
     }
 }

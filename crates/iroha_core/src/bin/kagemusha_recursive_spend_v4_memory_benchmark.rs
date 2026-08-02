@@ -23,11 +23,8 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
-    KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-    KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
-    KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
-    KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4, KagemushaPastaCycleParityV1,
-    KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4,
+    KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4, KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
+    KagemushaPastaCycleParityV1, KagemushaStepCircuitParamsV4,
 };
 
 const SUBCOMMAND: &str = "measure-compact-k17";
@@ -41,25 +38,12 @@ fn benchmark_error(message: impl Into<String>) -> io::Error {
 }
 
 fn compact_k17_params() -> Result<KagemushaStepCircuitParamsV4, io::Error> {
-    let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
-    let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
-        .map_err(|error| benchmark_error(format!("compact public layout is invalid: {error}")))?;
-    let params = KagemushaStepCircuitParamsV4 {
-        version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-        k,
-        num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
-        num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
-        num_fixed: 1,
-        lookup_bits: k - 1,
-        num_instance_columns: 1,
-        public_input_limbs: layout.instance_column_limbs,
-        minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-        max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
-    };
-    let validated_layout = params
-        .validate()
+    let params = KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
         .map_err(|error| benchmark_error(format!("compact circuit profile is invalid: {error}")))?;
-    if validated_layout != layout || layout.instance_column_limbs != 66 {
+    let layout = params
+        .validate_release_generation_profile()
+        .map_err(|error| benchmark_error(format!("compact circuit profile is invalid: {error}")))?;
+    if layout.instance_column_limbs != 66 {
         return Err(benchmark_error(
             "compact circuit profile does not select the fixed 66-limb public layout",
         ));

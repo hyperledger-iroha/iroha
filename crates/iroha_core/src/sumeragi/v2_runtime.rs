@@ -2787,13 +2787,30 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
         Ok(())
     }
 
-    fn validate_admission_identity(&self) -> bool {
+    /// Validate the constant-size admission certificate retained by an
+    /// immutable queued command.
+    ///
+    /// Full command and ingress ownership validation happens before queue
+    /// publication (and again before dispatch). Scheduler rank scans only
+    /// need the cached result plus the fixed-size structural projection; in
+    /// particular they must not repeatedly decode and authenticate the same
+    /// retained network envelope while an exact Serve barrier is polling.
+    fn validate_cached_admission_identity(&self) -> bool {
         self.identity_deep_validated
             && self.identity.validate_exact()
             && self.restored_producer_stage.is_none_or(|_| {
                 self.lifecycle_ordinal.is_some()
                     && self.causal_origin.restored_producer_lifecycle_key.is_some()
             })
+            && match (&self.ingress_ownership, self.identity.kind) {
+                (Some(_), RuntimeCommandKind::Authenticated) => true,
+                (None, RuntimeCommandKind::Authenticated) | (Some(_), _) => false,
+                (None, _) => true,
+            }
+    }
+
+    fn validate_admission_identity(&self) -> bool {
+        self.validate_cached_admission_identity()
             && match self.identity.kind {
                 RuntimeCommandKind::Authenticated => {
                     self.ingress_ownership.as_ref().is_some_and(|ownership| {
@@ -2805,7 +2822,7 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
                             }
                     })
                 }
-                _ => self.ingress_ownership.is_none(),
+                _ => true,
             }
     }
 }
@@ -3579,7 +3596,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .iter()
             .map(|queued| {
                 let ordinal = queued.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
-                (queued.validate_admission_identity()
+                (queued.validate_cached_admission_identity()
                     && queued.causal_origin.validate_exact()
                     && queued.causal_origin.root_lifecycle_ordinal == Some(ordinal))
                 .then_some(ordinal)
@@ -6997,10 +7014,41 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             || proposal_round.view != reservation.tag.view()
             || !reservation.ownership.validate_exact()
             || !ownership.validate_exact()
-            || reservation.ownership.owner() != ownership.owner()
         {
             self.latch_fail_closed("Proposal fanout changed its active-view producer");
             return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+        }
+
+        if reservation.ownership.owner() != ownership.owner() {
+            let owner = ownership.owner();
+            let fresh_kind = self
+                .dormant_fresh_lifecycle_owners
+                .iter()
+                .find_map(|((kind, _), candidate)| (candidate == owner).then_some(*kind));
+            if owner.causal_origin().root_tag != reservation.tag {
+                self.latch_fail_closed("Proposal fanout changed its active-view producer");
+                return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+            }
+            match fresh_kind {
+                // Recovery can restore a durable Proposal signing request before
+                // live clocks mint the process-local producer reservation. Its
+                // eventual fanout is the original Proposal terminal, not a
+                // competing producer, so it consumes the reservation.
+                Some(RuntimeFreshRootKind::StartupRecovery) => {}
+                // Periodic control retransmission has its own scheduler owner.
+                // It neither creates nor completes the active view's one-shot
+                // local Proposal producer.
+                Some(RuntimeFreshRootKind::Retransmit) => return Ok(()),
+                Some(
+                    RuntimeFreshRootKind::Timeout
+                    | RuntimeFreshRootKind::HistoricalLockedRetransmit
+                    | RuntimeFreshRootKind::LocalProposalAdmission,
+                )
+                | None => {
+                    self.latch_fail_closed("Proposal fanout changed its active-view producer");
+                    return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+                }
+            }
         }
         self.active_view_producer = None;
         Ok(())
@@ -9527,6 +9575,23 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.driver
             .recover_validated_body(manifest, validated_receipt)
+    }
+
+    /// Bind one live, independently durable validation marker without
+    /// delivering an obsolete reducer event.
+    ///
+    /// Effect completions call this inside the same serialized actor turn as
+    /// their catalog update. The registry mutation is exact and monotone; it
+    /// does not retag or otherwise revive a retired reducer consumer.
+    pub(crate) fn bind_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), AdapterError> {
+        if self.fail_closed {
+            return Err(AdapterError::FailClosed);
+        }
+        self.driver.bind_validated_body(manifest, validated_receipt)
     }
 
     /// Authenticate and enqueue one reducer-directed network message.
@@ -12382,6 +12447,91 @@ mod tests {
     }
 
     #[test]
+    fn replayed_proposal_fanout_consumes_the_live_producer_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xAA);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct replay runtime");
+        let replay_owner = runtime
+            .mint_fresh_lifecycle_owner(
+                initial,
+                CommandClass::Progress,
+                RuntimeFreshRootKind::StartupRecovery,
+                b"replayed-proposal-signature",
+            )
+            .expect("mint exact startup recovery owner");
+        let replay_ownership =
+            RuntimeEffectOwnership::fresh(replay_owner, RuntimeFreshRootKind::StartupRecovery);
+        runtime
+            .reconcile_active_view_producer(initial, true)
+            .expect("reserve live producer after replay work was restored");
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm clocks after replay restoration");
+
+        runtime
+            .complete_active_view_producer_after_proposal_fanout(proposal.round, &replay_ownership)
+            .expect("replayed original Proposal fanout consumes the live reservation");
+        assert!(runtime.active_view_producer.is_none());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn retransmitted_proposal_fanout_preserves_the_live_producer_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xAB);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct retransmit runtime");
+        runtime
+            .reconcile_active_view_producer(initial, true)
+            .expect("reserve live producer");
+        let retransmit_owner = runtime
+            .mint_fresh_lifecycle_owner(
+                initial,
+                CommandClass::Progress,
+                RuntimeFreshRootKind::Retransmit,
+                b"periodic-retransmit",
+            )
+            .expect("mint exact retransmit owner");
+        let retransmit_ownership =
+            RuntimeEffectOwnership::fresh(retransmit_owner, RuntimeFreshRootKind::Retransmit);
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm clocks after producer reservation");
+
+        runtime
+            .complete_active_view_producer_after_proposal_fanout(
+                proposal.round,
+                &retransmit_ownership,
+            )
+            .expect("periodic Proposal fanout is not the live producer terminal");
+        assert!(runtime.active_view_producer.is_some());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
     fn proposal_fanout_cannot_replace_active_view_producer_owner() {
         let (context, keys) = authenticated_runtime_context();
         let message = signed_runtime_proposal(&context, &keys, 0xA8);
@@ -14259,6 +14409,61 @@ mod tests {
         candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
         mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
         rejected(mutated);
+    }
+
+    #[test]
+    fn scheduler_minimum_uses_cached_admission_but_dispatch_revalidates_ingress() {
+        let directory = TempDir::new().expect("temporary cached-admission directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0xA6),
+            ));
+        let source = PeerId::new(keys[0].public_key().clone());
+
+        runtime
+            .enqueue_network_with_ingress_ownership(
+                message.clone(),
+                fair_network_ownership(&message, source),
+            )
+            .expect("deeply validated authenticated command enters the runtime FIFO");
+        let lifecycle_ordinal = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.lifecycle_ordinal)
+            .expect("published command owns a lifecycle ordinal");
+
+        // Model corruption after publication to prove the two validation
+        // boundaries are distinct. A rank scan consumes only the immutable
+        // cached admission certificate; dispatch still validates the full
+        // ingress carrier and therefore must fail closed before removal.
+        let queued = runtime
+            .ingress
+            .commands
+            .front_mut()
+            .expect("published command remains queued");
+        queued
+            .ingress_ownership
+            .as_mut()
+            .expect("authenticated command retains ingress ownership")
+            .projection_hash = Hash::new(b"invalid retained ingress projection");
+        assert!(!queued.validate_admission_identity());
+        assert_eq!(
+            runtime.ingress.oldest_lifecycle_ordinal(),
+            Ok(Some(lifecycle_ordinal)),
+            "scheduler rank scans must not repeat deep envelope validation"
+        );
+        assert!(matches!(
+            runtime.ingress.pop_next_with_ownership(),
+            Err(EnqueueError::FailClosed)
+        ));
+        assert_eq!(
+            runtime.ingress.commands.len(),
+            1,
+            "dispatch rejects corrupted ingress before consuming the cached owner"
+        );
     }
 
     #[test]
@@ -21600,9 +21805,25 @@ mod tests {
             );
             assert!(!runtime.fail_closed);
 
+            let reducer_tag_before_binding = runtime.driver.current_tag();
+            let reducer_body_before_binding = runtime
+                .driver
+                .body_state_for_test(manifest.round, manifest.subject);
             runtime
-                .recover_validated_body(&manifest, &validated)
-                .expect("local validation establishes canonical commitment authority");
+                .bind_validated_body(&manifest, &validated)
+                .expect("live validation establishes canonical commitment authority");
+            assert_eq!(
+                runtime.driver.current_tag(),
+                reducer_tag_before_binding,
+                "wire-authority binding cannot retag the reducer"
+            );
+            assert_eq!(
+                runtime
+                    .driver
+                    .body_state_for_test(manifest.round, manifest.subject),
+                reducer_body_before_binding,
+                "wire-authority binding cannot revive a reducer consumer"
+            );
             assert!(
                 runtime.can_admit_network_message(&signed_vote),
                 "the retained fair-ingress {phase:?} vote becomes drainable after validation"

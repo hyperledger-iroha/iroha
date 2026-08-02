@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Kagemusha V4 candidate generator from one reviewed dirty source closure."""
+"""Build the Kagemusha V4 candidate generator from one reviewed clean source closure."""
 
 from __future__ import annotations
 
@@ -411,6 +411,13 @@ def build_candidate_bundle(
         str(reviewed_source_closure),
         reviewed_source_closure_sha256,
     )
+    if (
+        first.source_repo_dirty
+        or first.reviewed_source_closure.get("source_repo_dirty") is not False
+    ):
+        raise CandidateBuildError(
+            "candidate generation requires a clean signed source closure"
+        )
     environment = _sanitized_build_environment()
     environment["KAGEMUSHA_BUILD_SOURCE_COMMIT"] = first.source_commit
     environment["KAGEMUSHA_BUILD_SOURCE_TREE_SHA256"] = first.source_tree_sha256

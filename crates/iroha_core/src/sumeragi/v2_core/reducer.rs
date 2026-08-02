@@ -3122,13 +3122,16 @@ impl Reducer {
                         ..
                     } if event_round == round && event_subject == subject
                 );
-                let decided_retry = matches!(event, Event::RetransmitElapsed { .. })
-                    && after.durable.decision().is_some_and(|decision| {
+                let certified_retry = matches!(event, Event::RetransmitElapsed { .. })
+                    && (after.durable.decision().is_some_and(|decision| {
                         after.decision_body_round(decision) == *round
                             && decision.subject() == *subject
-                    });
+                    }) || (after.durable.decision().is_none()
+                        && after.durable.locked().is_some_and(|locked| {
+                            locked.round() == *round && locked.subject() == *subject
+                        })));
                 (after.body_state(*round, *subject) == BodyState::Available
-                    && (newly_available || decided_retry))
+                    && (newly_available || certified_retry))
                     .then(|| EffectCapabilityKey {
                         kind: EFFECT_STORE,
                         tag: Self::tag_projection(after.current_tag()),
@@ -3147,13 +3150,16 @@ impl Reducer {
                         ..
                     } if event_round == round && event_subject == subject
                 );
-                let decided_retry = matches!(event, Event::RetransmitElapsed { .. })
-                    && after.durable.decision().is_some_and(|decision| {
+                let certified_retry = matches!(event, Event::RetransmitElapsed { .. })
+                    && (after.durable.decision().is_some_and(|decision| {
                         after.decision_body_round(decision) == *round
                             && decision.subject() == *subject
-                    });
+                    }) || (after.durable.decision().is_none()
+                        && after.durable.locked().is_some_and(|locked| {
+                            locked.round() == *round && locked.subject() == *subject
+                        })));
                 (after.body_state(*round, *subject) == BodyState::Durable
-                    && (newly_durable || decided_retry))
+                    && (newly_durable || certified_retry))
                     .then(|| EffectCapabilityKey {
                         kind: EFFECT_VALIDATE,
                         tag: Self::tag_projection(after.current_tag()),
@@ -4099,11 +4105,25 @@ impl Reducer {
             return StepOutcome::applied(effects);
         }
 
-        if let Some(locked) = self.durable.locked().cloned()
-            && self.body_state(locked.round(), locked.subject()) == BodyState::Missing
-        {
-            effects.push(self.ensure_body_fetch(&locked));
-            return StepOutcome::applied(effects);
+        if let Some(locked) = self.durable.locked().cloned() {
+            let effect = match self.body_state(locked.round(), locked.subject()) {
+                BodyState::Missing => Some(self.ensure_body_fetch(&locked)),
+                BodyState::Available => Some(Effect::StoreBody {
+                    tag: self.current_tag(),
+                    round: locked.round(),
+                    subject: locked.subject(),
+                }),
+                BodyState::Durable => Some(Effect::ValidateBody {
+                    tag: self.current_tag(),
+                    round: locked.round(),
+                    subject: locked.subject(),
+                }),
+                BodyState::Validated | BodyState::Invalid => None,
+            };
+            if let Some(effect) = effect {
+                effects.push(effect);
+                return StepOutcome::applied(effects);
+            }
         }
 
         if let Some(proposal) = self.candidate.clone()

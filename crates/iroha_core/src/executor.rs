@@ -21,7 +21,7 @@ use iroha_data_model::{
     Identifiable as _, ValidationFail,
     account::AccountId,
     asset::{
-        AssetBalancePolicy, AssetDefinition,
+        AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, ResolvedAssetDefinitionAliasV1,
         id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         value::Asset,
     },
@@ -1613,10 +1613,12 @@ enum PermissionOrRoleMutation<'a> {
     },
     AccountRole {
         role: &'a RoleId,
+        is_revoke: bool,
     },
     RolePermission {
         permission: &'a Permission,
         role: &'a RoleId,
+        is_revoke: bool,
     },
 }
 
@@ -1632,10 +1634,12 @@ fn extract_permission_or_role_mutation(
             },
             GrantBox::Role(grant) => PermissionOrRoleMutation::AccountRole {
                 role: grant.object(),
+                is_revoke: false,
             },
             GrantBox::RolePermission(grant) => PermissionOrRoleMutation::RolePermission {
                 permission: grant.object(),
                 role: grant.destination(),
+                is_revoke: false,
             },
         }
     }
@@ -1649,10 +1653,12 @@ fn extract_permission_or_role_mutation(
             },
             RevokeBox::Role(revoke) => PermissionOrRoleMutation::AccountRole {
                 role: revoke.object(),
+                is_revoke: true,
             },
             RevokeBox::RolePermission(revoke) => PermissionOrRoleMutation::RolePermission {
                 permission: revoke.object(),
                 role: revoke.destination(),
+                is_revoke: true,
             },
         }
     }
@@ -1681,23 +1687,27 @@ fn extract_permission_or_role_mutation(
     if let Some(grant) = any.downcast_ref::<Grant<RoleId, Account>>() {
         return Some(PermissionOrRoleMutation::AccountRole {
             role: grant.object(),
+            is_revoke: false,
         });
     }
     if let Some(revoke) = any.downcast_ref::<Revoke<RoleId, Account>>() {
         return Some(PermissionOrRoleMutation::AccountRole {
             role: revoke.object(),
+            is_revoke: true,
         });
     }
     if let Some(grant) = any.downcast_ref::<Grant<Permission, Role>>() {
         return Some(PermissionOrRoleMutation::RolePermission {
             permission: grant.object(),
             role: grant.destination(),
+            is_revoke: false,
         });
     }
     any.downcast_ref::<Revoke<Permission, Role>>()
         .map(|revoke| PermissionOrRoleMutation::RolePermission {
             permission: revoke.object(),
             role: revoke.destination(),
+            is_revoke: true,
         })
 }
 
@@ -8713,6 +8723,124 @@ fn initial_alias_scope_owned_by(
     }
 }
 
+fn initial_asset_definition_alias_scope_owned_by(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    scope: &executor_permission::asset_definition::AssetDefinitionAliasPermissionScope,
+) -> Result<bool, ValidationFail> {
+    match scope {
+        executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(
+            domain,
+        ) => authority_owns_domain(&state_transaction.world, authority, domain),
+        executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Dataspace(
+            dataspace,
+        ) => {
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            Ok(crate::sns::active_dataspace_owner_by_id(
+                &state_transaction.world,
+                state_transaction.world.dataspace_catalog(),
+                *dataspace,
+                now_ms,
+            )
+            .as_ref()
+                == Some(authority))
+        }
+        executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(_) => {
+            Ok(false)
+        }
+    }
+}
+
+fn initial_asset_definition_alias_namespace_scope(
+    alias: &ResolvedAssetDefinitionAliasV1,
+) -> Result<
+    executor_permission::asset_definition::AssetDefinitionAliasPermissionScope,
+    ValidationFail,
+> {
+    match alias.parent_domain() {
+        Ok(Some(domain)) => Ok(
+            executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(
+                domain,
+            ),
+        ),
+        Ok(None) => Ok(
+            executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Dataspace(
+                alias.dataspace_id,
+            ),
+        ),
+        Err(error) => Err(ValidationFail::NotPermitted(format!(
+            "invalid exact asset-definition alias namespace `{alias}`: {error}"
+        ))),
+    }
+}
+
+fn initial_asset_definition_alias_namespace_root_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    alias: &ResolvedAssetDefinitionAliasV1,
+) -> Result<bool, ValidationFail> {
+    if !alias.matches_catalog(state_transaction.world.dataspace_catalog()) {
+        return Ok(false);
+    }
+    initial_asset_definition_alias_scope_owned_by(
+        state_transaction,
+        authority,
+        &initial_asset_definition_alias_namespace_scope(alias)?,
+    )
+}
+
+fn initial_asset_definition_alias_namespace_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    alias: &ResolvedAssetDefinitionAliasV1,
+) -> Result<bool, ValidationFail> {
+    if !alias.matches_catalog(state_transaction.world.dataspace_catalog()) {
+        return Ok(false);
+    }
+    let scope = initial_asset_definition_alias_namespace_scope(alias)?;
+    let wider: Permission = executor_permission::asset_definition::CanManageAssetDefinitionAlias {
+        scope: scope.clone(),
+    }
+    .into();
+    Ok(
+        authority_has_permission(&state_transaction.world, authority, &wider)?
+            || initial_asset_definition_alias_scope_owned_by(state_transaction, authority, &scope)?,
+    )
+}
+
+fn initial_asset_definition_alias_exact_grant_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    alias: &ResolvedAssetDefinitionAliasV1,
+) -> Result<bool, ValidationFail> {
+    if !alias.matches_catalog(state_transaction.world.dataspace_catalog()) {
+        return Ok(false);
+    }
+    let Some(asset_definition_id) = state_transaction
+        .world
+        .asset_definition_aliases()
+        .get(&alias.canonical_name)
+    else {
+        return Ok(false);
+    };
+    if !state_transaction
+        .world
+        .asset_definition_alias_bindings()
+        .get(asset_definition_id)
+        .is_some_and(|binding| binding.alias == alias.canonical_name)
+    {
+        return Ok(false);
+    }
+    Ok(
+        authority_owns_asset_definition(&state_transaction.world, authority, asset_definition_id)?
+            && initial_asset_definition_alias_namespace_authority(
+                state_transaction,
+                authority,
+                alias,
+            )?,
+    )
+}
+
 fn initial_nft_transfer_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8812,6 +8940,24 @@ fn initial_permission_capability_root_authority(
         "CanManageAccountAlias" => {
             let token = decode!(executor_permission::account::CanManageAccountAlias);
             initial_alias_scope_owned_by(state_transaction, authority, &token.scope)?
+        }
+        "CanManageAssetDefinitionAlias" => {
+            let token =
+                decode!(executor_permission::asset_definition::CanManageAssetDefinitionAlias);
+            match &token.scope {
+                executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(
+                    alias,
+                ) => initial_asset_definition_alias_exact_grant_authority(
+                    state_transaction,
+                    authority,
+                    alias,
+                )?,
+                scope => initial_asset_definition_alias_scope_owned_by(
+                    state_transaction,
+                    authority,
+                    scope,
+                )?,
+            }
         }
         "CanUnregisterAssetDefinition" => {
             let token =
@@ -9051,12 +9197,57 @@ fn initial_permission_delegation_allowed(
         permission,
         contract_runtime_context,
     )?;
-    if permission.name() != "CanReadAccountData"
+    let holder_delegable = if permission.name() == "CanManageAssetDefinitionAlias" {
+        let token = executor_permission::asset_definition::CanManageAssetDefinitionAlias::try_from(
+            permission,
+        )
+        .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+        !matches!(
+            token.scope,
+            executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(_)
+        )
+    } else {
+        permission.name() != "CanReadAccountData"
+    };
+    if holder_delegable
         && authority_has_permission(&state_transaction.world, authority, permission)?
     {
         return Ok(true);
     }
     Ok(capability_root.unwrap_or(false))
+}
+
+fn initial_permission_revocation_allowed(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &Permission,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+) -> Result<bool, ValidationFail> {
+    if permission.name() == "CanManageAssetDefinitionAlias" {
+        let token = executor_permission::asset_definition::CanManageAssetDefinitionAlias::try_from(
+            permission,
+        )
+        .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+        if let executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(
+            alias,
+        ) = &token.scope
+        {
+            // An exact token retains the alias and dataspace identity after clear, but not the
+            // former definition or grant issuer. Only the native namespace root is therefore a
+            // provable lifecycle authority once the active binding is gone.
+            return initial_asset_definition_alias_namespace_root_authority(
+                state_transaction,
+                authority,
+                alias,
+            );
+        }
+    }
+    initial_permission_delegation_allowed(
+        state_transaction,
+        authority,
+        permission,
+        contract_runtime_context,
+    )
 }
 
 fn validate_initial_account_permission_destination(
@@ -9094,14 +9285,22 @@ fn validate_initial_permission_or_role_mutation(
                 is_genesis,
                 is_revoke,
             )?;
-            if is_genesis
-                || initial_permission_delegation_allowed(
+            let allowed = if is_revoke {
+                initial_permission_revocation_allowed(
                     state_transaction,
                     authority,
                     permission,
                     contract_runtime_context,
                 )?
-            {
+            } else {
+                initial_permission_delegation_allowed(
+                    state_transaction,
+                    authority,
+                    permission,
+                    contract_runtime_context,
+                )?
+            };
+            if is_genesis || allowed {
                 return Ok(());
             }
             Err(ValidationFail::NotPermitted(format!(
@@ -9109,7 +9308,10 @@ fn validate_initial_permission_or_role_mutation(
                 permission.name()
             )))
         }
-        PermissionOrRoleMutation::AccountRole { role: role_id } => {
+        PermissionOrRoleMutation::AccountRole {
+            role: role_id,
+            is_revoke,
+        } => {
             if is_genesis {
                 return Ok(());
             }
@@ -9128,12 +9330,22 @@ fn validate_initial_permission_or_role_mutation(
             for permission in role.permissions() {
                 let normalized =
                     normalize_role_permission_for_initial_executor(state_transaction, permission)?;
-                if !initial_permission_delegation_allowed(
-                    state_transaction,
-                    authority,
-                    &normalized,
-                    contract_runtime_context,
-                )? {
+                let allowed = if is_revoke {
+                    initial_permission_revocation_allowed(
+                        state_transaction,
+                        authority,
+                        &normalized,
+                        contract_runtime_context,
+                    )?
+                } else {
+                    initial_permission_delegation_allowed(
+                        state_transaction,
+                        authority,
+                        &normalized,
+                        contract_runtime_context,
+                    )?
+                };
+                if !allowed {
                     return Err(ValidationFail::NotPermitted(format!(
                         "authority cannot grant or revoke role `{role_id}` because it cannot delegate contained permission `{}`",
                         normalized.name()
@@ -9142,7 +9354,11 @@ fn validate_initial_permission_or_role_mutation(
             }
             Ok(())
         }
-        PermissionOrRoleMutation::RolePermission { permission, role } => {
+        PermissionOrRoleMutation::RolePermission {
+            permission,
+            role,
+            is_revoke,
+        } => {
             let normalized =
                 normalize_role_permission_for_initial_executor(state_transaction, permission)?;
             if is_genesis {
@@ -9153,12 +9369,22 @@ fn validate_initial_permission_or_role_mutation(
                     "authority cannot modify a role it does not hold".to_owned(),
                 ));
             }
-            if !initial_permission_delegation_allowed(
-                state_transaction,
-                authority,
-                &normalized,
-                contract_runtime_context,
-            )? {
+            let allowed = if is_revoke {
+                initial_permission_revocation_allowed(
+                    state_transaction,
+                    authority,
+                    &normalized,
+                    contract_runtime_context,
+                )?
+            } else {
+                initial_permission_delegation_allowed(
+                    state_transaction,
+                    authority,
+                    &normalized,
+                    contract_runtime_context,
+                )?
+            };
+            if !allowed {
                 return Err(ValidationFail::NotPermitted(format!(
                     "authority cannot grant or revoke role permission `{}`",
                     normalized.name()
@@ -10605,6 +10831,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyAccountMetadata",
     "CanReplaceAccountController",
     "CanManageAccountAlias",
+    "CanManageAssetDefinitionAlias",
     "CanDelegateAccountAliasResolution",
     "CanResolveAccountAlias",
     "CanReadAllLedgerData",
@@ -12776,6 +13003,10 @@ mod tests {
         .expect("seed trigger authority");
 
         let alias_scope = AccountAliasPermissionScope::Domain(governed_domain.clone());
+        let asset_alias_scope =
+            executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(
+                governed_domain.clone(),
+            );
         let program_id = FeeSponsorProgramId::new(
             legitimate_root.clone(),
             "root_program".parse().expect("program name"),
@@ -12851,6 +13082,14 @@ mod tests {
             (
                 "CanManageAccountAlias",
                 executor_permission::account::CanManageAccountAlias { scope: alias_scope }.into(),
+                true,
+            ),
+            (
+                "CanManageAssetDefinitionAlias",
+                executor_permission::asset_definition::CanManageAssetDefinitionAlias {
+                    scope: asset_alias_scope,
+                }
+                .into(),
                 true,
             ),
             (
@@ -13211,6 +13450,263 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("legitimate root could not revoke {name}: {error}"));
         }
+    }
+
+    #[test]
+    fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_guessing() {
+        use iroha_executor_data_model::permission::{
+            account::{AccountAliasPermissionScope, CanManageAccountAlias},
+            asset_definition::{
+                AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+            },
+        };
+
+        let namespace_root = checked_account_id();
+        let asset_owner = checked_account_id();
+        let holder = checked_account_id();
+        let unrelated = checked_account_id();
+        let domain = DomainId::try_new("banka", "universal").expect("alias domain");
+        let alias: AssetDefinitionAlias = "usd#banka.universal".parse().expect("asset alias");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain.clone(),
+            "usd".parse().expect("asset definition name"),
+        );
+        let account_alias_permission: Permission = CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+        }
+        .into();
+        let namespace_permission: Permission = CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Domain(domain.clone()),
+        }
+        .into();
+        let exact_permission: Permission = CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
+                alias.clone(),
+                DataSpaceId::UNIVERSAL,
+                definition_id.clone(),
+            )),
+        }
+        .into();
+
+        let mut world = World::with_assets(
+            [Domain::new(domain).build(&namespace_root)],
+            [
+                Account::new(namespace_root.clone()).build(&namespace_root),
+                Account::new(asset_owner.clone()).build(&asset_owner),
+                Account::new(holder.clone()).build(&holder),
+                Account::new(unrelated.clone()).build(&unrelated),
+            ],
+            [AssetDefinition::numeric(
+                definition_id.clone(),
+                "usd".to_owned(),
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .with_alias(Some(alias.clone()))
+            .build(&asset_owner)],
+            [],
+            [],
+        );
+        world.account_permissions.insert(
+            asset_owner.clone(),
+            BTreeSet::from([account_alias_permission]),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            None,
+            None,
+            None,
+            10_000,
+            0,
+        ));
+        let mut state_transaction = block.transaction();
+
+        let malformed_permission =
+            Permission::new("CanManageAssetDefinitionAlias".to_owned(), Json::new(()));
+        let malformed = Grant::account_permission(malformed_permission, holder.clone())
+            .execute(&asset_owner, &mut state_transaction)
+            .expect_err("Core must reject malformed built-in asset-alias permission payloads");
+        assert!(malformed.to_string().contains("current live binding"));
+
+        let mismatched_permission: Permission = CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
+                alias.clone(),
+                DataSpaceId::new(7),
+                definition_id.clone(),
+            )),
+        }
+        .into();
+        let mismatch = Grant::account_permission(mismatched_permission, holder.clone())
+            .execute(&asset_owner, &mut state_transaction)
+            .expect_err("Core must reject a text/ID pair that does not match the live catalog");
+        assert!(mismatch.to_string().contains("current live binding"));
+
+        let live_binding = state_transaction
+            .world
+            .asset_definition_alias_bindings
+            .get(&definition_id)
+            .cloned()
+            .expect("fixture alias binding");
+        {
+            let binding = state_transaction
+                .world
+                .asset_definition_alias_bindings
+                .get_mut(&definition_id)
+                .expect("fixture alias binding");
+            binding.lease_expiry_ms = Some(1);
+            binding.grace_until_ms = None;
+        }
+        Grant::account_permission(exact_permission.clone(), holder.clone())
+            .execute(&asset_owner, &mut state_transaction)
+            .expect_err("Core must reject a grace-expired binding pending cleanup");
+        state_transaction
+            .world
+            .asset_definition_alias_bindings
+            .insert(definition_id.clone(), live_binding);
+
+        let other_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("banka", "universal").expect("alias domain"),
+            "eur".parse().expect("asset definition name"),
+        );
+        let rebound_target: Permission = CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
+                alias.clone(),
+                DataSpaceId::UNIVERSAL,
+                other_definition_id,
+            )),
+        }
+        .into();
+        Grant::account_permission(rebound_target, holder.clone())
+            .execute(&asset_owner, &mut state_transaction)
+            .expect_err("Core must reject an exact label capability for a different definition");
+
+        for authority in [&namespace_root, &asset_owner] {
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    authority,
+                    Grant::account_permission(exact_permission.clone(), holder.clone()).into(),
+                )
+                .expect_err(
+                    "neither namespace ownership alone nor account-alias permission may grant an exact asset alias",
+                );
+        }
+
+        state_transaction
+            .world
+            .add_account_permission(&asset_owner, namespace_permission);
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &asset_owner,
+                Grant::account_permission(exact_permission.clone(), holder.clone()).into(),
+            )
+            .expect(
+                "active asset owner with asset-alias namespace authority may grant exact scope",
+            );
+
+        let permission_role: RoleId = "asset_alias_permission_lifecycle".parse().expect("role id");
+        Register::role(
+            Role::new(permission_role.clone(), namespace_root.clone())
+                .add_permission(exact_permission.clone()),
+        )
+        .execute(&namespace_root, &mut state_transaction)
+        .expect("seed exact role permission while the matching binding is live");
+        let membership_role: RoleId = "asset_alias_membership_lifecycle".parse().expect("role id");
+        Register::role(
+            Role::new(membership_role.clone(), namespace_root.clone())
+                .add_permission(exact_permission.clone()),
+        )
+        .execute(&namespace_root, &mut state_transaction)
+        .expect("seed exact role membership while the matching binding is live");
+        Grant::account_role(membership_role.clone(), holder.clone())
+            .execute(&namespace_root, &mut state_transaction)
+            .expect("seed exact role membership revocation fixture");
+
+        state_transaction
+            .world
+            .clear_asset_definition_alias(&definition_id);
+        assert!(
+            state_transaction
+                .world
+                .asset_definition_aliases()
+                .get(&alias)
+                .is_none(),
+            "test must exercise revocation after the binding is cleared",
+        );
+        Grant::account_permission(exact_permission.clone(), unrelated.clone())
+            .execute(&namespace_root, &mut state_transaction)
+            .expect_err("Core must reject a new exact grant after the binding is cleared");
+
+        for authority in [&unrelated, &holder, &asset_owner] {
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    authority,
+                    Revoke::account_permission(exact_permission.clone(), holder.clone()).into(),
+                )
+                .expect_err(
+                    "unrelated, exact-holder, and former grant-issuer identities are not namespace roots",
+                );
+        }
+        assert!(
+            state_transaction
+                .world
+                .account_permissions_iter(&holder)
+                .expect("holder permissions")
+                .any(|permission| permission == &exact_permission),
+            "failed revocations must preserve the exact capability",
+        );
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &namespace_root,
+                Revoke::account_permission(exact_permission.clone(), holder.clone()).into(),
+            )
+            .expect("native namespace root may revoke exact scope after clear");
+        assert!(
+            !state_transaction
+                .world
+                .account_permissions_iter(&holder)
+                .expect("holder permissions")
+                .any(|permission| permission == &exact_permission),
+        );
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &namespace_root,
+                Revoke::role_permission(exact_permission.clone(), permission_role.clone()).into(),
+            )
+            .expect("native namespace root may revoke exact role permission after clear");
+        assert!(
+            !state_transaction
+                .world
+                .roles()
+                .get(&permission_role)
+                .expect("permission role")
+                .permissions()
+                .any(|permission| permission == &exact_permission),
+        );
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &namespace_root,
+                Revoke::account_role(membership_role.clone(), holder.clone()).into(),
+            )
+            .expect("native namespace root may revoke exact role membership after clear");
+        assert!(!authority_has_role(
+            &state_transaction.world,
+            &holder,
+            &membership_role,
+        ));
     }
 
     #[test]

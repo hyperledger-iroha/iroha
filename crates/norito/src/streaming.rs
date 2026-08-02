@@ -32,6 +32,15 @@ use crate::{
 };
 /// Blake3-based 32-byte hash used across NSC metadata (chunk commitments, IDs, etc.).
 pub type Hash = [u8; 32];
+/// Compute the canonical BLAKE3 digest used by content-addressed streaming artifacts.
+///
+/// Keeping this adapter in Norito gives direct dependants one pinned,
+/// deterministic implementation without duplicating the hash function or
+/// changing their dependency graph.
+#[must_use]
+pub fn blake3_hash(bytes: &[u8]) -> Hash {
+    blake3::hash(bytes).into()
+}
 /// Ed25519 signature bytes as specified for manifests and control frames.
 pub type Signature = [u8; 64];
 /// Timestamp field used by manifests. The spec leaves the exact unit to deployments; NSC uses unix time.
@@ -10621,6 +10630,18 @@ mod tests {
             out.push(char::from(LUT[(byte & 0x0f) as usize]));
         }
         out
+    }
+
+    #[test]
+    fn shared_blake3_adapter_matches_official_vectors() {
+        assert_eq!(
+            hex_encode(blake3_hash(b"")),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        );
+        assert_eq!(
+            hex_encode(blake3_hash(b"abc")),
+            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+        );
     }
 
     #[test]

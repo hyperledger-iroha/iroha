@@ -6133,7 +6133,7 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
             || self.accepted_identity.candidate_record_sha256 != self.candidate_sha256
             || self.accepted_identity.candidate_manifest_sha256 != self.manifest_sha256
             || self.accepted_identity.production_capability_observed
-            || !self.accepted_identity.source_repo_dirty
+            || self.accepted_identity.source_repo_dirty
             || iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE
         {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
@@ -15506,7 +15506,7 @@ mod kagemusha_bridge_tests {
         source_tree_sha256: [u8; 32],
         seed: u8,
     ) -> (KagemushaReviewedSourceClosureV1, [u8; 32]) {
-        let tracked_binary_diff_sha256 = Sha256::digest([seed; 32]).into();
+        let tracked_binary_diff_sha256 = Sha256::digest([]).into();
         let untracked_path_mode_blob_oid_manifest_sha256 = Sha256::digest([]).into();
         let mut combined = Sha256::new();
         combined.update(b"iroha-source-diff-v1\0");
@@ -15518,7 +15518,7 @@ mod kagemusha_bridge_tests {
             schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
             base_commit: source_commit.to_owned(),
             source_commit: source_commit.to_owned(),
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             source_tree_sha256,
             tracked_binary_diff_sha256,
             untracked_file_count: 0,
@@ -15667,7 +15667,7 @@ mod kagemusha_bridge_tests {
             generation: generation.to_owned(),
             source_commit: source_commit.to_owned(),
             source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id: ChainId::from("sbd-streaming-install-test"),
@@ -18618,34 +18618,8 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     fn production_release_circuit_params_v4()
     -> iroha_data_model::offline::KagemushaStepCircuitParamsV4 {
-        use iroha_data_model::offline::{
-            KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-            KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
-            KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4, KagemushaPastaPublicLayoutV4,
-            KagemushaStepCircuitParamsV4,
-        };
-
-        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
-        let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
-            .expect("compact degree-17 production public layout");
-        let params = KagemushaStepCircuitParamsV4 {
-            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-            k,
-            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
-            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
-            num_fixed: 1,
-            lookup_bits: k - 1,
-            num_instance_columns: 1,
-            public_input_limbs: layout.instance_column_limbs,
-            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
-        };
-        params
-            .validate_release_generation_profile()
-            .expect("reviewed compact degree-17 production generation profile");
-        params
+        iroha_data_model::offline::KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+            .expect("reviewed compact degree-17 production generation profile")
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -18833,7 +18807,7 @@ mod kagemusha_bridge_tests {
             generation: generation.to_owned(),
             source_commit: source_commit.to_owned(),
             source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id,
@@ -34496,7 +34470,7 @@ fn java_native_kagemusha_candidate_lab_accepted_identity_v4(
         .map_err(|_| "candidate-lab identity failed revalidation".to_owned())?;
         if expected != installed.accepted_identity
             || expected.production_capability_observed
-            || !expected.source_repo_dirty
+            || expected.source_repo_dirty
             || expected.artifacts.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
         {
             return Err("candidate-lab identity changed after installation".to_owned());

@@ -354,9 +354,24 @@ fn validate_alias_query_request(app: &SharedAppState, request: &MusubiAliasQuery
 
 fn validate_cursor_page(app: &SharedAppState, page: &MusubiPageRequestV1) -> Result<()> {
     page.validate().map_err(|error| {
-        record_cursor_failure(app, INVALID_CURSOR_FAILURE_REASON);
+        if page_validation_failure_is_invalid_cursor(page) {
+            record_cursor_failure(app, INVALID_CURSOR_FAILURE_REASON);
+        }
         invalid_query_request(error)
     })
+}
+
+fn page_validation_failure_is_invalid_cursor(page: &MusubiPageRequestV1) -> bool {
+    let Some(cursor) = &page.cursor else {
+        return false;
+    };
+    // Preserve `MusubiPageRequestV1::validate` precedence: an invalid limit is
+    // a request-bound failure even when the same request also carries a bad cursor.
+    let limit_only = MusubiPageRequestV1 {
+        limit: page.limit,
+        cursor: None,
+    };
+    limit_only.validate().is_ok() && cursor.validate().is_err()
 }
 
 const INVALID_CURSOR_FAILURE_REASON: MusubiCursorFailureReasonV1 =
@@ -404,9 +419,9 @@ const fn core_cursor_failure_reason(
     error: &QueryExecutionFail,
 ) -> Option<MusubiCursorFailureReasonV1> {
     if matches!(error, QueryExecutionFail::Expired) {
-        // Core intentionally collapses stale anchor/revision/query/caller and
-        // missing-boundary cursors to Expired. Do not invent a more specific
-        // telemetry label at this transport boundary.
+        // Generic query paths expose only Expired. Do not invent a more
+        // specific telemetry label here; the six paged registry paths use
+        // `execute_musubi_query` and retain their typed reason separately.
         Some(MusubiCursorFailureReasonV1::Other)
     } else {
         None
@@ -456,7 +471,10 @@ where
 mod tests {
     use iroha_data_model::{
         isi::musubi::SetMusubiReleaseYankV1,
-        musubi::{MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1},
+        musubi::{
+            MUSUBI_MAX_PAGE_SIZE_V1, MusubiFinalizedCursorV1, MusubiPackageIdV1,
+            MusubiPackageScopeV1, MusubiQueryHashV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
+        },
         nexus::DataSpaceId,
     };
 
@@ -526,6 +544,55 @@ mod tests {
             core_cursor_failure_reason(&QueryExecutionFail::NotFound),
             None
         );
+    }
+
+    #[test]
+    fn page_validation_classifies_only_structurally_invalid_supplied_cursors() {
+        let valid_cursor = MusubiFinalizedCursorV1 {
+            snapshot: MusubiRegistrySnapshotV1 {
+                finalized_height: 7,
+                finalized_block_hash: [0x42; 32],
+                index_revision: 3,
+            },
+            query_hash: MusubiQueryHashV1::new([0x24; 32]),
+            last_key: "cursor-key".to_owned(),
+            caller: None,
+        };
+        let mut invalid_cursor = valid_cursor.clone();
+        invalid_cursor.query_hash = MusubiQueryHashV1::new([0; 32]);
+        let oversized_limit =
+            u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1 + 1).expect("page maximum fits u32");
+
+        assert!(!page_validation_failure_is_invalid_cursor(
+            &MusubiPageRequestV1 {
+                limit: oversized_limit,
+                cursor: None,
+            }
+        ));
+        assert!(!page_validation_failure_is_invalid_cursor(
+            &MusubiPageRequestV1 {
+                limit: oversized_limit,
+                cursor: Some(valid_cursor.clone()),
+            }
+        ));
+        assert!(page_validation_failure_is_invalid_cursor(
+            &MusubiPageRequestV1 {
+                limit: 0,
+                cursor: Some(invalid_cursor.clone()),
+            }
+        ));
+        assert!(!page_validation_failure_is_invalid_cursor(
+            &MusubiPageRequestV1 {
+                limit: oversized_limit,
+                cursor: Some(invalid_cursor),
+            }
+        ));
+        assert!(!page_validation_failure_is_invalid_cursor(
+            &MusubiPageRequestV1 {
+                limit: 0,
+                cursor: Some(valid_cursor),
+            }
+        ));
     }
 
     #[test]

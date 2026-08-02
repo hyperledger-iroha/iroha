@@ -188,12 +188,33 @@ state is encoded into `smart_contract_state`, stored in a global vector, or
 recovered by scanning unrelated state. Exact resolution reads only the
 universal sparse index.
 
+The universal `musubi_replication_shortfall_releases` cell is the exact sum of
+archive reverse-reference lengths for every archive whose authoritative
+availability is not `Selectable`. It therefore deliberately includes yanked
+and Parliament-taken-down releases while they remain bound to a non-selectable
+archive; this is a storage-risk aggregate, not a fresh-candidate count. Checked
+deltas apply only when an archive crosses the selectable boundary, snapshot
+validation recomputes the invariant while validating reverse references, and
+the process gauge is seeded directly from the persisted cell and synchronized
+only after the world-state commit succeeds.
+
 A source-level routing regression pins release publication to the universal
 coordinator with the package home dataspace as its exact participant. Snapshot
 validation fault-cut regressions reject one-sided release, reverse-reference,
-resolver-row, and public-directory projections while accepting exact replay.
-These deterministic checks complement, but do not replace, the required live
-four-or-more-peer Native AMX crash/replay qualification.
+resolver-row, and public-directory projections while accepting exact replay. A
+four-peer below-quorum queue-journal crash/restart smoke is defined to queue a
+structurally valid publication for an unavailable archive, restart every peer,
+require one canonical finalized-replication-quorum rejection, and assert that
+the package, release, resolver row, public-directory row, and archive reverse
+reference remain absent on every peer at one finalized snapshot. The smoke
+controls the durable queue boundary only; it does not pause a publication after
+PrepareQC, after CommitQC, or immediately before world commit. The non-shipping
+adversarial-test daemon now has source-bound, one-shot abort hooks at those
+three exact Core insertion points. Each hook fsyncs and reads back a canonical
+Norito acknowledgement before aborting, and the acknowledgement suppresses an
+identical cut after restart. A four-peer test must still drive a selectable
+three-replica publication through every hook and prove that home and universal
+projections are never half-visible before the Native AMX release gate closes.
 
 Snapshot loading reserves the complete generic `musubi` state-path namespace:
 the bare name and `_`, `/`, `.`, or `:` descendants are rejected as legacy
@@ -291,6 +312,16 @@ normal path dependency also declares its canonical registry package and
 version requirement. Packaging removes the path, resolves the registry
 release, and compiler-checks again from the clean packaged tree. Development
 dependencies apply only to selected workspace roots and never propagate.
+
+Clean publication validation reads only the immutable `PackagePlan`: it
+recomputes the typed interface of every authenticated exact registry node,
+validates the library graph, and compiler-checks every declared contract and
+test root from the packaged bytes. It never reopens a workspace path. Tests are
+compiled in test mode but are not executed during packaging, and their sources
+do not affect the library interface digest. Because the V1 verification lock
+contains only the release's normal dependency graph, a packaged test that
+requires a development-only import fails with an explicit non-propagation
+diagnostic instead of consulting local development state.
 
 Focused manifest edits preserve comments and unrelated formatting. Paths are
 portable, relative to their defining root, and cannot escape that root.
@@ -468,6 +499,11 @@ version with different commitments is permanently rejected.
 Archive-registration evidence must retain the exact staged receipt from that
 operation, including its nonce; another independently valid broker receipt
 cannot cross the registration boundary.
+Final verification retains the resolver page's chain and genesis identities in
+the operation evidence and requires both to match the immutable publication
+request. An exact-looking release row returned by another chain incarnation is
+therefore rejected even when its package, version, and content digests happen
+to match.
 
 Core plans and validates the successor package-governance revision, pending
 invitation rebases or expirations, resolver-index revision, exact archive
@@ -591,8 +627,12 @@ governance attempts, and storage pressure. Only an authoritative long-lived
 producer may materialize a series. Core, Torii, and the injected private
 publication service produce their owned transition/rejection signals; journal
 phase age, cache/capacity, selected-root storage, consumer fetch, restart-safe
-shortfall hydration, and exact cursor-reason propagation remain operational
-release gates. An absent series is unknown, not healthy. Rollout proceeds
+shortfall alert qualification, and the remaining long-lived producer wiring
+remain operational release gates. Paged Musubi queries preserve exact cursor
+failures inside Core and map them to Torii's bounded metric reasons without
+changing the public `Expired` query-error wire. An absent series is unknown,
+not healthy.
+Rollout proceeds
 through a four-peer devnet, a five-to-ten namespace Taira allowlist with a
 two-week soak, and a 30-day invite beta. Open admission requires zero
 critical/high findings, completed recovery drills, load and chaos success, and

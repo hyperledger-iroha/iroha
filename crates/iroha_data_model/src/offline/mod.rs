@@ -253,10 +253,10 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v4";
-/// Exact schema of the independently pinned reviewed dirty source closure.
+/// Exact schema of the independently pinned reviewed clean source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1: &str = "iroha.reviewed-source-closure.v1";
-/// Maximum untracked regular-file entries in one reviewed source closure.
-pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 100_000;
+/// Maximum untracked regular-file entries in a first-release source closure.
+pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 0;
 /// Maximum ignored root `Cargo.lock` bytes admitted by the reviewed closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// Degree-parameterized Pasta-cycle backend selected only by ABI 21 releases.
@@ -1705,7 +1705,7 @@ mod model {
         pub path_bytes_base64: String,
     }
 
-    /// Canonical independently reviewed dirty source closure for one candidate.
+    /// Canonical independently reviewed clean source closure for one candidate.
     ///
     /// Its JSON representation matches the reviewed descriptor: SHA-256 fields,
     /// including those in untracked-file entries, are lowercase hex strings.
@@ -1718,11 +1718,11 @@ mod model {
     pub struct KagemushaReviewedSourceClosureV1 {
         /// Exact reviewed-source-closure schema.
         pub schema: String,
-        /// Signed base commit against which the tracked binary diff is defined.
+        /// Signed commit against which the necessarily empty tracked diff is defined.
         pub base_commit: String,
         /// Exact checked-out source commit; first release requires `base_commit`.
         pub source_commit: String,
-        /// Derived dirty state; first release requires `true`.
+        /// Derived dirty state; first release requires `false`.
         pub source_repo_dirty: bool,
         /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
         #[cfg_attr(
@@ -1755,7 +1755,7 @@ mod model {
             norito(with = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub ignored_cargo_lock_sha256: [u8; 32],
-        /// Cross-repository tracked-diff/untracked-manifest fingerprint.
+        /// Fingerprint proving the tracked diff and untracked manifest are empty.
         #[cfg_attr(
             feature = "json",
             norito(with = "crate::json_helpers::fixed_bytes_hex")
@@ -1789,7 +1789,7 @@ mod model {
         pub source_tree_sha256: [u8; 32],
         /// Whether the exact build tree differed from `source_commit`.
         pub source_repo_dirty: bool,
-        /// Complete independently pinned reviewed dirty source closure.
+        /// Complete independently pinned reviewed clean source closure.
         pub reviewed_source_closure: KagemushaReviewedSourceClosureV1,
         /// SHA-256 of the exact canonical descriptor JSON bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -1833,7 +1833,7 @@ mod model {
 
     /// Immutable ABI-21 candidate captured before external review and device evidence exist.
     ///
-    /// The embedded manifest commits the independently reviewed dirty source
+    /// The embedded manifest commits the independently reviewed clean source
     /// closure, network parameters, inline circuit configuration, exact eight
     /// recursive artifacts, and finality roster. Its benchmark, review, and
     /// qualification and external-evidence digest slots must all be zero.
@@ -1914,7 +1914,7 @@ mod model {
         /// Exact source-tree identity copied from the candidate.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
-        /// Exact reviewed dirty-tree state copied from the candidate.
+        /// Exact reviewed clean-tree state copied from the candidate (`false`).
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the candidate.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -2088,7 +2088,7 @@ mod model {
         /// Exact source-tree identity copied from the V4 manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
-        /// Exact dirty-tree state copied from the V4 manifest.
+        /// Exact clean-tree state copied from the V4 manifest (`false`).
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -5036,6 +5036,35 @@ impl KagemushaPastaPublicLayoutV4 {
 }
 
 impl KagemushaStepCircuitParamsV4 {
+    /// Construct and validate the single reviewed first-release generation profile.
+    ///
+    /// Eq and Ep deliberately share this parameter carrier: parity-specific
+    /// circuit identities and keys remain separate, while their authenticated
+    /// Halo2 geometry is identical.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] if the reviewed constants no longer
+    /// form the admitted compact profile.
+    pub fn reviewed_first_release_generation_profile() -> Result<Self, KagemushaValidationError> {
+        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
+        let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)?;
+        let params = Self {
+            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+            k,
+            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
+            num_fixed: 1,
+            lookup_bits: k - 1,
+            num_instance_columns: 1,
+            public_input_limbs: layout.instance_column_limbs,
+            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
+        };
+        params.validate_release_generation_profile()?;
+        Ok(params)
+    }
+
     /// Validate the complete authenticated layout and return its public ABI.
     ///
     /// # Errors
@@ -5450,7 +5479,7 @@ impl KagemushaReviewedSourceClosureV1 {
         if self.schema != KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1
             || !is_kagemusha_source_commit(&self.base_commit)
             || self.base_commit != self.source_commit
-            || !self.source_repo_dirty
+            || self.source_repo_dirty
             || !nonzero_digests
             || untracked_count != Some(self.untracked_path_mode_blob_oid_manifest.len())
             || untracked_count.is_none_or(|count| {
@@ -5523,7 +5552,7 @@ impl KagemushaReviewedSourceClosureV1 {
         let empty_sha256: [u8; 32] = Sha256::digest([]).into();
         let derived_dirty =
             self.tracked_binary_diff_sha256 != empty_sha256 || self.untracked_file_count != 0;
-        if combined_sha256 != self.combined_source_fingerprint_sha256 || !derived_dirty {
+        if combined_sha256 != self.combined_source_fingerprint_sha256 || derived_dirty {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.v4.reviewed_source_closure.fingerprint",
             });
@@ -5546,7 +5575,7 @@ impl KagemushaReviewedSourceClosureV1 {
         append_python_ascii_json_string(&mut out, &self.schema);
         out.push_str(",\"source_commit\":");
         append_python_ascii_json_string(&mut out, &self.source_commit);
-        out.push_str(",\"source_repo_dirty\":true,\"source_tree_sha256\":\"");
+        out.push_str(",\"source_repo_dirty\":false,\"source_tree_sha256\":\"");
         out.push_str(&hex::encode(self.source_tree_sha256));
         out.push_str("\",\"tracked_binary_diff_sha256\":\"");
         out.push_str(&hex::encode(self.tracked_binary_diff_sha256));
@@ -5673,7 +5702,7 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || !is_kagemusha_portable_identifier(&self.generation)
             || !is_kagemusha_source_commit(&self.source_commit)
             || self.source_tree_sha256 == [0; 32]
-            || !self.source_repo_dirty
+            || self.source_repo_dirty
             || !reviewed_source_closure_valid
             || !is_kagemusha_chain_id(&self.chain_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
@@ -7674,16 +7703,8 @@ mod kagemusha_v4_artifact_contract_tests {
 
     fn reviewed_source_closure() -> KagemushaReviewedSourceClosureV1 {
         let source_commit = "1234567890abcdef1234567890abcdef12345678".to_owned();
-        let entry = KagemushaReviewedSourceClosureManifestEntryV1 {
-            blob_sha256: digest(b"reviewed untracked source bytes"),
-            git_blob_oid: "abcdef1234567890abcdef1234567890abcdef12".to_owned(),
-            git_mode: "100644".to_owned(),
-            path: "reviewed-untracked-source.rs".to_owned(),
-            path_bytes_base64: BASE64_STANDARD.encode(b"reviewed-untracked-source.rs"),
-        };
-        let entry_json = kagemusha_reviewed_source_manifest_entry_json(&entry);
-        let manifest_sha256 = Sha256::digest(format!("{entry_json}\n")).into();
-        let tracked_binary_diff_sha256 = digest(b"reviewed tracked binary diff");
+        let manifest_sha256 = Sha256::digest([]).into();
+        let tracked_binary_diff_sha256 = Sha256::digest([]).into();
         let mut combined = Sha256::new();
         combined.update(KAGEMUSHA_REVIEWED_SOURCE_DIFF_DOMAIN_V1);
         combined.update(KAGEMUSHA_REVIEWED_SOURCE_TRACKED_DIFF_DOMAIN_V1);
@@ -7694,11 +7715,11 @@ mod kagemusha_v4_artifact_contract_tests {
             schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
             base_commit: source_commit.clone(),
             source_commit,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             source_tree_sha256: digest(b"v4 artifact test source tree"),
             tracked_binary_diff_sha256,
-            untracked_file_count: 1,
-            untracked_path_mode_blob_oid_manifest: vec![entry],
+            untracked_file_count: 0,
+            untracked_path_mode_blob_oid_manifest: Vec::new(),
             untracked_path_mode_blob_oid_manifest_sha256: manifest_sha256,
             ignored_cargo_lock_size_bytes: 123,
             ignored_cargo_lock_sha256: digest(b"reviewed ignored Cargo.lock"),
@@ -7715,32 +7736,54 @@ mod kagemusha_v4_artifact_contract_tests {
             "\"source_tree_sha256\":\"{}\"",
             hex::encode(closure.source_tree_sha256)
         )));
-        assert!(json.contains(&format!(
-            "\"blob_sha256\":\"{}\"",
-            hex::encode(closure.untracked_path_mode_blob_oid_manifest[0].blob_sha256)
-        )));
+        assert!(json.contains("\"source_repo_dirty\":false"));
+        assert!(json.contains("\"untracked_file_count\":0"));
 
         let decoded: KagemushaReviewedSourceClosureV1 =
             norito::json::from_str(&json).expect("decode canonical hex descriptor JSON");
         assert_eq!(decoded, closure);
     }
 
+    #[test]
+    fn first_release_reviewed_source_closure_rejects_every_dirty_shape() {
+        assert_eq!(KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1, 0);
+        let recompute_combined = |closure: &mut KagemushaReviewedSourceClosureV1| {
+            let mut combined = Sha256::new();
+            combined.update(KAGEMUSHA_REVIEWED_SOURCE_DIFF_DOMAIN_V1);
+            combined.update(KAGEMUSHA_REVIEWED_SOURCE_TRACKED_DIFF_DOMAIN_V1);
+            combined.update(closure.tracked_binary_diff_sha256);
+            combined.update(KAGEMUSHA_REVIEWED_SOURCE_UNTRACKED_MANIFEST_DOMAIN_V1);
+            combined.update(closure.untracked_path_mode_blob_oid_manifest_sha256);
+            closure.combined_source_fingerprint_sha256 = combined.finalize().into();
+        };
+
+        let mut tracked = reviewed_source_closure();
+        tracked.source_repo_dirty = true;
+        tracked.tracked_binary_diff_sha256 = digest(b"forbidden tracked diff");
+        recompute_combined(&mut tracked);
+        assert!(tracked.validate().is_err());
+
+        let mut untracked = reviewed_source_closure();
+        let entry = KagemushaReviewedSourceClosureManifestEntryV1 {
+            blob_sha256: digest(b"forbidden untracked bytes"),
+            git_blob_oid: "abcdef1234567890abcdef1234567890abcdef12".to_owned(),
+            git_mode: "100644".to_owned(),
+            path: "forbidden-untracked.rs".to_owned(),
+            path_bytes_base64: BASE64_STANDARD.encode(b"forbidden-untracked.rs"),
+        };
+        let entry_json = kagemusha_reviewed_source_manifest_entry_json(&entry);
+        untracked.source_repo_dirty = true;
+        untracked.untracked_file_count = 1;
+        untracked.untracked_path_mode_blob_oid_manifest = vec![entry];
+        untracked.untracked_path_mode_blob_oid_manifest_sha256 =
+            Sha256::digest(format!("{entry_json}\n")).into();
+        recompute_combined(&mut untracked);
+        assert!(untracked.validate().is_err());
+    }
+
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
-        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
-        let layout =
-            KagemushaPastaPublicLayoutV4::for_ipa_round_count(k).expect("test V4 public layout");
-        KagemushaStepCircuitParamsV4 {
-            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-            k,
-            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
-            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
-            num_fixed: 1,
-            lookup_bits: k - 1,
-            num_instance_columns: 1,
-            public_input_limbs: layout.instance_column_limbs,
-            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
-        }
+        KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+            .expect("reviewed first-release circuit profile")
     }
 
     fn artifact(
@@ -7827,7 +7870,7 @@ mod kagemusha_v4_artifact_contract_tests {
             generation: "v4-artifact-test-release".to_owned(),
             source_commit: reviewed_source_closure.source_commit.clone(),
             source_tree_sha256: reviewed_source_closure.source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id: ChainId::from("v4-artifact-test-chain"),
@@ -8409,6 +8452,18 @@ mod kagemusha_v4_artifact_contract_tests {
         reviewed
             .validate_release_generation_profile()
             .expect("reviewed compact degree-17 generation profile");
+        let encoded = norito::to_bytes(&reviewed).expect("encode reviewed circuit profile");
+        let decoded: KagemushaStepCircuitParamsV4 =
+            norito::decode_from_bytes(&encoded).expect("decode reviewed circuit profile");
+        assert_eq!(decoded, reviewed);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode reviewed circuit profile"),
+            encoded,
+            "the constructor must remain a canonical Norito release input"
+        );
+        assert_eq!(reviewed.version, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4);
+        assert_eq!(reviewed.k, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4);
+        assert_eq!(reviewed.public_input_limbs, 66);
         assert_eq!(reviewed.max_parent_proof_bytes, 93_120);
         assert_eq!(
             KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,

@@ -4039,6 +4039,18 @@ impl SumeragiV2Adapter {
         self.reducer.current_tag()
     }
 
+    /// Return the reducer body state for one wire identity in seam tests.
+    #[cfg(test)]
+    pub(crate) fn body_state_for_test(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> reducer::BodyState {
+        let round = reducer::Round::new(round.height, round.view);
+        let subject = reducer::Subject::new(Hash::new(subject.encode()).into());
+        self.reducer.body_state(round, subject)
+    }
+
     /// Actor-global ordinal source shared with every replacement height
     /// adapter owned by this runtime actor.
     pub(crate) const fn deferred_admission_ordinal_source(
@@ -5255,14 +5267,14 @@ impl SumeragiV2Adapter {
         )
     }
 
-    /// Restore a body-store validation marker into the replayed wire registry.
+    /// Bind an exact body-store validation marker into the wire registry.
     ///
-    /// Proposal intent persistence deliberately precedes signing. On restart,
-    /// the safety WAL reconstructs that intent while the exact execution
-    /// commitment remains in the independently fsynced body store. Reassociating
-    /// those same-round durable records before dispatching startup effects lets
-    /// the replayed proposal continue directly into its Prepare vote.
-    pub(crate) fn recover_validated_body(
+    /// This monotone authority update is independent of the reducer consumer
+    /// incarnation. A validation worker can finish after its view-local
+    /// consumer was retired; the obsolete reducer event must remain a
+    /// stutter, but the independently fsynced execution commitment must still
+    /// release authenticated votes for this exact `(round, subject)`.
+    pub(crate) fn bind_validated_body(
         &mut self,
         manifest: &wire::PayloadManifest,
         validated_receipt: &ValidatedBodyReceipt,
@@ -5278,8 +5290,9 @@ impl SumeragiV2Adapter {
         }
         validated_receipt.execution_commitment().validate()?;
 
-        // Stage registry expansion so any mismatch leaves replayed authority
-        // unchanged and causes startup to fail closed at the caller.
+        // Stage registry expansion so any mismatch leaves canonical authority
+        // unchanged. Registration is idempotent for the exact receipt and
+        // rejects a conflicting commitment before mutation.
         let mut registry = self.registry.clone();
         let core_manifest = registry.manifest_to_core(manifest, &self.wire_context)?;
         let round = registry.round_to_core(manifest.round, &self.wire_context)?;
@@ -5290,6 +5303,21 @@ impl SumeragiV2Adapter {
         )?;
         self.registry = registry;
         Ok(())
+    }
+
+    /// Restore a body-store validation marker into the replayed wire registry.
+    ///
+    /// Proposal intent persistence deliberately precedes signing. On restart,
+    /// the safety WAL reconstructs that intent while the exact execution
+    /// commitment remains in the independently fsynced body store. Reassociating
+    /// those same-round durable records before dispatching startup effects lets
+    /// the replayed proposal continue directly into its Prepare vote.
+    pub(crate) fn recover_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), AdapterError> {
+        self.bind_validated_body(manifest, validated_receipt)
     }
 
     /// Complete a body reconstruction requested by [`AdapterEffect::FetchBody`].

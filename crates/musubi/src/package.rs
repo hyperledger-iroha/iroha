@@ -42,6 +42,8 @@ use crate::{
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
 
 /// Maximum total bytes in a Musubi V1 normalized source tree.
 pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
@@ -60,6 +62,13 @@ const BUNDLE_VERIFICATION_LOCK_PATH: &str = ".musubi/verification-lock.norito";
 const MAX_PATH_COMPONENTS: usize = 64;
 const MAX_PATH_COMPONENT_BYTES: usize = 255;
 const MAX_PATH_BYTES: usize = 4 * 1024;
+// Count every directory entry, including empty and excluded directories, so a selected tree can
+// never make the planner retain or recurse through an unbounded ambient namespace. This permits
+// the full file ceiling even when every file has a distinct maximum-depth directory chain.
+const MAX_SOURCE_ENTRIES: usize = MAX_SOURCE_FILES * MAX_PATH_COMPONENTS;
+// `read_dir` names are retained only long enough to impose deterministic byte ordering. Keep one
+// unusually wide selected directory from consuming the whole tree-wide traversal budget at once.
+const MAX_DIRECTORY_ENTRIES: usize = MAX_SOURCE_FILES * 2;
 
 const SOURCE_TREE_DOMAIN: &[u8] = b"musubi-source-tree-v1\0";
 const ARTIFACT_DESCRIPTOR_DOMAIN: &[u8] = b"musubi-artifact-descriptor-v1\0";
@@ -214,13 +223,14 @@ impl PackagePlan {
     ///
     /// # Errors
     ///
-    /// Returns an error when the semantic manifest or exact verification lock is invalid, or
-    /// when their release and lock-digest bindings differ.
+    /// Returns an error when SoraFS rejects a portable bundle path, the semantic manifest or
+    /// exact verification lock is invalid, or their release and lock-digest bindings differ.
     pub fn commitment_materials(
         &self,
         semantic_release_manifest: &MusubiSemanticReleaseManifestV1,
         verification_lock: &MusubiVerificationLockV1,
     ) -> Result<PackageCommitments, PackageError> {
+        validate_sorafs_bundle_paths(&self.files)?;
         let rendered_lock = render_verification_lock(verification_lock).map_err(|error| {
             PackageError::InvalidBundleBinding(format!(
                 "typed verification lock cannot be rendered: {error}"
@@ -597,6 +607,13 @@ pub enum PackageError {
         /// V1 maximum.
         maximum: usize,
     },
+    /// Positive-set traversal exceeded its filesystem-entry ceiling.
+    TooManyEntries {
+        /// Number of selected filesystem entries visited.
+        count: usize,
+        /// V1 traversal maximum.
+        maximum: usize,
+    },
     /// The normalized source tree exceeds the payload-byte ceiling.
     SourceTooLarge {
         /// Planned source bytes.
@@ -699,6 +716,10 @@ impl fmt::Display for PackageError {
             Self::TooManyFiles { count, maximum } => write!(
                 formatter,
                 "package has {count} files; Musubi V1 permits at most {maximum}"
+            ),
+            Self::TooManyEntries { count, maximum } => write!(
+                formatter,
+                "package traversal visited {count} filesystem entries; Musubi V1 permits at most {maximum}"
             ),
             Self::SourceTooLarge { bytes, maximum } => write!(
                 formatter,
@@ -831,7 +852,10 @@ pub fn plan_package(
         let root = validate_root(&selection.root)?;
         let mut external = Collector::new(root.clone());
         external.collect_selector(&selection.selector, selection.shape)?;
-        for file in external.finish()?.files {
+        let external_entries = external.visited_entries;
+        let external_plan = external.finish()?;
+        collector.consume_entries(external_entries)?;
+        for file in external_plan.files {
             let original = format!("external:{}:{}", root.display(), file.path);
             collector.insert(original, file.path, file.components, file.bytes)?;
         }
@@ -1230,6 +1254,7 @@ struct Collector {
     files: BTreeMap<String, PlannedFile>,
     collision_origins: BTreeMap<String, String>,
     source_bytes: u64,
+    visited_entries: usize,
 }
 
 impl Collector {
@@ -1239,7 +1264,20 @@ impl Collector {
             files: BTreeMap::new(),
             collision_origins: BTreeMap::new(),
             source_bytes: 0,
+            visited_entries: 0,
         }
+    }
+
+    fn consume_entries(&mut self, count: usize) -> Result<(), PackageError> {
+        let Some(next) = self.visited_entries.checked_add(count) else {
+            return Err(PackageError::TooManyEntries {
+                count: usize::MAX,
+                maximum: MAX_SOURCE_ENTRIES,
+            });
+        };
+        enforce_entry_limit(next, MAX_SOURCE_ENTRIES)?;
+        self.visited_entries = next;
+        Ok(())
     }
 
     fn insert_virtual(&mut self, path: &str, bytes: Vec<u8>) -> Result<(), PackageError> {
@@ -1259,6 +1297,7 @@ impl Collector {
         shape: SelectionShape,
     ) -> Result<(), PackageError> {
         let relative = validate_selector(selector)?;
+        self.consume_entries(1)?;
         if relative.as_os_str().is_empty() {
             if matches!(shape, SelectionShape::File) {
                 return Err(PackageError::WrongFileKind {
@@ -1273,7 +1312,7 @@ impl Collector {
         let physical = self.root.join(&relative);
         let metadata = fs::symlink_metadata(&physical)
             .map_err(|source| io_error("inspect package selector", &relative, source))?;
-        if metadata.file_type().is_symlink() {
+        if metadata_is_link_or_reparse(&metadata) {
             return Err(PackageError::Symlink(relative));
         }
         if metadata.is_file() {
@@ -1298,6 +1337,7 @@ impl Collector {
     }
 
     fn collect_directory(&mut self, relative: &Path) -> Result<(), PackageError> {
+        validate_portable_relative_path(relative)?;
         let physical = self.root.join(relative);
         validate_confined_directory(&self.root, relative)?;
         let entries = fs::read_dir(&physical)
@@ -1308,30 +1348,32 @@ impl Collector {
             let name = entry.file_name().into_string().map_err(|name| {
                 PackageError::NonPortablePath(relative.join(name).to_string_lossy().into_owned())
             })?;
+            canonical_portable_component(&name)?;
+            enforce_entry_limit(ordered.len() + 1, MAX_DIRECTORY_ENTRIES)?;
+            self.consume_entries(1)?;
             ordered.push((name, entry));
         }
         ordered.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
 
         for (name, entry) in ordered {
             let child = relative.join(&name);
-            let file_type = entry
-                .file_type()
+            let linked = fs::symlink_metadata(entry.path())
                 .map_err(|source| io_error("inspect package entry", &child, source))?;
-            if file_type.is_symlink() {
+            if metadata_is_link_or_reparse(&linked) {
                 return Err(PackageError::Symlink(child));
             }
             if is_sensitive_component(&name) {
                 return Err(PackageError::SensitivePath(child));
             }
-            if file_type.is_dir() && is_excluded_directory(&name) {
+            if is_excluded_directory(&name) {
                 continue;
             }
-            if file_type.is_file() && is_fixed_generated_file(&child) {
+            if linked.is_file() && is_fixed_generated_file(&child) {
                 continue;
             }
-            if file_type.is_dir() {
+            if linked.is_dir() {
                 self.collect_directory(&child)?;
-            } else if file_type.is_file() {
+            } else if linked.is_file() {
                 self.collect_file(&child)?;
             } else {
                 return Err(PackageError::SpecialFile(child));
@@ -1361,14 +1403,13 @@ impl Collector {
         validate_confined_parent(&self.root, relative)?;
         let linked = fs::symlink_metadata(&physical)
             .map_err(|source| io_error("inspect package file", relative, source))?;
-        if linked.file_type().is_symlink() {
+        if metadata_is_link_or_reparse(&linked) {
             return Err(PackageError::Symlink(relative.to_path_buf()));
         }
         if !linked.is_file() {
             return Err(PackageError::SpecialFile(relative.to_path_buf()));
         }
-        #[cfg(unix)]
-        if linked.nlink() != 1 {
+        if !metadata_has_one_hard_link(&linked) {
             return Err(PackageError::Hardlink(relative.to_path_buf()));
         }
         let next_size =
@@ -1382,6 +1423,7 @@ impl Collector {
 
         let mut source = FilePayload::open(&physical)
             .map_err(|source| io_error("securely open package file", relative, source))?;
+        validate_confined_file(&self.root, relative)?;
         let size = usize::try_from(linked.len()).map_err(|_| PackageError::SourceTooLarge {
             bytes: linked.len(),
             maximum: MAX_SOURCE_BYTES,
@@ -1409,6 +1451,7 @@ impl Collector {
                 io::Error::other(source),
             )
         })?;
+        validate_confined_file(&self.root, relative)?;
         if let Some(marker) = sensitive_content_marker(&bytes) {
             return Err(PackageError::SensitiveContent {
                 path: canonical,
@@ -1474,7 +1517,7 @@ impl Collector {
 fn validate_root(root: &Path) -> Result<PathBuf, PackageError> {
     let metadata = fs::symlink_metadata(root)
         .map_err(|source| io_error("inspect package root", root, source))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
         return Err(PackageError::InvalidRoot(root.to_path_buf()));
     }
     fs::canonicalize(root).map_err(|source| io_error("canonicalize package root", root, source))
@@ -1500,7 +1543,16 @@ fn validate_selector(selector: &Path) -> Result<PathBuf, PackageError> {
             }
         }
     }
+    validate_portable_relative_path(&output)?;
     Ok(output)
+}
+
+fn validate_portable_relative_path(path: &Path) -> Result<(), PackageError> {
+    if path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    let portable = relative_to_utf8(path)?;
+    canonical_portable_components(&portable).map(|_| ())
 }
 
 fn validate_no_symlink_chain(root: &Path, relative: &Path) -> Result<(), PackageError> {
@@ -1514,7 +1566,7 @@ fn validate_no_symlink_chain(root: &Path, relative: &Path) -> Result<(), Package
         shown.push(component);
         let metadata = fs::symlink_metadata(&current)
             .map_err(|source| io_error("inspect selected path", &shown, source))?;
-        if metadata.file_type().is_symlink() {
+        if metadata_is_link_or_reparse(&metadata) {
             return Err(PackageError::Symlink(shown));
         }
     }
@@ -1526,7 +1578,7 @@ fn validate_confined_directory(root: &Path, relative: &Path) -> Result<(), Packa
     let physical = root.join(relative);
     let metadata = fs::symlink_metadata(&physical)
         .map_err(|source| io_error("inspect package directory", relative, source))?;
-    if metadata.file_type().is_symlink() {
+    if metadata_is_link_or_reparse(&metadata) {
         return Err(PackageError::Symlink(relative.to_path_buf()));
     }
     if !metadata.is_dir() {
@@ -1544,6 +1596,20 @@ fn validate_confined_parent(root: &Path, relative: &Path) -> Result<(), PackageE
     let parent = relative.parent().unwrap_or_else(|| Path::new(""));
     let canonical = fs::canonicalize(root.join(parent))
         .map_err(|source| io_error("canonicalize package file parent", parent, source))?;
+    if !canonical.starts_with(root) {
+        return Err(PackageError::InvalidSelector(relative.to_path_buf()));
+    }
+    Ok(())
+}
+
+fn validate_confined_file(root: &Path, relative: &Path) -> Result<(), PackageError> {
+    // TODO: Replace these before/after namespace checks with retained, handle-relative directory
+    // traversal when safe Rust exposes a portable no-follow/open-beneath primitive. The stable
+    // file handle prevents final-entry substitution, while these checks fail ordinary ancestor
+    // swaps; a deliberately timed ancestor ABA race remains an OS-specific fuzz gate.
+    validate_no_symlink_chain(root, relative)?;
+    let canonical = fs::canonicalize(root.join(relative))
+        .map_err(|source| io_error("canonicalize package file", relative, source))?;
     if !canonical.starts_with(root) {
         return Err(PackageError::InvalidSelector(relative.to_path_buf()));
     }
@@ -1659,8 +1725,42 @@ fn portable_collision_key(components: &[String]) -> String {
     components
         .join("/")
         .chars()
+        // Uppercase-then-lowercase also collapses multi-scalar mappings such as
+        // `Straße`/`STRASSE` and final/non-final sigma. Rejecting these conservatively keeps one
+        // package valid on Unicode-aware case-insensitive filesystems without platform probing.
+        .flat_map(char::to_uppercase)
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || metadata_is_windows_reparse_point(metadata)
+}
+
+#[cfg(windows)]
+fn metadata_is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_attributes() & 0x0000_0400 != 0
+}
+
+#[cfg(not(windows))]
+const fn metadata_is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        metadata.nlink() == 1
+    }
+    #[cfg(windows)]
+    {
+        metadata.number_of_links() == Some(1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 fn is_reserved_component(component: &str) -> bool {
@@ -1720,6 +1820,7 @@ pub(crate) fn is_sensitive_component(component: &str) -> bool {
     let lower = component.to_ascii_lowercase();
     lower == ".env"
         || lower.starts_with(".env.")
+        || lower == ".envrc"
         || matches!(
             lower.as_str(),
             ".ssh"
@@ -1735,11 +1836,18 @@ pub(crate) fn is_sensitive_component(component: &str) -> bool {
                 | "credentials.json"
                 | "secrets"
                 | "secrets.toml"
+                | "private_key"
+                | "private-key"
+                | "secret_key"
+                | "secret-key"
+                | "mnemonic"
                 | "id_rsa"
                 | "id_dsa"
                 | "id_ecdsa"
                 | "id_ed25519"
         )
+        || lower.starts_with("credentials.")
+        || lower.starts_with("secrets.")
         || lower.contains("validator_secrets")
         || [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx"]
             .iter()
@@ -1749,7 +1857,12 @@ pub(crate) fn is_sensitive_component(component: &str) -> bool {
 fn sensitive_content_marker(bytes: &[u8]) -> Option<&'static str> {
     const FIXED: &[(&[u8], &str)] = &[
         (b"-----BEGIN PRIVATE KEY-----", "PKCS#8 private key"),
+        (
+            b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
+            "encrypted PKCS#8 private key",
+        ),
         (b"-----BEGIN RSA PRIVATE KEY-----", "RSA private key"),
+        (b"-----BEGIN DSA PRIVATE KEY-----", "DSA private key"),
         (b"-----BEGIN EC PRIVATE KEY-----", "EC private key"),
         (
             b"-----BEGIN OPENSSH PRIVATE KEY-----",
@@ -1923,6 +2036,29 @@ fn source_tree_material(files: &[PlannedFile]) -> Vec<u8> {
     output
 }
 
+fn validate_sorafs_bundle_paths(files: &[PlannedFile]) -> Result<(), PackageError> {
+    let mut entries = files
+        .iter()
+        .map(|file| FileEntry {
+            path: file.components.clone(),
+            data: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    for path in [
+        BUNDLE_RELEASE_PATH,
+        BUNDLE_DESCRIPTOR_PATH,
+        BUNDLE_VERIFICATION_LOCK_PATH,
+    ] {
+        entries.push(FileEntry {
+            path: path.split('/').map(str::to_owned).collect(),
+            data: Vec::new(),
+        });
+    }
+    CarBuildPlan::from_files(entries)
+        .map(|_| ())
+        .map_err(|error| PackageError::CarPlan(error.to_string()))
+}
+
 fn descriptor_commitment_material(descriptor: &MusubiArtifactDescriptorV1) -> Vec<u8> {
     let mut output = Vec::new();
     append_frame(&mut output, ARTIFACT_DESCRIPTOR_DOMAIN);
@@ -1972,6 +2108,13 @@ fn enforce_file_limit(count: usize) -> Result<(), PackageError> {
             count,
             maximum: MAX_SOURCE_FILES,
         });
+    }
+    Ok(())
+}
+
+fn enforce_entry_limit(count: usize, maximum: usize) -> Result<(), PackageError> {
+    if count > maximum {
+        return Err(PackageError::TooManyEntries { count, maximum });
     }
     Ok(())
 }
@@ -2402,6 +2545,9 @@ exports = []
         let temp = tempdir().expect("tempdir");
         fs::create_dir_all(temp.path().join("src/target")).expect("target");
         fs::write(temp.path().join("src/target/generated.ko"), b"generated").expect("generated");
+        // Worktrees may represent `.git` as a marker file rather than a directory. Ambient
+        // traversal must exclude both forms.
+        fs::write(temp.path().join("src/.git"), b"gitdir: ../../metadata").expect("git marker");
         fs::write(temp.path().join("src/lib.ko"), b"source").expect("source");
         let plan =
             plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1).expect("plan");
@@ -2411,12 +2557,36 @@ exports = []
                 .iter()
                 .any(|file| file.path().contains("target"))
         );
+        assert!(!plan.files().iter().any(|file| file.path() == "src/.git"));
 
         let mut explicit = PackageLayout::new(temp.path());
         explicit.add_include("src/target");
         assert!(matches!(
             plan_package(&explicit, MANIFEST, &semantic_release().1),
             Err(PackageError::ExcludedPath(_))
+        ));
+
+        let mut explicit_marker = PackageLayout::new(temp.path());
+        explicit_marker.add_include("src/.git");
+        assert!(matches!(
+            plan_package(&explicit_marker, MANIFEST, &semantic_release().1),
+            Err(PackageError::ExcludedPath(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_overdeep_empty_directory_trees_before_recursing_past_v1_bounds() {
+        let temp = tempdir().expect("tempdir");
+        let mut directory = temp.path().join("src");
+        fs::create_dir(&directory).expect("src");
+        for index in 0..MAX_PATH_COMPONENTS {
+            directory.push(format!("d{index}"));
+            fs::create_dir(&directory).expect("nested directory");
+        }
+
+        assert!(matches!(
+            plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1),
+            Err(PackageError::NonPortablePath(_))
         ));
     }
 
@@ -2469,6 +2639,16 @@ exports = []
             collector.insert_virtual("src/cafe\u{301}.ko", b"two".to_vec()),
             Err(PackageError::PathCollision { .. })
         ));
+
+        let caseless = tempdir().expect("tempdir");
+        let mut collector = Collector::new(caseless.path().to_path_buf());
+        collector
+            .insert_virtual("src/Straße.ko", b"one".to_vec())
+            .expect("first full case mapping");
+        assert!(matches!(
+            collector.insert_virtual("src/STRASSE.ko", b"two".to_vec()),
+            Err(PackageError::PathCollision { .. })
+        ));
     }
 
     #[test]
@@ -2487,6 +2667,16 @@ exports = []
 
     #[test]
     fn rejects_sensitive_paths_and_contents_without_echoing_secrets() {
+        for path in [
+            ".envrc",
+            "credentials.yaml",
+            "secrets.json",
+            "private_key",
+            "secret-key",
+            "mnemonic",
+        ] {
+            assert!(is_sensitive_component(path), "{path}");
+        }
         let path_case = tempdir().expect("tempdir");
         fs::create_dir(path_case.path().join("src")).expect("src");
         fs::write(path_case.path().join("src/id_ed25519"), b"secret").expect("key");
@@ -2514,6 +2704,14 @@ exports = []
         .expect_err("private key must fail");
         assert!(matches!(error, PackageError::SensitiveContent { .. }));
         assert!(!error.to_string().contains("very-secret-value"));
+        assert_eq!(
+            sensitive_content_marker(b"-----BEGIN ENCRYPTED PRIVATE KEY-----\nopaque"),
+            Some("encrypted PKCS#8 private key")
+        );
+        assert_eq!(
+            sensitive_content_marker(b"-----BEGIN DSA PRIVATE KEY-----\nopaque"),
+            Some("DSA private key")
+        );
     }
 
     #[cfg(unix)]
@@ -2589,6 +2787,61 @@ exports = []
             ),
             Err(PackageError::NonPortablePath(_))
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_windows_hardlinks_and_reparse_points() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+
+        let hardlinks = tempdir().expect("tempdir");
+        fs::create_dir(hardlinks.path().join("src")).expect("src");
+        fs::write(hardlinks.path().join("src/a.ko"), b"source").expect("source");
+        fs::hard_link(
+            hardlinks.path().join("src/a.ko"),
+            hardlinks.path().join("src/b.ko"),
+        )
+        .expect("hardlink");
+        assert!(matches!(
+            plan_package(
+                &base_layout(hardlinks.path()),
+                MANIFEST,
+                &semantic_release().1
+            ),
+            Err(PackageError::Hardlink(_))
+        ));
+
+        // Creating symlinks may require Developer Mode or elevated privileges. When the host
+        // permits them, both file and directory reparse points must retain the stable Symlink
+        // classification rather than falling through to a generic I/O failure.
+        let reparse = tempdir().expect("tempdir");
+        fs::create_dir(reparse.path().join("src")).expect("src");
+        fs::write(reparse.path().join("outside.ko"), b"outside").expect("outside");
+        let file_link = reparse.path().join("src/file-link.ko");
+        if symlink_file(reparse.path().join("outside.ko"), &file_link).is_ok() {
+            assert!(matches!(
+                plan_package(
+                    &base_layout(reparse.path()),
+                    MANIFEST,
+                    &semantic_release().1
+                ),
+                Err(PackageError::Symlink(_))
+            ));
+            fs::remove_file(&file_link).expect("remove file link");
+        }
+        let outside_directory = reparse.path().join("outside");
+        fs::create_dir(&outside_directory).expect("outside directory");
+        let directory_link = reparse.path().join("src/directory-link");
+        if symlink_dir(&outside_directory, &directory_link).is_ok() {
+            assert!(matches!(
+                plan_package(
+                    &base_layout(reparse.path()),
+                    MANIFEST,
+                    &semantic_release().1
+                ),
+                Err(PackageError::Symlink(_))
+            ));
+        }
     }
 
     #[test]
@@ -2710,6 +2963,26 @@ exports = []
     }
 
     #[test]
+    fn commitment_materials_apply_sorafs_portable_path_validation_first() {
+        // `PackagePlan` fields are private to this module, so production callers cannot bypass
+        // the positive-set collector. This malformed internal fixture pins the additional SoraFS
+        // validation at the commitment boundary itself.
+        let malformed = PackagePlan {
+            files: vec![PlannedFile {
+                path: "bad?.ko".to_owned(),
+                components: vec!["bad?.ko".to_owned()],
+                bytes: b"source".to_vec(),
+            }],
+            source_bytes: 6,
+        };
+        let (semantic, lock) = semantic_release();
+        assert!(matches!(
+            malformed.commitment_materials(&semantic, &lock),
+            Err(PackageError::CarPlan(_))
+        ));
+    }
+
+    #[test]
     fn semantic_bundle_rejects_two_individually_valid_lock_representations() {
         let temp = tempdir().expect("tempdir");
         fs::create_dir(temp.path().join("src")).expect("src");
@@ -2738,6 +3011,24 @@ exports = []
             enforce_file_limit(MAX_SOURCE_FILES + 1),
             Err(PackageError::TooManyFiles {
                 maximum: MAX_SOURCE_FILES,
+                ..
+            })
+        ));
+        assert_eq!(MAX_DIRECTORY_ENTRIES, MAX_SOURCE_FILES * 2);
+        assert_eq!(MAX_SOURCE_ENTRIES, MAX_SOURCE_FILES * MAX_PATH_COMPONENTS);
+        assert!(enforce_entry_limit(MAX_DIRECTORY_ENTRIES, MAX_DIRECTORY_ENTRIES).is_ok());
+        assert!(matches!(
+            enforce_entry_limit(MAX_DIRECTORY_ENTRIES + 1, MAX_DIRECTORY_ENTRIES),
+            Err(PackageError::TooManyEntries {
+                maximum: MAX_DIRECTORY_ENTRIES,
+                ..
+            })
+        ));
+        assert!(enforce_entry_limit(MAX_SOURCE_ENTRIES, MAX_SOURCE_ENTRIES).is_ok());
+        assert!(matches!(
+            enforce_entry_limit(MAX_SOURCE_ENTRIES + 1, MAX_SOURCE_ENTRIES),
+            Err(PackageError::TooManyEntries {
+                maximum: MAX_SOURCE_ENTRIES,
                 ..
             })
         ));

@@ -3071,6 +3071,11 @@ fn set_nexus_rejects_post_genesis_catalog_mutation_atomically() {
     );
     assert_eq!(state.lane_incarnations_snapshot(), before_incarnations);
     assert_eq!(
+        state.world.asset_definition_aliases.view().get(&alias),
+        Some(&asset_definition_id),
+        "rejected retirement must preserve the derived alias index"
+    );
+    assert_eq!(
         state.lane_incarnation_activation_heights_snapshot(),
         before_activations
     );
@@ -28140,6 +28145,176 @@ fn set_nexus_recreation_preserves_lineage_across_snapshot_and_accepts_first_merg
         .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
         .expect("first recreated-lane merge entry commits after set_nexus recreation");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
+}
+
+fn asset_alias_catalog_retirement_fixture() -> (
+    State,
+    iroha_config::parameters::actual::Nexus,
+    AssetDefinitionId,
+    AssetDefinitionAlias,
+    Permission,
+) {
+    let (mut state, asset_definition_id, _) = snapshot_state_with_numeric_asset();
+    let removed_dataspace = DataSpaceId::new(7);
+    let initial_nexus = iroha_config::parameters::actual::Nexus {
+        enabled: true,
+        dataspace_catalog: DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: removed_dataspace,
+                alias: "historical".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("initial dataspace catalog"),
+        ..iroha_config::parameters::actual::Nexus::default()
+    };
+    state
+        .set_nexus(initial_nexus)
+        .expect("install initial dataspace catalog");
+
+    let alias: AssetDefinitionAlias = "coin#historical".parse().expect("asset alias");
+    let permission = Permission::from(
+        iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionAlias {
+            scope: iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Dataspace(
+                removed_dataspace,
+            ),
+        },
+    );
+    let mut world = state.world.block();
+    world
+        .asset_definition_aliases
+        .insert(alias.clone(), asset_definition_id.clone());
+    world.asset_definition_alias_bindings.insert(
+        asset_definition_id.clone(),
+        AssetDefinitionAliasBindingRecord {
+            alias: alias.clone(),
+            lease_expiry_ms: None,
+            grace_until_ms: None,
+            bound_at_ms: 0,
+        },
+    );
+    world
+        .account_permissions
+        .insert(ALICE_ID.clone(), BTreeSet::from([permission.clone()]));
+    world.commit();
+
+    let attempted_nexus = iroha_config::parameters::actual::Nexus {
+        enabled: true,
+        dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::UNIVERSAL,
+            alias: "universal".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("retired dataspace catalog"),
+        ..iroha_config::parameters::actual::Nexus::default()
+    };
+
+    (
+        state,
+        attempted_nexus,
+        asset_definition_id,
+        alias,
+        permission,
+    )
+}
+
+#[test]
+fn set_nexus_rejects_retiring_bound_asset_alias_namespace_atomically() {
+    let (mut state, attempted_nexus, asset_definition_id, alias, permission) =
+        asset_alias_catalog_retirement_fixture();
+    let before_nexus = state.nexus_snapshot();
+    let before_incarnations = state.lane_incarnations_snapshot();
+
+    let error = state
+        .set_nexus(attempted_nexus)
+        .expect_err("bound asset alias must block textual namespace retirement");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::AssetDefinitionAliasNamespaceInUse {
+            dataspace_alias,
+            asset_definition_id: blocked_definition,
+            asset_alias,
+        } if dataspace_alias == "historical"
+            && blocked_definition == asset_definition_id
+            && asset_alias == alias
+    ));
+
+    let after_nexus = state.nexus_snapshot();
+    assert_eq!(
+        after_nexus.dataspace_catalog,
+        before_nexus.dataspace_catalog
+    );
+    assert_eq!(after_nexus.lane_catalog, before_nexus.lane_catalog);
+    assert_eq!(after_nexus.routing_policy, before_nexus.routing_policy);
+    assert_eq!(state.lane_incarnations_snapshot(), before_incarnations);
+    assert_eq!(
+        state
+            .world
+            .asset_definition_alias_bindings
+            .view()
+            .get(&asset_definition_id)
+            .map(|binding| &binding.alias),
+        Some(&alias),
+        "rejected retirement must preserve the authoritative binding"
+    );
+    assert!(
+        state
+            .world
+            .account_permissions
+            .view()
+            .get(&ALICE_ID)
+            .is_some_and(|permissions| permissions.contains(&permission)),
+        "rejected retirement must not prune the capability before catalog validation succeeds"
+    );
+}
+
+#[test]
+fn set_nexus_retires_asset_alias_namespace_after_binding_is_cleared() {
+    let (mut state, attempted_nexus, asset_definition_id, alias, permission) =
+        asset_alias_catalog_retirement_fixture();
+    let mut world = state.world.block();
+    world
+        .asset_definition_alias_bindings
+        .remove(asset_definition_id.clone());
+    world.asset_definition_aliases.remove(alias.clone());
+    world.commit();
+
+    state
+        .set_nexus(attempted_nexus)
+        .expect("clearing the last asset alias binding permits namespace retirement");
+
+    assert!(
+        state
+            .nexus_snapshot()
+            .dataspace_catalog
+            .by_alias("historical")
+            .is_none()
+    );
+    assert!(
+        state
+            .world
+            .asset_definition_alias_bindings
+            .view()
+            .get(&asset_definition_id)
+            .is_none()
+    );
+    assert!(
+        state
+            .world
+            .account_permissions
+            .view()
+            .get(&ALICE_ID)
+            .is_none_or(|permissions| !permissions.contains(&permission)),
+        "successful retirement prunes the now-stale dataspace capability"
+    );
 }
 
 #[test]

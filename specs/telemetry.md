@@ -873,13 +873,21 @@ the implementation in `specs/musubi_operations_runbook.md`.
 
 Core records typed governance rejections at the mutation boundary and updates
 replication shortfall when an exact archive availability projection crosses
-the selectable boundary. The latter is currently a process-local transition
-projection: restart-safe exact hydration remains a release gate, so a zero
-sample immediately after restart is not proof that no release is below quorum.
-Torii records structurally invalid cursors, while Core's currently collapsed
-`Expired` query error can only be exported as the bounded `other` reason;
-preserving the exact anchor, revision, query, caller, or boundary reason through
-the query error boundary remains open.
+the selectable boundary. The count is a persisted universal consensus cell:
+checked transition deltas are part of the Native AMX write set, snapshot load
+validates it against exact archive reverse references, startup seeds the gauge
+without an additional registry scan, and only a successful world-state commit
+updates the process metric. It counts every release bound to a non-selectable
+archive, including yanked and Parliament-taken-down releases, because it measures
+replication exposure rather than fresh resolver eligibility.
+Torii records structurally invalid cursors, while Core's public `Expired` query
+error remains wire-compatible. For the six paged Musubi queries, an in-process
+typed error preserves the exact failure through the Core boundary so Torii
+exports `FinalizedAnchorMismatch` as `stale_anchor`, `IndexRevisionMismatch` as
+`stale_revision`, `QueryMismatch` as `wrong_query`, `CallerMismatch` as
+`wrong_caller`, and `LastKeyStale` as `boundary`. Structurally invalid supplied
+cursors are rejected by Torii as `invalid` before Core execution; unrelated
+query paths retain their existing public behavior.
 
 The injected private publication service records authenticated terminal ingest
 deadletters and integrity failures. Invalid or future-skewed staging receipts

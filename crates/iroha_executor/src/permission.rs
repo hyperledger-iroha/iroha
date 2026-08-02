@@ -1,9 +1,11 @@
 //! Module with permission related functionality.
 //!
-//! Post-genesis delegation follows one capability rule: an authority may propagate an exact
-//! permission it already holds, exercise a native use-time ownership root for that same
-//! capability, or use an explicitly wider parent permission. Bootstrap-root permissions remain
-//! genesis-only, and ownership of an adjacent field in a compound scope grants no authority.
+//! Post-genesis delegation normally lets an authority propagate an exact permission it holds,
+//! exercise a native use-time ownership root for that same capability, or use an explicitly wider
+//! parent permission. Exact asset-definition-alias grants instead require both the active asset
+//! owner and namespace authority; after clear, only the native namespace root can revoke. The
+//! leaf token pins its definition so it cannot migrate across a label rebind. Bootstrap-root
+//! permissions remain genesis-only, and ownership of an adjacent field grants no authority.
 
 use std::{borrow::ToOwned as _, collections::BTreeSet, vec::Vec};
 
@@ -162,6 +164,7 @@ declare_permissions! {
 
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
+    iroha_executor_data_model::permission::asset_definition::{CanManageAssetDefinitionAlias},
 
     iroha_executor_data_model::permission::asset::{CanMintAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanBurnAssetWithDefinition},
@@ -258,10 +261,18 @@ impl AnyPermission {
     }
 
     /// Exact account-read holders may use their grant but cannot propagate it: only the
-    /// account named by the token controls its lifecycle. Genesis-only roots are likewise
-    /// non-delegable after bootstrap.
+    /// account named by the token controls its lifecycle. Exact asset-definition-alias holders
+    /// likewise cannot bypass the asset-owner plus namespace-authority grant rule. Genesis-only
+    /// roots are non-delegable after bootstrap.
     fn is_holder_delegable(&self) -> bool {
-        !self.is_genesis_only() && !matches!(self, Self::CanReadAccountData(_))
+        !self.is_genesis_only()
+            && !matches!(
+                self,
+                Self::CanReadAccountData(_)
+                    | Self::CanManageAssetDefinitionAlias(CanManageAssetDefinitionAlias {
+                        scope: iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(_),
+                    })
+            )
     }
 
     fn validate_payload(&self) -> Result {
@@ -1347,6 +1358,7 @@ pub mod asset_definition {
     //! Module with pass conditions for asset definition related tokens
 
     use iroha_executor_data_model::permission::asset_definition::{
+        AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
         CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
     };
 
@@ -1383,6 +1395,80 @@ pub mod asset_definition {
             ))
         })?;
         Ok(asset_definition.owned_by() == authority)
+    }
+
+    fn validate_asset_definition_alias_namespace_scope_owner(
+        scope: &AssetDefinitionAliasPermissionScope,
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        match scope {
+            AssetDefinitionAliasPermissionScope::Domain(domain) => {
+                super::domain::Owner { domain }.validate(authority, host, context)
+            }
+            AssetDefinitionAliasPermissionScope::Dataspace(dataspace) => {
+                super::account::validate_dataspace_alias_owner(*dataspace, authority, host)
+            }
+            AssetDefinitionAliasPermissionScope::Alias(_) => Err(ValidationFail::NotPermitted(
+                "an exact asset-definition alias is not a namespace root".to_owned(),
+            )),
+        }
+    }
+
+    pub(super) fn asset_definition_alias_namespace_scope(
+        alias: &ResolvedAssetDefinitionAliasV1,
+    ) -> Result<AssetDefinitionAliasPermissionScope> {
+        match alias.parent_domain() {
+            Ok(Some(domain)) => Ok(AssetDefinitionAliasPermissionScope::Domain(domain)),
+            Ok(None) => Ok(AssetDefinitionAliasPermissionScope::Dataspace(
+                alias.dataspace_id,
+            )),
+            Err(error) => Err(ValidationFail::NotPermitted(format!(
+                "Invalid exact asset-definition alias namespace `{alias}`: {error}"
+            ))),
+        }
+    }
+
+    fn validate_asset_definition_alias_namespace_authority(
+        alias: &ResolvedAssetDefinitionAliasV1,
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        let scope = asset_definition_alias_namespace_scope(alias)?;
+        let permission = CanManageAssetDefinitionAlias {
+            scope: scope.clone(),
+        };
+        if permission.is_owned_by(authority, host) {
+            return Ok(());
+        }
+        validate_asset_definition_alias_namespace_scope_owner(&scope, authority, context, host)
+    }
+
+    fn validate_active_asset_definition_alias_owner(
+        alias: &ResolvedAssetDefinitionAliasV1,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        let iter = host.query(FindAssetsDefinitions).execute()?;
+        for item in iter {
+            let definition = item.dbg_expect("Failed to get asset definition from cursor");
+            if definition.id() == &alias.asset_definition_id
+                && definition.alias().as_ref() == Some(&alias.canonical_name)
+            {
+                return if definition.owned_by() == authority {
+                    Ok(())
+                } else {
+                    Err(ValidationFail::NotPermitted(format!(
+                        "Only the owner of the definition bound to `{alias}` may grant its exact alias capability"
+                    )))
+                };
+            }
+        }
+        Err(ValidationFail::NotPermitted(format!(
+            "Asset-definition alias `{alias}` is not actively bound"
+        )))
     }
 
     /// Pass condition that checks if `authority` is the owner of asset definition.
@@ -1429,6 +1515,41 @@ pub mod asset_definition {
             host: &Iroha,
         ) -> Result {
             Owner::from(self).validate(authority, host, context)
+        }
+    }
+
+    impl ValidateGrantRevoke for CanManageAssetDefinitionAlias {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            match &self.scope {
+                AssetDefinitionAliasPermissionScope::Alias(alias) => {
+                    validate_active_asset_definition_alias_owner(alias, authority, host)?;
+                    validate_asset_definition_alias_namespace_authority(
+                        alias, authority, context, host,
+                    )
+                }
+                scope => validate_asset_definition_alias_namespace_scope_owner(
+                    scope, authority, context, host,
+                ),
+            }
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            match &self.scope {
+                AssetDefinitionAliasPermissionScope::Alias(alias) => {
+                    let scope = asset_definition_alias_namespace_scope(alias)?;
+                    validate_asset_definition_alias_namespace_scope_owner(
+                        &scope, authority, context, host,
+                    )
+                }
+                scope => validate_asset_definition_alias_namespace_scope_owner(
+                    scope, authority, context, host,
+                ),
+            }
         }
     }
 
@@ -1626,7 +1747,7 @@ pub mod account {
         pub account: &'asset AccountId,
     }
 
-    fn validate_dataspace_alias_owner(
+    pub(super) fn validate_dataspace_alias_owner(
         dataspace: crate::smart_contract::data_model::nexus::DataSpaceId,
         authority: &AccountId,
         host: &Iroha,
@@ -2285,6 +2406,7 @@ mod tests {
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
         },
         asset::{CanMintAssetToAccount, CanMintAssetWithDefinition},
+        asset_definition::{AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias},
         domain::CanRegisterDomain,
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -2311,7 +2433,10 @@ mod tests {
                 block::BlockHeader,
                 nexus::{DataSpaceId, FeeSponsorProgramId, UniversalAccountId},
                 permission::Permission as PermissionObject,
-                prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, Json, RoleId},
+                prelude::{
+                    AccountId, AssetDefinitionId, AssetId, DomainId, Json,
+                    ResolvedAssetDefinitionAliasV1, RoleId,
+                },
                 smart_contract::ContractAddress,
             },
         },
@@ -2680,6 +2805,43 @@ mod tests {
         ));
         assert!(recursive_grant.is_ok());
         assert!(recursive_revoke.is_ok());
+    }
+
+    #[test]
+    fn exact_asset_alias_holder_cannot_revoke_after_binding_clear_without_namespace_root() {
+        let holder = make_account_id();
+        let context = make_context(&holder, 2);
+        let target = ResolvedAssetDefinitionAliasV1::new(
+            "usd#banka.paynet".parse().expect("asset alias"),
+            DataSpaceId::new(7),
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("banka", "paynet").expect("alias domain"),
+                "usd".parse().expect("asset name"),
+            ),
+        );
+        let exact = CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Alias(target),
+        };
+        let exact_raw = PermissionObject::from(exact.clone());
+        let dispatched =
+            AnyPermission::try_from(&exact_raw).expect("exact alias permission must be typed");
+
+        // The binding is intentionally absent. Exact possession must not bypass the native
+        // namespace-root lookup; the definition pin prevents rebinding escalation, while the
+        // namespace root remains the lifecycle authority after clear.
+        let previous = test_override::replace_permissions(vec![exact_raw]);
+        let holder_revoke = dispatched.validate_revoke(&holder, &context, &Iroha);
+        test_override::replace_permissions(previous);
+
+        assert!(holder_revoke.is_err());
+        assert!(matches!(
+            asset_definition::asset_definition_alias_namespace_scope(match &exact.scope {
+                AssetDefinitionAliasPermissionScope::Alias(alias) => alias,
+                _ => unreachable!("test constructs an exact alias"),
+            }).expect("valid exact alias namespace"),
+            AssetDefinitionAliasPermissionScope::Domain(domain)
+                if domain == DomainId::try_new("banka", "paynet").expect("alias domain")
+        ));
     }
 
     #[test]

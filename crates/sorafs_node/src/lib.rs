@@ -118,8 +118,9 @@ pub use por::{
     PorProtocolMetricsSnapshot, PorRandomness, PorRepairHandoff, PorRepairHandoffAckOutcomeV1,
     PorRepairHandoffError, PorRepairReconcileErrorV1, PorRepairReconcileOutcomeV1,
     PorReputationTerminalAckOutcomeV1, PorReputationTerminalWorkV1, PorStatusAuthoritySnapshotV1,
-    PorTracker, PorTrackerError, PorVerdictStats, build_por_challenge_for_manifest,
-    canonical_por_failure_repair_report_v1, por_repair_source_identity_v1,
+    PorStatusAuthorityUpdateV1, PorTracker, PorTrackerError, PorVerdictStats,
+    build_por_challenge_for_manifest, canonical_por_failure_repair_report_v1,
+    por_repair_source_identity_v1,
 };
 pub use potr::{
     POTR_EXPORT_MAX_RECORDS_V1, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1,
@@ -307,16 +308,18 @@ const MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH: usize = 4;
 const MODERATION_EVIDENCE_VIEWER_DIR: &str = "moderation-evidence-viewer";
 const MODERATION_EVIDENCE_VIEWER_SNAPSHOT_FILE: &str = "evidence-viewer-snapshot.to";
 const AUX_RUNTIME_STATE_DIR: &str = "runtime-state";
-const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot-v4.to";
+const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot-v5.to";
 const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V1: &str = "auxiliary-snapshot.to";
 const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V2: &str = "auxiliary-snapshot-v2.to";
 const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V3: &str = "auxiliary-snapshot-v3.to";
-const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v4";
+const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V4: &str = "auxiliary-snapshot-v4.to";
+const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v5";
 const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V1: &str = "initialized-v1";
 const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V2: &str = "initialized-v2";
 const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V3: &str = "initialized-v3";
-const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v4\n";
-// V4 is a first-release hard cut: it adds authenticated governance provenance
+const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V4: &str = "initialized-v4";
+const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v5\n";
+// V5 is a first-release hard cut: it adds authenticated governance provenance
 // to retained source events, publish receipts, outbox entries, and the complete
 // bounded PoR status/repair projection. V1/V2/V3/V4
 // artifacts are rejected and must be explicitly reseeded; no field-default or
@@ -658,6 +661,12 @@ fn retired_runtime_state_initialization_path_v3(data_dir: &Path) -> PathBuf {
         .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V3)
 }
 
+fn retired_runtime_state_initialization_path_v4(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V4)
+}
+
 fn retired_auxiliary_runtime_checkpoint_path_v1(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
@@ -674,6 +683,12 @@ fn retired_auxiliary_runtime_checkpoint_path_v3(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V3)
+}
+
+fn retired_auxiliary_runtime_checkpoint_path_v4(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V4)
 }
 
 fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 5] {
@@ -716,6 +731,7 @@ fn inspect_runtime_checkpoint_initialization(
         (1, retired_runtime_state_initialization_path_v1(data_dir)),
         (2, retired_runtime_state_initialization_path_v2(data_dir)),
         (3, retired_runtime_state_initialization_path_v3(data_dir)),
+        (4, retired_runtime_state_initialization_path_v4(data_dir)),
     ] {
         if read_local_checkpoint_bounded(
             &retired_marker_path,
@@ -743,6 +759,7 @@ fn inspect_runtime_checkpoint_initialization(
         (1, retired_auxiliary_runtime_checkpoint_path_v1(data_dir)),
         (2, retired_auxiliary_runtime_checkpoint_path_v2(data_dir)),
         (3, retired_auxiliary_runtime_checkpoint_path_v3(data_dir)),
+        (4, retired_auxiliary_runtime_checkpoint_path_v4(data_dir)),
     ] {
         if read_local_checkpoint_bounded(&retired_checkpoint_path, checkpoint_max_bytes)
             .map_err(|err| {
@@ -774,7 +791,7 @@ fn inspect_runtime_checkpoint_initialization(
                 return Err(NodeInitError::checkpoint(
                     "runtime initialization marker",
                     &marker_path,
-                    "marker contents are not canonical for runtime-state v4",
+                    "marker contents are not canonical for runtime-state v5",
                 ));
             }
             for (component, path) in required_runtime_checkpoint_paths(data_dir) {
@@ -14844,6 +14861,15 @@ impl NodeHandle {
     /// beacon or VRF authentication. Torii retires direct challenge ingestion;
     /// the coordinator scheduler is the production authority for this method.
     pub fn record_por_challenge(&self, challenge: &PorChallengeV1) -> Result<(), PorTrackerError> {
+        self.record_por_challenge_with_authority_update(challenge)
+            .map(drop)
+    }
+
+    /// Durably record a challenge and return its exact bounded status update.
+    pub fn record_por_challenge_with_authority_update(
+        &self,
+        challenge: &PorChallengeV1,
+    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
         let replay_archive = self
             .por_finalized_replay_archive
             .as_ref()
@@ -14858,13 +14884,14 @@ impl NodeHandle {
         replay_archive: &dyn PorFinalizedReplayArchiveV1,
     ) -> Result<(), PorTrackerError> {
         self.record_por_challenge_with_optional_replay_archive(challenge, Some(replay_archive))
+            .map(drop)
     }
 
     fn record_por_challenge_with_optional_replay_archive(
         &self,
         challenge: &PorChallengeV1,
         replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
-    ) -> Result<(), PorTrackerError> {
+    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
         let proof_bounds = match (self.config.por_replay_archive_policy(), replay_archive) {
             (Some(policy), Some(archive)) => {
                 verify_por_replay_archive_provider(policy, archive)?;
@@ -14904,7 +14931,7 @@ impl NodeHandle {
             return Err(error);
         }
         if outcome == por::PorChallengeRecordOutcomeV1::ExactReplay {
-            return Ok(());
+            return self.por.status_authority_update(challenge.challenge_id);
         }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
@@ -14919,7 +14946,7 @@ impl NodeHandle {
             }
             return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
         }
-        Ok(())
+        self.por.status_authority_update(challenge.challenge_id)
     }
 
     /// Record a provider PoR proof response bound to its admitted provider key.
@@ -14928,6 +14955,16 @@ impl NodeHandle {
         proof: &PorProofV1,
         admitted_provider_key: &[u8],
     ) -> Result<(), PorTrackerError> {
+        self.record_por_proof_with_authority_update(proof, admitted_provider_key)
+            .map(drop)
+    }
+
+    /// Durably record a proof and return its exact bounded status update.
+    pub fn record_por_proof_with_authority_update(
+        &self,
+        proof: &PorProofV1,
+        admitted_provider_key: &[u8],
+    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             PorTrackerError::RuntimeCheckpoint(
                 "auxiliary checkpoint transaction lock poisoned".to_owned(),
@@ -14938,7 +14975,7 @@ impl NodeHandle {
         let previous = self.por.checkpoint();
         let outcome = self.por.record_proof(proof, admitted_provider_key)?;
         if outcome == por::PorProofRecordOutcomeV1::ExactReplay {
-            return Ok(());
+            return self.por.status_authority_update(proof.challenge_id);
         }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
@@ -14953,7 +14990,7 @@ impl NodeHandle {
             }
             return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
         }
-        Ok(())
+        self.por.status_authority_update(proof.challenge_id)
     }
 
     /// Return process-local PoR latency, VRF, and seed-binding metrics.
@@ -15212,6 +15249,21 @@ impl NodeHandle {
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
     ) -> Result<PorVerdictOutcome, PorTrackerError> {
+        self.record_por_verdict_with_authority_update(
+            verdict,
+            trusted_auditor_keys,
+            auditor_threshold,
+        )
+        .map(|(outcome, _update)| outcome)
+    }
+
+    /// Durably record a verdict and return its exact bounded status update.
+    pub fn record_por_verdict_with_authority_update(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+    ) -> Result<(PorVerdictOutcome, PorStatusAuthorityUpdateV1), PorTrackerError> {
         let replay_archive = self
             .por_finalized_replay_archive
             .as_ref()
@@ -15238,6 +15290,7 @@ impl NodeHandle {
             auditor_threshold,
             Some(replay_archive),
         )
+        .map(|(outcome, _update)| outcome)
     }
 
     fn record_por_verdict_with_optional_replay_archive(
@@ -15246,7 +15299,7 @@ impl NodeHandle {
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
         replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
-    ) -> Result<PorVerdictOutcome, PorTrackerError> {
+    ) -> Result<(PorVerdictOutcome, PorStatusAuthorityUpdateV1), PorTrackerError> {
         let proof_bounds = match (self.config.por_replay_archive_policy(), replay_archive) {
             (Some(policy), Some(archive)) => {
                 verify_por_replay_archive_provider(policy, archive)?;
@@ -15313,12 +15366,14 @@ impl NodeHandle {
                 })?
                 .get(&(verdict.manifest_digest, verdict.provider_id))
                 .map_or(0, |entry| entry.consecutive_failures);
-            return Ok(PorVerdictOutcome {
+            let outcome = PorVerdictOutcome {
                 stats,
                 repair_task_id: transition.repair_task_id,
                 consecutive_failures,
                 reputation_work,
-            });
+            };
+            let update = self.por.status_authority_update(verdict.challenge_id)?;
+            return Ok((outcome, update));
         }
         let previous_history = self
             .por_history
@@ -15365,12 +15420,14 @@ impl NodeHandle {
         }
         self.schedulers
             .record_por_samples(stats.success_samples, stats.failed_samples);
-        Ok(PorVerdictOutcome {
+        let outcome = PorVerdictOutcome {
             stats,
             repair_task_id: transition.repair_task_id,
             consecutive_failures,
             reputation_work,
-        })
+        };
+        let update = self.por.status_authority_update(verdict.challenge_id)?;
+        Ok((outcome, update))
     }
 
     /// Attach stripe layout and chunk-role metadata to a stored manifest.
@@ -19178,6 +19235,14 @@ mod tests {
                 retired_auxiliary_runtime_checkpoint_path_v3 as fn(&Path) -> PathBuf,
                 "retired auxiliary runtime checkpoint",
             ),
+            (
+                retired_runtime_state_initialization_path_v4 as fn(&Path) -> PathBuf,
+                "retired runtime initialization marker",
+            ),
+            (
+                retired_auxiliary_runtime_checkpoint_path_v4 as fn(&Path) -> PathBuf,
+                "retired auxiliary runtime checkpoint",
+            ),
         ] {
             let (cfg, _dir) = storage_config_with_temp_dir();
             drop(NodeHandle::new(cfg.clone()));
@@ -19201,18 +19266,18 @@ mod tests {
     }
 
     #[test]
-    fn runtime_initialization_rejects_noncanonical_v4_marker() {
+    fn runtime_initialization_rejects_noncanonical_v5_marker() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         drop(NodeHandle::new(cfg.clone()));
         let marker = runtime_state_initialization_path(cfg.data_dir());
         write_local_private_checkpoint_atomic(
             &marker,
-            b"sorafs.node.runtime-state.initialized.v1\n",
+            b"sorafs.node.runtime-state.initialized.v4\n",
         )
         .expect("replace runtime-state marker");
 
         let error = NodeHandle::try_new(cfg)
-            .expect_err("noncanonical runtime-state v4 marker must fail startup");
+            .expect_err("noncanonical runtime-state v5 marker must fail startup");
         assert!(
             matches!(
                 error,
@@ -19220,7 +19285,7 @@ mod tests {
                     component: "runtime initialization marker",
                     ref message,
                     ..
-                } if message.contains("runtime-state v4")
+                } if message.contains("runtime-state v5")
             ),
             "unexpected startup error: {error}"
         );
@@ -25806,6 +25871,63 @@ mod tests {
         assert_eq!(provider.last_success_unix, Some(verdict.decided_at));
         assert_eq!(provider.failures_total, 0);
         assert_eq!(provider.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn por_authority_updates_advance_one_durable_record_and_survive_restart() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let challenge = por_sample_challenge();
+        let initial = handle
+            .por_status_authority_snapshot()
+            .expect("initial authoritative projection");
+        assert_eq!(initial.generation, 1);
+        assert!(initial.statuses.is_empty());
+
+        let challenge_update = handle
+            .record_por_challenge_with_authority_update(&challenge)
+            .expect("durably record challenge with bounded authority update");
+        assert_eq!(challenge_update.generation, 2);
+        assert_eq!(challenge_update.status.challenge_id, challenge.challenge_id);
+        assert_eq!(challenge_update.status.status, PorChallengeOutcome::Pending);
+        assert_eq!(
+            handle
+                .record_por_challenge_with_authority_update(&challenge)
+                .expect("exact challenge replay returns the same authority record"),
+            challenge_update
+        );
+
+        let proof = por_sample_proof(&challenge);
+        let proof_update = handle
+            .record_por_proof_with_authority_update(&proof, &por_sample_provider_key())
+            .expect("durably record proof with bounded authority update");
+        assert_eq!(proof_update.generation, 3);
+        assert_eq!(proof_update.status.proof_digest, Some(proof.proof_digest()));
+        assert_eq!(proof_update.status.responded_at, Some(proof.submitted_at));
+
+        let verdict = por_sample_verdict(&challenge, proof.proof_digest());
+        let (_outcome, verdict_update) = handle
+            .record_por_verdict_with_authority_update(
+                &verdict,
+                &por_sample_auditor_keys(),
+                1,
+            )
+            .expect("durably record verdict with bounded authority update");
+        assert_eq!(verdict_update.generation, 4);
+        assert_eq!(verdict_update.status.status, PorChallengeOutcome::Verified);
+        let visible = handle
+            .por_status_authority_snapshot()
+            .expect("read complete authority after incremental mutations");
+        assert_eq!(visible.generation, verdict_update.generation);
+        assert_eq!(visible.statuses, vec![verdict_update.status.clone()]);
+        drop(handle);
+
+        assert_eq!(
+            NodeHandle::new(cfg)
+                .por_status_authority_snapshot()
+                .expect("restart restores the same authoritative checkpoint"),
+            visible
+        );
     }
 
     #[test]

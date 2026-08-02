@@ -6,7 +6,7 @@
     clippy::too_many_lines
 )]
 
-use std::num::NonZeroUsize;
+use std::{collections::HashSet, num::NonZeroUsize};
 
 use iroha_config::parameters::{
     actual::{
@@ -237,6 +237,64 @@ async fn assert_peer_stays_offline(network: &NetworkHandle<Dummy>, forbidden: &P
         Ok(Ok(_)) => panic!("mismatched peer entered the online set"),
         Ok(Err(error)) => panic!("online peers channel closed unexpectedly: {error}"),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
+    let chain = ChainId::from("initial-source-authority-test");
+    let kp1 = KeyPair::random();
+    let kp2 = KeyPair::random();
+    let id1 = PeerId::from(kp1.public_key().clone());
+    let id2 = PeerId::from(kp2.public_key().clone());
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
+    let mut cfg1 = cfg(addr1.clone());
+    let mut cfg2 = cfg(addr2.clone());
+    cfg1.connect_startup_delay = Duration::ZERO;
+    cfg2.connect_startup_delay = Duration::ZERO;
+    cfg1.max_total_connections = NonZeroUsize::new(1);
+    cfg2.max_total_connections = NonZeroUsize::new(1);
+
+    let (net1, _child1) =
+        match NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
+            kp1,
+            cfg1,
+            chain.clone(),
+            None,
+            None,
+            None,
+            HashSet::from([id2.clone()]),
+            ShutdownSignal::new(),
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(_) => return,
+        };
+    let (net2, _child2) =
+        match NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
+            kp2,
+            cfg2,
+            chain,
+            None,
+            None,
+            None,
+            HashSet::from([id1.clone()]),
+            ShutdownSignal::new(),
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(_) => return,
+        };
+
+    // Deliberately publish no asynchronous trusted-peer update: source
+    // authority must already exist when the zero-delay connection authenticates.
+    net1.update_topology(UpdateTopology(HashSet::from([id2.clone()])));
+    net1.update_peers_addresses(UpdatePeers(vec![(id2.clone(), addr2)]));
+
+    assert_peer_connects(&net1, &id2).await;
+    assert_peer_connects(&net2, &id1).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

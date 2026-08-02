@@ -67,8 +67,6 @@ use iroha_data_model::block::consensus::NativeAmxAttestationBodyV2;
 use iroha_data_model::consensus::ValidatorSetCheckpoint;
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
-#[cfg(test)]
-use iroha_data_model::state_path::StatePath;
 use iroha_data_model::{
     ChainId,
     account::{AccountController, AccountId, rekey::AccountAlias},
@@ -28628,6 +28626,7 @@ mod tests {
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
         prelude::*,
+        state_path::StatePath,
         transaction::{
             ExecutableBatchItem,
             signed::{

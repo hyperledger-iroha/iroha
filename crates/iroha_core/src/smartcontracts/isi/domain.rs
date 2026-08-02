@@ -42,7 +42,10 @@ pub mod isi {
 
     use super::*;
     use crate::{
-        alias::{authority_can_manage_account_alias, authority_can_manage_account_alias_scope},
+        alias::{
+            authority_can_manage_account_alias, authority_can_manage_account_alias_scope,
+            authority_can_manage_asset_definition_alias,
+        },
         state::{
             WorldReadOnly as _, account_label_is_pii, public_lane_reward_record_matches_key,
             public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
@@ -711,11 +714,12 @@ pub mod isi {
     fn ensure_authority_can_manage_asset_definition_alias(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
+        asset_definition_id: &AssetDefinitionId,
         alias: &AssetDefinitionAlias,
     ) -> Result<(), InstructionExecutionError> {
         // Genesis is the trusted namespace bootstrap. Every post-genesis mutation must carry the
-        // exact account-alias namespace permission; replay compatibility deliberately does not
-        // bypass this first-release authorization boundary.
+        // independent asset-definition-alias capability; replay compatibility deliberately does
+        // not bypass this first-release authorization boundary.
         if state_transaction._curr_block.is_genesis() {
             return Ok(());
         }
@@ -739,9 +743,11 @@ pub mod isi {
                         .into(),
                 )
             })?;
-        if authority_can_manage_account_alias_scope(
+        if authority_can_manage_asset_definition_alias(
             &state_transaction.world,
             authority,
+            asset_definition_id,
+            alias,
             dataspace,
             domain.as_ref(),
         ) {
@@ -749,7 +755,7 @@ pub mod isi {
         }
         Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "authority {authority} lacks exact CanManageAccountAlias scope for asset definition alias `{alias}`"
+                "authority {authority} lacks exact CanManageAssetDefinitionAlias scope for asset definition alias `{alias}`"
             )
             .into(),
         ))
@@ -1029,6 +1035,11 @@ pub mod isi {
         }
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata::try_from(permission) {
             return &permission.asset_definition == asset_definition_id;
+        }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionAlias::try_from(permission)
+            && let iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(alias) = permission.scope
+        {
+            return &alias.asset_definition_id == asset_definition_id;
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition::try_from(
@@ -2358,6 +2369,7 @@ pub mod isi {
                 ensure_authority_can_manage_asset_definition_alias(
                     state_transaction,
                     authority,
+                    asset_definition.id(),
                     alias,
                 )?;
             }
@@ -2760,7 +2772,7 @@ pub mod isi {
             }
 
             // Ensure definition exists and validate the alias against the display label and any
-            // projected ID name carried by the stored definition.
+            // explicit human-readable name carried by the stored definition.
             let definition = state_transaction
                 .world
                 .asset_definition(&asset_definition_id)
@@ -2786,6 +2798,7 @@ pub mod isi {
                 ensure_authority_can_manage_asset_definition_alias(
                     state_transaction,
                     authority,
+                    &asset_definition_id,
                     alias,
                 )?;
             }
@@ -2795,6 +2808,7 @@ pub mod isi {
                 ensure_authority_can_manage_asset_definition_alias(
                     state_transaction,
                     authority,
+                    &asset_definition_id,
                     existing_alias,
                 )?;
             }
@@ -3628,7 +3642,7 @@ mod tests {
         asset::definition::AssetConfidentialPolicy,
         asset::{
             Asset, AssetBalanceScope, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId,
-            AssetId, Mintable, NewAssetDefinition,
+            AssetId, Mintable, NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
         },
         block::BlockHeader,
         events::data::space_directory::{
@@ -3674,6 +3688,9 @@ mod tests {
     };
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
+    };
+    use iroha_executor_data_model::permission::asset_definition::{
+        AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
     };
     use iroha_primitives::{
         json::Json,
@@ -5720,7 +5737,7 @@ mod tests {
     }
 
     #[test]
-    fn retail_alias_owner_requires_exact_domain_manage_permission() {
+    fn retail_account_alias_rejects_asset_alias_permission() {
         let state = test_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -5749,6 +5766,12 @@ mod tests {
             AccountRekeyRecord::new(alias.clone(), current_account_id.clone()),
         );
         seed_account_alias_lease_record(&mut tx, &replacement_account_id, &alias);
+        tx.world.add_account_permission(
+            &current_account_id,
+            Permission::from(CanManageAssetDefinitionAlias {
+                scope: AssetDefinitionAliasPermissionScope::Domain(hbl.clone()),
+            }),
+        );
 
         let err = RebindAccountAlias::new(
             resolved_account_alias(&tx, &alias),
@@ -5756,7 +5779,7 @@ mod tests {
             replacement_account_id.clone(),
         )
         .execute(&current_account_id, &mut tx)
-        .expect_err("alias ownership must not bypass exact domain permission");
+        .expect_err("asset-definition alias permission must not authorize account aliases");
         assert!(
             instruction_error_contains(&err, "exact management permission"),
             "unexpected error: {err}"
@@ -10503,7 +10526,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_alias_requires_asset_owner_and_exact_domain_namespace_scope() {
+    fn asset_alias_requires_asset_owner_and_independent_domain_namespace_scope() {
         let attacker = (*ALICE_ID).clone();
         let namespace_owner = (*BOB_ID).clone();
         let mut state = test_state_with_authority(&attacker);
@@ -10516,13 +10539,24 @@ mod tests {
         seed_account(&mut state, &namespace_owner, &victim_domain);
 
         let definition_id = AssetDefinitionId::derive_from_components(
-            issuer_domain,
+            issuer_domain.clone(),
             "usd".parse().expect("asset name"),
+        );
+        let other_definition_id = AssetDefinitionId::derive_from_components(
+            issuer_domain,
+            "usd_shadow".parse().expect("asset name"),
         );
         let alias: AssetDefinitionAlias = "usd#victim.universal".parse().expect("alias");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+
+        tx.world.add_account_permission(
+            &attacker,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(victim_domain.clone()),
+            }),
+        );
 
         let error = Register::asset_definition(
             AssetDefinition::numeric(
@@ -10534,8 +10568,8 @@ mod tests {
             .with_alias(Some(alias.clone())),
         )
         .execute(&attacker, &mut tx)
-        .expect_err("asset ownership must not confer a victim-domain alias");
-        assert!(error.to_string().contains("CanManageAccountAlias"));
+        .expect_err("account-alias permission must not confer an asset alias");
+        assert!(error.to_string().contains("CanManageAssetDefinitionAlias"));
         assert!(tx.world.asset_definitions.get(&definition_id).is_none());
         assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
 
@@ -10547,11 +10581,19 @@ mod tests {
         ))
         .execute(&attacker, &mut tx)
         .expect("register unaliased attacker-owned definition");
+        Register::asset_definition(AssetDefinition::numeric(
+            other_definition_id.clone(),
+            "usd".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&attacker, &mut tx)
+        .expect("register second unaliased attacker-owned definition");
 
         let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&attacker, &mut tx)
             .expect_err("asset owner still needs exact victim-domain namespace scope");
-        assert!(error.to_string().contains("CanManageAccountAlias"));
+        assert!(error.to_string().contains("CanManageAssetDefinitionAlias"));
         assert!(
             tx.world
                 .asset_definition_alias_bindings
@@ -10561,8 +10603,8 @@ mod tests {
 
         tx.world.add_account_permission(
             &namespace_owner,
-            Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(victim_domain.clone()),
+            Permission::from(CanManageAssetDefinitionAlias {
+                scope: AssetDefinitionAliasPermissionScope::Domain(victim_domain.clone()),
             }),
         );
         let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
@@ -10576,15 +10618,45 @@ mod tests {
                 .is_none()
         );
 
-        tx.world.add_account_permission(
-            &attacker,
-            Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(victim_domain),
-            }),
-        );
+        let domain_asset_alias_permission = Permission::from(CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Domain(victim_domain),
+        });
+        tx.world
+            .add_account_permission(&attacker, domain_asset_alias_permission.clone());
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&attacker, &mut tx)
             .expect("delegated exact domain scope and asset ownership authorize binding");
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id)
+        );
+
+        assert!(
+            tx.world
+                .remove_account_permission(&attacker, &domain_asset_alias_permission),
+            "domain-scoped asset alias permission must be removable"
+        );
+        tx.world.add_account_permission(
+            &attacker,
+            Permission::from(CanManageAssetDefinitionAlias {
+                scope: AssetDefinitionAliasPermissionScope::Alias(
+                    ResolvedAssetDefinitionAliasV1::new(
+                        alias.clone(),
+                        DataSpaceId::UNIVERSAL,
+                        definition_id.clone(),
+                    ),
+                ),
+            }),
+        );
+        SetAssetDefinitionAlias::clear(definition_id.clone())
+            .execute(&attacker, &mut tx)
+            .expect("exact asset alias permission authorizes clearing its binding");
+        SetAssetDefinitionAlias::bind(other_definition_id, alias.clone(), None)
+            .execute(&attacker, &mut tx)
+            .expect_err("an exact alias capability must not migrate to another definition");
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&attacker, &mut tx)
+            .expect("exact asset alias permission authorizes restoring its binding");
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
@@ -10620,8 +10692,8 @@ mod tests {
 
         tx.world.add_account_permission(
             &authority,
-            Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(
+            Permission::from(CanManageAssetDefinitionAlias {
+                scope: AssetDefinitionAliasPermissionScope::Domain(
                     DomainId::try_new("unrelated", "paynet").expect("unrelated domain scope"),
                 ),
             }),
@@ -10629,7 +10701,7 @@ mod tests {
         let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect_err("domain permission must not authorize a dataspace-root alias");
-        assert!(error.to_string().contains("CanManageAccountAlias"));
+        assert!(error.to_string().contains("CanManageAssetDefinitionAlias"));
         assert!(
             tx.world
                 .asset_definition_alias_bindings
@@ -10641,6 +10713,17 @@ mod tests {
             &authority,
             Permission::from(CanManageAccountAlias {
                 scope: AccountAliasPermissionScope::Dataspace(paynet),
+            }),
+        );
+        let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect_err("account-alias dataspace permission must not authorize asset aliases");
+        assert!(error.to_string().contains("CanManageAssetDefinitionAlias"));
+
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAssetDefinitionAlias {
+                scope: AssetDefinitionAliasPermissionScope::Dataspace(paynet),
             }),
         );
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
@@ -12186,8 +12269,28 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
 
+        let alias: AssetDefinitionAlias = "usd#universal".parse().expect("asset alias");
+        let bound_at_ms = tx.block_unix_timestamp_ms();
+        tx.world
+            .bind_asset_definition_alias(
+                &asset_definition_id,
+                alias.clone(),
+                None,
+                None,
+                bound_at_ms,
+            )
+            .expect("bind exact-permission fixture alias");
+
         let permission_with_definition: Permission = iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata {
             asset_definition: asset_definition_id.clone(),
+        }
+        .into();
+        let permission_with_exact_alias: Permission = CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
+                alias,
+                DataSpaceId::UNIVERSAL,
+                asset_definition_id.clone(),
+            )),
         }
         .into();
         let permission_with_asset: Permission =
@@ -12201,6 +12304,9 @@ mod tests {
         Grant::account_permission(permission_with_asset.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant asset permission to holder");
+        Grant::account_permission(permission_with_exact_alias.clone(), holder_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("grant exact alias permission to holder");
 
         let role_id: RoleId = "ASSET_CLEANUP".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), holder_id.clone()))
@@ -12212,6 +12318,9 @@ mod tests {
         Grant::role_permission(permission_with_asset.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant asset permission to role");
+        Grant::role_permission(permission_with_exact_alias.clone(), role_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("grant exact alias permission to role");
 
         assert!(
             tx.world
@@ -12220,6 +12329,7 @@ mod tests {
                 .is_some_and(|perms| {
                     perms.contains(&permission_with_definition)
                         && perms.contains(&permission_with_asset)
+                        && perms.contains(&permission_with_exact_alias)
                 }),
             "holder should have permissions before unregister"
         );
@@ -12234,6 +12344,11 @@ mod tests {
                 .any(|perm| perm == &permission_with_asset),
             "role should include asset permission before unregister"
         );
+        assert!(
+            role.permissions()
+                .any(|perm| perm == &permission_with_exact_alias),
+            "role should include exact alias permission before unregister"
+        );
 
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
@@ -12246,6 +12361,7 @@ mod tests {
                 .is_some_and(|perms| {
                     perms.contains(&permission_with_definition)
                         || perms.contains(&permission_with_asset)
+                        || perms.contains(&permission_with_exact_alias)
                 }),
             "holder permissions should be removed"
         );
@@ -12264,6 +12380,12 @@ mod tests {
         );
         assert!(
             !role
+                .permissions()
+                .any(|perm| perm == &permission_with_exact_alias),
+            "role exact alias permission should be removed"
+        );
+        assert!(
+            !role
                 .permission_epochs()
                 .contains_key(&permission_with_definition),
             "definition permission epoch should be pruned"
@@ -12273,6 +12395,12 @@ mod tests {
                 .permission_epochs()
                 .contains_key(&permission_with_asset),
             "asset permission epoch should be pruned"
+        );
+        assert!(
+            !role
+                .permission_epochs()
+                .contains_key(&permission_with_exact_alias),
+            "exact alias permission epoch should be pruned"
         );
     }
 

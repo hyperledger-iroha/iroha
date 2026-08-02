@@ -3,7 +3,7 @@
 //! The release protocol admits exactly eight authenticated commitments before
 //! any reveal can be opened. Every commitment and reveal is bound to the
 //! governed authentication-key roster, epoch, phase, transcript, session, and
-//! canonical party slot. The final seed absorbs the complete ordered, signed
+//! canonical party slot. The public beacon absorbs the complete ordered, signed
 //! transcript, so one honest reveal keeps it unpredictable until the reveal
 //! round. This receipt supplies freshness only; it is not evidence that the
 //! encrypted Phase-II/III equations were evaluated correctly.
@@ -32,7 +32,7 @@ const REVEAL_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.freshness.reveal-authentication";
 const COMMIT_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.freshness.commit-transcript";
 const REVEAL_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.freshness.reveal-transcript";
-const FINAL_SEED_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.freshness.final-seed";
+const PUBLIC_BEACON_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.freshness.public-beacon";
 const RECEIPT_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.freshness.receipt";
 const PUBLIC_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.freshness.public-challenge";
 const MAX_REVEAL_REJECTION_ATTEMPTS_V1: usize = 128;
@@ -127,6 +127,66 @@ impl ZkAmsPhase23PublicChallengeFamilyV1 {
                 ZkAmsPhase23PublicChallengeRoleV1::FoldProofTranscript
             )
         )
+    }
+}
+
+/// Typed public challenge derived from a fully revealed freshness receipt.
+///
+/// The bytes are public transcript material. This type intentionally does not
+/// implement a random-source adapter and must not be used for secrets, masks,
+/// RLWE coins or errors, or prover blinding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkAmsPhase23PublicChallengeV1 {
+    phase: ZkAmsPhase23FreshnessPhaseV1,
+    family: ZkAmsPhase23PublicChallengeFamilyV1,
+    role: ZkAmsPhase23PublicChallengeRoleV1,
+    record_index: u32,
+    chunk_index: u32,
+    slot_index: u32,
+    bytes: [u8; 32],
+}
+
+impl ZkAmsPhase23PublicChallengeV1 {
+    /// Phase bound into the public challenge.
+    #[must_use]
+    pub const fn phase(&self) -> ZkAmsPhase23FreshnessPhaseV1 {
+        self.phase
+    }
+
+    /// Protocol family bound into the public challenge.
+    #[must_use]
+    pub const fn family(&self) -> ZkAmsPhase23PublicChallengeFamilyV1 {
+        self.family
+    }
+
+    /// Semantic role bound into the public challenge.
+    #[must_use]
+    pub const fn role(&self) -> ZkAmsPhase23PublicChallengeRoleV1 {
+        self.role
+    }
+
+    /// Record index bound into the public challenge.
+    #[must_use]
+    pub const fn record_index(&self) -> u32 {
+        self.record_index
+    }
+
+    /// Packed chunk index bound into the public challenge.
+    #[must_use]
+    pub const fn chunk_index(&self) -> u32 {
+        self.chunk_index
+    }
+
+    /// Logical slot index bound into the public challenge.
+    #[must_use]
+    pub const fn slot_index(&self) -> u32 {
+        self.slot_index
+    }
+
+    /// Exact 256 public challenge bits.
+    #[must_use]
+    pub const fn to_bytes(&self) -> [u8; 32] {
+        self.bytes
     }
 }
 
@@ -747,18 +807,18 @@ pub fn open_zk_ams_phase23_freshness_reveal_v1<R: MaskedRelaxedRandomSourceV1>(
     Ok(reveal)
 }
 
-/// Self-contained exact eight-party freshness transcript and derived seed.
+/// Self-contained exact eight-party freshness transcript and public beacon.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23FreshnessReceiptV1 {
     context: ZkAmsPhase23FreshnessContextV1,
     commits: [ZkAmsPhase23FreshnessCommitV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     reveals: [ZkAmsPhase23FreshnessRevealV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
-    final_seed: [u8; 32],
+    public_beacon: [u8; 32],
     receipt_digest: [u8; 32],
 }
 
 impl ZkAmsPhase23FreshnessReceiptV1 {
-    /// Digest binding the context, every signed record, and the final seed.
+    /// Digest binding the context, every signed record, and the public beacon.
     #[must_use]
     pub const fn receipt_digest(&self) -> [u8; 32] {
         self.receipt_digest
@@ -778,7 +838,7 @@ impl ZkAmsPhase23FreshnessReceiptV1 {
         record_index: u32,
         chunk_index: u32,
         slot_index: u32,
-    ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    ) -> Result<ZkAmsPhase23PublicChallengeV1, ZkAmsMkheErrorV1> {
         self.validate(context)?;
         if !family.admits(role) {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -791,13 +851,22 @@ impl ZkAmsPhase23FreshnessReceiptV1 {
         frame.push(role as u8);
         frame.extend_from_slice(&context.digest()?);
         frame.extend_from_slice(&self.receipt_digest);
-        frame.extend_from_slice(&self.final_seed);
+        frame.extend_from_slice(&self.public_beacon);
         frame.extend_from_slice(&record_index.to_be_bytes());
         frame.extend_from_slice(&chunk_index.to_be_bytes());
         frame.extend_from_slice(&slot_index.to_be_bytes());
-        shake256(&frame, 32)
+        let bytes = shake256(&frame, 32)
             .try_into()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        Ok(ZkAmsPhase23PublicChallengeV1 {
+            phase: context.phase,
+            family,
+            role,
+            record_index,
+            chunk_index,
+            slot_index,
+            bytes,
+        })
     }
 
     /// Encode the complete exact-width transcript after revalidation.
@@ -840,7 +909,7 @@ impl ZkAmsPhase23FreshnessReceiptV1 {
                 &verified,
             )?);
         }
-        let final_seed = decoder.array()?;
+        let public_beacon = decoder.array()?;
         let receipt_digest = decoder.array()?;
         decoder.finish()?;
         let receipt = Self {
@@ -851,7 +920,7 @@ impl ZkAmsPhase23FreshnessReceiptV1 {
             reveals: reveals
                 .try_into()
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            final_seed,
+            public_beacon,
             receipt_digest,
         };
         receipt.validate(context)?;
@@ -869,10 +938,10 @@ impl ZkAmsPhase23FreshnessReceiptV1 {
             }
             reveal.verify(&commits)?;
         }
-        let expected_seed = final_seed(context, &self.commits, &self.reveals)?;
-        if self.final_seed != expected_seed
+        let expected_beacon = public_beacon(context, &self.commits, &self.reveals)?;
+        if self.public_beacon != expected_beacon
             || self.receipt_digest
-                != receipt_digest(context, &self.commits, &self.reveals, expected_seed)?
+                != receipt_digest(context, &self.commits, &self.reveals, expected_beacon)?
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
@@ -891,14 +960,14 @@ impl ZkAmsPhase23FreshnessReceiptV1 {
         for reveal in &self.reveals {
             bytes.extend_from_slice(&reveal.encode_canonical());
         }
-        bytes.extend_from_slice(&self.final_seed);
+        bytes.extend_from_slice(&self.public_beacon);
         bytes.extend_from_slice(&self.receipt_digest);
         debug_assert_eq!(bytes.len(), ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1);
         bytes
     }
 }
 
-/// Verify all reveals and derive the sole final receipt and seed.
+/// Verify all reveals and derive the sole final receipt and public beacon.
 pub fn finalize_zk_ams_phase23_freshness_v1(
     commits: &ZkAmsPhase23VerifiedCommitSetV1,
     reveals: &[ZkAmsPhase23FreshnessRevealV1],
@@ -912,13 +981,14 @@ pub fn finalize_zk_ams_phase23_freshness_v1(
         }
         reveal.verify(commits)?;
     }
-    let final_seed = final_seed(&commits.context, &commits.commits, &reveals)?;
-    let receipt_digest = receipt_digest(&commits.context, &commits.commits, &reveals, final_seed)?;
+    let public_beacon = public_beacon(&commits.context, &commits.commits, &reveals)?;
+    let receipt_digest =
+        receipt_digest(&commits.context, &commits.commits, &reveals, public_beacon)?;
     let receipt = ZkAmsPhase23FreshnessReceiptV1 {
         context: commits.context,
         commits: commits.commits,
         reveals,
-        final_seed,
+        public_beacon,
         receipt_digest,
     };
     receipt.validate(&commits.context)?;
@@ -1156,13 +1226,13 @@ fn reveal_transcript_digest(
     Ok(hash.finalize())
 }
 
-fn final_seed(
+fn public_beacon(
     context: &ZkAmsPhase23FreshnessContextV1,
     commits: &[ZkAmsPhase23FreshnessCommitV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     reveals: &[ZkAmsPhase23FreshnessRevealV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut frame = Vec::with_capacity(ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1);
-    frame.extend_from_slice(FINAL_SEED_DOMAIN_V1);
+    frame.extend_from_slice(PUBLIC_BEACON_DOMAIN_V1);
     frame.extend_from_slice(&context.digest()?);
     frame.extend_from_slice(&commit_transcript_digest(context, commits)?);
     frame.extend_from_slice(&reveal_transcript_digest(context, reveals)?);
@@ -1182,14 +1252,14 @@ fn receipt_digest(
     context: &ZkAmsPhase23FreshnessContextV1,
     commits: &[ZkAmsPhase23FreshnessCommitV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     reveals: &[ZkAmsPhase23FreshnessRevealV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
-    final_seed: [u8; 32],
+    public_beacon: [u8; 32],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(RECEIPT_DIGEST_DOMAIN_V1);
     hash.update(&context.digest()?);
     hash.update(&commit_transcript_digest(context, commits)?);
     hash.update(&reveal_transcript_digest(context, reveals)?);
-    hash.update(&final_seed);
+    hash.update(&public_beacon);
     for commit in commits {
         hash.update(&commit.encode_canonical());
     }
@@ -1341,5 +1411,797 @@ impl<'a> FixedDecoder<'a> {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::OnceLock;
+
+    use super::*;
+    use crate::vega::{
+        MaskedRelaxedRandomErrorV1,
+        sponge::{keccak256, shake256},
+    };
+    use hex_literal::hex;
+
+    struct KatRandom {
+        seed: Vec<u8>,
+        counter: u64,
+    }
+
+    impl KatRandom {
+        fn new(label: &[u8]) -> Self {
+            Self {
+                seed: label.to_vec(),
+                counter: 0,
+            }
+        }
+    }
+
+    impl MaskedRelaxedRandomSourceV1 for KatRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            let mut written = 0;
+            while written < destination.len() {
+                let mut frame = self.seed.clone();
+                frame.extend_from_slice(&self.counter.to_be_bytes());
+                let block = keccak256(&frame);
+                let take = (destination.len() - written).min(block.len());
+                destination[written..written + take].copy_from_slice(&block[..take]);
+                written += take;
+                self.counter = self.counter.wrapping_add(1);
+            }
+            Ok(())
+        }
+    }
+
+    struct FailingRandom;
+
+    impl MaskedRelaxedRandomSourceV1 for FailingRandom {
+        fn fill_bytes(
+            &mut self,
+            _destination: &mut [u8],
+        ) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            Err(MaskedRelaxedRandomErrorV1::Unavailable)
+        }
+    }
+
+    struct ZeroRandom;
+
+    impl MaskedRelaxedRandomSourceV1 for ZeroRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            destination.fill(0);
+            Ok(())
+        }
+    }
+
+    struct NeverRandom;
+
+    impl MaskedRelaxedRandomSourceV1 for NeverRandom {
+        fn fill_bytes(
+            &mut self,
+            _destination: &mut [u8],
+        ) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            panic!("invalid context or party must fail before randomness")
+        }
+    }
+
+    struct Fixture {
+        roster: ZkAmsMkheGovernedActiveRosterV1,
+        secrets: Vec<ZkAmsMkheActivePartySecretV1>,
+    }
+
+    fn fixture() -> &'static Fixture {
+        static FIXTURE: OnceLock<Fixture> = OnceLock::new();
+        FIXTURE.get_or_init(|| fixture_with_label(b"phase23-freshness.fixture", 0x2301))
+    }
+
+    fn other_fixture() -> &'static Fixture {
+        static FIXTURE: OnceLock<Fixture> = OnceLock::new();
+        FIXTURE.get_or_init(|| fixture_with_label(b"phase23-freshness.other-fixture", 0x2301))
+    }
+
+    fn fixture_with_label(label: &[u8], epoch: u64) -> Fixture {
+        let mut random = KatRandom::new(label);
+        let mut secrets = (0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
+            .map(|_| ZkAmsMkheActivePartySecretV1::generate(&mut random).unwrap())
+            .collect::<Vec<_>>();
+        secrets.sort_by_key(|secret| secret.party().unwrap());
+        let ordered: [&ZkAmsMkheActivePartySecretV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+            std::array::from_fn(|index| &secrets[index]);
+        let roster = ZkAmsMkheGovernedActiveRosterV1::new(epoch, ordered, &mut random).unwrap();
+        Fixture { roster, secrets }
+    }
+
+    fn digest(label: &[u8]) -> [u8; 32] {
+        keccak256(label)
+    }
+
+    fn freshness_context(
+        fixture: &Fixture,
+        phase: ZkAmsPhase23FreshnessPhaseV1,
+        transcript_label: &[u8],
+        session_label: &[u8],
+    ) -> ZkAmsPhase23FreshnessContextV1 {
+        ZkAmsPhase23FreshnessContextV1::new(
+            &fixture.roster,
+            phase,
+            digest(transcript_label),
+            digest(session_label),
+        )
+        .unwrap()
+    }
+
+    fn freshness_context_at_epoch(
+        fixture: &Fixture,
+        epoch: u64,
+        phase: ZkAmsPhase23FreshnessPhaseV1,
+        transcript_label: &[u8],
+        session_label: &[u8],
+    ) -> ZkAmsPhase23FreshnessContextV1 {
+        let ordered: [&ZkAmsMkheActivePartySecretV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+            std::array::from_fn(|index| &fixture.secrets[index]);
+        let mut random = KatRandom::new(b"phase23-freshness.changed-epoch-roster");
+        let roster = ZkAmsMkheGovernedActiveRosterV1::new(epoch, ordered, &mut random).unwrap();
+        ZkAmsPhase23FreshnessContextV1::new(
+            &roster,
+            phase,
+            digest(transcript_label),
+            digest(session_label),
+        )
+        .unwrap()
+    }
+
+    fn party_label(prefix: &[u8], party_index: usize, suffix: &[u8]) -> Vec<u8> {
+        let mut label = prefix.to_vec();
+        label.extend_from_slice(&(party_index as u32).to_be_bytes());
+        label.extend_from_slice(suffix);
+        label
+    }
+
+    fn commit_round(
+        fixture: &Fixture,
+        context: &ZkAmsPhase23FreshnessContextV1,
+        label: &[u8],
+        changed_party: Option<usize>,
+    ) -> (
+        Vec<ZkAmsPhase23FreshnessCommitV1>,
+        Vec<ZkAmsPhase23PendingRevealV1>,
+    ) {
+        let mut commits = Vec::with_capacity(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1);
+        let mut pending = Vec::with_capacity(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1);
+        for (index, secret) in fixture.secrets.iter().enumerate() {
+            let suffix = if changed_party == Some(index) {
+                b".changed".as_slice()
+            } else {
+                b".base".as_slice()
+            };
+            let mut random = KatRandom::new(&party_label(label, index, suffix));
+            let (commit, reveal) =
+                commit_zk_ams_phase23_freshness_v1(context, index, secret, &mut random).unwrap();
+            commits.push(commit);
+            pending.push(reveal);
+        }
+        (commits, pending)
+    }
+
+    fn open_round(
+        fixture: &Fixture,
+        commits: &ZkAmsPhase23VerifiedCommitSetV1,
+        pending: Vec<ZkAmsPhase23PendingRevealV1>,
+        label: &[u8],
+    ) -> Vec<ZkAmsPhase23FreshnessRevealV1> {
+        pending
+            .into_iter()
+            .enumerate()
+            .map(|(index, pending)| {
+                let mut random = KatRandom::new(&party_label(label, index, b".open"));
+                open_zk_ams_phase23_freshness_reveal_v1(
+                    commits,
+                    pending,
+                    &fixture.secrets[index],
+                    &mut random,
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    struct CompleteRound {
+        commits: Vec<ZkAmsPhase23FreshnessCommitV1>,
+        verified: ZkAmsPhase23VerifiedCommitSetV1,
+        reveals: Vec<ZkAmsPhase23FreshnessRevealV1>,
+        receipt: ZkAmsPhase23FreshnessReceiptV1,
+    }
+
+    fn complete_round(
+        fixture: &Fixture,
+        context: &ZkAmsPhase23FreshnessContextV1,
+        label: &[u8],
+        changed_party: Option<usize>,
+    ) -> CompleteRound {
+        let (commits, pending) = commit_round(fixture, context, label, changed_party);
+        let verified = ZkAmsPhase23VerifiedCommitSetV1::verify_exact(context, &commits).unwrap();
+        let reveals = open_round(fixture, &verified, pending, label);
+        let receipt = finalize_zk_ams_phase23_freshness_v1(&verified, &reveals).unwrap();
+        CompleteRound {
+            commits,
+            verified,
+            reveals,
+            receipt,
+        }
+    }
+
+    fn forged_authentication(
+        authentication: ZkAmsMkheAuthenticationWireV1,
+    ) -> ZkAmsMkheAuthenticationWireV1 {
+        let mut signature = authentication.signature();
+        signature[64] ^= 1;
+        ZkAmsMkheAuthenticationWireV1::new(
+            authentication.party(),
+            authentication.public_key(),
+            signature,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn exact_width_roundtrip_and_ordered_kat() {
+        assert_eq!(ZK_AMS_PHASE23_FRESHNESS_COMMIT_WIRE_BYTES_V1, 371);
+        assert_eq!(ZK_AMS_PHASE23_FRESHNESS_REVEAL_WIRE_BYTES_V1, 403);
+        assert_eq!(ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1, 6_433);
+        assert!(!ZK_AMS_PHASE23_FRESHNESS_CERTIFIES_HIDDEN_MASK_SHARES_V1);
+
+        let fixture = fixture();
+        let context = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+            b"phase23-freshness.kat.transcript",
+            b"phase23-freshness.kat.session",
+        );
+        assert_eq!(context.phase(), ZkAmsPhase23FreshnessPhaseV1::PhaseIi);
+        assert_eq!(context.profile_digest(), fixture.roster.profile_digest());
+        assert_eq!(context.roster_digest(), fixture.roster.roster_digest());
+        assert_eq!(context.epoch(), fixture.roster.epoch());
+        assert_eq!(
+            context.transcript_digest(),
+            digest(b"phase23-freshness.kat.transcript")
+        );
+        assert_eq!(
+            context.session_digest(),
+            digest(b"phase23-freshness.kat.session")
+        );
+        let round = complete_round(fixture, &context, b"phase23-freshness.kat", None);
+        assert_ne!(round.verified.transcript_digest(), [0; 32]);
+        for (index, commit) in round.commits.iter().enumerate() {
+            assert_eq!(usize::from(commit.party_index()), index);
+            assert_eq!(commit.party(), fixture.roster.participants()[index].party());
+            assert_ne!(commit.commitment(), [0; 32]);
+            let bytes = commit.encode(&context).unwrap();
+            assert_eq!(bytes.len(), ZK_AMS_PHASE23_FRESHNESS_COMMIT_WIRE_BYTES_V1);
+            assert_eq!(
+                ZkAmsPhase23FreshnessCommitV1::decode_exact(&bytes, &context).unwrap(),
+                *commit
+            );
+        }
+        for (index, reveal) in round.reveals.iter().enumerate() {
+            assert_eq!(usize::from(reveal.party_index()), index);
+            let bytes = reveal.encode(&round.verified).unwrap();
+            assert_eq!(bytes.len(), ZK_AMS_PHASE23_FRESHNESS_REVEAL_WIRE_BYTES_V1);
+            assert_eq!(
+                ZkAmsPhase23FreshnessRevealV1::decode_exact(&bytes, &round.verified).unwrap(),
+                *reveal
+            );
+        }
+        let bytes = round.receipt.encode(&context).unwrap();
+        assert_eq!(bytes.len(), ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1);
+        assert_eq!(
+            ZkAmsPhase23FreshnessReceiptV1::decode_exact(&bytes, &context).unwrap(),
+            round.receipt
+        );
+
+        // The oracle duplicates the specified SHAKE transcript directly from
+        // the fixed canonical records, independently of `public_beacon`.
+        let mut oracle = Vec::new();
+        oracle.extend_from_slice(PUBLIC_BEACON_DOMAIN_V1);
+        oracle.extend_from_slice(&context.digest().unwrap());
+        oracle.extend_from_slice(
+            &commit_transcript_digest(&context, &round.commits.as_slice().try_into().unwrap())
+                .unwrap(),
+        );
+        oracle.extend_from_slice(
+            &reveal_transcript_digest(&context, &round.reveals.as_slice().try_into().unwrap())
+                .unwrap(),
+        );
+        oracle.push(RELEASE_ROSTER_COUNT_U8_V1);
+        for commit in &round.commits {
+            oracle.extend_from_slice(&commit.encode(&context).unwrap());
+        }
+        for reveal in &round.reveals {
+            oracle.extend_from_slice(&reveal.encode(&round.verified).unwrap());
+        }
+        let oracle_beacon: [u8; 32] = shake256(&oracle, 32).try_into().unwrap();
+        assert_eq!(round.receipt.public_beacon, oracle_beacon);
+        assert_eq!(
+            oracle_beacon,
+            hex!("0dd63a13f73d4c478de71426fe51f51ad23d970a4697316e3d17d32e3e321819")
+        );
+        assert_eq!(
+            round.receipt.receipt_digest(),
+            hex!("d52a9d3678d91216504ab2f870b7c42c971e2508f47814f9ce601d644b71797c")
+        );
+        eprintln!(
+            "freshness public beacon KAT: {}",
+            hex::encode(oracle_beacon)
+        );
+        eprintln!(
+            "freshness receipt digest KAT: {}",
+            hex::encode(round.receipt.receipt_digest())
+        );
+    }
+
+    #[test]
+    fn commit_set_rejects_missing_duplicate_reordered_excess_splice_and_binding_mutations() {
+        let fixture = fixture();
+        let context = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+            b"phase23-freshness.commit-set.transcript",
+            b"phase23-freshness.commit-set.session",
+        );
+        let (commits, _pending) =
+            commit_round(fixture, &context, b"phase23-freshness.commit-set", None);
+        assert!(ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &commits).is_ok());
+        assert!(
+            ZkAmsPhase23VerifiedCommitSetV1::verify_exact(
+                &context,
+                &commits[..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 - 1]
+            )
+            .is_err()
+        );
+
+        let mut excess = commits.clone();
+        excess.push(commits[0]);
+        assert!(ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &excess).is_err());
+        let mut duplicate = commits.clone();
+        duplicate[1] = duplicate[0];
+        assert!(ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &duplicate).is_err());
+        let mut reordered = commits.clone();
+        reordered.swap(2, 3);
+        assert!(ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &reordered).is_err());
+
+        let other_context = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+            b"phase23-freshness.commit-set.transcript",
+            b"phase23-freshness.commit-set.other-session",
+        );
+        let (other_commits, _) = commit_round(
+            fixture,
+            &other_context,
+            b"phase23-freshness.commit-set.other",
+            None,
+        );
+        let mut spliced = commits.clone();
+        spliced[4] = other_commits[4];
+        assert!(ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &spliced).is_err());
+
+        for mutation in 0..10 {
+            let mut changed = commits.clone();
+            match mutation {
+                0 => changed[0].phase = ZkAmsPhase23FreshnessPhaseV1::PhaseIii,
+                1 => changed[0].profile_digest[0] ^= 1,
+                2 => changed[0].roster_digest[0] ^= 1,
+                3 => changed[0].key_material_digest[0] ^= 1,
+                4 => changed[0].epoch += 1,
+                5 => changed[0].transcript_digest[0] ^= 1,
+                6 => changed[0].session_digest[0] ^= 1,
+                7 => changed[0].party_index = 1,
+                8 => changed[0].party = changed[1].party,
+                9 => changed[0].commitment[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &changed).is_err(),
+                "commit mutation {mutation} must fail"
+            );
+        }
+        let mut forged = commits.clone();
+        forged[0].authentication = forged_authentication(forged[0].authentication);
+        assert!(ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &forged).is_err());
+
+        let mut invalid_context = context;
+        invalid_context.profile_digest[0] ^= 1;
+        assert!(ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&invalid_context, &commits).is_err());
+    }
+
+    #[test]
+    fn reveal_set_rejects_replay_mismatch_wrong_order_and_cross_domain_authentication() {
+        let fixture = fixture();
+        let context = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIii,
+            b"phase23-freshness.reveal-set.transcript",
+            b"phase23-freshness.reveal-set.session",
+        );
+        let round = complete_round(fixture, &context, b"phase23-freshness.reveal-set", None);
+        assert!(
+            finalize_zk_ams_phase23_freshness_v1(
+                &round.verified,
+                &round.reveals[..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 - 1]
+            )
+            .is_err()
+        );
+        let mut excess = round.reveals.clone();
+        excess.push(round.reveals[0]);
+        assert!(finalize_zk_ams_phase23_freshness_v1(&round.verified, &excess).is_err());
+        let mut duplicate = round.reveals.clone();
+        duplicate[2] = duplicate[1];
+        assert!(finalize_zk_ams_phase23_freshness_v1(&round.verified, &duplicate).is_err());
+        let mut reordered = round.reveals.clone();
+        reordered.swap(5, 6);
+        assert!(finalize_zk_ams_phase23_freshness_v1(&round.verified, &reordered).is_err());
+
+        for mutation in 0..11 {
+            let mut changed = round.reveals.clone();
+            match mutation {
+                0 => changed[0].phase = ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+                1 => changed[0].profile_digest[0] ^= 1,
+                2 => changed[0].roster_digest[0] ^= 1,
+                3 => changed[0].key_material_digest[0] ^= 1,
+                4 => changed[0].epoch += 1,
+                5 => changed[0].transcript_digest[0] ^= 1,
+                6 => changed[0].session_digest[0] ^= 1,
+                7 => changed[0].party_index = 1,
+                8 => changed[0].party = changed[1].party,
+                9 => changed[0].commitment[0] ^= 1,
+                10 => changed[0].reveal[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                finalize_zk_ams_phase23_freshness_v1(&round.verified, &changed).is_err(),
+                "reveal mutation {mutation} must fail"
+            );
+        }
+        let mut zero = round.reveals.clone();
+        zero[0].reveal = [0; 32];
+        assert!(finalize_zk_ams_phase23_freshness_v1(&round.verified, &zero).is_err());
+        let mut forged = round.reveals.clone();
+        forged[0].authentication = forged_authentication(forged[0].authentication);
+        assert!(finalize_zk_ams_phase23_freshness_v1(&round.verified, &forged).is_err());
+
+        // A valid commitment signature cannot cross the distinct reveal domain.
+        let mut cross_domain = round.reveals.clone();
+        cross_domain[0].authentication = round.commits[0].authentication;
+        assert!(finalize_zk_ams_phase23_freshness_v1(&round.verified, &cross_domain).is_err());
+
+        let replay_context = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIii,
+            b"phase23-freshness.reveal-set.transcript",
+            b"phase23-freshness.reveal-set.replay-session",
+        );
+        let replay_round = complete_round(
+            fixture,
+            &replay_context,
+            b"phase23-freshness.reveal-set.replay",
+            None,
+        );
+        let mut spliced = round.reveals.clone();
+        spliced[3] = replay_round.reveals[3];
+        assert!(finalize_zk_ams_phase23_freshness_v1(&round.verified, &spliced).is_err());
+    }
+
+    #[test]
+    fn reveal_state_machine_and_random_failure_are_bounded_and_fail_closed() {
+        let fixture = fixture();
+        let context = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+            b"phase23-freshness.rng.transcript",
+            b"phase23-freshness.rng.session",
+        );
+        assert_eq!(
+            commit_zk_ams_phase23_freshness_v1(
+                &context,
+                0,
+                &fixture.secrets[0],
+                &mut FailingRandom
+            )
+            .unwrap_err(),
+            ZkAmsMkheErrorV1::RandomUnavailable
+        );
+        assert_eq!(
+            commit_zk_ams_phase23_freshness_v1(&context, 0, &fixture.secrets[0], &mut ZeroRandom)
+                .unwrap_err(),
+            ZkAmsMkheErrorV1::RandomUnavailable
+        );
+        assert_eq!(
+            commit_zk_ams_phase23_freshness_v1(&context, 0, &fixture.secrets[1], &mut NeverRandom)
+                .unwrap_err(),
+            ZkAmsMkheErrorV1::InvalidAuthentication
+        );
+
+        let (commits, mut pending) =
+            commit_round(fixture, &context, b"phase23-freshness.rng.round", None);
+        // Seven commitments cannot construct the type required by every reveal API.
+        assert!(ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &commits[..7]).is_err());
+        let verified = ZkAmsPhase23VerifiedCommitSetV1::verify_exact(&context, &commits).unwrap();
+        let first_pending = pending.remove(0);
+        assert_eq!(
+            open_zk_ams_phase23_freshness_reveal_v1(
+                &verified,
+                first_pending,
+                &fixture.secrets[0],
+                &mut ZeroRandom
+            )
+            .unwrap_err(),
+            ZkAmsMkheErrorV1::RandomUnavailable
+        );
+        assert!(format!("{:?}", pending.remove(0)).contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn canonical_wire_rejects_truncation_trailing_counts_context_and_mutation() {
+        let fixture = fixture();
+        let context = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+            b"phase23-freshness.wire.transcript",
+            b"phase23-freshness.wire.session",
+        );
+        let round = complete_round(fixture, &context, b"phase23-freshness.wire", None);
+        let commit = round.commits[0].encode(&context).unwrap();
+        let reveal = round.reveals[0].encode(&round.verified).unwrap();
+        let receipt = round.receipt.encode(&context).unwrap();
+
+        for length in 0..commit.len() {
+            assert!(
+                ZkAmsPhase23FreshnessCommitV1::decode_exact(&commit[..length], &context).is_err()
+            );
+        }
+        let mut trailing = commit.clone();
+        trailing.push(0);
+        assert!(ZkAmsPhase23FreshnessCommitV1::decode_exact(&trailing, &context).is_err());
+        for index in 0..commit.len() {
+            let mut changed = commit.clone();
+            changed[index] ^= 1;
+            assert!(
+                ZkAmsPhase23FreshnessCommitV1::decode_exact(&changed, &context).is_err(),
+                "commit wire mutation {index} must fail"
+            );
+        }
+
+        for length in 0..reveal.len() {
+            assert!(
+                ZkAmsPhase23FreshnessRevealV1::decode_exact(&reveal[..length], &round.verified)
+                    .is_err()
+            );
+        }
+        let mut trailing = reveal.clone();
+        trailing.push(0);
+        assert!(ZkAmsPhase23FreshnessRevealV1::decode_exact(&trailing, &round.verified).is_err());
+        for index in 0..reveal.len() {
+            let mut changed = reveal.clone();
+            changed[index] ^= 1;
+            assert!(
+                ZkAmsPhase23FreshnessRevealV1::decode_exact(&changed, &round.verified).is_err(),
+                "reveal wire mutation {index} must fail"
+            );
+        }
+
+        for length in 0..receipt.len() {
+            assert!(
+                ZkAmsPhase23FreshnessReceiptV1::decode_exact(&receipt[..length], &context).is_err()
+            );
+        }
+        let mut trailing = receipt.clone();
+        trailing.push(0);
+        assert!(ZkAmsPhase23FreshnessReceiptV1::decode_exact(&trailing, &context).is_err());
+        let commit_count_offset = RECEIPT_CONTEXT_WIRE_BYTES_V1;
+        let reveal_count_offset = commit_count_offset
+            + 1
+            + ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 * ZK_AMS_PHASE23_FRESHNESS_COMMIT_WIRE_BYTES_V1;
+        for offset in [
+            0,
+            4,
+            5,
+            6,
+            7,
+            39,
+            71,
+            103,
+            111,
+            143,
+            commit_count_offset,
+            reveal_count_offset,
+            receipt.len() - 64,
+            receipt.len() - 1,
+        ] {
+            let mut changed = receipt.clone();
+            changed[offset] ^= if offset == commit_count_offset || offset == reveal_count_offset {
+                0xff
+            } else {
+                1
+            };
+            assert!(
+                ZkAmsPhase23FreshnessReceiptV1::decode_exact(&changed, &context).is_err(),
+                "receipt mutation at {offset} must fail"
+            );
+        }
+
+        let wrong_session = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+            b"phase23-freshness.wire.transcript",
+            b"phase23-freshness.wire.wrong-session",
+        );
+        assert!(ZkAmsPhase23FreshnessCommitV1::decode_exact(&commit, &wrong_session).is_err());
+        assert!(ZkAmsPhase23FreshnessReceiptV1::decode_exact(&receipt, &wrong_session).is_err());
+    }
+
+    #[test]
+    fn every_contribution_and_context_axis_changes_beacon_and_public_challenges_are_typed() {
+        let fixture = fixture();
+        let base_context = freshness_context(
+            fixture,
+            ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+            b"phase23-freshness.axes.transcript",
+            b"phase23-freshness.axes.session",
+        );
+        let base = complete_round(fixture, &base_context, b"phase23-freshness.axes", None);
+        for party in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+            let changed = complete_round(
+                fixture,
+                &base_context,
+                b"phase23-freshness.axes",
+                Some(party),
+            );
+            assert_ne!(
+                changed.receipt.public_beacon, base.receipt.public_beacon,
+                "party {party} contribution must change the beacon"
+            );
+        }
+
+        let contexts = [
+            (
+                freshness_context(
+                    fixture,
+                    ZkAmsPhase23FreshnessPhaseV1::PhaseIii,
+                    b"phase23-freshness.axes.transcript",
+                    b"phase23-freshness.axes.session",
+                ),
+                fixture,
+            ),
+            (
+                freshness_context(
+                    fixture,
+                    ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+                    b"phase23-freshness.axes.other-transcript",
+                    b"phase23-freshness.axes.session",
+                ),
+                fixture,
+            ),
+            (
+                freshness_context(
+                    fixture,
+                    ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+                    b"phase23-freshness.axes.transcript",
+                    b"phase23-freshness.axes.other-session",
+                ),
+                fixture,
+            ),
+            (
+                freshness_context_at_epoch(
+                    fixture,
+                    0x2302,
+                    ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+                    b"phase23-freshness.axes.transcript",
+                    b"phase23-freshness.axes.session",
+                ),
+                fixture,
+            ),
+            (
+                freshness_context(
+                    other_fixture(),
+                    ZkAmsPhase23FreshnessPhaseV1::PhaseIi,
+                    b"phase23-freshness.axes.transcript",
+                    b"phase23-freshness.axes.session",
+                ),
+                other_fixture(),
+            ),
+        ];
+        for (index, (changed_context, changed_fixture)) in contexts.iter().enumerate() {
+            let changed = complete_round(
+                changed_fixture,
+                changed_context,
+                b"phase23-freshness.axes",
+                None,
+            );
+            assert_ne!(
+                changed.receipt.public_beacon, base.receipt.public_beacon,
+                "context axis {index} must change the beacon"
+            );
+        }
+        let mut invalid_profile = base_context;
+        invalid_profile.profile_digest[0] ^= 1;
+        assert!(invalid_profile.digest().is_err());
+
+        let args = (
+            ZkAmsPhase23PublicChallengeFamilyV1::MaskShareStatement,
+            ZkAmsPhase23PublicChallengeRoleV1::ReplicatedUStatement,
+            9,
+            4,
+            2,
+        );
+        let challenge = base
+            .receipt
+            .derive_public_challenge(&base_context, args.0, args.1, args.2, args.3, args.4)
+            .unwrap();
+        assert_eq!(challenge.phase(), ZkAmsPhase23FreshnessPhaseV1::PhaseIi);
+        assert_eq!(challenge.family(), args.0);
+        assert_eq!(challenge.role(), args.1);
+        assert_eq!(challenge.record_index(), args.2);
+        assert_eq!(challenge.chunk_index(), args.3);
+        assert_eq!(challenge.slot_index(), args.4);
+        assert_ne!(challenge.to_bytes(), [0; 32]);
+        for changed in [
+            base.receipt
+                .derive_public_challenge(
+                    &base_context,
+                    ZkAmsPhase23PublicChallengeFamilyV1::FoldProof,
+                    ZkAmsPhase23PublicChallengeRoleV1::FoldProofTranscript,
+                    args.2,
+                    args.3,
+                    args.4,
+                )
+                .unwrap(),
+            base.receipt
+                .derive_public_challenge(
+                    &base_context,
+                    ZkAmsPhase23PublicChallengeFamilyV1::CollectiveEncryptionStatement,
+                    ZkAmsPhase23PublicChallengeRoleV1::CollectiveEncryptionProof,
+                    args.2,
+                    args.3,
+                    args.4,
+                )
+                .unwrap(),
+            base.receipt
+                .derive_public_challenge(
+                    &base_context,
+                    ZkAmsPhase23PublicChallengeFamilyV1::MaskShareStatement,
+                    ZkAmsPhase23PublicChallengeRoleV1::EncryptedMaskShareProof,
+                    args.2,
+                    args.3,
+                    args.4,
+                )
+                .unwrap(),
+            base.receipt
+                .derive_public_challenge(&base_context, args.0, args.1, args.2 + 1, args.3, args.4)
+                .unwrap(),
+            base.receipt
+                .derive_public_challenge(&base_context, args.0, args.1, args.2, args.3 + 1, args.4)
+                .unwrap(),
+            base.receipt
+                .derive_public_challenge(&base_context, args.0, args.1, args.2, args.3, args.4 + 1)
+                .unwrap(),
+        ] {
+            assert_ne!(changed.to_bytes(), challenge.to_bytes());
+        }
+        assert!(
+            base.receipt
+                .derive_public_challenge(
+                    &base_context,
+                    ZkAmsPhase23PublicChallengeFamilyV1::MaskShareStatement,
+                    ZkAmsPhase23PublicChallengeRoleV1::CollectiveEncryptionProof,
+                    0,
+                    0,
+                    0,
+                )
+                .is_err()
+        );
+        // The only derivation API is explicitly public-challenge typed, and the
+        // capability gate confirms no hidden mask-share protocol is certified.
+        assert!(!ZK_AMS_PHASE23_FRESHNESS_CERTIFIES_HIDDEN_MASK_SHARES_V1);
     }
 }

@@ -9,6 +9,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
+    num::NonZeroU64,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     str::FromStr,
@@ -1408,6 +1409,7 @@ impl SupervisorBuilder {
                 peers: &specs,
                 config_overrides: &peer_config_overrides,
                 consensus_mode: self.profile.consensus_mode,
+                block_cadence_ms: self.profile.signed_block_cadence_ms(),
                 genesis_profile: self.genesis_profile,
                 vrf_seed_hex: self.vrf_seed_hex.as_deref(),
             },
@@ -2587,6 +2589,7 @@ impl Supervisor {
                 peers: &specs,
                 config_overrides: &self.peer_config_overrides,
                 consensus_mode: self.profile.consensus_mode,
+                block_cadence_ms: self.profile.signed_block_cadence_ms(),
                 genesis_profile: self.genesis.profile,
                 vrf_seed_hex: self.genesis.vrf_seed_hex.as_deref(),
             },
@@ -3666,6 +3669,7 @@ struct GenesisCreateContext<'a> {
     peers: &'a [PeerSpec],
     config_overrides: &'a PeerConfigOverrides,
     consensus_mode: SumeragiConsensusMode,
+    block_cadence_ms: NonZeroU64,
     genesis_profile: Option<GenesisProfile>,
     vrf_seed_hex: Option<&'a str>,
 }
@@ -3744,6 +3748,7 @@ impl GenesisMaterial {
             peers,
             config_overrides,
             consensus_mode,
+            block_cadence_ms,
             genesis_profile,
             vrf_seed_hex,
         } = context;
@@ -3762,6 +3767,19 @@ impl GenesisMaterial {
             genesis_profile,
             vrf_seed_hex,
         )?;
+        // Public Kagami profiles own their signed cadence and are checked by
+        // `kagami verify`. The unprofiled Mochi sandbox instead binds cadence
+        // to its local topology: 100 ms for one peer and the documented
+        // one-second localnet cadence for multiple peers.
+        let manifest = if genesis_profile.is_some() {
+            manifest
+        } else {
+            manifest
+                .into_builder()
+                .with_block_cadence_ms(block_cadence_ms)
+                .build_raw()
+                .with_consensus_meta()
+        };
         let topology: Vec<GenesisTopologyEntry> = peers
             .iter()
             .map(|spec| GenesisTopologyEntry::new(spec.peer_id(), spec.pop_bytes().to_vec()))
@@ -5767,6 +5785,41 @@ esac
                 }),
             "temporary genesis signing keys must be removed after kagami exits"
         );
+    }
+
+    #[test]
+    fn generated_genesis_binds_topology_specific_block_cadence() {
+        if !ports_available("generated_genesis_binds_topology_specific_block_cadence") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _stub = KagamiStub::install(temp.path());
+
+        for (preset, expected_cadence_ms) in [
+            (ProfilePreset::SinglePeer, 100),
+            (ProfilePreset::FourPeerBft, 1_000),
+        ] {
+            let supervisor = SupervisorBuilder::new(preset)
+                .data_root(temp.path().join(format!("cadence-{}", preset.slug())))
+                .build()
+                .expect("build supervisor");
+            let manifest = RawGenesisTransaction::from_path(supervisor.genesis_manifest())
+                .expect("load generated genesis manifest");
+            let actual_cadence_ms = manifest
+                .effective_parameters()
+                .expect("derive effective genesis parameters")
+                .sumeragi()
+                .block_cadence_ms()
+                .get();
+
+            assert_eq!(
+                actual_cadence_ms,
+                expected_cadence_ms,
+                "{} must sign the topology-appropriate local cadence",
+                preset.slug()
+            );
+        }
     }
 
     #[cfg(unix)]

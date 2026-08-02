@@ -5018,17 +5018,6 @@ fn zk_vk_commitment_hex(backend: &str, bytes: &[u8]) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn validate_optional_json_vk_ref(
-    object: &norito::json::Map,
-    context: &str,
-    expected_backend: Option<&str>,
-) -> Result<()> {
-    if object.contains_key("vk_ref") {
-        require_json_vk_ref(object, context, expected_backend)?;
-    }
-    Ok(())
-}
-
 fn require_json_vk_ref(
     object: &norito::json::Map,
     context: &str,
@@ -5048,29 +5037,6 @@ fn require_json_vk_ref(
         ));
     }
     require_json_non_empty_string_field(vk_ref, "name", &format!("{context}.vk_ref.name"))?;
-    Ok(())
-}
-
-fn validate_optional_json_backend_object(
-    object: &norito::json::Map,
-    field: &str,
-    context: &str,
-    expected_backend: Option<&str>,
-) -> Result<()> {
-    let Some(value) = object.get(field) else {
-        return Ok(());
-    };
-    let Some(nested) = value.as_object() else {
-        return Ok(());
-    };
-    if nested.contains_key("backend") {
-        let backend = require_json_backend_field(nested, "backend", &format!("{context}.backend"))?;
-        if let Some(expected) = expected_backend
-            && backend != expected
-        {
-            return Err(eyre!("{context}.backend must match parent backend"));
-        }
-    }
     Ok(())
 }
 
@@ -8606,7 +8572,6 @@ mod status_tests {
             offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
-            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -8663,7 +8628,6 @@ mod status_tests {
             offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
-            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -8713,7 +8677,6 @@ mod status_tests {
             offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
-            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -9836,12 +9799,14 @@ mod evidence_http_tests {
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(core::iter::once(instruction));
+        let transaction_payload_b64 =
+            base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
+        let signing_message_b64 = base64::engine::general_purpose::STANDARD
+            .encode(HashOf::new(builder.payload()).as_ref());
         let value = norito::json!({
             "submitted": false,
-            "transaction_payload_b64": base64::engine::general_purpose::STANDARD
-                .encode(builder.encode_payload()),
-            "signing_message_b64": base64::engine::general_purpose::STANDARD
-                .encode(HashOf::new(builder.payload()).as_ref()),
+            "transaction_payload_b64": transaction_payload_b64,
+            "signing_message_b64": signing_message_b64,
         });
         json_response(
             StatusCode::OK,
@@ -9937,8 +9902,15 @@ mod evidence_http_tests {
         );
         let mut response_body: Value =
             norito::json::from_slice(valid_response.body()).expect("decode valid VK draft");
-        response_body["signing_message_b64"] =
-            norito::json::Value::from(base64::engine::general_purpose::STANDARD.encode([0_u8; 32]));
+        response_body
+            .as_object_mut()
+            .expect("VK draft response must be an object")
+            .insert(
+                "signing_message_b64".into(),
+                norito::json::Value::from(
+                    base64::engine::general_purpose::STANDARD.encode([0_u8; 32]),
+                ),
+            );
         let response = json_response(
             StatusCode::OK,
             &norito::json::to_json(&response_body).expect("encode mismatched VK draft"),
@@ -24384,7 +24356,6 @@ mod tests {
             PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusPolicyV1,
             PrivacyProtocolIdV1,
         },
-        query::parameters::Pagination,
         sorafs::{
             moderation::{
                 SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
@@ -30225,7 +30196,6 @@ mod tests {
             offline: None,
             sumeragi: None,
             governance: GovernanceStatus::default(),
-            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -35615,7 +35585,7 @@ mod tests {
             .expect("render canonical chunk fetch plan");
         }
         let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(&bundle.manifest_bytes);
-        let mut response_map = JsonMap::from_iter([
+        let response_map = JsonMap::from_iter([
             (
                 "storage_ticket".into(),
                 JsonValue::String(bundle.storage_ticket_hex.clone()),

@@ -38,11 +38,11 @@ and raw errors are forbidden as metric labels.
 | Metric | Bounded labels | Meaning |
 | --- | --- | --- |
 | `musubi_publication_phase_age_seconds` | `phase` (the seven V1 phases) | Oldest active operation age in each phase. |
-| `musubi_replication_shortfall_releases` | none | Freshly indexed releases currently below three replicas. |
+| `musubi_replication_shortfall_releases` | none | Release references on non-selectable archives, including yanked and taken-down releases. |
 | `musubi_ingest_deadletters_total` | `reason` | Terminal authenticated-ingress failures. |
 | `musubi_integrity_failures_total` | `surface` | Commitment, extraction, provider, or readback verification failures. |
 | `musubi_cache_corruption_total` | `operation` | Corruption found by fetch, verify, repair, or prune validation. |
-| `musubi_cursor_failures_total` | `reason` | Invalid, stale-anchor, stale-revision, wrong-query, or wrong-caller cursors. |
+| `musubi_cursor_failures_total` | `reason` | Invalid, stale-anchor, stale-revision, wrong-query, wrong-caller, boundary, or other cursor failures. |
 | `musubi_governance_rejections_total` | `action`, `reason` | Rejected bounded namespace/archive/package/alias/Parliament mutations. |
 | `musubi_storage_bytes_used` | none | Bytes occupied by the measured registry archive/cache root. |
 | `musubi_storage_bytes_capacity` | none | Configured capacity of the same measured root. |
@@ -124,11 +124,24 @@ host must map this boundary to its metrics registry. The distinct
 `provider_readback` surface remains reserved for the full publication readback
 workflow.
 
+For the six paged Musubi registry queries, Core carries its exact typed cursor
+failure to Torii alongside the unchanged public `Expired` query error. Torii
+maps finalized-anchor, index-revision, query, caller, and last-key failures to
+`stale_anchor`, `stale_revision`, `wrong_query`, `wrong_caller`, and `boundary`
+respectively. Torii's structural cursor validation records `invalid` before
+query execution. Do not infer one of these exact causes from an ordinary
+`Expired` error on an unrelated query path; that bounded fallback is `other`.
+
 Core updates replication shortfall from exact archive reverse references when
-availability crosses the selectable boundary. That gauge does not yet have a
-restart-safe exact hydration source. Treat its zero value after process start
-as unknown until the node has re-established an authoritative projection; do
-not suppress storage checks or alerts on that sample alone.
+availability crosses the selectable boundary. The exact count is persisted in
+a universal consensus cell, validated against reverse references during
+snapshot load, bound into the Native AMX write set, read once to seed the gauge
+at startup, and mirrored only after world-state commit succeeds. It deliberately
+counts yanked and Parliament-taken-down releases while their archive remains
+non-selectable because this signal measures replication exposure, not fresh
+resolver eligibility. A zero sample therefore means the committed aggregate is
+zero; operators should still correlate it with archive-location and provider
+health alerts.
 
 Governance rejection producers must receive typed action and reason values at
 the ISI rejection site; classifying a returned error string is forbidden. Core
@@ -271,7 +284,9 @@ An invalid cursor is never silently restarted by the server. Confirm the
 failure class, discard the cursor client-side, acquire a new finalized snapshot,
 and repeat the identical typed query. Repeated stale-revision failures indicate
 registry churn or a lagging endpoint; wrong-query or wrong-caller failures are
-client misuse or possible replay and should be investigated.
+client misuse or possible replay and should be investigated. A `boundary`
+failure means the cursor's last key is absent or noncanonical in the bound
+snapshot; `invalid` means the supplied cursor failed structural validation.
 
 ## Unauthorized governance attempts
 

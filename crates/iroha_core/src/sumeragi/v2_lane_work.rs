@@ -11124,6 +11124,11 @@ impl V2LaneWorkAdapter {
             {
                 return None;
             }
+            #[cfg(feature = "test-network-native-amx-fault-injection")]
+            crate::native_amx_fault_injection::maybe_abort(
+                crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrepareQc,
+                prepare_body.source_id,
+            );
             self.retire_native_requests(&prepare_body);
             let mut commit_request = prepare_request;
             commit_request.body.phase = NativeAmxPhase::Commit;
@@ -11170,6 +11175,11 @@ impl V2LaneWorkAdapter {
             {
                 return None;
             }
+            #[cfg(feature = "test-network-native-amx-fault-injection")]
+            crate::native_amx_fault_injection::maybe_abort(
+                crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterCommitQc,
+                commit_body.source_id,
+            );
             self.retire_native_requests(&commit_body);
             legs.push(NativeAmxLegRecordV2 {
                 lane_id: participant.route.lane_id,

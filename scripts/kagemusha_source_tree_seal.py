@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Capture and verify the exact reviewed Kagemusha source closure.
+"""Capture and verify the exact clean Kagemusha source closure.
 
-Candidate generation is allowed from a dirty checkout only when the complete
-tracked diff, untracked regular files, ignored root ``Cargo.lock``, and full
-source-tree identity match one canonical descriptor whose raw SHA-256 is pinned
-independently.  ``descriptor`` emits the observation that must be reviewed and
-pinned.  Gitlinks bind their exact index commit and may only be absent or an
-empty, non-symlink directory.  ``identity`` and ``fingerprint`` never accept an
-unpinned observation.
+First-release candidate generation requires one SSH signature trusted by the
+reviewer's user-level allowed-signers policy on the exact checked-out commit,
+an index identical to HEAD, no untracked files, the separately bound ignored
+root ``Cargo.lock``, and a full source-tree identity
+matching one independently pinned canonical descriptor.  ``descriptor`` emits
+the clean observation that must be reviewed and pinned.  Gitlinks bind their
+exact index commit and must be represented by an empty, non-symlink directory.
+``identity`` and ``fingerprint`` never accept an unpinned observation.
+
+Repository-local Git signature configuration is untrusted.  The verifier pins
+``/usr/bin/ssh-keygen``, reads only the user-level allowed-signers/revocation
+paths, snapshots those owner-controlled policies, and overrides every Git
+signature-format, trust, policy, and executable setting for verification.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,9 +45,12 @@ EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 MAX_DESCRIPTOR_BYTES = 16 * 1024 * 1024
 MAX_CARGO_LOCK_BYTES = 16 * 1024 * 1024
 MAX_UNTRACKED_FILE_BYTES = 16 * 1024 * 1024
-MAX_UNTRACKED_FILES = 100_000
+MAX_UNTRACKED_FILES = 0
+MAX_ALLOWED_SIGNERS_BYTES = 64 * 1024
+MAX_REVOCATION_BYTES = 16 * 1024 * 1024
 REQUIRED_IGNORED_BUILD_INPUT = b"Cargo.lock"
 GIT = pathlib.Path("/usr/bin/git")
+SSH_KEYGEN = pathlib.Path("/usr/bin/ssh-keygen")
 GIT_ARGUMENT_PREFIX = (
     "-c",
     "core.attributesFile=/dev/null",
@@ -61,6 +71,7 @@ TRACKED_DIFF_ARGUMENTS = (
     "--no-ext-diff",
     "--no-textconv",
     "--ignore-submodules=none",
+    "--cached",
     "HEAD",
     "--",
     ".",
@@ -97,6 +108,24 @@ class IndexEntry:
     mode: bytes
     object_id: bytes
     path: bytes
+
+
+@dataclass(frozen=True)
+class OpenedDirectory:
+    """One descriptor-retained component in a repository-relative path."""
+
+    parent_descriptor: int
+    name: bytes
+    descriptor: int
+    identity: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class SignaturePolicy:
+    """Stable user-level SSH trust policy used for source authentication."""
+
+    allowed_signers: bytes
+    revocation: bytes
 
 
 @dataclass(frozen=True)
@@ -145,6 +174,355 @@ def _git(root: pathlib.Path, *arguments: str) -> bytes:
         ).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
         raise SourceSealError(f"pinned Git failed: {' '.join(arguments)}") from exc
+
+
+def _global_signature_config_path(
+    key: str, *, required: bool
+) -> pathlib.Path | None:
+    environment = _git_environment()
+    environment.pop("GIT_CONFIG_GLOBAL", None)
+    home_text = os.environ.get("HOME", "")
+    if not home_text:
+        raise SourceSealError("HOME is required to select the user signature trust root")
+    home = pathlib.Path(home_text)
+    if not home.is_absolute() or os.path.normpath(home_text) != home_text:
+        raise SourceSealError("HOME must be one absolute normalized path")
+    environment["HOME"] = home_text
+    try:
+        completed = subprocess.run(
+            [
+                os.fspath(GIT),
+                *GIT_ARGUMENT_PREFIX,
+                "config",
+                "--global",
+                "--path",
+                "--get",
+                key,
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+    except OSError as exc:
+        raise SourceSealError("could not read the user signature trust policy") from exc
+    if completed.returncode == 1 and not completed.stdout and not required:
+        return None
+    if completed.returncode != 0:
+        raise SourceSealError(f"user Git config must define exactly one {key}")
+    payload = completed.stdout
+    if (
+        not payload.endswith(b"\n")
+        or b"\n" in payload[:-1]
+        or b"\r" in payload
+        or b"\0" in payload
+    ):
+        raise SourceSealError(f"user Git config has a malformed {key}")
+    try:
+        value = pathlib.Path(payload[:-1].decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise SourceSealError(f"user Git config has a non-UTF-8 {key}") from exc
+    if (
+        not value.is_absolute()
+        or os.path.normpath(os.fspath(value)) != os.fspath(value)
+    ):
+        raise SourceSealError(f"user Git config {key} must be absolute and normalized")
+    return value
+
+
+def _open_absolute_parent_directory(
+    path: pathlib.Path, label: str
+) -> tuple[int, int, bytes, list[OpenedDirectory]]:
+    path_text = os.fspath(path)
+    if not path.is_absolute() or os.path.normpath(path_text) != path_text:
+        raise SourceSealError(f"{label} path must be absolute and normalized")
+    components = [os.fsencode(component) for component in path.parts[1:]]
+    if not components or any(
+        component in (b"", b".", b"..") for component in components
+    ):
+        raise SourceSealError(f"{label} path is not canonical")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    root_descriptor = os.open(b"/", flags)
+    current = root_descriptor
+    chain: list[OpenedDirectory] = []
+    try:
+        for component in components[:-1]:
+            before = os.stat(component, dir_fd=current, follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+                raise SourceSealError(f"{label} path traverses a symlink")
+            child = os.open(component, flags, dir_fd=current)
+            opened = os.fstat(child)
+            if _stable_identity(before) != _stable_identity(opened):
+                os.close(child)
+                raise SourceSealError(f"{label} ancestor changed while opened")
+            chain.append(
+                OpenedDirectory(
+                    parent_descriptor=current,
+                    name=component,
+                    descriptor=child,
+                    identity=_stable_identity(opened),
+                )
+            )
+            current = child
+    except SourceSealError:
+        _close_directory_chain(chain)
+        os.close(root_descriptor)
+        raise
+    except OSError as exc:
+        _close_directory_chain(chain)
+        os.close(root_descriptor)
+        raise SourceSealError(f"{label} path is missing or unsafe") from exc
+    return root_descriptor, current, components[-1], chain
+
+
+def _read_bounded_absolute_file(
+    path: pathlib.Path,
+    label: str,
+    maximum_bytes: int,
+    *,
+    allow_empty: bool,
+    owner_controlled: bool,
+) -> bytes:
+    root_descriptor, parent, name, chain = _open_absolute_parent_directory(path, label)
+    descriptor: int | None = None
+    try:
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size > maximum_bytes
+            or (not allow_empty and before.st_size == 0)
+            or (
+                owner_controlled
+                and (before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) & 0o022)
+            )
+        ):
+            raise SourceSealError(f"{label} must be one bounded regular file")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(name, flags, dir_fd=parent)
+        opened_before = os.fstat(descriptor)
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > maximum_bytes:
+                raise SourceSealError(f"{label} exceeds its byte bound")
+            chunks.append(chunk)
+        opened_after = os.fstat(descriptor)
+        after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not (
+            _stable_identity(before)
+            == _stable_identity(opened_before)
+            == _stable_identity(opened_after)
+            == _stable_identity(after)
+        ):
+            raise SourceSealError(f"{label} changed while read")
+        payload = b"".join(chunks)
+        if (not allow_empty and not payload) or len(payload) != opened_after.st_size:
+            raise SourceSealError(f"{label} has an invalid size")
+        return payload
+    except OSError as exc:
+        raise SourceSealError(f"{label} is missing or unsafe") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            _verify_directory_chain(chain, os.fsencode(path))
+        finally:
+            os.close(root_descriptor)
+
+
+def _read_signature_policy_file(
+    path: pathlib.Path, label: str, maximum_bytes: int, *, allow_empty: bool
+) -> bytes:
+    return _read_bounded_absolute_file(
+        path,
+        label,
+        maximum_bytes,
+        allow_empty=allow_empty,
+        owner_controlled=True,
+    )
+
+
+def _validate_allowed_signers(payload: bytes) -> None:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SourceSealError("SSH allowed-signers policy must be UTF-8") from exc
+    if "\r" in text or "\0" in text or not text.endswith("\n"):
+        raise SourceSealError("SSH allowed-signers policy must be canonical LF text")
+    active = [line for line in text.splitlines() if line and not line.startswith("#")]
+    if len(active) != 1:
+        raise SourceSealError("SSH allowed-signers policy must contain exactly one active key")
+    folded = active[0].casefold()
+    if (
+        "cert-authority" in folded
+        or "-cert-v01@openssh.com" in folded
+        or "valid-after=" in folded
+        or "valid-before=" in folded
+    ):
+        raise SourceSealError(
+            "SSH allowed-signers policy forbids certificates and time-dependent keys"
+        )
+
+
+def _load_signature_policy() -> SignaturePolicy:
+    allowed_path = _global_signature_config_path(
+        "gpg.ssh.allowedSignersFile", required=True
+    )
+    assert allowed_path is not None
+    revocation_path = _global_signature_config_path(
+        "gpg.ssh.revocationFile", required=False
+    )
+    allowed = _read_signature_policy_file(
+        allowed_path,
+        "SSH allowed-signers policy",
+        MAX_ALLOWED_SIGNERS_BYTES,
+        allow_empty=False,
+    )
+    _validate_allowed_signers(allowed)
+    revocation = (
+        b""
+        if revocation_path is None
+        else _read_signature_policy_file(
+            revocation_path,
+            "SSH revocation policy",
+            MAX_REVOCATION_BYTES,
+            allow_empty=True,
+        )
+    )
+    return SignaturePolicy(allowed_signers=allowed, revocation=revocation)
+
+
+def _require_one_ssh_signature(raw_commit: bytes) -> None:
+    headers, separator, _ = raw_commit.partition(b"\n\n")
+    if not separator:
+        raise SourceSealError("source commit object has no canonical header boundary")
+    lines = headers.split(b"\n")
+    signature_indexes = [
+        index for index, line in enumerate(lines) if line.startswith(b"gpgsig ")
+    ]
+    if len(signature_indexes) != 1:
+        raise SourceSealError("source commit must contain exactly one SSH signature")
+    start = signature_indexes[0]
+    signature = [lines[start][len(b"gpgsig ") :]]
+    for line in lines[start + 1 :]:
+        if not line.startswith(b" "):
+            break
+        signature.append(line[1:])
+    payload = b"\n".join(signature)
+    if (
+        payload.count(b"-----BEGIN SSH SIGNATURE-----") != 1
+        or payload.count(b"-----END SSH SIGNATURE-----") != 1
+        or any(
+            marker in payload
+            for marker in (
+                b"-----BEGIN PGP SIGNATURE-----",
+                b"-----BEGIN SIGNED MESSAGE-----",
+                b"-----BEGIN CERTIFICATE-----",
+            )
+        )
+    ):
+        raise SourceSealError("source commit signature must be exactly one SSH signature")
+
+
+def _write_private_policy_snapshot(
+    directory: pathlib.Path, name: str, payload: bytes
+) -> pathlib.Path:
+    path = directory / name
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise SourceSealError("could not snapshot the SSH trust policy")
+            offset += written
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return path
+
+
+def _verify_signed_commit(root: pathlib.Path, commit: bytes) -> None:
+    try:
+        commit_text = commit.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise SourceSealError("source commit is not canonical ASCII") from exc
+    raw_commit = _git(root, "cat-file", "commit", commit_text)
+    _require_one_ssh_signature(raw_commit)
+    if not SSH_KEYGEN.is_file() or SSH_KEYGEN.is_symlink():
+        raise SourceSealError("pinned /usr/bin/ssh-keygen is unavailable")
+    policy = _load_signature_policy()
+    environment = _git_environment()
+    try:
+        with tempfile.TemporaryDirectory(prefix="iroha-kagemusha-signature-") as temporary:
+            directory = pathlib.Path(temporary)
+            allowed = _write_private_policy_snapshot(
+                directory, "allowed-signers", policy.allowed_signers
+            )
+            revocation = _write_private_policy_snapshot(
+                directory, "revocation", policy.revocation
+            )
+            signature_config = [
+                "-c",
+                "gpg.format=ssh",
+                "-c",
+                "gpg.minTrustLevel=fully",
+                "-c",
+                f"gpg.ssh.program={SSH_KEYGEN}",
+                "-c",
+                f"gpg.ssh.allowedSignersFile={allowed}",
+                "-c",
+                f"gpg.ssh.revocationFile={revocation}",
+                "-c",
+                f"gpg.program={SSH_KEYGEN}",
+                "-c",
+                f"gpg.openpgp.program={SSH_KEYGEN}",
+                "-c",
+                f"gpg.x509.program={SSH_KEYGEN}",
+            ]
+            completed = subprocess.run(
+                [
+                    os.fspath(GIT),
+                    *GIT_ARGUMENT_PREFIX,
+                    "-C",
+                    os.fspath(root),
+                    *signature_config,
+                    "verify-commit",
+                    "--raw",
+                    commit_text,
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                env=environment,
+            )
+    except OSError as exc:
+        raise SourceSealError("could not verify the source commit signature") from exc
+    if completed.returncode != 0:
+        raise SourceSealError(
+            "source commit must carry a locally verifiable signature"
+        )
 
 
 def _repository_root(root: pathlib.Path) -> pathlib.Path:
@@ -243,26 +621,154 @@ def _stable_identity(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _hash_regular_file(
+def _git_mode(metadata: os.stat_result) -> bytes:
+    if stat.S_ISREG(metadata.st_mode):
+        return b"100755" if metadata.st_mode & 0o111 else b"100644"
+    if stat.S_ISLNK(metadata.st_mode):
+        return b"120000"
+    if stat.S_ISDIR(metadata.st_mode):
+        return b"160000"
+    return b"unsupported"
+
+
+def _open_root_directory(root: pathlib.Path) -> tuple[bytes, int, tuple[int, ...]]:
+    root_bytes = os.fsencode(root)
+    before = os.lstat(root_bytes)
+    if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+        raise SourceSealError("repository root must be one real directory")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(root_bytes, flags)
+    opened = os.fstat(descriptor)
+    if _stable_identity(before) != _stable_identity(opened):
+        os.close(descriptor)
+        raise SourceSealError("repository root changed while opened")
+    return root_bytes, descriptor, _stable_identity(opened)
+
+
+def _verify_root_directory(
+    root_bytes: bytes, descriptor: int, expected: tuple[int, ...]
+) -> None:
+    if (
+        _stable_identity(os.fstat(descriptor)) != expected
+        or _stable_identity(os.lstat(root_bytes)) != expected
+    ):
+        raise SourceSealError("repository root changed while sealing")
+
+
+def _close_directory_chain(chain: list[OpenedDirectory]) -> None:
+    for opened in reversed(chain):
+        os.close(opened.descriptor)
+
+
+def _open_parent_directory(
+    root_descriptor: int, path: bytes
+) -> tuple[int, bytes, list[OpenedDirectory]]:
+    """Resolve a source parent with descriptor-relative, no-symlink traversal."""
+
+    _safe_relative_path(path, allow_cargo_lock=True)
+    components = path.split(b"/")
+    current = root_descriptor
+    chain: list[OpenedDirectory] = []
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        for component in components[:-1]:
+            before = os.stat(component, dir_fd=current, follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+                raise SourceSealError(
+                    f"source path has a non-directory or symlink ancestor: {os.fsdecode(path)}"
+                )
+            child = os.open(component, flags, dir_fd=current)
+            opened = os.fstat(child)
+            if _stable_identity(before) != _stable_identity(opened):
+                os.close(child)
+                raise SourceSealError(
+                    f"source ancestor changed while opened: {os.fsdecode(path)}"
+                )
+            chain.append(
+                OpenedDirectory(
+                    parent_descriptor=current,
+                    name=component,
+                    descriptor=child,
+                    identity=_stable_identity(opened),
+                )
+            )
+            current = child
+    except SourceSealError:
+        _close_directory_chain(chain)
+        raise
+    except OSError as exc:
+        _close_directory_chain(chain)
+        raise SourceSealError(
+            f"source path ancestor is missing or unsafe: {os.fsdecode(path)}"
+        ) from exc
+    return current, components[-1], chain
+
+
+def _verify_directory_chain(chain: list[OpenedDirectory], path: bytes) -> None:
+    try:
+        for opened in chain:
+            bound = os.stat(
+                opened.name,
+                dir_fd=opened.parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                _stable_identity(bound) != opened.identity
+                or _stable_identity(os.fstat(opened.descriptor)) != opened.identity
+            ):
+                raise SourceSealError(
+                    f"source ancestor changed while read: {os.fsdecode(path)}"
+                )
+    except OSError as exc:
+        raise SourceSealError(
+            f"source ancestor changed while read: {os.fsdecode(path)}"
+        ) from exc
+    finally:
+        _close_directory_chain(chain)
+
+
+def _hash_regular_file_at(
+    root_descriptor: int,
     path: bytes,
     source_hasher: "hashlib._Hash",
     *,
     maximum_bytes: int | None = None,
     require_nonempty: bool = False,
+    expected_git_mode: bytes | None = None,
 ) -> tuple[int, str, str]:
-    before = os.lstat(path)
-    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-        raise SourceSealError(
-            f"source must be a singly linked regular file: {os.fsdecode(path)}"
-        )
-    if (
-        (require_nonempty and before.st_size <= 0)
-        or (maximum_bytes is not None and before.st_size > maximum_bytes)
-    ):
-        raise SourceSealError(f"source file has an invalid size: {os.fsdecode(path)}")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+    parent, name, chain = _open_parent_directory(root_descriptor, path)
+    descriptor: int | None = None
     try:
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise SourceSealError(
+                f"source must be a singly linked regular file: {os.fsdecode(path)}"
+            )
+        if expected_git_mode is not None and _git_mode(before) != expected_git_mode:
+            raise SourceSealError(
+                f"source mode differs from the signed index: {os.fsdecode(path)}"
+            )
+        if (
+            (require_nonempty and before.st_size <= 0)
+            or (maximum_bytes is not None and before.st_size > maximum_bytes)
+        ):
+            raise SourceSealError(f"source file has an invalid size: {os.fsdecode(path)}")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(name, flags, dir_fd=parent)
         opened_before = os.fstat(descriptor)
         source_hasher.update(opened_before.st_size.to_bytes(8, "big"))
         sha256 = hashlib.sha256()
@@ -280,54 +786,70 @@ def _hash_regular_file(
             sha256.update(chunk)
             blob_oid.update(chunk)
         opened_after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    after = os.lstat(path)
-    if not (
-        _stable_identity(before)
-        == _stable_identity(opened_before)
-        == _stable_identity(opened_after)
-        == _stable_identity(after)
-    ):
-        raise SourceSealError(f"source changed while read: {os.fsdecode(path)}")
-    if total != opened_after.st_size:
-        raise SourceSealError(f"source was truncated while read: {os.fsdecode(path)}")
-    return total, sha256.hexdigest(), blob_oid.hexdigest()
-
-
-def _stable_symlink_bytes(path: bytes) -> bytes:
-    before = os.lstat(path)
-    if not stat.S_ISLNK(before.st_mode) or before.st_nlink != 1:
-        raise SourceSealError(f"tracked symlink must be singly linked: {os.fsdecode(path)}")
-    payload = os.readlink(path)
-    after = os.lstat(path)
-    if not isinstance(payload, bytes):
-        payload = os.fsencode(payload)
-    if _stable_identity(before) != _stable_identity(after):
-        raise SourceSealError(f"tracked symlink changed while read: {os.fsdecode(path)}")
-    return payload
-
-
-def _require_empty_gitlink_directory(
-    path: bytes, observed: os.stat_result
-) -> None:
-    if not stat.S_ISDIR(observed.st_mode):
-        raise SourceSealError(
-            f"tracked gitlink must be absent or an empty directory: {os.fsdecode(path)}"
-        )
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    descriptor = os.open(path, flags)
-    try:
-        opened_before = os.fstat(descriptor)
-        if (
-            not stat.S_ISDIR(opened_before.st_mode)
-            or _stable_identity(observed) != _stable_identity(opened_before)
+        after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not (
+            _stable_identity(before)
+            == _stable_identity(opened_before)
+            == _stable_identity(opened_after)
+            == _stable_identity(after)
         ):
+            raise SourceSealError(f"source changed while read: {os.fsdecode(path)}")
+        if total != opened_after.st_size:
+            raise SourceSealError(f"source was truncated while read: {os.fsdecode(path)}")
+        return total, sha256.hexdigest(), blob_oid.hexdigest()
+    except OSError as exc:
+        raise SourceSealError(
+            f"source is missing or unsafe: {os.fsdecode(path)}"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        _verify_directory_chain(chain, path)
+
+
+def _stable_symlink_bytes_at(root_descriptor: int, path: bytes) -> bytes:
+    parent, name, chain = _open_parent_directory(root_descriptor, path)
+    try:
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISLNK(before.st_mode) or before.st_nlink != 1:
+            raise SourceSealError(
+                f"tracked source differs from signed symlink mode: {os.fsdecode(path)}"
+            )
+        payload = os.readlink(name, dir_fd=parent)
+        after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not isinstance(payload, bytes):
+            payload = os.fsencode(payload)
+        if _stable_identity(before) != _stable_identity(after):
+            raise SourceSealError(
+                f"tracked symlink changed while read: {os.fsdecode(path)}"
+            )
+        return payload
+    except OSError as exc:
+        raise SourceSealError(
+            f"tracked symlink is missing or unsafe: {os.fsdecode(path)}"
+        ) from exc
+    finally:
+        _verify_directory_chain(chain, path)
+
+
+def _require_empty_gitlink_directory_at(root_descriptor: int, path: bytes) -> None:
+    parent, name, chain = _open_parent_directory(root_descriptor, path)
+    descriptor: int | None = None
+    try:
+        observed = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISDIR(observed.st_mode) or stat.S_ISLNK(observed.st_mode):
+            raise SourceSealError(
+                f"tracked gitlink must be a present empty directory: {os.fsdecode(path)}"
+            )
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(name, flags, dir_fd=parent)
+        opened_before = os.fstat(descriptor)
+        if _stable_identity(observed) != _stable_identity(opened_before):
             raise SourceSealError(
                 f"tracked gitlink changed while inspected: {os.fsdecode(path)}"
             )
@@ -336,18 +858,24 @@ def _require_empty_gitlink_directory(
                 f"tracked gitlink directory must be empty: {os.fsdecode(path)}"
             )
         opened_after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    after = os.lstat(path)
-    if not (
-        _stable_identity(observed)
-        == _stable_identity(opened_before)
-        == _stable_identity(opened_after)
-        == _stable_identity(after)
-    ):
+        after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not (
+            _stable_identity(observed)
+            == _stable_identity(opened_before)
+            == _stable_identity(opened_after)
+            == _stable_identity(after)
+        ):
+            raise SourceSealError(
+                f"tracked gitlink changed while inspected: {os.fsdecode(path)}"
+            )
+    except OSError as exc:
         raise SourceSealError(
-            f"tracked gitlink changed while inspected: {os.fsdecode(path)}"
-        )
+            f"tracked gitlink is missing or unsafe: {os.fsdecode(path)}"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        _verify_directory_chain(chain, path)
 
 
 def _untracked_paths(root: pathlib.Path) -> list[bytes]:
@@ -407,109 +935,107 @@ def _untracked_manifest_bytes(entries: list[dict[str, Any]]) -> bytes:
 
 def _capture_observed_descriptor(root: pathlib.Path) -> dict[str, Any]:
     root = _repository_root(root)
-    head_before = _head(root)
-    diff_before = _git(root, *TRACKED_DIFF_ARGUMENTS)
-    untracked_before = _untracked_paths(root)
-    ignored_before = _ignored_paths(root)
-    if ignored_before != [REQUIRED_IGNORED_BUILD_INPUT]:
-        raise SourceSealError(
-            "ignored source set must contain exactly the separately bound root Cargo.lock"
-        )
-    entries = _index_entries(root)
-    source_hasher = hashlib.sha256(SOURCE_TREE_DOMAIN)
-    root_bytes = os.fsencode(root)
-
-    for entry in entries:
-        absolute = os.path.join(root_bytes, entry.path)
-        _field(source_hasher, b"tracked-source-v1")
-        _field(source_hasher, entry.path)
-        if entry.mode == b"160000":
-            _field(source_hasher, b"gitlink-index-v1")
-            _field(source_hasher, entry.object_id)
-            try:
-                metadata = os.lstat(absolute)
-            except FileNotFoundError:
-                continue
-            _require_empty_gitlink_directory(absolute, metadata)
-            continue
-        try:
-            metadata = os.lstat(absolute)
-        except FileNotFoundError:
-            _field(source_hasher, b"absent")
-            continue
-        if stat.S_ISREG(metadata.st_mode):
-            current_mode = b"100755" if metadata.st_mode & 0o111 else b"100644"
-            _field(source_hasher, current_mode)
-            _hash_regular_file(absolute, source_hasher)
-        elif stat.S_ISLNK(metadata.st_mode):
-            _field(source_hasher, b"120000")
-            _field(source_hasher, _stable_symlink_bytes(absolute))
-        else:
+    root_bytes, root_descriptor, root_identity = _open_root_directory(root)
+    try:
+        head_before = _head(root)
+        _verify_signed_commit(root, head_before)
+        diff_before = _git(root, *TRACKED_DIFF_ARGUMENTS)
+        untracked_before = _untracked_paths(root)
+        if diff_before or untracked_before:
             raise SourceSealError(
-                f"tracked source has an unsafe file type: {os.fsdecode(entry.path)}"
+                "first-release Kagemusha source index must equal HEAD (empty tracked diff) "
+                "and have no untracked files"
+            )
+        ignored_before = _ignored_paths(root)
+        if ignored_before != [REQUIRED_IGNORED_BUILD_INPUT]:
+            raise SourceSealError(
+                "ignored source set must contain exactly the separately bound root Cargo.lock"
+            )
+        entries = _index_entries(root)
+        source_hasher = hashlib.sha256(SOURCE_TREE_DOMAIN)
+
+        for entry in entries:
+            _field(source_hasher, b"tracked-source-v1")
+            _field(source_hasher, entry.path)
+            if entry.mode == b"160000":
+                _field(source_hasher, b"gitlink-index-v1")
+                _field(source_hasher, entry.object_id)
+                _require_empty_gitlink_directory_at(root_descriptor, entry.path)
+            elif entry.mode in (b"100644", b"100755"):
+                _field(source_hasher, entry.mode)
+                _, _, observed_blob_oid = _hash_regular_file_at(
+                    root_descriptor,
+                    entry.path,
+                    source_hasher,
+                    expected_git_mode=entry.mode,
+                )
+                if observed_blob_oid.encode("ascii") != entry.object_id:
+                    raise SourceSealError(
+                        "tracked source blob differs from the signed index: "
+                        f"{os.fsdecode(entry.path)}"
+                    )
+            elif entry.mode == b"120000":
+                payload = _stable_symlink_bytes_at(root_descriptor, entry.path)
+                blob_oid = hashlib.sha1(
+                    b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload,
+                    usedforsecurity=False,
+                ).hexdigest()
+                if blob_oid.encode("ascii") != entry.object_id:
+                    raise SourceSealError(
+                        "tracked symlink blob differs from the signed index: "
+                        f"{os.fsdecode(entry.path)}"
+                    )
+                _field(source_hasher, entry.mode)
+                _field(source_hasher, payload)
+            else:  # Kept exhaustive even if the index parser changes later.
+                raise SourceSealError(
+                    f"unsupported tracked source mode: {os.fsdecode(entry.path)}"
+                )
+
+        untracked_manifest: list[dict[str, Any]] = []
+        for path in untracked_before:
+            # MAX_UNTRACKED_FILES is zero.  Retain a fail-closed guard if that
+            # first-release policy is ever accidentally relaxed in one place.
+            raise SourceSealError(
+                f"untracked source is forbidden: {os.fsdecode(path)}"
             )
 
-    untracked_manifest: list[dict[str, Any]] = []
-    for path in untracked_before:
-        absolute = os.path.join(root_bytes, path)
-        metadata = os.lstat(absolute)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise SourceSealError(
-                f"untracked source must be a regular file: {os.fsdecode(path)}"
-            )
-        git_mode = "100755" if metadata.st_mode & 0o111 else "100644"
-        _field(source_hasher, b"untracked-source-v1")
-        _field(source_hasher, path)
-        _field(source_hasher, git_mode.encode("ascii"))
-        _, blob_sha256, git_blob_oid = _hash_regular_file(
-            absolute,
+        _field(source_hasher, b"required-ignored-build-input-v1")
+        _field(source_hasher, REQUIRED_IGNORED_BUILD_INPUT)
+        _field(source_hasher, b"100644")
+        cargo_lock_size, cargo_lock_sha256, _ = _hash_regular_file_at(
+            root_descriptor,
+            REQUIRED_IGNORED_BUILD_INPUT,
             source_hasher,
-            maximum_bytes=MAX_UNTRACKED_FILE_BYTES,
+            maximum_bytes=MAX_CARGO_LOCK_BYTES,
             require_nonempty=True,
-        )
-        untracked_manifest.append(
-            {
-                "blob_sha256": blob_sha256,
-                "git_blob_oid": git_blob_oid,
-                "git_mode": git_mode,
-                "path": os.fsdecode(path),
-                "path_bytes_base64": base64.b64encode(path).decode("ascii"),
-            }
+            expected_git_mode=b"100644",
         )
 
-    cargo_lock_path = os.path.join(root_bytes, REQUIRED_IGNORED_BUILD_INPUT)
-    cargo_metadata = os.lstat(cargo_lock_path)
-    if cargo_metadata.st_mode & 0o111:
-        raise SourceSealError("ignored root Cargo.lock must not be executable")
-    _field(source_hasher, b"required-ignored-build-input-v1")
-    _field(source_hasher, REQUIRED_IGNORED_BUILD_INPUT)
-    _field(source_hasher, b"100644")
-    cargo_lock_size, cargo_lock_sha256, _ = _hash_regular_file(
-        cargo_lock_path,
-        source_hasher,
-        maximum_bytes=MAX_CARGO_LOCK_BYTES,
-        require_nonempty=True,
-    )
-
-    head_after = _head(root)
-    diff_after = _git(root, *TRACKED_DIFF_ARGUMENTS)
-    untracked_after = _untracked_paths(root)
-    ignored_after = _ignored_paths(root)
-    cargo_recheck_size, cargo_recheck_sha256, _ = _hash_regular_file(
-        cargo_lock_path,
-        hashlib.sha256(),
-        maximum_bytes=MAX_CARGO_LOCK_BYTES,
-        require_nonempty=True,
-    )
-    if (
-        head_after != head_before
-        or diff_after != diff_before
-        or untracked_after != untracked_before
-        or ignored_after != ignored_before
-        or cargo_recheck_size != cargo_lock_size
-        or cargo_recheck_sha256 != cargo_lock_sha256
-    ):
-        raise SourceSealError("Kagemusha source HEAD or closure changed while sealing")
+        head_after = _head(root)
+        diff_after = _git(root, *TRACKED_DIFF_ARGUMENTS)
+        untracked_after = _untracked_paths(root)
+        ignored_after = _ignored_paths(root)
+        cargo_recheck_size, cargo_recheck_sha256, _ = _hash_regular_file_at(
+            root_descriptor,
+            REQUIRED_IGNORED_BUILD_INPUT,
+            hashlib.sha256(),
+            maximum_bytes=MAX_CARGO_LOCK_BYTES,
+            require_nonempty=True,
+            expected_git_mode=b"100644",
+        )
+        _verify_root_directory(root_bytes, root_descriptor, root_identity)
+        if (
+            head_after != head_before
+            or diff_after != diff_before
+            or untracked_after != untracked_before
+            or ignored_after != ignored_before
+            or cargo_recheck_size != cargo_lock_size
+            or cargo_recheck_sha256 != cargo_lock_sha256
+        ):
+            raise SourceSealError("Kagemusha source HEAD or closure changed while sealing")
+    finally:
+        os.close(root_descriptor)
 
     tracked_binary_diff_sha256 = hashlib.sha256(diff_before).hexdigest()
     untracked_manifest_sha256 = hashlib.sha256(
@@ -521,9 +1047,7 @@ def _capture_observed_descriptor(root: pathlib.Path) -> dict[str, Any]:
     combined.update(bytes.fromhex(tracked_binary_diff_sha256))
     combined.update(UNTRACKED_MANIFEST_DOMAIN)
     combined.update(bytes.fromhex(untracked_manifest_sha256))
-    source_repo_dirty = (
-        tracked_binary_diff_sha256 != EMPTY_SHA256 or bool(untracked_manifest)
-    )
+    source_repo_dirty = False
     descriptor = {
         "base_commit": head_before.decode("ascii"),
         "combined_source_fingerprint_sha256": combined.hexdigest(),
@@ -674,33 +1198,24 @@ def _validate_descriptor(value: Any, required_commit: str) -> dict[str, Any]:
     )
     if value["source_repo_dirty"] is not derived_dirty:
         raise SourceSealError("source_repo_dirty does not equal the derived closure state")
-    if not derived_dirty:
-        raise SourceSealError("reviewed Kagemusha source closure must be nonempty")
+    if value["source_repo_dirty"] is not False:
+        raise SourceSealError("source_repo_dirty must be false for a clean source closure")
+    if derived_dirty:
+        raise SourceSealError(
+            "reviewed Kagemusha source closure must have an empty tracked diff and no untracked files"
+        )
     return value
 
 
 def _read_descriptor_payload(path: str) -> bytes:
     selected = pathlib.Path(path)
-    if not selected.is_absolute() or os.path.normpath(path) != path:
-        raise SourceSealError("reviewed source closure path must be absolute and normalized")
-    resolved = selected.resolve(strict=True)
-    if resolved != selected:
-        raise SourceSealError("reviewed source closure path must not traverse symlinks")
-    before = selected.lstat()
-    if (
-        not stat.S_ISREG(before.st_mode)
-        or before.st_nlink != 1
-        or before.st_size <= 0
-        or before.st_size > MAX_DESCRIPTOR_BYTES
-    ):
-        raise SourceSealError("reviewed source closure must be one bounded regular file")
-    payload = selected.read_bytes()
-    after = selected.lstat()
-    if _stable_identity(before) != _stable_identity(after):
-        raise SourceSealError("reviewed source closure changed while read")
-    if not payload or len(payload) > MAX_DESCRIPTOR_BYTES:
-        raise SourceSealError("reviewed source closure payload has an invalid size")
-    return payload
+    return _read_bounded_absolute_file(
+        selected,
+        "reviewed source closure",
+        MAX_DESCRIPTOR_BYTES,
+        allow_empty=False,
+        owner_controlled=True,
+    )
 
 
 def _load_descriptor(

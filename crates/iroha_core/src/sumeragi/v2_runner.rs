@@ -522,6 +522,24 @@ impl LocalProposalState {
         LocalValidationDisposition::RetryHeartbeat
     }
 
+    /// Abandon a candidate whose lane-local ownership could not be bound
+    /// before the body was submitted, then give the exact owner one empty
+    /// heartbeat attempt. The caller releases the candidate's selection lease
+    /// before crossing this boundary, without publishing a body or events.
+    fn handle_candidate_binding_rejection(
+        &mut self,
+        owner: LocalProposalOwner,
+    ) -> LocalValidationDisposition {
+        let owner = self.reconcile(owner);
+        if self.heartbeat_only == Some(owner) {
+            return LocalValidationDisposition::FatalHeartbeat;
+        }
+        self.attempted = None;
+        self.heartbeat_only = Some(owner);
+        self.candidate_work_wait = None;
+        LocalValidationDisposition::RetryHeartbeat
+    }
+
     fn take_prepared_events(
         &mut self,
         owner: LocalProposalOwner,
@@ -2388,7 +2406,24 @@ fn schedule_local_proposal(
         if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block().hash())
             == V2LaneIngressOutcome::Rejected
         {
-            return Err(V2RunnerError::LaneCandidateBinding);
+            // Binding happens before body storage and reducer submission.
+            // Drop the abandoned candidate first so its ordinary queue lease
+            // is available to a later-height reproposal.
+            drop(candidate);
+            match proposal_state.handle_candidate_binding_rejection(owner) {
+                LocalValidationDisposition::RetryHeartbeat => {
+                    iroha_logger::warn!(
+                        height = tag.height(),
+                        view = tag.view(),
+                        "discarded an unsubmitted candidate after lane-local ownership binding rejected; retrying as an empty heartbeat"
+                    );
+                    return Ok(());
+                }
+                LocalValidationDisposition::FatalHeartbeat
+                | LocalValidationDisposition::Ignored => {
+                    return Err(V2RunnerError::LaneCandidateBinding);
+                }
+            }
         }
         let (_block, canonical_wire, encoded_payload, events, report, selection_lease) =
             candidate.into_parts();
@@ -7556,6 +7591,45 @@ mod tests {
             "repeated timeout handling must never re-arm ordinary candidate work"
         );
         assert!(state.candidate_work_wait.is_none());
+    }
+
+    #[test]
+    fn pre_submit_lane_binding_rejection_arms_one_empty_heartbeat_retry() {
+        let (context, _) = context();
+        let owner = proposal_owner(
+            &context,
+            EventTag::new(context.height, 3, Generation::new(19)),
+            None,
+            None,
+        );
+        let now = Instant::now();
+        let mut state = LocalProposalState {
+            attempted: Some(owner),
+            candidate_work_wait: Some(CandidateWorkWait {
+                owner,
+                started_at: now,
+                next_retry: now,
+            }),
+            ..LocalProposalState::default()
+        };
+
+        assert_eq!(
+            state.handle_candidate_binding_rejection(owner),
+            LocalValidationDisposition::RetryHeartbeat,
+            "an unsubmitted lane-binding rejection must not stop the process"
+        );
+        assert_eq!(state.attempted, None);
+        assert_eq!(state.heartbeat_only, Some(owner));
+        assert!(state.candidate_work_wait.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.pending_events.is_none());
+        assert!(state.global_selection.is_none());
+
+        assert_eq!(
+            state.handle_candidate_binding_rejection(owner),
+            LocalValidationDisposition::FatalHeartbeat,
+            "a rejected empty heartbeat still fails closed"
+        );
     }
 
     #[test]

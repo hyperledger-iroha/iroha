@@ -718,6 +718,9 @@ macro_rules! build_world_block {
             musubi_governance_decisions: $state.musubi_governance_decisions.$method(),
             musubi_registry_policy: $state.musubi_registry_policy.$method(),
             musubi_resolver_index_revision: $state.musubi_resolver_index_revision.$method(),
+            musubi_replication_shortfall_releases: $state
+                .musubi_replication_shortfall_releases
+                .$method(),
             soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
             soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
             soracloud_app_infra_states: $state.soracloud_app_infra_states.$method(),
@@ -995,6 +998,9 @@ macro_rules! build_world_transaction {
             musubi_governance_decisions: $state.musubi_governance_decisions.transaction(),
             musubi_registry_policy: $state.musubi_registry_policy.transaction(),
             musubi_resolver_index_revision: $state.musubi_resolver_index_revision.transaction(),
+            musubi_replication_shortfall_releases: $state
+                .musubi_replication_shortfall_releases
+                .transaction(),
             soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
             soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
             soracloud_app_infra_states: $state.soracloud_app_infra_states.transaction(),
@@ -3113,6 +3119,19 @@ pub enum LaneLifecycleError {
     /// Lifecycle plan references a dataspace that is not present in the catalog.
     #[error("lane lifecycle plan references unknown dataspace {0}")]
     UnknownDataspace(DataSpaceId),
+    /// A persisted asset-definition alias still occupies a textual dataspace namespace selected
+    /// for retirement.
+    #[error(
+        "dataspace alias `{dataspace_alias}` cannot be retired while asset definition {asset_definition_id} retains alias `{asset_alias}`; clear the asset-definition alias binding first"
+    )]
+    AssetDefinitionAliasNamespaceInUse {
+        /// Textual dataspace alias removed by the attempted catalog.
+        dataspace_alias: String,
+        /// Definition retaining the blocking alias binding.
+        asset_definition_id: AssetDefinitionId,
+        /// Exact persisted alias which must be cleared first.
+        asset_alias: AssetDefinitionAlias,
+    },
     /// External lane configuration attempted to claim an autoscale-managed lane.
     #[error("lane {0} uses reserved autoscale metadata")]
     ReservedAutoscaleManagedLane(LaneId),
@@ -4143,6 +4162,8 @@ pub struct World {
     pub(crate) musubi_registry_policy: Cell<MusubiRegistryPolicyV1>,
     /// Universal sparse-index revision bound into finalized query cursors.
     pub(crate) musubi_resolver_index_revision: Cell<MusubiResolverIndexRevisionV1>,
+    /// Exact count of releases bound to archives below fresh-selection quorum.
+    pub(crate) musubi_replication_shortfall_releases: Cell<u64>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
     pub(crate) soracloud_service_revisions: Storage<(String, String), SoraDeploymentBundleV1>,
     /// Current Soracloud deployment state keyed by service name.
@@ -4812,6 +4833,8 @@ pub struct WorldBlock<'world> {
     pub(crate) musubi_registry_policy: CellBlock<'world, MusubiRegistryPolicyV1>,
     /// Universal sparse-index revision.
     pub(crate) musubi_resolver_index_revision: CellBlock<'world, MusubiResolverIndexRevisionV1>,
+    /// Exact count of releases bound to archives below fresh-selection quorum.
+    pub(crate) musubi_replication_shortfall_releases: CellBlock<'world, u64>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageBlock<'world, (String, String), SoraDeploymentBundleV1>,
@@ -5338,6 +5361,7 @@ impl<'world> WorldBlock<'world> {
             privacy_consensus_policy,
             musubi_registry_policy,
             musubi_resolver_index_revision,
+            musubi_replication_shortfall_releases,
             merge_hint_roots,
             merge_global_state_root,
         );
@@ -6048,6 +6072,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// Universal sparse-index revision.
     pub(crate) musubi_resolver_index_revision:
         CellTransaction<'block, 'world, MusubiResolverIndexRevisionV1>,
+    /// Exact count of releases bound to archives below fresh-selection quorum.
+    pub(crate) musubi_replication_shortfall_releases: CellTransaction<'block, 'world, u64>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageTransaction<'block, 'world, (String, String), SoraDeploymentBundleV1>,
@@ -8082,6 +8108,8 @@ pub struct WorldView<'world> {
     pub(crate) musubi_registry_policy: CellView<'world, MusubiRegistryPolicyV1>,
     /// Universal sparse-index revision.
     pub(crate) musubi_resolver_index_revision: CellView<'world, MusubiResolverIndexRevisionV1>,
+    /// Exact count of releases bound to archives below fresh-selection quorum.
+    pub(crate) musubi_replication_shortfall_releases: CellView<'world, u64>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageView<'world, (String, String), SoraDeploymentBundleV1>,
@@ -20413,6 +20441,9 @@ impl World {
             musubi_governance_decisions: self.musubi_governance_decisions.view(),
             musubi_registry_policy: self.musubi_registry_policy.view(),
             musubi_resolver_index_revision: self.musubi_resolver_index_revision.view(),
+            musubi_replication_shortfall_releases: self
+                .musubi_replication_shortfall_releases
+                .view(),
             soracloud_service_revisions: self.soracloud_service_revisions.view(),
             soracloud_service_deployments: self.soracloud_service_deployments.view(),
             soracloud_app_infra_states: self.soracloud_app_infra_states.view(),
@@ -21233,6 +21264,8 @@ pub trait WorldReadOnly {
     }
     /// Universal Musubi sparse-index revision bound into finalized cursors.
     fn musubi_resolver_index_revision(&self) -> u64;
+    /// Exact count of releases bound to archives below fresh-selection quorum.
+    fn musubi_replication_shortfall_releases(&self) -> u64;
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
     fn soracloud_service_revisions(
         &self,
@@ -22847,6 +22880,9 @@ macro_rules! impl_world_ro {
             fn musubi_resolver_index_revision(&self) -> u64 {
                 self.musubi_resolver_index_revision.get().get()
             }
+            fn musubi_replication_shortfall_releases(&self) -> u64 {
+                *self.musubi_replication_shortfall_releases.get()
+            }
             fn soracloud_service_revisions(
                 &self,
             ) -> &impl StorageReadOnly<(String, String), SoraDeploymentBundleV1> {
@@ -23712,6 +23748,7 @@ impl<'world> WorldBlock<'world> {
             musubi_governance_decisions,
             musubi_registry_policy,
             musubi_resolver_index_revision,
+            musubi_replication_shortfall_releases,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -23857,6 +23894,7 @@ impl<'world> WorldBlock<'world> {
         musubi_governance_decisions.commit();
         musubi_registry_policy.commit();
         musubi_resolver_index_revision.commit();
+        musubi_replication_shortfall_releases.commit();
         soracloud_service_revisions.commit();
         soracloud_service_deployments.commit();
         soracloud_app_infra_states.commit();
@@ -25294,6 +25332,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             musubi_governance_decisions,
             musubi_registry_policy,
             musubi_resolver_index_revision,
+            musubi_replication_shortfall_releases,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -25451,6 +25490,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         musubi_governance_decisions.apply();
         musubi_registry_policy.apply();
         musubi_resolver_index_revision.apply();
+        musubi_replication_shortfall_releases.apply();
         soracloud_service_revisions.apply();
         soracloud_service_deployments.apply();
         soracloud_app_infra_states.apply();
@@ -29378,6 +29418,9 @@ impl State {
             .expect("initial World derived indexes must be internally consistent");
         #[cfg(feature = "telemetry")]
         {
+            telemetry_seed.set_musubi_replication_shortfall_releases(
+                *s.world.musubi_replication_shortfall_releases.view().get(),
+            );
             let view = s.world.governance_proposals.view();
             let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
             telemetry_seed.seed_governance_proposals(records);
@@ -41959,7 +42002,9 @@ impl State {
     ///
     /// Returns a `LaneLifecycleError` if lanes reference unknown dataspaces,
     /// routing policy targets cannot resolve, or geometry updates cannot be
-    /// applied to the current state.
+    /// applied to the current state. A textual dataspace namespace also cannot
+    /// be retired until all asset-definition alias bindings in that namespace
+    /// are explicitly cleared.
     pub fn set_nexus(
         &mut self,
         nexus: iroha_config::parameters::actual::Nexus,
@@ -42268,6 +42313,38 @@ impl State {
         )
     }
 
+    fn ensure_retired_dataspace_aliases_have_no_asset_definition_bindings(
+        &self,
+        current_catalog: &DataSpaceCatalog,
+        attempted_aliases: &BTreeSet<String>,
+    ) -> Result<(), LaneLifecycleError> {
+        let retired_aliases = current_catalog
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                (!attempted_aliases.contains(&entry.alias)).then_some(entry.alias.as_str())
+            })
+            .collect::<BTreeSet<_>>();
+        if retired_aliases.is_empty() {
+            return Ok(());
+        }
+
+        for (asset_definition_id, binding) in
+            self.world.asset_definition_alias_bindings.view().iter()
+        {
+            let dataspace_alias = binding.alias.dataspace_segment();
+            if retired_aliases.contains(dataspace_alias) {
+                return Err(LaneLifecycleError::AssetDefinitionAliasNamespaceInUse {
+                    dataspace_alias: dataspace_alias.to_owned(),
+                    asset_definition_id: asset_definition_id.clone(),
+                    asset_alias: binding.alias.clone(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn set_nexus_with_configured_lane_catalog(
         &mut self,
         mut nexus: iroha_config::parameters::actual::Nexus,
@@ -42275,6 +42352,7 @@ impl State {
         configured_baseline: Option<Hash>,
     ) -> Result<(), LaneLifecycleError> {
         nexus.configured_lane_catalog = configured_lane_catalog;
+        let previous_nexus = self.nexus.read().clone();
         let dataspace_ids: BTreeSet<_> = nexus
             .dataspace_catalog
             .entries()
@@ -42293,6 +42371,13 @@ impl State {
             .iter()
             .map(|entry| (entry.alias.clone(), entry.id))
             .collect();
+        // This must precede lane-geometry publication, catalog replacement, and stale-token
+        // pruning. A failed retirement therefore leaves both the binding and its authority path
+        // intact so the owner can clear it and retry.
+        self.ensure_retired_dataspace_aliases_have_no_asset_definition_bindings(
+            &previous_nexus.dataspace_catalog,
+            &dataspace_aliases,
+        )?;
         let active_lane_ids: BTreeSet<_> = nexus
             .lane_catalog
             .lanes()
@@ -42417,7 +42502,6 @@ impl State {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
-        let previous_nexus = self.nexus.read().clone();
         let previous_lane_config = previous_nexus.lane_config.clone();
         let previous_lane_incarnations = self.lane_incarnations_snapshot();
         let previous_lane_incarnation_lineage = self.lane_incarnation_lineage_snapshot();
@@ -42776,6 +42860,22 @@ impl State {
                     }
                 }
             };
+        let is_stale_asset_definition_alias_scope = |scope: &iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope| {
+                match scope {
+                    iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(
+                        domain,
+                    ) => !dataspace_aliases.contains(domain.dataspace().as_ref()),
+                    iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Dataspace(
+                        dataspace,
+                    ) => !dataspace_ids.contains(dataspace),
+                    iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(
+                        alias,
+                    ) => dataspace_ids_by_alias
+                        .get(alias.canonical_name.dataspace_segment())
+                        .copied()
+                        != Some(alias.dataspace_id),
+                }
+            };
         let is_stale_dataspace_permission = |permission: &Permission| {
             if let Ok(permission) =
                 iroha_executor_data_model::permission::account::CanResolveAccountAlias::try_from(
@@ -42793,6 +42893,10 @@ impl State {
                 )
             {
                 return is_stale_account_alias_scope(&permission.scope);
+            }
+            if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionAlias::try_from(permission)
+            {
+                return is_stale_asset_definition_alias_scope(&permission.scope);
             }
             if let Ok(permission) =
                 iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest::try_from(
@@ -51533,6 +51637,16 @@ impl<'state> StateBlock<'state> {
                 // first and then world storage transactions; committing block hashes first can
                 // invert that order and deadlock under contention.
                 world.commit();
+                #[cfg(feature = "telemetry")]
+                state_ref
+                    .telemetry
+                    .set_musubi_replication_shortfall_releases(
+                        *state_ref
+                            .world
+                            .musubi_replication_shortfall_releases
+                            .view()
+                            .get(),
+                    );
                 state_ref.install_sccp_registry_cache(Arc::clone(&sccp_registry));
                 if !direct_committed_transactions.is_empty() {
                     let direct_height = NonZeroUsize::new(
@@ -53982,6 +54096,143 @@ mod state_preverify_backend_admission_tests {
             PreverifyResult::Accepted,
             "Halo2 IPA profile labels must be checked as IPA/Pasta labels before metadata preverify"
         );
+    }
+}
+
+#[cfg(test)]
+mod musubi_replication_shortfall_state_tests {
+    use super::*;
+
+    #[test]
+    fn native_amx_write_set_binds_replication_shortfall_cell() {
+        let world = World::default();
+        let mut block = world.block();
+        *block.musubi_replication_shortfall_releases.get_mut() = 1;
+
+        let write_set = block.merge_execution_write_set_bytes();
+        let field = b"musubi_replication_shortfall_releases";
+        assert!(
+            write_set.windows(field.len()).any(|window| window == field),
+            "Native AMX write set must commit to the persisted shortfall aggregate"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "telemetry"))]
+mod musubi_replication_shortfall_telemetry_tests {
+    use std::sync::Arc;
+
+    use iroha_data_model::block::BlockHeader;
+    use mv::storage::Cell;
+    use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore};
+
+    fn replication_shortfall_gauge(metrics: &crate::telemetry::Metrics) -> u64 {
+        metrics
+            .try_to_string()
+            .expect("encode telemetry exposition")
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("musubi_replication_shortfall_releases ")
+                    .map(|value| value.parse::<u64>().expect("gauge value is an integer"))
+            })
+            .expect("Musubi replication-shortfall gauge is exported")
+    }
+
+    fn state_with_shortfall(
+        releases: u64,
+        telemetry_enabled: bool,
+    ) -> (State, Arc<crate::telemetry::Metrics>, StateTelemetry) {
+        let mut world = World::default();
+        world.musubi_replication_shortfall_releases = Cell::new(releases);
+        let metrics = Arc::new(crate::telemetry::Metrics::default());
+        let telemetry = StateTelemetry::new(Arc::clone(&metrics), telemetry_enabled);
+        let telemetry_handle = telemetry.clone();
+        let state = State::with_telemetry(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            telemetry,
+        );
+        (state, metrics, telemetry_handle)
+    }
+
+    #[test]
+    fn startup_seeds_replication_shortfall_gauge_from_persisted_cell() {
+        let (_state, metrics, telemetry) = state_with_shortfall(7, false);
+
+        assert_eq!(replication_shortfall_gauge(&metrics), 7);
+        telemetry.enable();
+        assert_eq!(replication_shortfall_gauge(&metrics), 7);
+    }
+
+    #[test]
+    fn replication_shortfall_gauge_changes_only_after_state_block_commit() {
+        let (state, metrics, _telemetry) = state_with_shortfall(2, true);
+        assert_eq!(replication_shortfall_gauge(&metrics), 2);
+
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            *transaction
+                .world
+                .musubi_replication_shortfall_releases
+                .get_mut() = 3;
+        }
+        assert_eq!(
+            *state
+                .world
+                .musubi_replication_shortfall_releases
+                .view()
+                .get(),
+            2
+        );
+        assert_eq!(replication_shortfall_gauge(&metrics), 2);
+
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            *transaction
+                .world
+                .musubi_replication_shortfall_releases
+                .get_mut() = 5;
+            transaction.apply();
+            assert_eq!(replication_shortfall_gauge(&metrics), 2);
+        }
+        assert_eq!(
+            *state
+                .world
+                .musubi_replication_shortfall_releases
+                .view()
+                .get(),
+            2
+        );
+        assert_eq!(replication_shortfall_gauge(&metrics), 2);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        *transaction
+            .world
+            .musubi_replication_shortfall_releases
+            .get_mut() = 9;
+        transaction.apply();
+        assert_eq!(replication_shortfall_gauge(&metrics), 2);
+        block.commit().expect("commit shortfall projection");
+
+        assert_eq!(
+            *state
+                .world
+                .musubi_replication_shortfall_releases
+                .view()
+                .get(),
+            9
+        );
+        assert_eq!(replication_shortfall_gauge(&metrics), 9);
     }
 }
 
@@ -67646,6 +67897,12 @@ pub(crate) mod deserialize {
         Ok(revision)
     }
 
+    fn take_musubi_replication_shortfall_releases(
+        map: &mut json::native::Map,
+    ) -> Result<Cell<u64>, json::Error> {
+        take_required(map, "musubi_replication_shortfall_releases")
+    }
+
     fn validate_provider_ingest_completion_authorities(
         provider_owners: &Storage<ProviderId, AccountId>,
         authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
@@ -68118,6 +68375,7 @@ pub(crate) mod deserialize {
         alias_history: &'a Storage<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
         governance_decisions: &'a Storage<[u8; 32], MusubiGovernanceDecisionConsumptionV1>,
         resolver_index_revision: u64,
+        replication_shortfall_releases: u64,
     }
 
     impl MusubiPersistedState<'_> {
@@ -68526,6 +68784,7 @@ pub(crate) mod deserialize {
                     ));
                 }
             }
+            let mut expected_replication_shortfall_releases = 0_u64;
             for (archive_id, expected) in &expected_references {
                 if archive_reverse_references.get(archive_id).is_none() {
                     return Err(invalid_musubi_state(
@@ -68536,6 +68795,35 @@ pub(crate) mod deserialize {
                         ),
                     ));
                 }
+                let availability = archive_availability
+                    .get(archive_id)
+                    .expect("every validated archive has an availability projection");
+                if availability.availability != MusubiStorageAvailabilityV1::Selectable {
+                    let release_count = u64::try_from(expected.len()).map_err(|_| {
+                        invalid_musubi_state(
+                            "musubi_replication_shortfall_releases",
+                            "archive reverse-reference count overflows u64",
+                        )
+                    })?;
+                    expected_replication_shortfall_releases =
+                        expected_replication_shortfall_releases
+                            .checked_add(release_count)
+                            .ok_or_else(|| {
+                                invalid_musubi_state(
+                                    "musubi_replication_shortfall_releases",
+                                    "replication-shortfall release count overflows u64",
+                                )
+                            })?;
+                }
+            }
+            if self.replication_shortfall_releases != expected_replication_shortfall_releases {
+                return Err(invalid_musubi_state(
+                    "musubi_replication_shortfall_releases",
+                    format!(
+                        "persisted count {} does not match the exact derived count {expected_replication_shortfall_releases}",
+                        self.replication_shortfall_releases
+                    ),
+                ));
             }
 
             let mut latest_selectable = BTreeMap::<
@@ -69390,6 +69678,8 @@ pub(crate) mod deserialize {
         let musubi_governance_decisions = take_required(&mut map, "musubi_governance_decisions")?;
         let musubi_registry_policy = take_musubi_registry_policy(&mut map)?;
         let musubi_resolver_index_revision = take_musubi_resolver_index_revision(&mut map)?;
+        let musubi_replication_shortfall_releases =
+            take_musubi_replication_shortfall_releases(&mut map)?;
         let soracloud_service_revisions = take_required(&mut map, "soracloud_service_revisions")?;
         let soracloud_service_deployments =
             take_optional_default(&mut map, "soracloud_service_deployments")?;
@@ -69634,6 +69924,7 @@ pub(crate) mod deserialize {
             musubi_governance_decisions,
             musubi_registry_policy,
             musubi_resolver_index_revision,
+            musubi_replication_shortfall_releases,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -69746,6 +70037,10 @@ pub(crate) mod deserialize {
             alias_history: &world.musubi_alias_history,
             governance_decisions: &world.musubi_governance_decisions,
             resolver_index_revision: world.musubi_resolver_index_revision.view().get().get(),
+            replication_shortfall_releases: *world
+                .musubi_replication_shortfall_releases
+                .view()
+                .get(),
         }
         .validate()?;
         validate_musubi_governance_provenance(&world)?;
@@ -70549,11 +70844,16 @@ pub(crate) mod deserialize {
                 alias_history: &world.musubi_alias_history,
                 governance_decisions: &world.musubi_governance_decisions,
                 resolver_index_revision: world.musubi_resolver_index_revision.view().get().get(),
+                replication_shortfall_releases: *world
+                    .musubi_replication_shortfall_releases
+                    .view()
+                    .get(),
             }
             .validate()?;
             validate_musubi_live_projections(world)
         }
 
+        #[allow(clippy::too_many_lines)]
         fn seeded_musubi_publication_snapshot()
         -> (World, MusubiReleaseIdV1, ArchiveId, MusubiPackageSelectorV1) {
             let mut world = World::default();
@@ -70773,11 +71073,31 @@ pub(crate) mod deserialize {
                 .insert(selector.clone(), directory);
             world.musubi_resolver_index_revision =
                 Cell::new(MusubiResolverIndexRevisionV1::new(2).expect("resolver revision"));
+            world.musubi_replication_shortfall_releases = Cell::new(1);
 
             (world, release, archive_id, selector)
         }
 
         #[test]
+        fn musubi_publication_snapshot_validates_replication_shortfall_aggregate() {
+            let (baseline, _, _, _) = seeded_musubi_publication_snapshot();
+            validate_musubi_publication_snapshot(&baseline)
+                .expect("one release on an unavailable archive has shortfall count one");
+
+            let (mut mismatched, _, _, _) = seeded_musubi_publication_snapshot();
+            mismatched.musubi_replication_shortfall_releases = Cell::new(0);
+            let error = validate_musubi_publication_snapshot(&mismatched)
+                .expect_err("a stale persisted shortfall aggregate must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("musubi_replication_shortfall_releases"),
+                "unexpected shortfall mismatch diagnostic: {error}"
+            );
+        }
+
+        #[test]
+        #[allow(clippy::too_many_lines)]
         fn musubi_publication_snapshot_rejects_every_one_sided_projection_cut() {
             let (baseline, _, _, _) = seeded_musubi_publication_snapshot();
             validate_musubi_publication_snapshot(&baseline)
@@ -70796,6 +71116,7 @@ pub(crate) mod deserialize {
                     releases: Vec::new(),
                 },
             );
+            universal_only.musubi_replication_shortfall_releases = Cell::new(0);
             let error = validate_musubi_publication_snapshot(&universal_only)
                 .expect_err("a universal resolver row cannot survive without its home release");
             assert!(
@@ -71152,7 +71473,7 @@ pub(crate) mod deserialize {
         }
 
         #[test]
-        fn take_musubi_policy_and_resolver_revision_fail_closed() {
+        fn take_musubi_policy_revision_and_shortfall_fail_closed() {
             let policy = MusubiRegistryPolicyV1::default();
             let mut map = json::native::Map::new();
             map.insert(
@@ -71217,6 +71538,28 @@ pub(crate) mod deserialize {
             assert!(
                 take_musubi_resolver_index_revision(&mut json::native::Map::new()).is_err(),
                 "missing resolver revision must fail"
+            );
+
+            let mut map = json::native::Map::new();
+            map.insert(
+                "musubi_replication_shortfall_releases".to_owned(),
+                json::to_value(&Cell::new(7_u64)).expect("serialize shortfall count"),
+            );
+            assert_eq!(
+                *take_musubi_replication_shortfall_releases(&mut map)
+                    .expect("canonical shortfall count")
+                    .view()
+                    .get(),
+                7
+            );
+            let error = take_musubi_replication_shortfall_releases(&mut json::native::Map::new())
+                .err()
+                .expect("missing shortfall count must fail cleanly");
+            assert!(
+                error
+                    .to_string()
+                    .contains("musubi_replication_shortfall_releases"),
+                "unexpected missing-shortfall error: {error}"
             );
         }
 

@@ -2070,17 +2070,14 @@ impl StateTelemetry {
         }
     }
 
-    /// Adjust the number of Musubi releases currently below fresh-selection quorum.
+    /// Mirror the committed count of Musubi releases below fresh-selection quorum.
     ///
-    /// Callers derive `added` and `removed` from exact archive reverse references
-    /// when one archive crosses the selectable boundary. The saturating projection
-    /// is telemetry-only and never feeds consensus state.
-    pub fn adjust_musubi_replication_shortfall_releases(&self, added: u64, removed: u64) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        let gauge = &self.metrics.musubi;
-        gauge.adjust_replication_shortfall_releases(added, removed);
+    /// This exact setter intentionally remains active while telemetry collection is
+    /// disabled so enabling telemetry later exposes the current committed value.
+    pub fn set_musubi_replication_shortfall_releases(&self, releases: u64) {
+        self.metrics
+            .musubi
+            .set_replication_shortfall_releases(releases);
     }
 
     /// Record a rejected Musubi package, alias, or Parliament mutation.

@@ -1487,6 +1487,19 @@ pub struct PorStatusAuthoritySnapshotV1 {
     pub statuses: Vec<PorChallengeStatusV1>,
 }
 
+/// One node-authoritative PoR status record after a durable lifecycle operation.
+///
+/// The update is emitted while the node's auxiliary-checkpoint transaction is
+/// still serialized. Torii can therefore advance its rebuildable indexes by one
+/// exact generation without cloning or sorting the complete retained history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PorStatusAuthorityUpdateV1 {
+    /// Non-zero generation visible in the durable node checkpoint.
+    pub generation: u64,
+    /// Exact retained status affected by the lifecycle operation.
+    pub status: PorChallengeStatusV1,
+}
+
 /// One failed-verdict repair intent retained until its durable handoff is acknowledged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PorPendingRepairWorkV1 {
@@ -2223,6 +2236,59 @@ impl PorTracker {
         Ok(PorStatusAuthoritySnapshotV1 {
             generation: tracker.status_generation,
             statuses,
+        })
+    }
+
+    /// Return one exact status and generation without materializing history.
+    pub(crate) fn status_authority_update(
+        &self,
+        challenge_id: [u8; 32],
+    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        if tracker.status_generation == 0 {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR status generation is zero".to_owned(),
+            ));
+        }
+
+        let pending = tracker
+            .pending
+            .get(&challenge_id)
+            .map(ChallengeState::to_status);
+        let finalized = tracker
+            .finalized
+            .get(&challenge_id)
+            .map(FinalizedChallengeStateV1::to_status);
+        let compacted = tracker.compacted_statuses.get(&challenge_id).cloned();
+        let retained_copies = usize::from(pending.is_some())
+            .checked_add(usize::from(finalized.is_some()))
+            .and_then(|count| count.checked_add(usize::from(compacted.is_some())))
+            .ok_or_else(|| {
+                PorTrackerError::InvalidCheckpoint(
+                    "PoR status ownership count overflowed".to_owned(),
+                )
+            })?;
+        if retained_copies != 1 {
+            return if retained_copies == 0 {
+                Err(PorTrackerError::UnknownChallenge)
+            } else {
+                Err(PorTrackerError::InvalidCheckpoint(
+                    "PoR status exists in multiple lifecycle stores".to_owned(),
+                ))
+            };
+        }
+        let status = pending
+            .or(finalized)
+            .or(compacted)
+            .expect("exactly one retained PoR status was counted");
+        status.validate().map_err(|error| {
+            PorTrackerError::InvalidCheckpoint(format!(
+                "invalid authoritative PoR status update: {error}"
+            ))
+        })?;
+        Ok(PorStatusAuthorityUpdateV1 {
+            generation: tracker.status_generation,
+            status,
         })
     }
 

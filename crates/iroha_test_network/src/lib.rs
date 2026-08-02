@@ -8,6 +8,7 @@ pub mod fslock_ports;
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
     ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
+    NativeAmxFaultAck, NativeAmxFaultPhase,
 };
 
 use core::{fmt, future::Future, time::Duration};

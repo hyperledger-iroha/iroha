@@ -10,8 +10,6 @@ use super::{
 use crate::cli_output::print_with_optional_text;
 use crate::{CliOutputFormat, Run, RunContext};
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
-#[cfg(test)]
-use blake3::hash as blake3_hash;
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::da::{

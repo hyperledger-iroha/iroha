@@ -86,6 +86,7 @@ struct TestPorStatusPageV1 {
     record_limit: u32,
     canonical_byte_limit: u64,
     canonical_bytes: u64,
+    inspected_candidates: u32,
     has_more: bool,
     #[norito(default)]
     next_cursor: Option<String>,
@@ -118,6 +119,8 @@ fn test_por_status_page(
         canonical_byte_limit: u64::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
             .expect("PoR byte limit fits u64"),
         canonical_bytes: u64::try_from(canonical_bytes).expect("fixture byte total fits u64"),
+        inspected_candidates: u32::try_from(statuses.len())
+            .expect("fixture status count fits u32"),
         has_more: next_cursor.is_some(),
         next_cursor,
         statuses,

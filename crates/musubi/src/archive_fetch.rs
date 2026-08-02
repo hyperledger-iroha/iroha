@@ -8,9 +8,10 @@
 //! verification.
 
 use std::{
+    collections::BTreeSet,
     error::Error,
     fmt,
-    io::Read,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
@@ -19,15 +20,25 @@ use iroha_data_model::{
         ArchiveId, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
         MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationQueryV1,
         MusubiArchiveLocationStateV1, MusubiArchiveLocationV1, MusubiPageRequestV1,
+        MusubiRegistrySnapshotV1,
     },
-    sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
+    sorafs::{
+        capacity::ProviderId,
+        pin_registry::{ManifestDigest, ProviderIngestFinalizedAnchorV1},
+    },
 };
-use sorafs_car::CarBuildPlan;
+use sorafs_car::{
+    CarBuildPlan, CarStreamingWriter, CarWriteError, ProfileId, compute_chunk_plan_digest_sha3,
+};
 
 use crate::{
     cache::{CacheError, InstallOutcome, MusubiCache},
     registry::{RegistryFailureClassV1, RegistryReadClientV1},
 };
+
+const RELEASE_PATH: &str = ".musubi/semantic-release.norito";
+const DESCRIPTOR_PATH: &str = ".musubi/artifact-descriptor.norito";
+const VERIFICATION_LOCK_PATH: &str = ".musubi/verification-lock.norito";
 
 /// Stable classification for a secret-redacted archive fetch failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -400,7 +411,8 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     /// Healthy locations must still have the V1 quorum. Degraded locations are
     /// accepted only for exact locked fetches, preserving already-locked builds
     /// while at least one attested provider remains. Pending and retired
-    /// locations are never used.
+    /// locations are never used. Within each health rank, distinct providers
+    /// are tried before an alternate pin assigned to an already-tried provider.
     pub fn fetch_exact(
         &self,
         archive_id: ArchiveId,
@@ -417,7 +429,19 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
                 candidate.provider,
                 &commitment,
             ) {
-                Ok(plan) => plan,
+                Ok(plan) => match validate_transport_plan(&commitment, &plan) {
+                    Ok(()) => plan,
+                    Err(error) => {
+                        record_transport_failure(
+                            self.integrity_observer,
+                            error,
+                            &mut retryable,
+                            &mut integrity,
+                            &mut permanent,
+                        );
+                        continue;
+                    }
+                },
                 Err(error) => {
                     record_transport_failure(
                         self.integrity_observer,
@@ -440,7 +464,19 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
                 }
                 Err(CacheError::Io { source, .. })
                     if source.kind() == std::io::ErrorKind::NotFound => {}
-                Err(CacheError::InvalidPlan(_) | CacheError::InvalidArchive(_)) => {
+                Err(CacheError::InvalidPlan(_)) => {
+                    record_transport_failure(
+                        self.integrity_observer,
+                        ArchiveTransportErrorV1::integrity(
+                            "SORAFS_ARCHIVE_PLAN_COMMITMENT_MISMATCH",
+                        ),
+                        &mut retryable,
+                        &mut integrity,
+                        &mut permanent,
+                    );
+                    continue;
+                }
+                Err(CacheError::InvalidArchive(_)) => {
                     return Err(ArchiveFetchErrorV1::new(
                         ArchiveFetchFailureClassV1::Permanent,
                         "MUSUBI_CACHE_CORRUPT",
@@ -546,7 +582,9 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     ///
     /// This shares the same registry/location/attestation and transport-plan trust boundary as
     /// [`Self::fetch_exact`], allowing cache verification and repair to avoid untrusted local
-    /// plans. Providers are tried in deterministic healthy-then-degraded order.
+    /// plans. The chunk plan, registered profile, bundle metadata inventory, and file-plan-derived
+    /// root CID are checked without reading CAR body bytes. Providers are tried in deterministic
+    /// healthy-then-degraded order.
     pub fn prepare_exact(
         &self,
         archive_id: ArchiveId,
@@ -558,7 +596,7 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
         let mut permanent = None;
         for candidate in candidates {
             match transport.storage_plan(&candidate.pin_manifest, candidate.provider, &commitment) {
-                Ok(plan) => {
+                Ok(plan) if validate_transport_plan(&commitment, &plan).is_ok() => {
                     return Ok(PreparedArchivePlanV1 {
                         archive_id,
                         commitment,
@@ -567,6 +605,17 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
                         provider: candidate.provider,
                         plan,
                     });
+                }
+                Ok(_) => {
+                    record_transport_failure(
+                        self.integrity_observer,
+                        ArchiveTransportErrorV1::integrity(
+                            "SORAFS_ARCHIVE_PLAN_COMMITMENT_MISMATCH",
+                        ),
+                        &mut retryable,
+                        &mut integrity,
+                        &mut permanent,
+                    );
                 }
                 Err(error) => {
                     record_transport_failure(
@@ -610,9 +659,19 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
             .archive_locations(&query)
             .map_err(registry_error)?
             .ok_or_else(archive_unavailable)?;
+        // The V1 directory contains at most four locations and this first-page request asks for
+        // all four. A cursor or a shorter/different identity list is therefore incomplete rather
+        // than a legitimate continuation.
         if page.next_cursor.is_some()
             || page.archive.archive_id != archive_id
             || page.archive.commitment.archive_id() != archive_id
+            || page.archive.location_ids.len() != page.items.len()
+            || page
+                .archive
+                .location_ids
+                .iter()
+                .zip(&page.items)
+                .any(|(expected, location)| *expected != location.location_id)
         {
             return Err(invalid_evidence());
         }
@@ -641,8 +700,7 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
                 });
             }
         }
-        candidates
-            .sort_by_key(|candidate| (candidate.rank, candidate.location_id, candidate.provider));
+        let candidates = prioritize_distinct_providers(candidates);
         if candidates.is_empty() {
             return Err(archive_unavailable());
         }
@@ -662,7 +720,11 @@ fn validate_location_evidence(
         let binding = &attestation.payload.binding;
         if binding.chain_id != page.chain_id
             || binding.genesis_block_hash != page.genesis_hash
-            || binding.finalized_anchor.height > page.snapshot.finalized_height
+            || !finalized_anchor_is_compatible(
+                &binding.finalized_anchor,
+                location.finalized_height,
+                &page.snapshot,
+            )
             || binding.bundle_digest != commitment.bundle_digest
             || binding.descriptor_digest != commitment.descriptor_digest
             || binding.source_tree_digest != commitment.source_tree_digest
@@ -673,6 +735,105 @@ fn validate_location_evidence(
         attestation
             .verify(binding)
             .map_err(|_| invalid_evidence())?;
+    }
+    Ok(())
+}
+
+fn finalized_anchor_is_compatible(
+    anchor: &ProviderIngestFinalizedAnchorV1,
+    location_finalized_height: u64,
+    snapshot: &MusubiRegistrySnapshotV1,
+) -> bool {
+    anchor.height <= location_finalized_height
+        && anchor.height <= snapshot.finalized_height
+        && (anchor.height != snapshot.finalized_height
+            || anchor.block_hash == snapshot.finalized_block_hash)
+}
+
+fn prioritize_distinct_providers(
+    mut candidates: Vec<ArchiveCandidateV1>,
+) -> Vec<ArchiveCandidateV1> {
+    candidates.sort_by_key(|candidate| (candidate.rank, candidate.location_id, candidate.provider));
+    let mut ordered = Vec::with_capacity(candidates.len());
+    let mut seen = BTreeSet::new();
+    for rank in [0_u8, 1_u8] {
+        let mut repeated = Vec::new();
+        for candidate in candidates
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.rank == rank)
+        {
+            if seen.insert(candidate.provider) {
+                ordered.push(candidate);
+            } else {
+                repeated.push(candidate);
+            }
+        }
+        ordered.extend(repeated);
+    }
+    ordered
+}
+
+fn validate_transport_plan(
+    commitment: &MusubiArchiveCommitmentV1,
+    plan: &CarBuildPlan,
+) -> Result<(), ArchiveTransportErrorV1> {
+    let invalid = || ArchiveTransportErrorV1::integrity("SORAFS_ARCHIVE_PLAN_COMMITMENT_MISMATCH");
+    commitment.validate().map_err(|_| invalid())?;
+    plan.validate().map_err(|_| invalid())?;
+    if plan.content_length != commitment.content_length
+        || plan.chunks.len() != usize::try_from(commitment.chunk_count).unwrap_or(usize::MAX)
+        || plan
+            .chunks
+            .iter()
+            .any(|chunk| chunk.taikai_segment_hint.is_some())
+        || compute_chunk_plan_digest_sha3(&plan.chunks) != *commitment.chunk_plan_digest.as_bytes()
+    {
+        return Err(invalid());
+    }
+    let descriptor = sorafs_car::chunker_registry::lookup(ProfileId(commitment.chunker.profile_id))
+        .ok_or_else(invalid)?;
+    if descriptor.namespace != commitment.chunker.namespace
+        || descriptor.name != commitment.chunker.name
+        || descriptor.semver != commitment.chunker.semver
+        || descriptor.multihash_code != commitment.chunker.multihash_code
+        || descriptor.profile != plan.chunk_profile
+    {
+        return Err(invalid());
+    }
+
+    let mut source_count = 0_usize;
+    let mut release_count = 0_u8;
+    let mut descriptor_count = 0_u8;
+    let mut lock_count = 0_u8;
+    for file in &plan.files {
+        match file.path.join("/").as_str() {
+            RELEASE_PATH => release_count = release_count.saturating_add(1),
+            DESCRIPTOR_PATH => descriptor_count = descriptor_count.saturating_add(1),
+            VERIFICATION_LOCK_PATH => lock_count = lock_count.saturating_add(1),
+            path if path.starts_with(".musubi/") => return Err(invalid()),
+            _ => source_count = source_count.saturating_add(1),
+        }
+    }
+    if source_count != usize::try_from(commitment.file_count).unwrap_or(usize::MAX)
+        || release_count != 1
+        || descriptor_count != 1
+        || lock_count != 1
+    {
+        return Err(invalid());
+    }
+    // `CarStreamingWriter` computes the complete file/directory DAG and compares expected roots
+    // before reading a body byte. Every valid Musubi bundle is non-empty, so a matching root must
+    // reach this empty reader and fail with `UnexpectedEof`; a root mismatch fails earlier. Plan
+    // validation and the exact registered profile cap the reserved probe buffer at the profile's
+    // maximum chunk size.
+    let roots = vec![commitment.root_cid.as_bytes().to_vec()];
+    let mut empty = io::empty();
+    match CarStreamingWriter::with_expected_roots(plan, roots)
+        .write_from_reader(&mut empty, io::sink())
+    {
+        Err(CarWriteError::Io(source)) if source.kind() == io::ErrorKind::UnexpectedEof => {}
+        Ok(_) | Err(_) => return Err(invalid()),
     }
     Ok(())
 }
@@ -782,6 +943,7 @@ mod tests {
         musubi::MusubiContentDigestV1,
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
+    use sorafs_car::FileEntry;
 
     use super::*;
 
@@ -827,6 +989,65 @@ mod tests {
         }
     }
 
+    fn transport_plan_fixture() -> (MusubiArchiveCommitmentV1, CarBuildPlan) {
+        let files = [
+            (
+                vec!["src".to_owned(), "lib.ko".to_owned()],
+                b"fn main() {}".to_vec(),
+            ),
+            (
+                RELEASE_PATH.split('/').map(str::to_owned).collect(),
+                vec![1],
+            ),
+            (
+                DESCRIPTOR_PATH.split('/').map(str::to_owned).collect(),
+                vec![2],
+            ),
+            (
+                VERIFICATION_LOCK_PATH
+                    .split('/')
+                    .map(str::to_owned)
+                    .collect(),
+                vec![3],
+            ),
+        ]
+        .into_iter()
+        .map(|(path, data)| FileEntry { path, data })
+        .collect();
+        let (plan, payload) = CarBuildPlan::from_files(files).expect("canonical bundle plan");
+        let stats = sorafs_car::CarWriter::new(&plan, &payload)
+            .expect("fixture CAR writer")
+            .write_to(io::sink())
+            .expect("fixture CAR stats");
+        let descriptor = sorafs_car::chunker_registry::default_descriptor();
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: ManifestRootCid::try_from(stats.root_cids[0].clone())
+                .expect("canonical root CID"),
+            chunker: ChunkerProfileHandle {
+                profile_id: descriptor.id.0,
+                namespace: descriptor.namespace.to_owned(),
+                name: descriptor.name.to_owned(),
+                semver: descriptor.semver.to_owned(),
+                multihash_code: descriptor.multihash_code,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new(compute_chunk_plan_digest_sha3(
+                &plan.chunks,
+            )),
+            por_root: MusubiContentDigestV1::new(
+                sorafs_car::compute_por_root(&payload, &plan).expect("fixture PoR"),
+            ),
+            content_length: plan.content_length,
+            car_digest: MusubiContentDigestV1::new(*stats.car_archive_digest.as_bytes()),
+            car_size: stats.car_size,
+            bundle_digest: MusubiContentDigestV1::new([5; 32]),
+            source_tree_digest: MusubiContentDigestV1::new([6; 32]),
+            descriptor_digest: MusubiContentDigestV1::new([7; 32]),
+            file_count: 1,
+            chunk_count: u32::try_from(plan.chunks.len()).expect("fixture chunk count"),
+        };
+        (commitment, plan)
+    }
+
     #[test]
     fn transport_error_codes_are_closed_and_redacted() {
         let invalid = ArchiveTransportErrorV1::retryable("token=secret");
@@ -870,6 +1091,114 @@ mod tests {
         assert!(retryable.is_some());
         assert!(integrity.is_some());
         assert!(permanent.is_some());
+    }
+
+    #[test]
+    fn transport_plan_is_revalidated_before_cache_or_maintenance_use() {
+        let (commitment, plan) = transport_plan_fixture();
+        validate_transport_plan(&commitment, &plan).expect("exact provider plan");
+
+        let mut substituted = plan.clone();
+        substituted.chunks[0].digest[0] ^= 0xff;
+        let error = validate_transport_plan(&commitment, &substituted)
+            .expect_err("substituted chunk plan must fail");
+        assert_eq!(error.class(), ArchiveFetchFailureClassV1::Integrity);
+        assert_eq!(
+            error.integrity_surface(),
+            Some(ArchiveFetchIntegritySurfaceV1::ArchiveCommitment)
+        );
+
+        let mut hinted = plan.clone();
+        hinted.chunks[0].taikai_segment_hint = Some(sorafs_car::TaikaiSegmentHint {
+            event: "event".to_owned(),
+            stream: "stream".to_owned(),
+            rendition: "rendition".to_owned(),
+            sequence: 0,
+            payload_len: None,
+            payload_digest: None,
+        });
+        assert!(
+            validate_transport_plan(&commitment, &hinted).is_err(),
+            "Musubi V1 provider plans must reject uncommitted Taikai hints"
+        );
+
+        let mut wrong_root = commitment.clone();
+        wrong_root.root_cid = ManifestRootCid::from_blake3_digest([0xaa; 32]).expect("other CID");
+        assert!(validate_transport_plan(&wrong_root, &plan).is_err());
+
+        let mut substituted_files = plan;
+        let source = substituted_files
+            .files
+            .iter_mut()
+            .find(|file| file.path.join("/") == "src/lib.ko")
+            .expect("source plan entry");
+        source.path = vec!["src".to_owned(), "other.ko".to_owned()];
+        substituted_files
+            .validate()
+            .expect("substituted file geometry remains structurally valid");
+        assert!(validate_transport_plan(&commitment, &substituted_files).is_err());
+    }
+
+    #[test]
+    fn candidate_order_prefers_distinct_providers_within_each_health_rank() {
+        let candidate = |rank, location: u8, provider| ArchiveCandidateV1 {
+            rank,
+            location_id: MusubiArchiveLocationIdV1::new([location; 32]),
+            pin_manifest: ManifestDigest::new([location.saturating_add(20); 32]),
+            provider: ProviderId::new([provider; 32]),
+        };
+        let candidates = vec![
+            candidate(1, 2, 3),
+            candidate(0, 3, 2),
+            candidate(0, 2, 1),
+            candidate(1, 1, 1),
+            candidate(0, 1, 1),
+        ];
+        let candidates = prioritize_distinct_providers(candidates);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.provider)
+                .collect::<Vec<_>>(),
+            vec![
+                ProviderId::new([1; 32]),
+                ProviderId::new([2; 32]),
+                ProviderId::new([1; 32]),
+                ProviderId::new([3; 32]),
+                ProviderId::new([1; 32]),
+            ]
+        );
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.rank)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 0, 1, 1]
+        );
+    }
+
+    #[test]
+    fn provider_completion_anchor_must_precede_location_and_match_snapshot_fork() {
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 100,
+            finalized_block_hash: [9; 32],
+            index_revision: 1,
+        };
+        let mut anchor = ProviderIngestFinalizedAnchorV1 {
+            height: 99,
+            block_hash: [8; 32],
+        };
+        assert!(finalized_anchor_is_compatible(&anchor, 100, &snapshot));
+        anchor.height = 100;
+        anchor.block_hash = snapshot.finalized_block_hash;
+        assert!(finalized_anchor_is_compatible(&anchor, 100, &snapshot));
+        anchor.block_hash = [7; 32];
+        assert!(!finalized_anchor_is_compatible(&anchor, 100, &snapshot));
+        anchor.height = 101;
+        assert!(!finalized_anchor_is_compatible(&anchor, 101, &snapshot));
+        anchor.height = 100;
+        anchor.block_hash = snapshot.finalized_block_hash;
+        assert!(!finalized_anchor_is_compatible(&anchor, 99, &snapshot));
     }
 
     #[test]

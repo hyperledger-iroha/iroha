@@ -143,7 +143,7 @@ class Fixture:
             ),
             "source_commit": SOURCE.commit,
             "source_tree_sha256": SOURCE.tree_sha256,
-            "source_repo_dirty": True,
+            "source_repo_dirty": False,
             "generation": "candidate.test.v4",
             "generation_memory_limit_bytes": 6 * 1024 * 1024 * 1024,
             "generation_memory_enforcement_profile": (
@@ -358,6 +358,48 @@ class CandidateStagerTests(unittest.TestCase):
         artifact["framed_size_bytes"] = maximum + 1
         with self.assertRaisesRegex(stage.StageError, "exceed the V4 corridor"):
             stage.parse_validation_report(self.report_bytes())
+
+    def test_source_identity_consumes_only_a_clean_signed_descriptor(self) -> None:
+        descriptor = {
+            "schema": "iroha.reviewed-source-closure.v1",
+            "base_commit": SOURCE.commit,
+            "source_commit": SOURCE.commit,
+            "source_repo_dirty": False,
+            "source_tree_sha256": SOURCE.tree_sha256,
+            "tracked_binary_diff_sha256": stage.EMPTY_SHA256,
+            "untracked_file_count": 0,
+            "untracked_path_mode_blob_oid_manifest": [],
+            "untracked_path_mode_blob_oid_manifest_sha256": stage.EMPTY_SHA256,
+            "ignored_cargo_lock_size_bytes": 1,
+            "ignored_cargo_lock_sha256": "3" * 64,
+            "combined_source_fingerprint_sha256": "4" * 64,
+        }
+        clean = stage.subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=stage._canonical_json(descriptor),
+            stderr=b"",
+        )
+        dirty_descriptor = dict(descriptor)
+        dirty_descriptor["source_repo_dirty"] = True
+        dirty = stage.subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=stage._canonical_json(dirty_descriptor),
+            stderr=b"",
+        )
+        with (
+            mock.patch.object(stage, "_safe_system_environment", return_value={}),
+            mock.patch.object(
+                stage.subprocess,
+                "run",
+                side_effect=[clean, dirty],
+            ) as runner,
+        ):
+            self.assertEqual(stage._source_identity(), SOURCE)
+            self.assertIn("descriptor", runner.call_args_list[0].args[0])
+            with self.assertRaisesRegex(stage.StageError, "not clean"):
+                stage._source_identity()
 
     def test_source_identity_race_is_rejected(self) -> None:
         changed = stage.SourceIdentity(commit="5" * 40, tree_sha256="6" * 64)

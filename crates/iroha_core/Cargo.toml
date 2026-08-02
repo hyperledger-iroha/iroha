@@ -46,6 +46,10 @@ workspace = true
 # named proof aggregate rather than workspace-wide inheritance.
 default = ["node"]
 dev-tools = []
+# Non-shipping, feature-isolated process-cut hooks used by the dedicated
+# `iroha_test_network` daemon. The default/node feature graph never enables
+# these hooks.
+test-network-native-amx-fault-injection = ["json"]
 runtime = ["json", "bls", "fast_dsl", "proofs-halo2"]
 node = ["runtime", "proofs-stark"]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]

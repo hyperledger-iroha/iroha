@@ -1657,6 +1657,17 @@ impl V2ApplyService {
                 return Err(V2ApplyError::InjectedCrashAfterReputationArchiveCapture);
             }
         }
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        if let Some(execution_context) = committed_block.execution_context() {
+            for external in &execution_context.external {
+                if let Some(receipt) = &external.native_amx_receipt {
+                    crate::native_amx_fault_injection::maybe_abort(
+                        crate::native_amx_fault_injection::NativeAmxFaultPhase::BeforeWorldCommit,
+                        receipt.source_id,
+                    );
+                }
+            }
+        }
         state_block.commit().map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;

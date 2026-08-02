@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     convert::{Infallible, TryInto},
     fs,
-    io::{self, Read, Write},
+    io::{self, Cursor},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     path::{Component, Path as StdPath, PathBuf},
@@ -148,11 +148,10 @@ use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, NoritoDeserialize, NoritoSerialize};
 use norito::json::{self, Map, Number, Value};
-#[cfg(test)]
 use sorafs_car::verifier::CarVerifier;
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarStreamingWriter, ChunkFetchSpec, FileEntry, FilePlan,
-    compute_chunk_plan_digest_sha3,
+    CarBuildPlan, CarChunk, CarStreamingWriter, ChunkFetchSpec, ChunkStoreError, FileEntry,
+    FilePlan, compute_chunk_plan_digest_sha3,
     por_json::sample_to_map,
     proof_stream::{ProofStreamItem, ProofStreamSequenceVerifier, ProofStreamVerificationContext},
     verifier::CarVerifyError,
@@ -207,9 +206,7 @@ use sorafs_node::{
     ModerationScreeningAuthenticationError, ModerationScreeningError, ModerationScreeningRecord,
     ModerationScreeningSnapshot, NodeStorageError, PrivacyAggregateScheduleOutcome,
     PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
-    store::{
-        ChunkFileRecord, StorageError as StorageBackendError, StoredFileRecord, StoredManifest,
-    },
+    store::{StorageError as StorageBackendError, StoredFileRecord, StoredManifest},
 };
 
 #[cfg(test)]
@@ -227,8 +224,7 @@ use sorafs_orchestrator::appeals::{
     AppealSettlementConfig, AppealUrgency, AppealVerdict, parse_appeal_quantity_literal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::sync::{Mutex as AsyncMutex, RwLock, broadcast, mpsc};
-use tokio_stream::wrappers::ReceiverStream;
+use tokio::sync::{Mutex as AsyncMutex, RwLock, broadcast};
 use url::Host as UrlHost;
 use urlencoding::decode;
 
@@ -402,6 +398,9 @@ const RANGE_CAPABILITY_FEATURE_MERKLE: &str = "supports_merkle_proof";
 const RANGE_CAPABILITY_FEATURE_STREAM_BUDGET: &str = "stream_budget";
 const RANGE_CAPABILITY_FEATURE_TRANSPORT_HINTS: &str = "transport_hints";
 const GOVERNANCE_DAG_MIRROR_INDEX_FILE: &str = "mirror-index.json";
+const GOVERNANCE_DAG_PUBLICATION_STATE_FILE: &str = "governance-publication-state-v1.json";
+const GOVERNANCE_DAG_PUBLICATION_STATE_SCHEMA: &str =
+    "sorafs.governance_dag.local_publication_state.v1";
 const GOVERNANCE_DAG_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_DAG_CAR_QUEUE_FILE: &str = "car-queue.json";
 const GOVERNANCE_DAG_RUNTIME_INDEX_FILE: &str = "runtime-dag-index.json";
@@ -410,6 +409,15 @@ const GOVERNANCE_DAG_LOGICAL_ROOT: &str = ".";
 const GOVERNANCE_DAG_RUNTIME_HEAD_FILE: &str = "runtime-dag/head.to";
 const GOVERNANCE_DAG_RUNTIME_BLOCKS_DIR: &str = "runtime-dag/blocks";
 const GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const GOVERNANCE_DAG_PUBLICATION_STATE_MAX_BYTES: u64 = 160 * 1024 * 1024;
+// A governance CAR contains at most two 64 MiB sources, two 65-byte sidecars,
+// and the canonical CARv2 DAG/index overhead. Keep archive reads endpoint-local
+// and fixed instead of deriving an allocation limit from retained metadata.
+const GOVERNANCE_DAG_CAR_ARCHIVE_MAX_BYTES: u64 = 160 * 1024 * 1024;
+const GOVERNANCE_DAG_DIGEST_SIDECAR_BYTES: u64 = 65;
+const GOVERNANCE_DAG_CAR_SOURCE_TOTAL_MAX_BYTES: u64 =
+    128 * 1024 * 1024 + 2 * GOVERNANCE_DAG_DIGEST_SIDECAR_BYTES;
+const GOVERNANCE_DAG_CAR_CHUNK_HARD_CAP: usize = 4_096;
 const GOVERNANCE_DAG_RUNTIME_ENTRY_HARD_CAP: usize = 131_072;
 const GOVERNANCE_DAG_RUNTIME_TOTAL_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
 const GOVERNANCE_DAG_DECODE_MAX_TOTAL_ELEMENTS: usize = 4_000_000;
@@ -2466,6 +2474,14 @@ const MAX_REMOTE_SITE_FILES: usize = 4_096;
 const MAX_REMOTE_HYDRATION_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
 /// Maximum bytes returned by one site response without explicit streaming support.
 const MAX_SITE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+/// Maximum canonical local manifest bytes relayed by a metadata response.
+const MAX_LOCAL_MANIFEST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum raw payload bytes returned by one JSON storage-fetch response.
+const MAX_STORAGE_FETCH_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+/// Maximum source payload bytes admitted to one canonical CAR range response.
+const MAX_CAR_RANGE_PAYLOAD_BYTES: u64 = 8 * 1024 * 1024;
+/// Maximum encoded canonical CAR bytes returned by one range response.
+const MAX_CAR_RANGE_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 /// DNS resolution deadline used before constructing a pinned HTTP client.
 const REMOTE_DNS_TIMEOUT: Duration = Duration::from_secs(3);
 /// Full remote hydration request deadline.
@@ -5922,6 +5938,33 @@ where
     }
 }
 
+async fn sorafs_heavy_blocking_task<T, F>(
+    state: &SharedAppState,
+    worker_label: &'static str,
+    operation: F,
+) -> Result<T, Response>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, Response> + Send + 'static,
+{
+    let permit = match crate::acquire_query_admission(state.as_ref(), true).await {
+        Ok(permit) => permit,
+        Err(error) => return Err(error.into_response()),
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        iroha_core::panic_hook::with_hook_suppressed(operation)
+    })
+    .await
+    .map_err(|error| {
+        error!(?error, worker_label, "SoraFS blocking worker failed");
+        json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("{worker_label} worker is unavailable"),
+        )
+    })?
+}
+
 fn governance_car_queue_response(state: &SharedAppState, headers: HeaderMap) -> Response {
     let (queue, source_path, encoded_len, blake3_hex, etag) =
         match load_governance_dag_car_queue(state) {
@@ -6337,45 +6380,148 @@ fn load_governance_dag_mirror_index(
     ))
 }
 
-fn load_governance_dag_publish_index(
+struct LoadedGovernancePublicationState {
+    publish_index: Value,
+    car_queue: Value,
+    encoded_len: u64,
+    blake3_hex: String,
+    etag: String,
+}
+
+fn reject_legacy_governance_publication_authorities(
     state: &SharedAppState,
-) -> Result<(Value, String, u64, String, String), Response> {
+) -> Result<(), Response> {
+    for file in [
+        GOVERNANCE_DAG_PUBLISH_INDEX_FILE,
+        GOVERNANCE_DAG_CAR_QUEUE_FILE,
+    ] {
+        match state
+            .sorafs_node
+            .read_governance_dag_file(StdPath::new(file), 1)
+        {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) | Err(_) => {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!(
+                        "legacy governance publication authority `{file}` is unsupported by the first-release schema"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn load_governance_publication_state(
+    state: &SharedAppState,
+) -> Result<LoadedGovernancePublicationState, Response> {
+    reject_legacy_governance_publication_authorities(state)?;
     let path = governance_dag_index_file_path(
         state,
-        GOVERNANCE_DAG_PUBLISH_INDEX_FILE,
-        "sorafs governance DAG publish index directory is not configured",
+        GOVERNANCE_DAG_PUBLICATION_STATE_FILE,
+        "sorafs governance publication-state directory is not configured",
     )?;
     let bytes = read_bounded_governance_dag_file(
         state,
         &path,
-        GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
-        "governance DAG publish index",
+        GOVERNANCE_DAG_PUBLICATION_STATE_MAX_BYTES,
+        "governance publication state",
     )?;
     let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
-    let index: Value = json::from_slice(&bytes).map_err(|err| {
-        warn!(error = %err, path = %path.display(), "failed to decode governance DAG publish index");
+    let publication_state: Value = json::from_slice(&bytes).map_err(|err| {
+        warn!(error = %err, path = %path.display(), "failed to decode governance publication state");
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to decode governance DAG publish index",
+            "failed to decode governance publication state",
         )
     })?;
-    if index.get("schema").and_then(Value::as_str)
-        != Some("sorafs.governance_dag.local_publish_index.v1")
+    let root = publication_state.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance publication state root is not an object",
+        )
+    })?;
+    const PUBLICATION_STATE_FIELDS: [&str; 7] = [
+        "schema",
+        "source",
+        "root",
+        "generation",
+        "generated_at",
+        "publish_index",
+        "car_queue",
+    ];
+    require_exact_map_fields(
+        root,
+        &PUBLICATION_STATE_FIELDS,
+        "governance publication state",
+    )?;
+    if publication_state.get("schema").and_then(Value::as_str)
+        != Some(GOVERNANCE_DAG_PUBLICATION_STATE_SCHEMA)
+        || publication_state.get("source").and_then(Value::as_str) != Some("filesystem")
+        || publication_state.get("root").and_then(Value::as_str)
+            != Some(GOVERNANCE_DAG_LOGICAL_ROOT)
     {
         return Err(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG publish index uses an unsupported schema",
+            "governance publication state uses an unsupported identity",
         ));
     }
-    validate_governance_dag_publish_index(&index)?;
+    required_value_u64(&publication_state, "generation", "governance publication state")?;
+    required_value_u64(
+        &publication_state,
+        "generated_at",
+        "governance publication state",
+    )?;
+    let publish_index = publication_state
+        .get("publish_index")
+        .cloned()
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance publication state is missing its publish index",
+            )
+        })?;
+    let car_queue = publication_state.get("car_queue").cloned().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance publication state is missing its CAR queue",
+        )
+    })?;
+    if publish_index.get("schema").and_then(Value::as_str)
+        != Some("sorafs.governance_dag.local_publish_index.v1")
+        || car_queue.get("schema").and_then(Value::as_str)
+            != Some("sorafs.governance_dag.local_car_queue.v1")
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance publication state contains an unsupported nested schema",
+        ));
+    }
+    validate_governance_dag_publish_index(&publish_index)?;
+    validate_governance_dag_car_queue(&car_queue)?;
+    validate_governance_publication_cross_sections(&publish_index, &car_queue)?;
     let etag = format!("\"{blake3_hex}\"");
-    Ok((
-        index,
-        GOVERNANCE_DAG_PUBLISH_INDEX_FILE.to_owned(),
+    Ok(LoadedGovernancePublicationState {
+        publish_index,
+        car_queue,
         encoded_len,
         blake3_hex,
         etag,
+    })
+}
+
+fn load_governance_dag_publish_index(
+    state: &SharedAppState,
+) -> Result<(Value, String, u64, String, String), Response> {
+    let loaded = load_governance_publication_state(state)?;
+    Ok((
+        loaded.publish_index,
+        GOVERNANCE_DAG_PUBLICATION_STATE_FILE.to_owned(),
+        loaded.encoded_len,
+        loaded.blake3_hex,
+        loaded.etag,
     ))
 }
 
@@ -6450,13 +6596,15 @@ fn validate_governance_dag_publish_index(index: &Value) -> Result<(), Response> 
                 format!("{entry_context} is not an object"),
             )
         })?;
-        const ENTRY_FIELDS: [&str; 8] = [
+        const ENTRY_FIELDS: [&str; 10] = [
             "position",
             "payload_kind",
             "encoded_path",
             "json_path",
             "encoded_blake3",
             "encoded_len",
+            "json_blake3",
+            "json_len",
             "published_at_unix",
             "labels",
         ];
@@ -6548,10 +6696,25 @@ fn validate_governance_dag_publish_index(index: &Value) -> Result<(), Response> 
             ));
         }
         append_governance_lookup_position(&mut by_encoded_blake3, encoded_blake3, position_u64);
-        if required_map_u64(entry, "encoded_len", &entry_context)? > maximum_payload_bytes {
+        let encoded_len = required_map_u64(entry, "encoded_len", &entry_context)?;
+        if encoded_len == 0 || encoded_len > maximum_payload_bytes {
             return Err(json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{entry_context} encoded length exceeds the V1 payload limit"),
+                format!("{entry_context} encoded length is outside the V1 payload limit"),
+            ));
+        }
+        let json_blake3 = required_map_string(entry, "json_blake3", &entry_context)?;
+        if json_blake3.len() != 64 || !is_canonical_lower_hex(&json_blake3, 64) {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{entry_context} JSON digest is noncanonical"),
+            ));
+        }
+        let json_len = required_map_u64(entry, "json_len", &entry_context)?;
+        if json_len == 0 || json_len > GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{entry_context} JSON length exceeds the V1 CAR source limit"),
             ));
         }
         required_map_u64(entry, "published_at_unix", &entry_context)?;
@@ -6604,47 +6767,38 @@ fn validate_governance_dag_publish_index(index: &Value) -> Result<(), Response> 
 fn load_governance_dag_car_queue(
     state: &SharedAppState,
 ) -> Result<(Value, String, u64, String, String), Response> {
-    let path = governance_dag_index_file_path(
-        state,
-        GOVERNANCE_DAG_CAR_QUEUE_FILE,
-        "sorafs governance DAG CAR queue directory is not configured",
-    )?;
-    let bytes = read_bounded_governance_dag_file(
-        state,
-        &path,
-        GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
-        "governance DAG CAR queue",
-    )?;
-    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
-    let queue: Value = json::from_slice(&bytes).map_err(|err| {
-        warn!(error = %err, path = %path.display(), "failed to decode governance DAG CAR queue");
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to decode governance DAG CAR queue",
-        )
-    })?;
-    if queue.get("schema").and_then(Value::as_str)
-        != Some("sorafs.governance_dag.local_car_queue.v1")
-    {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG CAR queue uses an unsupported schema",
-        ));
-    }
-    validate_governance_dag_car_queue(&queue)?;
-    let etag = format!("\"{blake3_hex}\"");
+    let loaded = load_governance_publication_state(state)?;
     Ok((
-        queue,
-        GOVERNANCE_DAG_CAR_QUEUE_FILE.to_owned(),
-        encoded_len,
-        blake3_hex,
-        etag,
+        loaded.car_queue,
+        GOVERNANCE_DAG_PUBLICATION_STATE_FILE.to_owned(),
+        loaded.encoded_len,
+        loaded.blake3_hex,
+        loaded.etag,
     ))
 }
 
 fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
     let context = "governance DAG CAR queue";
+    let queue_object = queue.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} root is not an object"),
+        )
+    })?;
+    const QUEUE_FIELDS: [&str; 11] = [
+        "schema",
+        "source",
+        "root",
+        "generated_at",
+        "segment_count",
+        "assembled_count",
+        "pending_count",
+        "by_encoded_blake3",
+        "by_payload_kind",
+        "by_car_archive_blake3",
+        "segments",
+    ];
+    require_exact_map_fields(queue_object, &QUEUE_FIELDS, context)?;
     if queue.get("source").and_then(Value::as_str) != Some("filesystem") {
         return Err(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -6690,6 +6844,40 @@ fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
                 format!("{segment_context} is not an object"),
             )
         })?;
+        let status = required_map_string(segment, "status", &segment_context)?;
+        const ASSEMBLED_SEGMENT_FIELDS: [&str; 24] = [
+            "schema",
+            "queue_position",
+            "status",
+            "source",
+            "source_publish_index_position",
+            "payload_kind",
+            "encoded_path",
+            "json_path",
+            "encoded_blake3",
+            "encoded_len",
+            "car_path",
+            "plan_path",
+            "manifest_path",
+            "car_size",
+            "car_archive_blake3",
+            "car_payload_blake3",
+            "car_cid_hex",
+            "root_cids_hex",
+            "dag_codec",
+            "chunk_count",
+            "payload_bytes",
+            "assembled_at_unix",
+            "files",
+            "chunk_profile",
+        ];
+        if status != "assembled" {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{segment_context} uses a non-producible V1 status"),
+            ));
+        }
+        require_exact_map_fields(segment, &ASSEMBLED_SEGMENT_FIELDS, &segment_context)?;
         if segment.get("schema").and_then(Value::as_str)
             != Some("sorafs.governance_dag.local_car_segment.v1")
             || segment.get("source").and_then(Value::as_str) != Some("filesystem")
@@ -6711,6 +6899,7 @@ fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
                 format!("{segment_context} position is noncanonical"),
             ));
         }
+        required_map_u64(segment, "source_publish_index_position", &segment_context)?;
         let payload_kind = required_map_string(segment, "payload_kind", &segment_context)?;
         if payload_kind.is_empty()
             || payload_kind.len() > 128
@@ -6735,55 +6924,49 @@ fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
         for (field, suffix) in [("encoded_path", ".to"), ("json_path", ".json")] {
             validate_governance_dag_indexed_path(segment, field, suffix, &segment_context)?;
         }
-        if required_map_u64(segment, "encoded_len", &segment_context)? > maximum_payload_bytes {
+        let encoded_len = required_map_u64(segment, "encoded_len", &segment_context)?;
+        if encoded_len == 0 || encoded_len > maximum_payload_bytes {
             return Err(json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{segment_context} encoded length exceeds the V1 payload limit"),
+                format!("{segment_context} encoded length is outside the V1 payload limit"),
             ));
         }
 
-        let status = required_map_string(segment, "status", &segment_context)?;
-        if status == "assembled" {
-            for (field, suffix) in [
-                ("car_path", ".car"),
-                ("plan_path", ".plan.json"),
-                ("manifest_path", ".json"),
-            ] {
-                validate_governance_dag_indexed_path(segment, field, suffix, &segment_context)?;
-            }
-            let car_archive_blake3 =
-                required_map_string(segment, "car_archive_blake3", &segment_context)?;
-            if car_archive_blake3.len() != 64 || !is_canonical_lower_hex(&car_archive_blake3, 64) {
-                return Err(json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("{segment_context} CAR archive digest is noncanonical"),
-                ));
-            }
-            let car_payload_blake3 =
-                required_map_string(segment, "car_payload_blake3", &segment_context)?;
-            if !is_canonical_lower_hex(&car_payload_blake3, 64) {
-                return Err(json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("{segment_context} CAR payload digest is noncanonical"),
-                ));
-            }
-            append_governance_lookup_position(
-                &mut by_car_archive_blake3,
-                car_archive_blake3,
-                position_u64,
-            );
-            assembled_count = assembled_count.checked_add(1).ok_or_else(|| {
-                json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("{context} assembled counter overflowed"),
-                )
-            })?;
-        } else if status != "pending" {
+        for (field, suffix) in [
+            ("car_path", ".car"),
+            ("plan_path", ".plan.json"),
+            ("manifest_path", ".json"),
+        ] {
+            validate_governance_dag_indexed_path(segment, field, suffix, &segment_context)?;
+        }
+        let car_archive_blake3 =
+            required_map_string(segment, "car_archive_blake3", &segment_context)?;
+        if car_archive_blake3.len() != 64 || !is_canonical_lower_hex(&car_archive_blake3, 64) {
             return Err(json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{segment_context} status is outside the V1 vocabulary"),
+                format!("{segment_context} CAR archive digest is noncanonical"),
             ));
         }
+        let car_payload_blake3 =
+            required_map_string(segment, "car_payload_blake3", &segment_context)?;
+        if car_payload_blake3.len() != 64 || !is_canonical_lower_hex(&car_payload_blake3, 64) {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{segment_context} CAR payload digest is noncanonical"),
+            ));
+        }
+        validate_governance_dag_car_assembled_details(segment, &segment_context)?;
+        append_governance_lookup_position(
+            &mut by_car_archive_blake3,
+            car_archive_blake3,
+            position_u64,
+        );
+        assembled_count = assembled_count.checked_add(1).ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} assembled counter overflowed"),
+            )
+        })?;
     }
 
     let segment_count = u64::try_from(segments.len()).map_err(|_| {
@@ -6792,12 +6975,7 @@ fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
             format!("{context} segment count exceeds u64"),
         )
     })?;
-    let pending_count = segment_count.checked_sub(assembled_count).ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{context} pending counter underflowed"),
-        )
-    })?;
+    let pending_count = 0_u64;
     if required_value_u64(queue, "segment_count", context)? != segment_count
         || required_value_u64(queue, "assembled_count", context)? != assembled_count
         || required_value_u64(queue, "pending_count", context)? != pending_count
@@ -6819,6 +6997,920 @@ fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
                 format!("{context} `{name}` index is missing, stale, or substituted"),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_governance_publication_cross_sections(
+    publish_index: &Value,
+    car_queue: &Value,
+) -> Result<(), Response> {
+    let context = "governance publication state";
+    let entries = publish_index
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} publish entries are missing"),
+            )
+        })?;
+    let segments = car_queue
+        .get("segments")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} CAR segments are missing"),
+            )
+        })?;
+    if entries.len() != segments.len() {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} publish index and CAR queue are not one-to-one"),
+        ));
+    }
+    for (position, (entry_value, segment_value)) in entries.iter().zip(segments).enumerate() {
+        let entry = entry_value.as_object().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} publish entry {position} is invalid"),
+            )
+        })?;
+        let segment = segment_value.as_object().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} CAR segment {position} is invalid"),
+            )
+        })?;
+        let position_u64 = u64::try_from(position).map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} position exceeds u64"),
+            )
+        })?;
+        if required_map_u64(segment, "source_publish_index_position", context)? != position_u64
+            || required_map_string(segment, "payload_kind", context)?
+                != required_map_string(entry, "payload_kind", context)?
+            || required_map_string(segment, "encoded_path", context)?
+                != required_map_string(entry, "encoded_path", context)?
+            || required_map_string(segment, "json_path", context)?
+                != required_map_string(entry, "json_path", context)?
+            || required_map_string(segment, "encoded_blake3", context)?
+                != required_map_string(entry, "encoded_blake3", context)?
+            || required_map_u64(segment, "encoded_len", context)?
+                != required_map_u64(entry, "encoded_len", context)?
+        {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} CAR segment {position} is not bound to its publish entry"),
+            ));
+        }
+        let files = segment
+            .get("files")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{context} CAR segment {position} source files are missing"),
+                )
+            })?;
+        for (role, path_field, length_field, digest_field) in [
+            (
+                "encoded",
+                "encoded_path",
+                "encoded_len",
+                "encoded_blake3",
+            ),
+            ("json", "json_path", "json_len", "json_blake3"),
+        ] {
+            let file = files
+                .iter()
+                .filter_map(Value::as_object)
+                .find(|file| file.get("role").and_then(Value::as_str) == Some(role))
+                .ok_or_else(|| {
+                    json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("{context} CAR segment {position} is missing `{role}`"),
+                    )
+                })?;
+            if required_map_string(file, "path", context)?
+                != required_map_string(entry, path_field, context)?
+                || required_map_u64(file, "bytes", context)?
+                    != required_map_u64(entry, length_field, context)?
+                || required_map_string(file, "blake3", context)?
+                    != required_map_string(entry, digest_field, context)?
+            {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!(
+                        "{context} CAR segment {position} `{role}` identity is substituted"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_governance_dag_car_assembled_details(
+    segment: &Map,
+    context: &str,
+) -> Result<(), Response> {
+    let car_size = required_map_u64(segment, "car_size", context)?;
+    if car_size == 0 || car_size > GOVERNANCE_DAG_CAR_ARCHIVE_MAX_BYTES {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} CAR size is outside the endpoint bound"),
+        ));
+    }
+    if required_map_u64(segment, "dag_codec", context)? != 0x71 {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} DAG codec is not canonical DAG-CBOR"),
+        ));
+    }
+    if required_map_u64(segment, "chunk_count", context)? == 0
+        || required_map_u64(segment, "payload_bytes", context)? == 0
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} CAR chunk/payload counts must be non-zero"),
+        ));
+    }
+    required_map_u64(segment, "assembled_at_unix", context)?;
+    let car_cid = required_map_string(segment, "car_cid_hex", context)?;
+    validate_governance_car_blake3_cid(&car_cid, 0x55, context, "CAR CID")?;
+    let root_cids = segment
+        .get("root_cids_hex")
+        .and_then(Value::as_array)
+        .filter(|cids| !cids.is_empty() && cids.len() <= 64)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} `root_cids_hex` is not a bounded non-empty array"),
+            )
+        })?;
+    for cid in root_cids {
+        let cid = cid.as_str().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} `root_cids_hex` contains a non-string CID"),
+            )
+        })?;
+        validate_governance_car_blake3_cid(cid, 0x71, context, "root CID")?;
+    }
+
+    let encoded_path = required_map_string(segment, "encoded_path", context)?;
+    let json_path = required_map_string(segment, "json_path", context)?;
+    let encoded_len = required_map_u64(segment, "encoded_len", context)?;
+    let encoded_blake3 = required_map_string(segment, "encoded_blake3", context)?;
+    let files = segment
+        .get("files")
+        .and_then(Value::as_array)
+        .filter(|files| files.len() == 4)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} must describe the four canonical CAR source files"),
+            )
+        })?;
+    let mut roles = BTreeSet::new();
+    let mut described_payload_bytes = 0_u64;
+    for (position, value) in files.iter().enumerate() {
+        let file_context = format!("{context} file {position}");
+        let file = value.as_object().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{file_context} is not an object"),
+            )
+        })?;
+        const FILE_FIELDS: [&str; 4] = ["role", "path", "bytes", "blake3"];
+        require_exact_map_fields(file, &FILE_FIELDS, &file_context)?;
+        let role = required_map_string(file, "role", &file_context)?;
+        let expected_path = match role.as_str() {
+            "encoded" => encoded_path.clone(),
+            "encoded_blake3_sidecar" => format!("{encoded_path}.blake3"),
+            "json" => json_path.clone(),
+            "json_blake3_sidecar" => format!("{json_path}.blake3"),
+            _ => {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{file_context} role is outside the V1 vocabulary"),
+                ));
+            }
+        };
+        if !roles.insert(role.clone()) {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} contains a duplicate CAR source-file role"),
+            ));
+        }
+        let path = required_map_string(file, "path", &file_context)?;
+        validate_governance_dag_relative_path(&path, "CAR source file").map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{file_context} has a noncanonical path"),
+            )
+        })?;
+        if path != expected_path {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{file_context} path is not bound to the segment source"),
+            ));
+        }
+        let bytes = required_map_u64(file, "bytes", &file_context)?;
+        described_payload_bytes = described_payload_bytes.checked_add(bytes).ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} CAR source byte count overflowed"),
+            )
+        })?;
+        let digest = required_map_string(file, "blake3", &file_context)?;
+        if digest.len() != 64 || !is_canonical_lower_hex(&digest, 64) {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{file_context} digest is noncanonical"),
+            ));
+        }
+        match role.as_str() {
+            "encoded" if bytes != encoded_len || digest != encoded_blake3 => {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{file_context} does not bind the indexed encoded source"),
+                ));
+            }
+            "encoded_blake3_sidecar" | "json_blake3_sidecar" if bytes != 65 => {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{file_context} digest sidecar length is noncanonical"),
+                ));
+            }
+            "json" if bytes == 0 || bytes > GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES => {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{file_context} JSON source length is noncanonical"),
+                ));
+            }
+            _ => {}
+        }
+    }
+    if described_payload_bytes > GOVERNANCE_DAG_CAR_SOURCE_TOTAL_MAX_BYTES
+        || required_map_u64(segment, "payload_bytes", context)? != described_payload_bytes
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "{context} payload byte count exceeds or does not match its bounded source files"
+            ),
+        ));
+    }
+
+    let profile = segment
+        .get("chunk_profile")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} chunk profile is not an object"),
+            )
+        })?;
+    const PROFILE_FIELDS: [&str; 4] = ["min_size", "target_size", "max_size", "break_mask"];
+    require_exact_map_fields(
+        profile,
+        &PROFILE_FIELDS,
+        &format!("{context} chunk profile"),
+    )?;
+    let canonical_profile = ChunkProfile::DEFAULT;
+    let min_size = required_map_u64(profile, "min_size", context)?;
+    let target_size = required_map_u64(profile, "target_size", context)?;
+    let max_size = required_map_u64(profile, "max_size", context)?;
+    let break_mask = required_map_u64(profile, "break_mask", context)?;
+    if min_size != canonical_profile.min_size as u64
+        || target_size != canonical_profile.target_size as u64
+        || max_size != canonical_profile.max_size as u64
+        || break_mask != canonical_profile.break_mask
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} chunk profile is not the canonical V1 profile"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_governance_car_blake3_cid(
+    cid_hex: &str,
+    codec: u8,
+    context: &str,
+    field: &str,
+) -> Result<(), Response> {
+    let cid = parse_canonical_hex_fixed::<36>(cid_hex, field).map_err(|_| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} {field} is noncanonical"),
+        )
+    })?;
+    if cid[..4] != [0x01, codec, 0x1f, 0x20] {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} {field} uses a noncanonical codec or multihash"),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct GovernanceCarSourceBinding {
+    role: String,
+    path: String,
+    path_components: Vec<String>,
+    bytes: u64,
+    digest: [u8; 32],
+}
+
+fn governance_car_source_bindings(
+    segment: &Map,
+    context: &str,
+) -> Result<Vec<GovernanceCarSourceBinding>, Response> {
+    let files = segment
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} is missing its CAR source files"),
+            )
+        })?;
+    let mut bindings = Vec::with_capacity(files.len());
+    for (position, value) in files.iter().enumerate() {
+        let file_context = format!("{context} file {position}");
+        let file = value.as_object().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{file_context} is not an object"),
+            )
+        })?;
+        let role = required_map_string(file, "role", &file_context)?;
+        let path = required_map_string(file, "path", &file_context)?;
+        let relative = validate_governance_dag_relative_path(&path, "CAR source file")?;
+        let mut path_components = Vec::new();
+        for component in relative.iter() {
+            let component = component.to_str().ok_or_else(|| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{file_context} path is not UTF-8"),
+                )
+            })?;
+            path_components.push(component.to_owned());
+        }
+        let digest_hex = required_map_string(file, "blake3", &file_context)?;
+        let digest =
+            parse_canonical_hex_fixed::<32>(&digest_hex, "CAR source digest").map_err(|_| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{file_context} digest is noncanonical"),
+                )
+            })?;
+        bindings.push(GovernanceCarSourceBinding {
+            role,
+            path,
+            path_components,
+            bytes: required_map_u64(file, "bytes", &file_context)?,
+            digest,
+        });
+    }
+    bindings.sort_by(|left, right| left.path_components.cmp(&right.path_components));
+    Ok(bindings)
+}
+
+fn read_bounded_governance_car_artifact(
+    state: &SharedAppState,
+    raw_path: &str,
+    maximum: u64,
+    label: &str,
+) -> Result<Vec<u8>, Response> {
+    let relative = validate_governance_dag_relative_path(raw_path, label)?;
+    let maximum = usize::try_from(maximum).map_err(|_| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{label} byte limit exceeds host limits"),
+        )
+    })?;
+    state
+        .sorafs_node
+        .read_governance_dag_file(&relative, maximum)
+        .map_err(|err| {
+            warn!(error = %err, path = raw_path, label, "failed to read retained governance CAR artifact");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to read retained {label}"),
+            )
+        })
+}
+
+fn read_verified_governance_car_artifact(
+    state: &SharedAppState,
+    raw_path: &str,
+    maximum: u64,
+    expected_len: Option<u64>,
+    expected_blake3: Option<&str>,
+    label: &str,
+) -> Result<Vec<u8>, Response> {
+    let bytes = read_bounded_governance_car_artifact(state, raw_path, maximum, label)?;
+    let actual_len = u64::try_from(bytes.len()).map_err(|_| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("retained {label} length exceeds u64"),
+        )
+    })?;
+    if expected_len.is_some_and(|expected| expected != actual_len) {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("retained {label} length does not match its queue identity"),
+        ));
+    }
+    let digest_hex = blake3_hash(&bytes).to_hex().to_string();
+    if expected_blake3.is_some_and(|expected| expected != digest_hex) {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("retained {label} digest does not match its queue identity"),
+        ));
+    }
+
+    let sidecar_path = format!("{raw_path}.blake3");
+    let sidecar = read_bounded_governance_car_artifact(
+        state,
+        &sidecar_path,
+        GOVERNANCE_DAG_DIGEST_SIDECAR_BYTES,
+        "governance CAR digest sidecar",
+    )?;
+    let expected_sidecar = format!("{digest_hex}\n");
+    if sidecar != expected_sidecar.as_bytes() {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("retained {label} digest sidecar is inconsistent"),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn retained_governance_car_plan(
+    segment: &Map,
+    plan_value: &Value,
+    bindings: &[GovernanceCarSourceBinding],
+    context: &str,
+) -> Result<CarBuildPlan, Response> {
+    let plan = plan_value.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan is not an object"),
+        )
+    })?;
+    const PLAN_FIELDS: [&str; 12] = [
+        "schema",
+        "source_publish_index_position",
+        "payload_kind",
+        "encoded_blake3",
+        "encoded_len",
+        "content_length",
+        "payload_blake3",
+        "dag_codec",
+        "chunk_count",
+        "files",
+        "chunk_profile",
+        "chunks",
+    ];
+    require_exact_map_fields(plan, &PLAN_FIELDS, "governance CAR retained plan")?;
+    if plan.get("schema").and_then(Value::as_str) != Some("sorafs.governance_dag.local_car_plan.v1")
+        || required_map_u64(plan, "source_publish_index_position", context)?
+            != required_map_u64(segment, "source_publish_index_position", context)?
+        || required_map_string(plan, "payload_kind", context)?
+            != required_map_string(segment, "payload_kind", context)?
+        || required_map_string(plan, "encoded_blake3", context)?
+            != required_map_string(segment, "encoded_blake3", context)?
+        || required_map_u64(plan, "encoded_len", context)?
+            != required_map_u64(segment, "encoded_len", context)?
+        || required_map_u64(plan, "content_length", context)?
+            != required_map_u64(segment, "payload_bytes", context)?
+        || required_map_u64(plan, "dag_codec", context)?
+            != required_map_u64(segment, "dag_codec", context)?
+        || plan.get("files") != segment.get("files")
+        || plan.get("chunk_profile") != segment.get("chunk_profile")
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan is not bound to the queue segment"),
+        ));
+    }
+
+    let chunk_count_u64 = required_map_u64(plan, "chunk_count", context)?;
+    if chunk_count_u64 != required_map_u64(segment, "chunk_count", context)? {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan chunk count is inconsistent"),
+        ));
+    }
+    let chunk_count = usize::try_from(chunk_count_u64).map_err(|_| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan chunk count exceeds host limits"),
+        )
+    })?;
+    if chunk_count == 0 || chunk_count > GOVERNANCE_DAG_CAR_CHUNK_HARD_CAP {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan exceeds the V1 chunk bound"),
+        ));
+    }
+    let chunks_value = plan
+        .get("chunks")
+        .and_then(Value::as_array)
+        .filter(|chunks| chunks.len() == chunk_count)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained plan chunk inventory is inconsistent"),
+            )
+        })?;
+    let mut chunks = Vec::with_capacity(chunk_count);
+    let mut expected_offset = 0_u64;
+    for (index, value) in chunks_value.iter().enumerate() {
+        let chunk_context = format!("{context} retained plan chunk {index}");
+        let chunk = value.as_object().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{chunk_context} is not an object"),
+            )
+        })?;
+        const CHUNK_FIELDS: [&str; 4] = ["index", "offset", "length", "blake3"];
+        require_exact_map_fields(chunk, &CHUNK_FIELDS, &chunk_context)?;
+        if required_map_u64(chunk, "index", &chunk_context)? != index as u64
+            || required_map_u64(chunk, "offset", &chunk_context)? != expected_offset
+        {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{chunk_context} position is noncanonical"),
+            ));
+        }
+        let length_u64 = required_map_u64(chunk, "length", &chunk_context)?;
+        if length_u64 == 0 || length_u64 > ChunkProfile::DEFAULT.max_size as u64 {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{chunk_context} length is outside the V1 profile"),
+            ));
+        }
+        let length = u32::try_from(length_u64).map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{chunk_context} length exceeds u32"),
+            )
+        })?;
+        let digest_hex = required_map_string(chunk, "blake3", &chunk_context)?;
+        let digest = parse_canonical_hex_fixed::<32>(&digest_hex, "CAR plan chunk digest")
+            .map_err(|_| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{chunk_context} digest is noncanonical"),
+                )
+            })?;
+        chunks.push(CarChunk {
+            offset: expected_offset,
+            length,
+            digest,
+            taikai_segment_hint: None,
+        });
+        expected_offset = expected_offset.checked_add(length_u64).ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained plan payload length overflowed"),
+            )
+        })?;
+    }
+    let content_length = required_map_u64(plan, "content_length", context)?;
+    if expected_offset != content_length {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan does not cover its payload"),
+        ));
+    }
+
+    let mut files = Vec::with_capacity(bindings.len());
+    let mut next_chunk = 0_usize;
+    let mut next_offset = 0_u64;
+    for binding in bindings {
+        let end = next_offset.checked_add(binding.bytes).ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained file geometry overflowed"),
+            )
+        })?;
+        let first_chunk = next_chunk;
+        while let Some(chunk) = chunks.get(next_chunk) {
+            if chunk.offset >= end {
+                break;
+            }
+            let chunk_end = chunk
+                .offset
+                .checked_add(u64::from(chunk.length))
+                .ok_or_else(|| {
+                    json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("{context} retained chunk geometry overflowed"),
+                    )
+                })?;
+            if chunk.offset < next_offset || chunk_end > end {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{context} retained chunks cross a source-file boundary"),
+                ));
+            }
+            next_chunk += 1;
+        }
+        if binding.bytes == 0 || first_chunk == next_chunk {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained source file has no canonical chunk"),
+            ));
+        }
+        files.push(FilePlan {
+            path: binding.path_components.clone(),
+            first_chunk,
+            chunk_count: next_chunk - first_chunk,
+            size: binding.bytes,
+        });
+        next_offset = end;
+    }
+    if next_chunk != chunks.len() || next_offset != content_length {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained source files do not partition the plan"),
+        ));
+    }
+    let payload_digest_hex = required_map_string(plan, "payload_blake3", context)?;
+    let payload_digest =
+        parse_canonical_hex_fixed::<32>(&payload_digest_hex, "governance CAR plan payload digest")
+            .map_err(|_| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{context} retained payload digest is noncanonical"),
+                )
+            })?;
+    let plan = CarBuildPlan {
+        chunk_profile: ChunkProfile::DEFAULT,
+        payload_digest: blake3::Hash::from_bytes(payload_digest),
+        content_length,
+        chunks,
+        files,
+    };
+    plan.validate().map_err(|err| {
+        warn!(error = %err, "retained governance CAR plan failed validation");
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan is invalid"),
+        )
+    })?;
+    Ok(plan)
+}
+
+fn verify_governance_car_source_identities(
+    state: &SharedAppState,
+    plan: &CarBuildPlan,
+    bindings: &[GovernanceCarSourceBinding],
+    context: &str,
+) -> Result<(), Response> {
+    let encoded_digest = bindings
+        .iter()
+        .find(|binding| binding.role == "encoded")
+        .map(|binding| binding.digest)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} encoded source binding is missing"),
+            )
+        })?;
+    let json_digest = bindings
+        .iter()
+        .find(|binding| binding.role == "json")
+        .map(|binding| binding.digest)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} JSON source binding is missing"),
+            )
+        })?;
+    let mut payload_hasher = blake3::Hasher::new();
+    for (file_index, (binding, file_plan)) in bindings.iter().zip(&plan.files).enumerate() {
+        let maximum = match binding.role.as_str() {
+            "encoded" => u64::try_from(GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1)
+                .unwrap_or(u64::MAX),
+            "json" => GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
+            "encoded_blake3_sidecar" | "json_blake3_sidecar" => GOVERNANCE_DAG_DIGEST_SIDECAR_BYTES,
+            _ => {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{context} contains an unsupported retained source role"),
+                ));
+            }
+        };
+        if binding.bytes > maximum {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained source exceeds its role bound"),
+            ));
+        }
+        let bytes = read_bounded_governance_car_artifact(
+            state,
+            &binding.path,
+            maximum,
+            "governance CAR source file",
+        )?;
+        if u64::try_from(bytes.len()).ok() != Some(binding.bytes)
+            || blake3_hash(&bytes).as_bytes() != &binding.digest
+        {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained source does not match its file identity"),
+            ));
+        }
+        let expected_sidecar = match binding.role.as_str() {
+            "encoded_blake3_sidecar" => Some(format!("{}\n", hex::encode(encoded_digest))),
+            "json_blake3_sidecar" => Some(format!("{}\n", hex::encode(json_digest))),
+            _ => None,
+        };
+        if expected_sidecar
+            .as_ref()
+            .is_some_and(|expected| bytes != expected.as_bytes())
+        {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained source digest sidecar is inconsistent"),
+            ));
+        }
+
+        let canonical_chunks =
+            sorafs_chunker::try_chunk_bytes_with_digests_profile(ChunkProfile::DEFAULT, &bytes)
+                .map_err(|err| {
+                    warn!(error = %err, "failed to rechunk retained governance CAR source");
+                    json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("{context} retained source cannot be canonically chunked"),
+                    )
+                })?;
+        if canonical_chunks.len() != file_plan.chunk_count {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained source chunk count is noncanonical"),
+            ));
+        }
+        for (local_index, canonical) in canonical_chunks.iter().enumerate() {
+            let chunk_index = file_plan.first_chunk + local_index;
+            let planned = &plan.chunks[chunk_index];
+            let local_offset = u64::try_from(canonical.offset).map_err(|_| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{context} retained source offset exceeds u64"),
+                )
+            })?;
+            let expected_offset = plan
+                .chunks
+                .get(file_plan.first_chunk)
+                .map_or(planned.offset, |first| first.offset)
+                .checked_add(local_offset)
+                .ok_or_else(|| {
+                    json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("{context} retained source offset overflowed"),
+                    )
+                })?;
+            if planned.offset != expected_offset
+                || usize::try_from(planned.length).ok() != Some(canonical.length)
+                || planned.digest != canonical.digest
+            {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!(
+                        "{context} retained source chunk {file_index}:{local_index} is noncanonical"
+                    ),
+                ));
+            }
+        }
+        payload_hasher.update(&bytes);
+    }
+    if payload_hasher.finalize() != plan.payload_digest {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained sources do not match the plan payload identity"),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_governance_car_segment_artifacts(
+    state: &SharedAppState,
+    segment_value: &Value,
+) -> Result<(), Response> {
+    let context = "governance CAR archive lookup";
+    let segment = segment_value.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} segment is not an object"),
+        )
+    })?;
+
+    let manifest_path = required_map_string(segment, "manifest_path", context)?;
+    let manifest_bytes = read_verified_governance_car_artifact(
+        state,
+        &manifest_path,
+        GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
+        None,
+        None,
+        "governance CAR segment manifest",
+    )?;
+    let manifest: Value = json::from_slice(&manifest_bytes).map_err(|err| {
+        warn!(error = %err, "failed to decode retained governance CAR segment manifest");
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained segment manifest is invalid"),
+        )
+    })?;
+    let mut expected_manifest = segment.clone();
+    expected_manifest.remove("queue_position");
+    if manifest != Value::Object(expected_manifest) {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained segment manifest is substituted"),
+        ));
+    }
+
+    let bindings = governance_car_source_bindings(segment, context)?;
+    let plan_path = required_map_string(segment, "plan_path", context)?;
+    let plan_bytes = read_verified_governance_car_artifact(
+        state,
+        &plan_path,
+        GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
+        None,
+        None,
+        "governance CAR plan",
+    )?;
+    let plan_value: Value = json::from_slice(&plan_bytes).map_err(|err| {
+        warn!(error = %err, "failed to decode retained governance CAR plan");
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained plan is invalid"),
+        )
+    })?;
+    let plan = retained_governance_car_plan(segment, &plan_value, &bindings, context)?;
+    verify_governance_car_source_identities(state, &plan, &bindings, context)?;
+
+    let car_path = required_map_string(segment, "car_path", context)?;
+    let car_size = required_map_u64(segment, "car_size", context)?;
+    let car_archive_blake3 = required_map_string(segment, "car_archive_blake3", context)?;
+    let car_bytes = read_verified_governance_car_artifact(
+        state,
+        &car_path,
+        GOVERNANCE_DAG_CAR_ARCHIVE_MAX_BYTES,
+        Some(car_size),
+        Some(&car_archive_blake3),
+        "governance CAR archive",
+    )?;
+    let stats = CarVerifier::verify_canonical_car_with_plan(&plan, &car_bytes).map_err(|err| {
+        warn!(error = %err, "retained governance CAR failed canonical verification");
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained archive is not canonical"),
+        )
+    })?;
+    let expected_roots = segment
+        .get("root_cids_hex")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} retained root CID inventory is missing"),
+            )
+        })?;
+    let actual_roots = stats
+        .root_cids
+        .iter()
+        .map(|cid| Value::from(hex::encode(cid)))
+        .collect::<Vec<_>>();
+    if stats.car_size != car_size
+        || stats.car_archive_digest.to_hex().as_str() != car_archive_blake3
+        || stats.car_payload_digest.to_hex().as_str()
+            != required_map_string(segment, "car_payload_blake3", context)?
+        || hex::encode(&stats.car_cid) != required_map_string(segment, "car_cid_hex", context)?
+        || actual_roots.as_slice() != expected_roots.as_slice()
+        || stats.dag_codec != required_map_u64(segment, "dag_codec", context)?
+        || u64::try_from(stats.chunk_count).ok()
+            != Some(required_map_u64(segment, "chunk_count", context)?)
+        || stats.payload_bytes != required_map_u64(segment, "payload_bytes", context)?
+        || stats.chunk_profile != ChunkProfile::DEFAULT
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} retained archive statistics are substituted"),
+        ));
     }
     Ok(())
 }
@@ -7101,6 +8193,36 @@ fn verify_and_bind_governance_dag_runtime_index(
 ) -> Result<VerifiedGovernanceRuntimeState, Response> {
     let root = governance_dag_root_dir(state)?;
     let context = "governance DAG runtime index";
+    let index_object = index.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG runtime index root is not an object",
+        )
+    })?;
+    const RUNTIME_INDEX_FIELDS: [&str; 21] = [
+        "schema",
+        "source",
+        "root",
+        "generated_at",
+        "signer_handle",
+        "publisher_peer_id",
+        "publisher_peer_id_hex",
+        "publisher_public_key_hex",
+        "signer_revision",
+        "signer_policy_digest_hex",
+        "checkpoint_store_handle",
+        "checkpoint_store_revision",
+        "checkpoint_store_policy_digest_hex",
+        "head_block_cid_hex",
+        "head_generated_at",
+        "head_path",
+        "block_count",
+        "by_encoded_blake3",
+        "by_source_payload_blake3",
+        "by_payload_kind",
+        "blocks",
+    ];
+    require_exact_map_fields(index_object, &RUNTIME_INDEX_FIELDS, context)?;
     if index.get("source").and_then(Value::as_str) != Some("filesystem")
         || index.get("root").and_then(Value::as_str) != Some(GOVERNANCE_DAG_LOGICAL_ROOT)
     {
@@ -7144,6 +8266,26 @@ fn verify_and_bind_governance_dag_runtime_index(
                 format!("{entry_context} is not an object"),
             )
         })?;
+        const RUNTIME_BLOCK_FIELDS: [&str; 17] = [
+            "position",
+            "sequence",
+            "payload_kind",
+            "encoded_blake3",
+            "encoded_len",
+            "source_payload_blake3",
+            "source_payload_len",
+            "submission_publisher_account_digest_hex",
+            "submission_origin",
+            "encoded_path",
+            "json_path",
+            "node_cid_hex",
+            "prev_node_cid_hex",
+            "block_cid_hex",
+            "prev_block_cid_hex",
+            "block_path",
+            "published_at_unix",
+        ];
+        require_exact_map_fields(entry, &RUNTIME_BLOCK_FIELDS, &entry_context)?;
         let position_u64 = u64::try_from(position).map_err(|_| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -7427,6 +8569,26 @@ fn verify_and_bind_governance_dag_mirror_index(
     runtime: &VerifiedGovernanceRuntimeState,
 ) -> Result<(), Response> {
     let context = "governance DAG mirror index";
+    let index_object = index.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror index root is not an object",
+        )
+    })?;
+    const MIRROR_INDEX_FIELDS: [&str; 11] = [
+        "schema",
+        "generation",
+        "generated_at",
+        "head",
+        "block_count",
+        "indexed_block_count",
+        "blocks",
+        "by_block_cid_hex",
+        "by_node_cid_hex",
+        "by_encoded_blake3",
+        "by_payload_kind",
+    ];
+    require_exact_map_fields(index_object, &MIRROR_INDEX_FIELDS, context)?;
     let head = index
         .get("head")
         .and_then(Value::as_object)
@@ -7436,6 +8598,35 @@ fn verify_and_bind_governance_dag_mirror_index(
                 "governance DAG mirror index is missing `head` object",
             )
         })?;
+    const MIRROR_HEAD_FIELDS: [&str; 6] = [
+        "head_block_cid_hex",
+        "block_count",
+        "generated_at",
+        "ipfs_cid",
+        "public_token",
+        "blake3",
+    ];
+    require_exact_map_fields(head, &MIRROR_HEAD_FIELDS, "governance DAG mirror head")?;
+    if required_value_u64(index, "generation", context)? == 0 {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror generation must be positive",
+        ));
+    }
+    required_value_u64(index, "generated_at", context)?;
+    let public_token = required_map_string(head, "public_token", context)?;
+    if public_token.is_empty()
+        || public_token.len() > 512
+        || public_token.trim() != public_token
+        || !public_token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror public token is noncanonical",
+        ));
+    }
     if required_map_string(head, "head_block_cid_hex", context)?
         != encode(&runtime.head.head_block_cid)
         || required_map_u64(head, "block_count", context)? != runtime.head.block_count
@@ -7498,6 +8689,20 @@ fn verify_and_bind_governance_dag_mirror_index(
                 format!("{entry_context} is not an object"),
             )
         })?;
+        const MIRROR_BLOCK_FIELDS: [&str; 11] = [
+            "position",
+            "sequence",
+            "timestamp",
+            "payload_kind",
+            "block_cid_hex",
+            "node_cid_hex",
+            "blake3",
+            "encoded_len",
+            "ipfs_cid",
+            "submission_publisher_account_digest_hex",
+            "submission_origin",
+        ];
+        require_exact_map_fields(entry, &MIRROR_BLOCK_FIELDS, &entry_context)?;
         let position_u64 = u64::try_from(position).map_err(|_| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -7651,7 +8856,6 @@ fn governance_dag_lookup_response(
         }
         Err(response) => return response,
     };
-
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
     response.insert("source".into(), Value::from("local_mirror_index"));
@@ -8495,6 +9699,22 @@ fn transparency_entry_labels(entry: &Value) -> Result<&Map, Response> {
         })
 }
 
+fn require_exact_map_fields(
+    map: &Map,
+    expected_fields: &[&str],
+    context: &str,
+) -> Result<(), Response> {
+    if map.len() != expected_fields.len()
+        || !expected_fields.iter().all(|field| map.contains_key(*field))
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} fields do not match the V1 schema"),
+        ));
+    }
+    Ok(())
+}
+
 fn required_value_string(value: &Value, field: &str, context: &str) -> Result<String, Response> {
     value
         .get(field)
@@ -8898,6 +10118,17 @@ fn validate_governance_dag_relative_path(raw_path: &str, field: &str) -> Result<
         return Err(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("governance DAG {field} path is empty"),
+        ));
+    }
+    let canonical = clean
+        .iter()
+        .map(|component| component.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    if canonical != raw_path {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("governance DAG {field} path is not canonical"),
         ));
     }
     Ok(clean)
@@ -9443,6 +10674,9 @@ fn governance_car_queue_archive_lookup_response(
         }
         Err(response) => return response,
     };
+    if let Err(response) = verify_governance_car_segment_artifacts(state, &segment) {
+        return response;
+    }
 
     let mut response = Map::new();
     response.insert(
@@ -23517,75 +24751,78 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
         return response;
     }
 
-    let manifest_bytes = match fs::read(stored.manifest_path()) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            error!(?err, "failed to read stored manifest bytes");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to read stored manifest bytes",
-            );
+    match sorafs_heavy_blocking_task(&state, "SoraFS manifest read", move || {
+        let manifest_bytes = stored
+            .load_manifest_bytes()
+            .map_err(storage_backend_error)?;
+        if manifest_bytes.len() > MAX_LOCAL_MANIFEST_RESPONSE_BYTES {
+            return Err(json_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "stored manifest exceeds the local readback byte limit",
+            ));
         }
-    };
 
-    let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(manifest_bytes.as_slice());
-    let file_count = stored.files().len();
-    let offset = query
-        .offset
-        .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX))
-        .unwrap_or(0)
-        .min(file_count);
-    let limit = query
-        .limit
-        .map(|limit| normalize_limit(Some(limit)))
-        .unwrap_or_else(|| file_count.saturating_sub(offset));
-    let files = stored
-        .files()
-        .iter()
-        .skip(offset)
-        .take(limit)
-        .map(storage_stored_file_dto)
-        .collect::<Vec<_>>();
-    let returned_file_count = files.len();
-    let returned_end = offset.saturating_add(returned_file_count);
+        let manifest_b64 =
+            base64::engine::general_purpose::STANDARD.encode(manifest_bytes.as_slice());
+        let file_count = stored.files().len();
+        let offset = query
+            .offset
+            .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX))
+            .unwrap_or(0)
+            .min(file_count);
+        let limit = query
+            .limit
+            .map(|limit| normalize_limit(Some(limit)))
+            .unwrap_or_else(|| file_count.saturating_sub(offset));
+        let files = stored
+            .files()
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(storage_stored_file_dto)
+            .collect::<Vec<_>>();
+        let returned_file_count = files.len();
+        let returned_end = offset.saturating_add(returned_file_count);
 
-    let response = StorageManifestResponseDto {
-        manifest_id_hex,
-        manifest_b64,
-        manifest_digest_hex: hex::encode(stored.manifest_digest()),
-        payload_digest_hex: hex::encode(stored.payload_digest()),
-        content_length: stored.content_length(),
-        chunk_count: stored.chunk_count() as u64,
-        chunk_profile_handle: stored.chunk_profile_handle().to_owned(),
-        stored_at_unix_secs: stored.stored_at_unix_secs(),
-        files,
-    };
+        let response = StorageManifestResponseDto {
+            manifest_id_hex,
+            manifest_b64,
+            manifest_digest_hex: hex::encode(stored.manifest_digest()),
+            payload_digest_hex: hex::encode(stored.payload_digest()),
+            content_length: stored.content_length(),
+            chunk_count: stored.chunk_count() as u64,
+            chunk_profile_handle: stored.chunk_profile_handle().to_owned(),
+            stored_at_unix_secs: stored.stored_at_unix_secs(),
+            files,
+        };
 
-    let mut value = match norito::json::to_value(&response) {
-        Ok(value) => value,
-        Err(err) => {
+        let mut value = norito::json::to_value(&response).map_err(|err| {
             error!(?err, "failed to encode manifest response");
-            return json_error(
+            json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to encode manifest response",
+            )
+        })?;
+        if let Value::Object(ref mut obj) = value {
+            obj.insert("file_count".into(), Value::from(file_count as u64));
+            obj.insert(
+                "returned_file_count".into(),
+                Value::from(returned_file_count as u64),
+            );
+            obj.insert("limit".into(), Value::from(limit as u64));
+            obj.insert("offset".into(), Value::from(offset as u64));
+            obj.insert(
+                "truncated_files".into(),
+                Value::from(returned_end < file_count),
             );
         }
-    };
-    if let Value::Object(ref mut obj) = value {
-        obj.insert("file_count".into(), Value::from(file_count as u64));
-        obj.insert(
-            "returned_file_count".into(),
-            Value::from(returned_file_count as u64),
-        );
-        obj.insert("limit".into(), Value::from(limit as u64));
-        obj.insert("offset".into(), Value::from(offset as u64));
-        obj.insert(
-            "truncated_files".into(),
-            Value::from(returned_end < file_count),
-        );
-    }
 
-    JsonBody(value).into_response()
+        Ok(JsonBody(value).into_response())
+    })
+    .await
+    {
+        Ok(response) | Err(response) => response,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -23621,124 +24858,124 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         return response;
     }
 
-    let manifest_v1 = match stored.load_manifest() {
-        Ok(manifest) => manifest,
-        Err(err) => return storage_backend_error(err),
-    };
+    match sorafs_heavy_blocking_task(&state, "SoraFS plan read", move || {
+        let manifest_v1 = stored.load_manifest().map_err(storage_backend_error)?;
+        let chunk_profile = match chunk_profile_for_manifest(&manifest_v1) {
+            Ok(profile) => profile,
+            Err(err) => return Err(err.into_response()),
+        };
+        let taikai_hint = match sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1) {
+            Ok(hint) => hint,
+            Err(err) => {
+                error!(
+                    ?err,
+                    manifest = manifest_id_hex,
+                    "failed to derive Taikai segment hint from manifest"
+                );
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to derive Taikai metadata",
+                ));
+            }
+        };
 
-    let chunk_profile = match chunk_profile_for_manifest(&manifest_v1) {
-        Ok(profile) => profile,
-        Err(err) => return err.into_response(),
-    };
-
-    let taikai_hint = match sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1) {
-        Ok(hint) => hint,
-        Err(err) => {
-            error!(
-                ?err,
-                manifest = manifest_id_hex,
-                "failed to derive Taikai segment hint from manifest"
-            );
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to derive Taikai metadata",
-            );
-        }
-    };
-
-    let plan = stored.to_car_plan_with_hint(chunk_profile, taikai_hint.clone());
-    let specs = match plan.try_chunk_fetch_specs() {
-        Ok(specs) => specs,
-        Err(err) => {
+        let plan = stored
+            .try_to_car_plan_with_hint(chunk_profile, taikai_hint.as_ref())
+            .map_err(storage_backend_error)?;
+        let specs = plan.try_chunk_fetch_specs().map_err(|err| {
             error!(
                 ?err,
                 manifest = manifest_id_hex,
                 "failed to derive bounded chunk fetch plan"
             );
-            return json_error(
+            json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to derive bounded chunk plan",
-            );
-        }
-    };
-    let file_count = stored.files().len();
-    let offset = query
-        .offset
-        .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX))
-        .unwrap_or(0);
-    let file_offset = offset.min(file_count);
-    let files = stored
-        .files()
-        .iter()
-        .skip(file_offset)
-        .take(limit)
-        .map(file_listing_entry_json)
-        .collect::<Vec<_>>();
-    let returned_file_count = files.len();
-    let chunk_count = specs.len();
-    let chunk_offset = offset.min(chunk_count);
+            )
+        })?;
+        let file_count = stored.files().len();
+        let offset = query
+            .offset
+            .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX))
+            .unwrap_or(0);
+        let file_offset = offset.min(file_count);
+        let files = stored
+            .files()
+            .iter()
+            .skip(file_offset)
+            .take(limit)
+            .map(file_listing_entry_json)
+            .collect::<Vec<_>>();
+        let returned_file_count = files.len();
+        let chunk_count = specs.len();
+        let chunk_offset = offset.min(chunk_count);
 
-    let chunk_digests = specs
-        .iter()
-        .skip(chunk_offset)
-        .take(limit)
-        .map(|spec| Value::String(hex::encode(spec.digest)))
-        .collect::<Vec<_>>();
-    let chunks = specs
-        .iter()
-        .skip(chunk_offset)
-        .take(limit)
-        .map(chunk_fetch_spec_json)
-        .collect::<Vec<_>>();
+        let chunk_digests = specs
+            .iter()
+            .skip(chunk_offset)
+            .take(limit)
+            .map(|spec| Value::String(hex::encode(spec.digest)))
+            .collect::<Vec<_>>();
+        let chunks = specs
+            .iter()
+            .skip(chunk_offset)
+            .take(limit)
+            .map(chunk_fetch_spec_json)
+            .collect::<Vec<_>>();
 
-    let mut plan_map = Map::new();
-    plan_map.insert("chunk_count".into(), Value::from(chunk_count as u64));
-    plan_map.insert("offset".into(), Value::from(offset as u64));
-    plan_map.insert(
-        "returned_chunk_count".into(),
-        Value::from(chunks.len() as u64),
-    );
-    plan_map.insert("limit".into(), Value::from(limit as u64));
-    plan_map.insert(
-        "truncated_chunks".into(),
-        Value::from(chunk_offset.saturating_add(chunks.len()) < chunk_count),
-    );
-    plan_map.insert("content_length".into(), Value::from(plan.content_length));
-    plan_map.insert(
-        "payload_digest_blake3".into(),
-        Value::String(hex::encode(plan.payload_digest.as_bytes())),
-    );
-    plan_map.insert(
-        "chunk_profile_handle".into(),
-        Value::String(stored.chunk_profile_handle().to_owned()),
-    );
-    plan_map.insert("file_count".into(), Value::from(file_count as u64));
-    plan_map.insert(
-        "returned_file_count".into(),
-        Value::from(returned_file_count as u64),
-    );
-    plan_map.insert(
-        "truncated_files".into(),
-        Value::from(file_offset.saturating_add(returned_file_count) < file_count),
-    );
-    plan_map.insert("files".into(), Value::Array(files));
-    plan_map.insert("chunk_digest_count".into(), Value::from(chunk_count as u64));
-    plan_map.insert(
-        "returned_chunk_digest_count".into(),
-        Value::from(chunk_digests.len() as u64),
-    );
-    plan_map.insert(
-        "truncated_chunk_digests".into(),
-        Value::from(chunk_offset.saturating_add(chunk_digests.len()) < chunk_count),
-    );
-    plan_map.insert("chunk_digests_blake3".into(), Value::Array(chunk_digests));
-    plan_map.insert("chunks".into(), Value::Array(chunks));
+        let mut plan_map = Map::new();
+        plan_map.insert("chunk_count".into(), Value::from(chunk_count as u64));
+        plan_map.insert("offset".into(), Value::from(offset as u64));
+        plan_map.insert(
+            "returned_chunk_count".into(),
+            Value::from(chunks.len() as u64),
+        );
+        plan_map.insert("limit".into(), Value::from(limit as u64));
+        plan_map.insert(
+            "truncated_chunks".into(),
+            Value::from(chunk_offset.saturating_add(chunks.len()) < chunk_count),
+        );
+        plan_map.insert("content_length".into(), Value::from(plan.content_length));
+        plan_map.insert(
+            "payload_digest_blake3".into(),
+            Value::String(hex::encode(plan.payload_digest.as_bytes())),
+        );
+        plan_map.insert(
+            "chunk_profile_handle".into(),
+            Value::String(stored.chunk_profile_handle().to_owned()),
+        );
+        plan_map.insert("file_count".into(), Value::from(file_count as u64));
+        plan_map.insert(
+            "returned_file_count".into(),
+            Value::from(returned_file_count as u64),
+        );
+        plan_map.insert(
+            "truncated_files".into(),
+            Value::from(file_offset.saturating_add(returned_file_count) < file_count),
+        );
+        plan_map.insert("files".into(), Value::Array(files));
+        plan_map.insert("chunk_digest_count".into(), Value::from(chunk_count as u64));
+        plan_map.insert(
+            "returned_chunk_digest_count".into(),
+            Value::from(chunk_digests.len() as u64),
+        );
+        plan_map.insert(
+            "truncated_chunk_digests".into(),
+            Value::from(chunk_offset.saturating_add(chunk_digests.len()) < chunk_count),
+        );
+        plan_map.insert("chunk_digests_blake3".into(), Value::Array(chunk_digests));
+        plan_map.insert("chunks".into(), Value::Array(chunks));
 
-    let mut root = Map::new();
-    root.insert("manifest_id_hex".into(), Value::String(manifest_id_hex));
-    root.insert("plan".into(), Value::Object(plan_map));
+        let mut root = Map::new();
+        root.insert("manifest_id_hex".into(), Value::String(manifest_id_hex));
+        root.insert("plan".into(), Value::Object(plan_map));
 
-    JsonBody(Value::Object(root)).into_response()
+        Ok(JsonBody(Value::Object(root)).into_response())
+    })
+    .await
+    {
+        Ok(response) | Err(response) => response,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -26197,7 +27434,7 @@ fn parse_site_response_range(
     })
 }
 
-fn build_site_file_response(
+async fn build_site_file_response(
     state: &SharedAppState,
     stored: &StoredManifest,
     path: &[String],
@@ -26217,13 +27454,18 @@ fn build_site_file_response(
         );
     };
 
-    let bytes = match state.sorafs_node.read_payload_range(
-        stored.manifest_id(),
-        storage_offset,
-        response_range.length,
-    ) {
+    let worker_state = state.clone();
+    let manifest_id = stored.manifest_id().to_owned();
+    let bytes = match sorafs_heavy_blocking_task(state, "SoraFS site payload read", move || {
+        worker_state
+            .sorafs_node
+            .read_payload_range(&manifest_id, storage_offset, response_range.length)
+            .map_err(node_storage_error_response)
+    })
+    .await
+    {
         Ok(value) => value,
-        Err(err) => return node_storage_error_response(err),
+        Err(response) => return response,
     };
 
     let mut response = Response::new(Body::from(bytes));
@@ -26285,55 +27527,59 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
         Err(response) => return response,
     };
 
-    let manifest_bytes = match fs::read(resolved.stored.manifest_path()) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            error!(
-                ?err,
-                "failed to read stored manifest bytes for site binding"
-            );
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to read stored manifest bytes",
-            );
+    match sorafs_heavy_blocking_task(&state, "SoraFS site manifest read", move || {
+        let manifest_bytes = resolved
+            .stored
+            .load_manifest_bytes()
+            .map_err(storage_backend_error)?;
+        if manifest_bytes.len() > MAX_LOCAL_MANIFEST_RESPONSE_BYTES {
+            return Err(json_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "stored manifest exceeds the local readback byte limit",
+            ));
         }
-    };
-    let (files, file_count, truncated_files) = bounded_file_listing_json(&resolved.stored, limit);
-    let returned_file_count = files.len();
+        let (files, file_count, truncated_files) =
+            bounded_file_listing_json(&resolved.stored, limit);
+        let returned_file_count = files.len();
 
-    let value = json_object(vec![
-        json_entry("hostname", Value::from(resolved.hostname.clone())),
-        json_entry(
-            "content_cid",
-            Value::from(encode_content_cid(resolved.stored.manifest_cid())),
-        ),
-        json_entry(
-            "manifest_digest_hex",
-            Value::from(hex::encode(resolved.stored.manifest_digest())),
-        ),
-        json_entry(
-            "manifest_id_hex",
-            Value::from(resolved.stored.manifest_id().to_owned()),
-        ),
-        json_entry(
-            "manifest_b64",
-            Value::from(BASE64_STANDARD.encode(manifest_bytes)),
-        ),
-        json_entry(
-            "index_document",
-            Value::from(resolved.index_document.clone()),
-        ),
-        json_entry("spa_fallback", Value::from(resolved.spa_fallback)),
-        json_entry("file_count", Value::from(file_count as u64)),
-        json_entry(
-            "returned_file_count",
-            Value::from(returned_file_count as u64),
-        ),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry("truncated_files", Value::from(truncated_files)),
-        json_entry("files", Value::Array(files)),
-    ]);
-    JsonBody(value).into_response()
+        let value = json_object(vec![
+            json_entry("hostname", Value::from(resolved.hostname.clone())),
+            json_entry(
+                "content_cid",
+                Value::from(encode_content_cid(resolved.stored.manifest_cid())),
+            ),
+            json_entry(
+                "manifest_digest_hex",
+                Value::from(hex::encode(resolved.stored.manifest_digest())),
+            ),
+            json_entry(
+                "manifest_id_hex",
+                Value::from(resolved.stored.manifest_id().to_owned()),
+            ),
+            json_entry(
+                "manifest_b64",
+                Value::from(BASE64_STANDARD.encode(manifest_bytes)),
+            ),
+            json_entry(
+                "index_document",
+                Value::from(resolved.index_document.clone()),
+            ),
+            json_entry("spa_fallback", Value::from(resolved.spa_fallback)),
+            json_entry("file_count", Value::from(file_count as u64)),
+            json_entry(
+                "returned_file_count",
+                Value::from(returned_file_count as u64),
+            ),
+            json_entry("limit", Value::from(limit as u64)),
+            json_entry("truncated_files", Value::from(truncated_files)),
+            json_entry("files", Value::Array(files)),
+        ]);
+        Ok(JsonBody(value).into_response())
+    })
+    .await
+    {
+        Ok(response) | Err(response) => response,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -26365,7 +27611,7 @@ pub(crate) async fn handle_get_sorafs_site_path(
         path = index_document_path(&resolved.index_document);
     }
 
-    build_site_file_response(&state, &resolved.stored, &path, &headers)
+    build_site_file_response(&state, &resolved.stored, &path, &headers).await
 }
 
 #[cfg(feature = "app_api")]
@@ -26470,7 +27716,7 @@ pub(crate) async fn handle_get_sorafs_cid_path(
         );
     }
 
-    let mut response = build_site_file_response(&state, &stored, &path, &headers);
+    let mut response = build_site_file_response(&state, &stored, &path, &headers).await;
     if response.status().is_success() {
         attach_cid_gateway_headers(&mut response, &stored);
     }
@@ -26489,6 +27735,14 @@ pub(crate) async fn handle_post_sorafs_storage_fetch(
     }
     if req.length == 0 {
         return json_error(StatusCode::BAD_REQUEST, "length must be greater than zero");
+    }
+    if req.length > MAX_STORAGE_FETCH_RESPONSE_BYTES {
+        return json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "storage fetch responses are limited to {MAX_STORAGE_FETCH_RESPONSE_BYTES} bytes"
+            ),
+        );
     }
     let length = match usize::try_from(req.length) {
         Ok(length) => length,
@@ -26552,25 +27806,33 @@ pub(crate) async fn handle_post_sorafs_storage_fetch(
         }
     }
 
-    let data = match state
-        .sorafs_node
-        .read_payload_range(&storage_manifest_id, req.offset, length)
+    let worker_state = state.clone();
+    match sorafs_heavy_blocking_task(&state, "SoraFS storage fetch", move || {
+        let data = worker_state
+            .sorafs_node
+            .read_payload_range(&storage_manifest_id, req.offset, length)
+            .map_err(node_storage_error_response)?;
+        record_storage_metrics(&worker_state);
+
+        let response = StorageFetchResponseDto {
+            manifest_id_hex: req.manifest_id_hex,
+            offset: req.offset,
+            length: data.len() as u64,
+            data_b64: base64::engine::general_purpose::STANDARD.encode(data),
+        };
+        let value = norito::json::to_value(&response).map_err(|error| {
+            error!(?error, "failed to encode SoraFS storage fetch response");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode storage fetch response",
+            )
+        })?;
+        Ok((StatusCode::OK, JsonBody(value)).into_response())
+    })
+    .await
     {
-        Ok(bytes) => bytes,
-        Err(err) => return node_storage_error_response(err),
-    };
-
-    record_storage_metrics(&state);
-
-    let response = StorageFetchResponseDto {
-        manifest_id_hex: req.manifest_id_hex,
-        offset: req.offset,
-        length: data.len() as u64,
-        data_b64: base64::engine::general_purpose::STANDARD.encode(data),
-    };
-
-    let value = norito::json::to_value(&response).unwrap_or(Value::Null);
-    (StatusCode::OK, JsonBody(value)).into_response()
+        Ok(response) | Err(response) => response,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -27242,131 +28504,6 @@ fn enforce_stream_token_for_request(
     }
 
     Ok((concurrency_guard, token.body))
-}
-
-#[cfg(feature = "app_api")]
-fn validate_chunk_files_and_payload_digest(
-    chunks: &[ChunkFileRecord],
-) -> Result<blake3::Hash, io::Error> {
-    let mut payload_hasher = blake3::Hasher::new();
-    let mut buffer = [0_u8; 64 * 1024];
-
-    for chunk in chunks {
-        let mut file = fs::File::open(&chunk.path)?;
-        let mut remaining = u64::from(chunk.length);
-        let mut chunk_hasher = blake3::Hasher::new();
-        while remaining > 0 {
-            let read_len = usize::try_from(remaining.min(buffer.len() as u64))
-                .expect("buffer-bounded read length fits usize");
-            let read = file.read(&mut buffer[..read_len])?;
-            if read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "stored chunk ended before the declared length",
-                ));
-            }
-            let bytes = &buffer[..read];
-            chunk_hasher.update(bytes);
-            payload_hasher.update(bytes);
-            remaining -= read as u64;
-        }
-
-        let actual = chunk_hasher.finalize();
-        if actual.as_bytes() != &chunk.digest {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "stored chunk digest does not match the manifest",
-            ));
-        }
-    }
-
-    Ok(payload_hasher.finalize())
-}
-
-#[cfg(feature = "app_api")]
-struct ChunkFilesReader {
-    chunks: Vec<ChunkFileRecord>,
-    next_index: usize,
-    current: Option<(fs::File, u64)>,
-}
-
-#[cfg(feature = "app_api")]
-impl ChunkFilesReader {
-    fn new(chunks: Vec<ChunkFileRecord>) -> Self {
-        Self {
-            chunks,
-            next_index: 0,
-            current: None,
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl Read for ChunkFilesReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-
-        loop {
-            if matches!(self.current.as_ref(), Some((_, 0))) {
-                self.current = None;
-                continue;
-            }
-
-            if self.current.is_some() {
-                let (read, finished) = {
-                    let (file, remaining) = self
-                        .current
-                        .as_mut()
-                        .expect("current chunk reader is present");
-                    let read_len = usize::try_from((*remaining).min(buffer.len() as u64))
-                        .expect("buffer-bounded read length fits usize");
-                    let read = file.read(&mut buffer[..read_len])?;
-                    if read == 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "stored chunk ended before the declared length",
-                        ));
-                    }
-                    *remaining -= read as u64;
-                    (read, *remaining == 0)
-                };
-                if finished {
-                    self.current = None;
-                }
-                return Ok(read);
-            }
-
-            let Some(chunk) = self.chunks.get(self.next_index) else {
-                return Ok(0);
-            };
-            self.next_index += 1;
-            self.current = Some((fs::File::open(&chunk.path)?, u64::from(chunk.length)));
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-struct StreamingBodyWriter {
-    sender: mpsc::Sender<Result<Bytes, Infallible>>,
-}
-
-#[cfg(feature = "app_api")]
-impl Write for StreamingBodyWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        self.sender
-            .blocking_send(Ok(Bytes::copy_from_slice(buffer)))
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "response body closed"))?;
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 fn manifest_envelope_valid(headers: &HeaderMap, record: Option<&PinManifestRecord>) -> bool {
@@ -28973,6 +30110,12 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             "requested range exceeds server limits",
         );
     }
+    if length > MAX_CAR_RANGE_PAYLOAD_BYTES {
+        return json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("CAR range payloads are limited to {MAX_CAR_RANGE_PAYLOAD_BYTES} bytes"),
+        );
+    }
 
     let expected_chunk_count = match ensure_chunk_alignment(&manifest, byte_range) {
         Ok(count) => count,
@@ -29024,175 +30167,242 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         }
     }
 
-    let manifest_payload = match manifest.load_manifest() {
-        Ok(manifest_payload) => manifest_payload,
-        Err(err) => return storage_backend_error(err),
-    };
-
-    if let Some(alias) = alias_header.as_deref() {
-        let alias_matches = manifest_payload
-            .chunking
-            .aliases
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(alias))
-            || manifest_payload.alias_claims.iter().any(|claim| {
-                format!("{}/{}", claim.namespace, claim.name).eq_ignore_ascii_case(alias)
-            });
-        if !alias_matches {
-            drop(stream_token_guard);
-            return gateway_refusal_response(
-                &state,
-                StatusCode::PRECONDITION_FAILED,
-                "manifest_variant_missing",
-                format!(
-                    "requested manifest alias `{alias}` is not bound in the governance envelope"
-                ),
-                Some(&manifest_profile),
-                provider_id.as_ref(),
-                TELEMETRY_ENDPOINT_CAR_RANGE,
-                [("alias", Value::from(alias.to_string()))],
-            );
-        }
-    }
-
-    let chunk_profile = match chunk_profile_for_manifest(&manifest_payload) {
-        Ok(profile) => profile,
-        Err(err) => return err.into_response(),
-    };
-
-    let taikai_hint = match sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_payload)
-    {
-        Ok(hint) => hint,
-        Err(err) => {
-            error!(
-                ?err,
-                manifest = manifest_id_hex,
-                "failed to derive Taikai segment hint from manifest"
-            );
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to derive Taikai metadata",
-            );
-        }
-    };
-
-    let chunk_slice = match manifest.chunk_slice(byte_range.start, length as usize) {
-        Ok(slice) => slice,
-        Err(StorageBackendError::RangeOutOfBounds { .. }) => {
-            return range_not_satisfiable(
-                total_length,
-                "requested range is not aligned with stored chunk boundaries".to_string(),
-            );
-        }
-        Err(err) => {
-            error!(?err, "failed to derive chunk slice for CAR range response");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to assemble CAR range",
-            );
-        }
-    };
-
-    let mut range_chunks = Vec::with_capacity(chunk_slice.chunk_count());
-    let mut relative_offset = 0u64;
-    for record in &chunk_slice.chunks {
-        range_chunks.push(CarChunk {
-            offset: relative_offset,
-            length: record.length,
-            digest: record.digest,
-            taikai_segment_hint: taikai_hint.clone(),
-        });
-        relative_offset += u64::from(record.length);
-    }
-    if relative_offset != length {
-        error!(
-            expected = length,
-            actual = relative_offset,
-            "chunk slice length mismatch while assembling CAR range"
-        );
-        drop(stream_token_guard);
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chunk slice length mismatch",
-        );
-    }
-
-    let payload_digest = match validate_chunk_files_and_payload_digest(&chunk_slice.chunks) {
-        Ok(digest) => digest,
-        Err(err) if err.kind() == io::ErrorKind::InvalidData => {
-            error!(
-                ?err,
-                manifest_id = manifest_id_hex,
-                "stored chunk digest mismatch"
-            );
-            drop(stream_token_guard);
-            const DIGEST_MISMATCH_REASON: &str =
-                "car verification failed due to mismatched chunk digest";
-            return gateway_refusal_response(
-                &state,
-                StatusCode::UNPROCESSABLE_ENTITY,
-                DIGEST_MISMATCH_REASON,
-                DIGEST_MISMATCH_REASON,
-                Some(&manifest_profile),
-                provider_id.as_ref(),
-                TELEMETRY_ENDPOINT_CAR_RANGE,
-                [("error_kind", Value::from("chunk_digest_mismatch"))],
-            );
-        }
-        Err(err) => {
-            error!(
-                ?err,
-                manifest_id = manifest_id_hex,
-                "failed to read stored chunk files"
-            );
-            drop(stream_token_guard);
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to assemble CAR range",
-            );
-        }
-    };
-
-    record_storage_metrics(&state);
-
-    let sub_plan = CarBuildPlan {
-        chunk_profile,
-        payload_digest,
-        content_length: length,
-        chunks: range_chunks,
-        files: vec![FilePlan {
-            path: Vec::new(),
-            first_chunk: 0,
-            chunk_count: chunk_slice.chunk_count(),
-            size: length,
-        }],
-    };
-
-    let car_stats = {
-        let mut stats_reader = ChunkFilesReader::new(chunk_slice.chunks.clone());
-        let writer = CarStreamingWriter::new(&sub_plan);
-        match writer.write_from_reader(&mut stats_reader, io::sink()) {
-            Ok(stats) => stats,
-            Err(err) => {
-                error!(
-                    ?err,
-                    manifest_id = manifest_id_hex,
-                    "failed to size CAR range response"
-                );
-                drop(stream_token_guard);
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to assemble CAR range",
-                );
+    let worker_state = state.clone();
+    let worker_manifest_id = storage_manifest_id.clone();
+    let worker_manifest_hex = manifest_id_hex.clone();
+    let worker_manifest_profile = manifest_profile.clone();
+    let worker_manifest = manifest.clone();
+    let worker_provider_id = provider_id;
+    let range_start = byte_range.start;
+    let range_length = usize::try_from(length).expect("CAR range length was bounded to usize");
+    let (car_stats, car_bytes, verified_chunk_count) =
+        match sorafs_heavy_blocking_task(&state, "SoraFS CAR range", move || {
+            let manifest_payload = worker_manifest
+                .load_manifest()
+                .map_err(storage_backend_error)?;
+            if let Some(alias) = alias_header.as_deref() {
+                let alias_matches = manifest_payload
+                    .chunking
+                    .aliases
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(alias))
+                    || manifest_payload.alias_claims.iter().any(|claim| {
+                        format!("{}/{}", claim.namespace, claim.name).eq_ignore_ascii_case(alias)
+                    });
+                if !alias_matches {
+                    return Err(gateway_refusal_response(
+                        &worker_state,
+                        StatusCode::PRECONDITION_FAILED,
+                        "manifest_variant_missing",
+                        format!(
+                            "requested manifest alias `{alias}` is not bound in the governance envelope"
+                        ),
+                        Some(&worker_manifest_profile),
+                        worker_provider_id.as_ref(),
+                        TELEMETRY_ENDPOINT_CAR_RANGE,
+                        [("alias", Value::from(alias.to_owned()))],
+                    ));
+                }
             }
-        }
-    };
 
-    #[cfg(debug_assertions)]
-    debug_assert_eq!(chunk_slice.chunk_count(), expected_chunk_count);
-    #[cfg(not(debug_assertions))]
-    let _ = expected_chunk_count;
-    let verified_chunk_count = chunk_slice.chunk_count();
+            let chunk_profile = match chunk_profile_for_manifest(&manifest_payload) {
+                Ok(profile) => profile,
+                Err(err) => return Err(err.into_response()),
+            };
+            let taikai_hint = match sorafs_car::taikai_segment_hint_from_sorafs_manifest(
+                &manifest_payload,
+            ) {
+                Ok(hint) => hint,
+                Err(err) => {
+                    error!(
+                        ?err,
+                        manifest = worker_manifest_hex,
+                        "failed to derive Taikai segment hint from manifest"
+                    );
+                    return Err(json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to derive Taikai metadata",
+                    ));
+                }
+            };
+
+            let chunk_slice = match worker_manifest.chunk_slice(range_start, range_length) {
+                Ok(slice) => slice,
+                Err(StorageBackendError::RangeOutOfBounds { .. }) => {
+                    return Err(range_not_satisfiable(
+                        total_length,
+                        "requested range is not aligned with stored chunk boundaries".to_owned(),
+                    ));
+                }
+                Err(err) => {
+                    error!(?err, "failed to derive chunk slice for CAR range response");
+                    return Err(json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to assemble CAR range",
+                    ));
+                }
+            };
+            let verified_chunk_count = chunk_slice.chunk_count();
+            #[cfg(debug_assertions)]
+            debug_assert_eq!(verified_chunk_count, expected_chunk_count);
+            #[cfg(not(debug_assertions))]
+            let _ = expected_chunk_count;
+
+            let mut range_chunks = Vec::new();
+            range_chunks
+                .try_reserve_exact(verified_chunk_count)
+                .map_err(|error| {
+                    error!(?error, "failed to reserve CAR range chunk plan");
+                    json_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "CAR range plan memory is unavailable",
+                    )
+                })?;
+            let mut relative_offset = 0_u64;
+            for record in &chunk_slice.chunks {
+                range_chunks.push(CarChunk {
+                    offset: relative_offset,
+                    length: record.length,
+                    digest: record.digest,
+                    taikai_segment_hint: taikai_hint.clone(),
+                });
+                relative_offset = relative_offset
+                    .checked_add(u64::from(record.length))
+                    .ok_or_else(|| {
+                        json_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "CAR range chunk offsets overflowed",
+                        )
+                    })?;
+            }
+            if relative_offset != length {
+                error!(
+                    expected = length,
+                    actual = relative_offset,
+                    "chunk slice length mismatch while assembling CAR range"
+                );
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "chunk slice length mismatch",
+                ));
+            }
+
+            let payload = match worker_state.sorafs_node.read_payload_range(
+                &worker_manifest_id,
+                range_start,
+                range_length,
+            ) {
+                Ok(payload) => payload,
+                Err(NodeStorageError::Storage(StorageBackendError::ChunkStore(
+                    error @ (ChunkStoreError::UnexpectedEof { .. }
+                    | ChunkStoreError::DigestMismatch { .. }
+                    | ChunkStoreError::LengthMismatch { .. }),
+                ))) => {
+                    error!(
+                        ?error,
+                        manifest_id = worker_manifest_hex,
+                        "stored chunk failed CAR range verification"
+                    );
+                    const DIGEST_MISMATCH_REASON: &str =
+                        "car verification failed due to mismatched chunk digest";
+                    return Err(gateway_refusal_response(
+                        &worker_state,
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        DIGEST_MISMATCH_REASON,
+                        DIGEST_MISMATCH_REASON,
+                        Some(&worker_manifest_profile),
+                        worker_provider_id.as_ref(),
+                        TELEMETRY_ENDPOINT_CAR_RANGE,
+                        [("error_kind", Value::from("chunk_digest_mismatch"))],
+                    ));
+                }
+                Err(error) => {
+                    error!(
+                        ?error,
+                        manifest_id = worker_manifest_hex,
+                        "failed to read verified CAR range payload"
+                    );
+                    return Err(node_storage_error_response(error));
+                }
+            };
+            let sub_plan = CarBuildPlan {
+                chunk_profile,
+                payload_digest: blake3_hash(&payload),
+                content_length: length,
+                chunks: range_chunks,
+                files: vec![FilePlan {
+                    path: Vec::new(),
+                    first_chunk: 0,
+                    chunk_count: verified_chunk_count,
+                    size: length,
+                }],
+            };
+            let writer = CarStreamingWriter::new(&sub_plan);
+            let car_stats = writer
+                .write_from_reader(&mut Cursor::new(payload.as_slice()), io::sink())
+                .map_err(|error| {
+                    error!(
+                        ?error,
+                        manifest_id = worker_manifest_hex,
+                        "failed to size verified CAR range response"
+                    );
+                    json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to assemble CAR range",
+                    )
+                })?;
+            if car_stats.car_size > MAX_CAR_RANGE_RESPONSE_BYTES {
+                return Err(json_error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    format!(
+                        "CAR range responses are limited to {MAX_CAR_RANGE_RESPONSE_BYTES} bytes"
+                    ),
+                ));
+            }
+            let car_capacity = usize::try_from(car_stats.car_size).map_err(|_| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "CAR range response length exceeds host limits",
+                )
+            })?;
+            let mut car_bytes = Vec::new();
+            car_bytes.try_reserve_exact(car_capacity).map_err(|error| {
+                error!(?error, "failed to reserve bounded CAR range response");
+                json_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "CAR range response memory is unavailable",
+                )
+            })?;
+            let emitted = writer
+                .write_from_reader(&mut Cursor::new(payload.as_slice()), &mut car_bytes)
+                .map_err(|error| {
+                    error!(
+                        ?error,
+                        manifest_id = worker_manifest_hex,
+                        "failed to encode verified CAR range response"
+                    );
+                    json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to assemble CAR range",
+                    )
+                })?;
+            if emitted.car_size != car_stats.car_size || car_bytes.len() != car_capacity {
+                return Err(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "CAR range response size changed during canonical encoding",
+                ));
+            }
+            record_storage_metrics(&worker_state);
+            Ok((car_stats, car_bytes, verified_chunk_count))
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(response) => {
+                drop(stream_token_guard);
+                return response;
+            }
+        };
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(MIME_CAR));
@@ -29327,35 +30537,26 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         }
     }
 
-    let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, Infallible>>(8);
-    let writer_plan = sub_plan;
-    let writer_chunks = chunk_slice.chunks;
-    let writer_manifest_id = manifest_id_hex.clone();
-    tokio::task::spawn_blocking(move || {
-        // Tokio task-local handler suppression is intentionally not inherited by detached
-        // blocking tasks. Restore it explicitly for this request-owned writer so an unexpected
-        // library panic terminates only the response stream, not the node process.
-        iroha_core::panic_hook::with_hook_suppressed(|| {
-            let _stream_token_guard = stream_token_guard;
-            let mut reader = ChunkFilesReader::new(writer_chunks);
-            let mut body_writer = StreamingBodyWriter { sender: body_tx };
-            let writer = CarStreamingWriter::new(&writer_plan);
-            if let Err(err) = writer.write_from_reader(&mut reader, &mut body_writer) {
-                error!(
-                    ?err,
-                    manifest_id = writer_manifest_id,
-                    "failed to stream CAR range response"
-                );
+    const RESPONSE_CHUNK_BYTES: usize = 64 * 1024;
+    let car_bytes = Bytes::from(car_bytes);
+    let body = Body::from_stream(stream::unfold(
+        (stream_token_guard, car_bytes, 0_usize),
+        |(stream_token_guard, car_bytes, offset)| async move {
+            if offset >= car_bytes.len() {
+                return None;
             }
-        });
-    });
+            let end = offset
+                .saturating_add(RESPONSE_CHUNK_BYTES)
+                .min(car_bytes.len());
+            let chunk = car_bytes.slice(offset..end);
+            Some((
+                Ok::<Bytes, Infallible>(chunk),
+                (stream_token_guard, car_bytes, end),
+            ))
+        },
+    ));
 
-    (
-        response_status,
-        response_headers,
-        Body::from_stream(ReceiverStream::new(body_rx)),
-    )
-        .into_response()
+    (response_status, response_headers, body).into_response()
 }
 
 #[cfg(feature = "app_api")]
@@ -33878,6 +35079,13 @@ mod advert_tests {
         let report_digest_hex = "dd".repeat(32);
         let receipt_digest_hex = "ee".repeat(32);
         let proof_token_digest_hex = "ff".repeat(32);
+        let insert_json_identity = |entry: &mut Map, digest_byte: u8, json_len: u64| {
+            entry.insert(
+                "json_blake3".into(),
+                Value::from(hex::encode([digest_byte; 32])),
+            );
+            entry.insert("json_len".into(), Value::from(json_len));
+        };
         let mut repair_labels = Map::new();
         repair_labels.insert("ticket_id".into(), Value::from("REP-123"));
         repair_labels.insert("status".into(), Value::from("queued"));
@@ -33894,6 +35102,7 @@ mod advert_tests {
         );
         repair_entry.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
         repair_entry.insert("encoded_len".into(), Value::from(128_u64));
+        insert_json_identity(&mut repair_entry, 0x10, 192);
         repair_entry.insert("published_at_unix".into(), Value::from(1_800_000_300_u64));
         repair_entry.insert("labels".into(), Value::Object(repair_labels));
 
@@ -33915,6 +35124,7 @@ mod advert_tests {
             Value::from(reputation_digest_hex.clone()),
         );
         reputation_entry.insert("encoded_len".into(), Value::from(256_u64));
+        insert_json_identity(&mut reputation_entry, 0x20, 224);
         reputation_entry.insert("published_at_unix".into(), Value::from(1_800_000_301_u64));
         reputation_entry.insert("labels".into(), Value::Object(reputation_labels));
 
@@ -33960,6 +35170,7 @@ mod advert_tests {
             Value::from(report_digest_hex.clone()),
         );
         report_entry.insert("encoded_len".into(), Value::from(320_u64));
+        insert_json_identity(&mut report_entry, 0x30, 352);
         report_entry.insert("published_at_unix".into(), Value::from(1_800_000_302_u64));
         report_entry.insert("labels".into(), Value::Object(report_labels));
 
@@ -33994,6 +35205,7 @@ mod advert_tests {
             Value::from(rollup_digest_hex.clone()),
         );
         rollup_entry.insert("encoded_len".into(), Value::from(384_u64));
+        insert_json_identity(&mut rollup_entry, 0x40, 416);
         rollup_entry.insert("published_at_unix".into(), Value::from(1_800_000_303_u64));
         rollup_entry.insert("labels".into(), Value::Object(rollup_labels));
 
@@ -34053,6 +35265,7 @@ mod advert_tests {
             Value::from(receipt_digest_hex.clone()),
         );
         receipt_entry.insert("encoded_len".into(), Value::from(448_u64));
+        insert_json_identity(&mut receipt_entry, 0x50, 480);
         receipt_entry.insert("published_at_unix".into(), Value::from(1_800_000_304_u64));
         receipt_entry.insert("labels".into(), Value::Object(receipt_labels));
 
@@ -34099,6 +35312,7 @@ mod advert_tests {
             Value::from(proof_token_digest_hex.clone()),
         );
         proof_token_entry.insert("encoded_len".into(), Value::from(512_u64));
+        insert_json_identity(&mut proof_token_entry, 0x60, 544);
         proof_token_entry.insert("published_at_unix".into(), Value::from(1_800_000_305_u64));
         proof_token_entry.insert("labels".into(), Value::Object(proof_token_labels));
 
@@ -34177,11 +35391,7 @@ mod advert_tests {
                 Value::Object(proof_token_entry),
             ]),
         );
-        fs::write(
-            governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE),
-            norito::json::to_vec(&Value::Object(index)).expect("encode publish index"),
-        )
-        .expect("write publish index");
+        write_publish_index_fixture(&governance_dir, Value::Object(index));
 
         let node = node_with_test_governance_publisher(
             StorageConfig::builder()
@@ -34252,6 +35462,350 @@ mod advert_tests {
         .expect("transparency publication fixture")
     }
 
+    fn synthetic_car_queue_for_publish_index(index: &Value) -> Value {
+        let entries = index
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("publish-index fixture entries");
+        let mut segments = Vec::with_capacity(entries.len());
+        let mut by_encoded_blake3 = Map::new();
+        let mut by_payload_kind = Map::new();
+        let mut by_car_archive_blake3 = Map::new();
+        for (position, entry) in entries.iter().enumerate() {
+            let encoded_path = entry
+                .get("encoded_path")
+                .and_then(Value::as_str)
+                .expect("fixture encoded path");
+            let json_path = entry
+                .get("json_path")
+                .and_then(Value::as_str)
+                .expect("fixture JSON path");
+            let encoded_blake3 = entry
+                .get("encoded_blake3")
+                .and_then(Value::as_str)
+                .expect("fixture encoded digest");
+            let json_blake3 = entry
+                .get("json_blake3")
+                .and_then(Value::as_str)
+                .expect("fixture JSON digest");
+            let encoded_len = entry
+                .get("encoded_len")
+                .and_then(Value::as_u64)
+                .expect("fixture encoded length");
+            let json_len = entry
+                .get("json_len")
+                .and_then(Value::as_u64)
+                .expect("fixture JSON length");
+            let payload_kind = entry
+                .get("payload_kind")
+                .and_then(Value::as_str)
+                .expect("fixture payload kind");
+            let position_u64 = u64::try_from(position).expect("fixture position");
+            let archive_digest = blake3_hash(
+                format!("synthetic-governance-car:{position}:{encoded_blake3}").as_bytes(),
+            )
+            .to_hex()
+            .to_string();
+            let car_digest = blake3_hash(
+                format!("synthetic-governance-car-cid:{position}:{encoded_blake3}").as_bytes(),
+            );
+            let root_digest = blake3_hash(
+                format!("synthetic-governance-root-cid:{position}:{encoded_blake3}").as_bytes(),
+            );
+            let sidecar_record = |role: &str, path: String, seed: &str| {
+                let mut file = Map::new();
+                file.insert("role".into(), Value::from(role));
+                file.insert("path".into(), Value::from(path));
+                file.insert("bytes".into(), Value::from(65_u64));
+                file.insert(
+                    "blake3".into(),
+                    Value::from(blake3_hash(seed.as_bytes()).to_hex().to_string()),
+                );
+                Value::Object(file)
+            };
+            let source_record = |role: &str, path: &str, bytes: u64, digest: &str| {
+                let mut file = Map::new();
+                file.insert("role".into(), Value::from(role));
+                file.insert("path".into(), Value::from(path));
+                file.insert("bytes".into(), Value::from(bytes));
+                file.insert("blake3".into(), Value::from(digest));
+                Value::Object(file)
+            };
+            let mut profile = Map::new();
+            profile.insert(
+                "min_size".into(),
+                Value::from(ChunkProfile::DEFAULT.min_size as u64),
+            );
+            profile.insert(
+                "target_size".into(),
+                Value::from(ChunkProfile::DEFAULT.target_size as u64),
+            );
+            profile.insert(
+                "max_size".into(),
+                Value::from(ChunkProfile::DEFAULT.max_size as u64),
+            );
+            profile.insert(
+                "break_mask".into(),
+                Value::from(ChunkProfile::DEFAULT.break_mask),
+            );
+            let base = format!("car-segments/{position:020}_synthetic_{position:016x}");
+            let mut segment = Map::new();
+            segment.insert(
+                "schema".into(),
+                Value::from("sorafs.governance_dag.local_car_segment.v1"),
+            );
+            segment.insert("queue_position".into(), Value::from(position_u64));
+            segment.insert("status".into(), Value::from("assembled"));
+            segment.insert("source".into(), Value::from("filesystem"));
+            segment.insert(
+                "source_publish_index_position".into(),
+                Value::from(position_u64),
+            );
+            segment.insert("payload_kind".into(), Value::from(payload_kind));
+            segment.insert("encoded_path".into(), Value::from(encoded_path));
+            segment.insert("json_path".into(), Value::from(json_path));
+            segment.insert("encoded_blake3".into(), Value::from(encoded_blake3));
+            segment.insert("encoded_len".into(), Value::from(encoded_len));
+            segment.insert("car_path".into(), Value::from(format!("{base}.car")));
+            segment.insert("plan_path".into(), Value::from(format!("{base}.plan.json")));
+            segment.insert("manifest_path".into(), Value::from(format!("{base}.json")));
+            segment.insert("car_size".into(), Value::from(2_048_u64));
+            segment.insert(
+                "car_archive_blake3".into(),
+                Value::from(archive_digest.clone()),
+            );
+            segment.insert(
+                "car_payload_blake3".into(),
+                Value::from(blake3_hash(archive_digest.as_bytes()).to_hex().to_string()),
+            );
+            segment.insert(
+                "car_cid_hex".into(),
+                Value::from(format!("01551f20{}", car_digest.to_hex())),
+            );
+            segment.insert(
+                "root_cids_hex".into(),
+                Value::Array(vec![Value::from(format!(
+                    "01711f20{}",
+                    root_digest.to_hex()
+                ))]),
+            );
+            segment.insert("dag_codec".into(), Value::from(0x71_u64));
+            segment.insert("chunk_count".into(), Value::from(4_u64));
+            segment.insert(
+                "payload_bytes".into(),
+                Value::from(encoded_len + json_len + 130),
+            );
+            segment.insert("assembled_at_unix".into(), Value::from(1_800_000_000_u64));
+            segment.insert(
+                "files".into(),
+                Value::Array(vec![
+                    source_record("encoded", encoded_path, encoded_len, encoded_blake3),
+                    sidecar_record(
+                        "encoded_blake3_sidecar",
+                        format!("{encoded_path}.blake3"),
+                        encoded_blake3,
+                    ),
+                    source_record("json", json_path, json_len, json_blake3),
+                    sidecar_record(
+                        "json_blake3_sidecar",
+                        format!("{json_path}.blake3"),
+                        json_blake3,
+                    ),
+                ]),
+            );
+            segment.insert("chunk_profile".into(), Value::Object(profile));
+            append_governance_lookup_position(
+                &mut by_encoded_blake3,
+                encoded_blake3.to_owned(),
+                position_u64,
+            );
+            append_governance_lookup_position(
+                &mut by_payload_kind,
+                payload_kind.to_owned(),
+                position_u64,
+            );
+            append_governance_lookup_position(
+                &mut by_car_archive_blake3,
+                archive_digest,
+                position_u64,
+            );
+            segments.push(Value::Object(segment));
+        }
+        let count = u64::try_from(segments.len()).expect("fixture segment count");
+        let mut queue = Map::new();
+        queue.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.local_car_queue.v1"),
+        );
+        queue.insert("source".into(), Value::from("filesystem"));
+        queue.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
+        queue.insert("generated_at".into(), Value::from(1_800_000_000_u64));
+        queue.insert("segment_count".into(), Value::from(count));
+        queue.insert("assembled_count".into(), Value::from(count));
+        queue.insert("pending_count".into(), Value::from(0_u64));
+        queue.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
+        queue.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
+        queue.insert(
+            "by_car_archive_blake3".into(),
+            Value::Object(by_car_archive_blake3),
+        );
+        queue.insert("segments".into(), Value::Array(segments));
+        Value::Object(queue)
+    }
+
+    fn synthetic_publish_index_for_car_queue(queue: &Value) -> Value {
+        let segments = queue
+            .get("segments")
+            .and_then(Value::as_array)
+            .expect("CAR queue fixture segments");
+        let mut entries = Vec::with_capacity(segments.len());
+        let mut payload_kind_counts = Map::new();
+        let mut by_encoded_blake3 = Map::new();
+        let mut by_payload_kind = Map::new();
+        for (position, segment) in segments.iter().enumerate() {
+            let files = segment
+                .get("files")
+                .and_then(Value::as_array)
+                .expect("fixture source files");
+            let json_file = files
+                .iter()
+                .find(|file| file.get("role").and_then(Value::as_str) == Some("json"))
+                .expect("fixture JSON source file");
+            let payload_kind = segment
+                .get("payload_kind")
+                .and_then(Value::as_str)
+                .expect("fixture payload kind");
+            let encoded_blake3 = segment
+                .get("encoded_blake3")
+                .and_then(Value::as_str)
+                .expect("fixture encoded digest");
+            let position_u64 = u64::try_from(position).expect("fixture position");
+            let mut entry = Map::new();
+            entry.insert("position".into(), Value::from(position_u64));
+            for field in [
+                "payload_kind",
+                "encoded_path",
+                "json_path",
+                "encoded_blake3",
+                "encoded_len",
+            ] {
+                entry.insert(
+                    field.into(),
+                    segment.get(field).cloned().expect("fixture segment field"),
+                );
+            }
+            entry.insert(
+                "json_blake3".into(),
+                json_file.get("blake3").cloned().expect("fixture JSON digest"),
+            );
+            entry.insert(
+                "json_len".into(),
+                json_file.get("bytes").cloned().expect("fixture JSON length"),
+            );
+            entry.insert("published_at_unix".into(), Value::from(1_800_000_000_u64));
+            entry.insert("labels".into(), Value::Object(Map::new()));
+            entries.push(Value::Object(entry));
+            let count = payload_kind_counts
+                .get(payload_kind)
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                + 1;
+            payload_kind_counts.insert(payload_kind.to_owned(), Value::from(count));
+            append_governance_lookup_position(
+                &mut by_encoded_blake3,
+                encoded_blake3.to_owned(),
+                position_u64,
+            );
+            append_governance_lookup_position(
+                &mut by_payload_kind,
+                payload_kind.to_owned(),
+                position_u64,
+            );
+        }
+        let mut index = Map::new();
+        index.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.local_publish_index.v1"),
+        );
+        index.insert("source".into(), Value::from("filesystem"));
+        index.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
+        index.insert("generated_at".into(), Value::from(1_800_000_000_u64));
+        index.insert(
+            "entry_count".into(),
+            Value::from(u64::try_from(entries.len()).expect("fixture entry count")),
+        );
+        index.insert(
+            "payload_kind_counts".into(),
+            Value::Object(payload_kind_counts),
+        );
+        index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
+        index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
+        index.insert("entries".into(), Value::Array(entries));
+        Value::Object(index)
+    }
+
+    fn write_publication_state_fixture(
+        governance_dir: &StdPath,
+        publish_index: Value,
+        car_queue: Value,
+    ) {
+        let mut state = Map::new();
+        state.insert(
+            "schema".into(),
+            Value::from(GOVERNANCE_DAG_PUBLICATION_STATE_SCHEMA),
+        );
+        state.insert("source".into(), Value::from("filesystem"));
+        state.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
+        state.insert("generation".into(), Value::from(1_u64));
+        state.insert("generated_at".into(), Value::from(1_800_000_000_u64));
+        state.insert("publish_index".into(), publish_index);
+        state.insert("car_queue".into(), car_queue);
+        fs::write(
+            governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE),
+            norito::json::to_vec(&Value::Object(state)).expect("encode publication state fixture"),
+        )
+        .expect("write publication state fixture");
+    }
+
+    fn read_publication_state_fixture(governance_dir: &StdPath) -> Value {
+        norito::json::from_slice(
+            &fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE))
+                .expect("read publication state fixture"),
+        )
+        .expect("decode publication state fixture")
+    }
+
+    fn write_publication_state_value(governance_dir: &StdPath, state: &Value) {
+        fs::write(
+            governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE),
+            norito::json::to_vec(state).expect("encode publication state fixture"),
+        )
+        .expect("write publication state fixture");
+    }
+
+    fn publication_state_section_mut<'a>(state: &'a mut Value, section: &str) -> &'a mut Value {
+        state
+            .get_mut(section)
+            .unwrap_or_else(|| panic!("publication state contains {section}"))
+    }
+
+    fn read_publication_section_fixture(governance_dir: &StdPath, section: &str) -> Value {
+        read_publication_state_fixture(governance_dir)
+            .get(section)
+            .unwrap_or_else(|| panic!("publication state contains {section}"))
+            .clone()
+    }
+
+    fn write_publish_index_fixture(governance_dir: &StdPath, publish_index: Value) {
+        let car_queue = synthetic_car_queue_for_publish_index(&publish_index);
+        write_publication_state_fixture(governance_dir, publish_index, car_queue);
+    }
+
+    fn write_car_queue_fixture(governance_dir: &StdPath, car_queue: Value) {
+        let publish_index = synthetic_publish_index_for_car_queue(&car_queue);
+        write_publication_state_fixture(governance_dir, publish_index, car_queue);
+    }
+
     fn sorafs_app_state_with_transparency_publication()
     -> (SharedAppState, TempDir, String, String, String) {
         let mut app = mk_app_state_for_tests();
@@ -34278,11 +35832,9 @@ mod advert_tests {
         fs::create_dir_all(encoded_path.parent().expect("encoded parent"))
             .expect("create transparency dir");
         fs::write(&encoded_path, &encoded).expect("write transparency publication");
-        fs::write(
-            governance_dir.join(&relative_json),
-            br#"{"schema":"sorafs.transparency.test_sidecar.v1"}"#,
-        )
-        .expect("write transparency sidecar");
+        let json_sidecar = br#"{"schema":"sorafs.transparency.test_sidecar.v1"}"#;
+        fs::write(governance_dir.join(&relative_json), json_sidecar)
+            .expect("write transparency sidecar");
 
         let mut labels = Map::new();
         labels.insert("cycle_id_hex".into(), Value::from(cycle_id_hex.clone()));
@@ -34322,6 +35874,11 @@ mod advert_tests {
         entry.insert("json_path".into(), Value::from(relative_json));
         entry.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
         entry.insert("encoded_len".into(), Value::from(encoded.len() as u64));
+        entry.insert(
+            "json_blake3".into(),
+            Value::from(blake3_hash(json_sidecar).to_hex().to_string()),
+        );
+        entry.insert("json_len".into(), Value::from(json_sidecar.len() as u64));
         entry.insert("published_at_unix".into(), Value::from(1_800_000_080_u64));
         entry.insert("labels".into(), Value::Object(labels));
 
@@ -34354,11 +35911,7 @@ mod advert_tests {
         index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
         index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
         index.insert("entries".into(), Value::Array(vec![Value::Object(entry)]));
-        fs::write(
-            governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE),
-            norito::json::to_vec(&Value::Object(index)).expect("encode publish index"),
-        )
-        .expect("write publish index");
+        write_publish_index_fixture(&governance_dir, Value::Object(index));
 
         let node = node_with_test_governance_publisher(
             StorageConfig::builder()
@@ -34378,6 +35931,50 @@ mod advert_tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let governance_dir = temp_dir.path().join("governance");
         fs::create_dir_all(&governance_dir).expect("create governance dir");
+
+        let source_files = |encoded_path: &str,
+                            json_path: &str,
+                            encoded_len: u64,
+                            encoded_digest: &str,
+                            json_len: u64| {
+            let file = |role: &str, path: String, bytes: u64, digest: String| {
+                let mut record = Map::new();
+                record.insert("role".into(), Value::from(role));
+                record.insert("path".into(), Value::from(path));
+                record.insert("bytes".into(), Value::from(bytes));
+                record.insert("blake3".into(), Value::from(digest));
+                Value::Object(record)
+            };
+            Value::Array(vec![
+                file(
+                    "encoded",
+                    encoded_path.to_owned(),
+                    encoded_len,
+                    encoded_digest.to_owned(),
+                ),
+                file(
+                    "encoded_blake3_sidecar",
+                    format!("{encoded_path}.blake3"),
+                    65,
+                    "11".repeat(32),
+                ),
+                file("json", json_path.to_owned(), json_len, "22".repeat(32)),
+                file(
+                    "json_blake3_sidecar",
+                    format!("{json_path}.blake3"),
+                    65,
+                    "33".repeat(32),
+                ),
+            ])
+        };
+        let chunk_profile = || {
+            let mut profile = Map::new();
+            profile.insert("min_size".into(), Value::from(64 * 1024_u64));
+            profile.insert("target_size".into(), Value::from(256 * 1024_u64));
+            profile.insert("max_size".into(), Value::from(512 * 1024_u64));
+            profile.insert("break_mask".into(), Value::from(0x0000_FFFF_u64));
+            Value::Object(profile)
+        };
 
         let digest_hex = "aa".repeat(32);
         let reputation_digest_hex = "bb".repeat(32);
@@ -34424,15 +36021,29 @@ mod advert_tests {
             Value::from(car_archive_hex.clone()),
         );
         repair_segment.insert("car_payload_blake3".into(), Value::from("ee".repeat(32)));
-        repair_segment.insert("car_cid_hex".into(), Value::from("01".repeat(36)));
+        repair_segment.insert(
+            "car_cid_hex".into(),
+            Value::from(format!("01551f20{}", "01".repeat(32))),
+        );
         repair_segment.insert(
             "root_cids_hex".into(),
-            Value::Array(vec![Value::from("02".repeat(36))]),
+            Value::Array(vec![Value::from(format!("01711f20{}", "02".repeat(32)))]),
         );
         repair_segment.insert("dag_codec".into(), Value::from(0x71_u64));
         repair_segment.insert("chunk_count".into(), Value::from(3_u64));
         repair_segment.insert("payload_bytes".into(), Value::from(512_u64));
         repair_segment.insert("assembled_at_unix".into(), Value::from(1_800_000_500_u64));
+        repair_segment.insert(
+            "files".into(),
+            source_files(
+                "repairs/audit/00000000000000000001.to",
+                "repairs/audit/00000000000000000001.json",
+                128,
+                &digest_hex,
+                254,
+            ),
+        );
+        repair_segment.insert("chunk_profile".into(), chunk_profile());
 
         let mut reputation_segment = repair_segment.clone();
         reputation_segment.insert("queue_position".into(), Value::from(1_u64));
@@ -34452,8 +36063,36 @@ mod advert_tests {
         );
         reputation_segment.insert("encoded_len".into(), Value::from(256_u64));
         reputation_segment.insert(
+            "car_path".into(),
+            Value::from(
+                "car-segments/00000000000000000001_reputation_snapshot_bbbbbbbbbbbbbbbb.car",
+            ),
+        );
+        reputation_segment.insert(
+            "plan_path".into(),
+            Value::from(
+                "car-segments/00000000000000000001_reputation_snapshot_bbbbbbbbbbbbbbbb.plan.json",
+            ),
+        );
+        reputation_segment.insert(
+            "manifest_path".into(),
+            Value::from(
+                "car-segments/00000000000000000001_reputation_snapshot_bbbbbbbbbbbbbbbb.json",
+            ),
+        );
+        reputation_segment.insert(
             "car_archive_blake3".into(),
             Value::from(reputation_car_archive_hex.clone()),
+        );
+        reputation_segment.insert(
+            "files".into(),
+            source_files(
+                "reputation/snapshots/snapshot-a.to",
+                "reputation/snapshots/snapshot-a.json",
+                256,
+                &reputation_digest_hex,
+                126,
+            ),
         );
 
         let mut by_encoded_blake3 = Map::new();
@@ -34505,11 +36144,9 @@ mod advert_tests {
                 Value::Object(reputation_segment),
             ]),
         );
-        fs::write(
-            governance_dir.join(GOVERNANCE_DAG_CAR_QUEUE_FILE),
-            norito::json::to_vec(&Value::Object(queue)).expect("encode CAR queue"),
-        )
-        .expect("write CAR queue");
+        let queue = Value::Object(queue);
+        let publish_index = synthetic_publish_index_for_car_queue(&queue);
+        write_publication_state_fixture(&governance_dir, publish_index, queue);
 
         let node = node_with_test_governance_publisher(
             StorageConfig::builder()
@@ -34712,6 +36349,237 @@ mod advert_tests {
             !producer.contains("JsonValue::from(root.display().to_string())"),
             "public Governance DAG indexes must not persist the host filesystem root"
         );
+    }
+
+    #[test]
+    fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
+        assert_eq!(MAX_LOCAL_MANIFEST_RESPONSE_BYTES, 16 * 1024 * 1024);
+        assert_eq!(MAX_STORAGE_FETCH_RESPONSE_BYTES, 8 * 1024 * 1024);
+        assert_eq!(MAX_CAR_RANGE_PAYLOAD_BYTES, 8 * 1024 * 1024);
+        assert_eq!(MAX_CAR_RANGE_RESPONSE_BYTES, 16 * 1024 * 1024);
+
+        let source = include_str!("api.rs");
+        for (start_marker, end_marker, io_marker) in [
+            (
+                "pub(crate) async fn handle_get_sorafs_storage_manifest(",
+                "pub(crate) async fn handle_get_sorafs_storage_plan(",
+                ".load_manifest_bytes()",
+            ),
+            (
+                "pub(crate) async fn handle_get_sorafs_storage_plan(",
+                "pub(crate) async fn handle_get_sorafs_pin_registry(",
+                ".load_manifest()",
+            ),
+            (
+                "async fn build_site_file_response(",
+                "pub(crate) async fn handle_get_sorafs_site_manifest(",
+                ".read_payload_range(",
+            ),
+            (
+                "pub(crate) async fn handle_get_sorafs_site_manifest(",
+                "pub(crate) async fn handle_get_sorafs_site_root(",
+                ".load_manifest_bytes()",
+            ),
+            (
+                "pub(crate) async fn handle_post_sorafs_storage_fetch(",
+                "fn required_canonical_stream_header(",
+                ".read_payload_range(",
+            ),
+            (
+                "pub(crate) async fn handle_get_sorafs_storage_car_range(",
+                "pub(crate) async fn handle_get_sorafs_storage_chunk(",
+                ".load_manifest()",
+            ),
+        ] {
+            let start = source
+                .find(start_marker)
+                .unwrap_or_else(|| panic!("missing SoraFS handler `{start_marker}`"));
+            let tail = &source[start..];
+            let end = tail
+                .find(end_marker)
+                .unwrap_or_else(|| panic!("missing end marker `{end_marker}`"));
+            let handler = &tail[..end];
+            let worker = handler
+                .find("sorafs_heavy_blocking_task(")
+                .unwrap_or_else(|| {
+                    panic!("file-backed SoraFS handler `{start_marker}` is not offloaded")
+                });
+            let io = handler.find(io_marker).unwrap_or_else(|| {
+                panic!("file-backed SoraFS handler `{start_marker}` lost `{io_marker}`")
+            });
+            assert!(
+                worker < io,
+                "file-backed SoraFS handler `{start_marker}` performs I/O before entering its heavy worker"
+            );
+        }
+
+        let car_start = source
+            .find("pub(crate) async fn handle_get_sorafs_storage_car_range(")
+            .expect("CAR range handler");
+        let car_end = source[car_start..]
+            .find("pub(crate) async fn handle_get_sorafs_storage_chunk(")
+            .map(|offset| car_start + offset)
+            .expect("end of CAR range handler");
+        let car_handler = &source[car_start..car_end];
+        let worker = car_handler
+            .find("sorafs_heavy_blocking_task(")
+            .expect("CAR range heavy worker");
+        assert!(
+            car_handler
+                .find(".read_payload_range(")
+                .is_some_and(|read| worker < read),
+            "CAR range payload reads must occur inside the heavy worker"
+        );
+        for forbidden in [
+            "fs::read(stored.manifest_path())",
+            "ChunkFilesReader",
+            "StreamingBodyWriter",
+            "validate_chunk_files_and_payload_digest",
+            "tokio::sync::mpsc",
+        ] {
+            assert!(
+                !car_handler.contains(forbidden),
+                "CAR range handler must not reintroduce `{forbidden}`"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn governance_dag_indexes_reject_unknown_host_path_fields() {
+        const FORBIDDEN_PATH: &str = "/private/retained/governance/state";
+
+        let (mirror_app, _mirror_temp, _block_cid, _node_cid, _head_cid) =
+            sorafs_app_state_with_governance_mirror();
+        let mirror_path = mirror_app
+            .sorafs_node
+            .config()
+            .governance_dir()
+            .expect("configured mirror governance dir")
+            .join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
+        let mut mirror: Value = norito::json::from_slice(
+            &fs::read(&mirror_path).expect("read governance mirror fixture"),
+        )
+        .expect("decode governance mirror fixture");
+        mirror
+            .as_object_mut()
+            .expect("mirror index object")
+            .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
+        fs::write(
+            &mirror_path,
+            norito::json::to_vec(&mirror).expect("encode mirror with unknown field"),
+        )
+        .expect("write mirror with unknown field");
+        let response =
+            handle_get_sorafs_governance_dag_dashboard(State(mirror_app), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect rejected mirror response");
+        assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
+
+        let (runtime_app, _runtime_temp, _digest, _block_cid, _node_cid) =
+            sorafs_app_state_with_governance_runtime_index();
+        let runtime_path = runtime_app
+            .sorafs_node
+            .config()
+            .governance_dir()
+            .expect("configured runtime governance dir")
+            .join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE);
+        let mut runtime: Value = norito::json::from_slice(
+            &fs::read(&runtime_path).expect("read governance runtime fixture"),
+        )
+        .expect("decode governance runtime fixture");
+        runtime
+            .get_mut("blocks")
+            .and_then(Value::as_array_mut)
+            .and_then(|blocks| blocks.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("first runtime block")
+            .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
+        fs::write(
+            &runtime_path,
+            norito::json::to_vec(&runtime).expect("encode runtime with unknown field"),
+        )
+        .expect("write runtime with unknown field");
+        let response =
+            handle_get_sorafs_governance_dag_runtime(State(runtime_app), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect rejected runtime response");
+        assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
+
+        let (car_app, car_temp, _digest, _archive_digest) =
+            sorafs_app_state_with_governance_car_queue();
+        let governance_dir = car_temp.path().join("governance");
+        let mut state = read_publication_state_fixture(&governance_dir);
+        publication_state_section_mut(&mut state, "car_queue")
+            .get_mut("segments")
+            .and_then(Value::as_array_mut)
+            .and_then(|segments| segments.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("first CAR queue segment")
+            .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
+        write_publication_state_value(&governance_dir, &state);
+        let response =
+            handle_get_sorafs_governance_dag_car_queue(State(car_app), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect rejected CAR queue response");
+        assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
+    }
+
+    #[tokio::test]
+    async fn governance_dag_pending_car_segment_cannot_hide_an_artifact_path() {
+        let (app, temp_dir, _digest, car_archive_digest) =
+            sorafs_app_state_with_governance_car_queue();
+        let governance_dir = temp_dir.path().join("governance");
+        let mut state = read_publication_state_fixture(&governance_dir);
+        let queue_object = publication_state_section_mut(&mut state, "car_queue")
+            .as_object_mut()
+            .expect("CAR queue object");
+        let segment = queue_object
+            .get_mut("segments")
+            .and_then(Value::as_array_mut)
+            .and_then(|segments| segments.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("first CAR queue segment");
+        segment.insert("status".into(), Value::from("pending"));
+        for field in [
+            "car_path",
+            "plan_path",
+            "manifest_path",
+            "car_size",
+            "car_archive_blake3",
+            "car_payload_blake3",
+            "car_cid_hex",
+            "root_cids_hex",
+            "dag_codec",
+            "chunk_count",
+            "payload_bytes",
+            "assembled_at_unix",
+            "files",
+            "chunk_profile",
+        ] {
+            segment.remove(field);
+        }
+        segment.insert(
+            "car_path".into(),
+            Value::from("/private/retained/substituted.car"),
+        );
+        queue_object.insert("assembled_count".into(), Value::from(1_u64));
+        queue_object.insert("pending_count".into(), Value::from(1_u64));
+        queue_object
+            .get_mut("by_car_archive_blake3")
+            .and_then(Value::as_object_mut)
+            .expect("CAR archive lookup")
+            .remove(&car_archive_digest);
+        write_publication_state_value(&governance_dir, &state);
+
+        let response =
+            handle_get_sorafs_governance_dag_car_queue(State(app), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
@@ -35744,10 +37612,7 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let governance_dir = temp_dir.path().join("governance");
-        let index_path = governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
-        let mut index: Value =
-            norito::json::from_slice(&fs::read(&index_path).expect("read publish index"))
-                .expect("decode publish index");
+        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
         let response = handle_get_sorafs_transparency_cycles(
             State(app.clone()),
             HeaderMap::new(),
@@ -35786,11 +37651,7 @@ mod advert_tests {
             .expect("entries");
         let entry = entries[0].as_object_mut().expect("entry object");
         entry.insert("encoded_path".into(), Value::from("../escape.to"));
-        fs::write(
-            &index_path,
-            norito::json::to_vec(&index).expect("encode escaped index"),
-        )
-        .expect("write escaped index");
+        write_publish_index_fixture(&governance_dir, index);
 
         let response = handle_get_sorafs_transparency_cycle(
             State(app),
@@ -35817,10 +37678,7 @@ mod advert_tests {
         fs::write(&encoded_path, &encoded).expect("write noncanonical transparency publication");
         let new_digest_hex = encode(blake3_hash(&encoded).as_bytes());
 
-        let index_path = governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
-        let mut index: Value =
-            norito::json::from_slice(&fs::read(&index_path).expect("read publish index"))
-                .expect("decode publish index");
+        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
         let entry = index
             .get_mut("entries")
             .and_then(Value::as_array_mut)
@@ -35835,11 +37693,7 @@ mod advert_tests {
             .expect("publish digest lookup");
         lookup.remove(&old_digest_hex);
         lookup.insert(new_digest_hex, Value::Array(vec![Value::from(0_u64)]));
-        fs::write(
-            &index_path,
-            norito::json::to_vec(&index).expect("encode noncanonical publish index"),
-        )
-        .expect("write noncanonical publish index");
+        write_publish_index_fixture(&governance_dir, index);
 
         let response = handle_get_sorafs_transparency_cycle(
             State(app),
@@ -35946,13 +37800,8 @@ mod advert_tests {
     #[tokio::test]
     async fn transparency_readback_limit_query_bounds_response_arrays() {
         let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let index_path = temp_dir
-            .path()
-            .join("governance")
-            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
-        let mut index: Value =
-            norito::json::from_slice(&fs::read(&index_path).expect("read publish index"))
-                .expect("decode publish index");
+        let governance_dir = temp_dir.path().join("governance");
+        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
         {
             let entries = index
                 .get_mut("entries")
@@ -35984,11 +37833,7 @@ mod advert_tests {
             .and_then(Value::as_array_mut)
             .expect("proof-token lookup")
             .push(Value::from(6_u64));
-        fs::write(
-            &index_path,
-            norito::json::to_vec(&index).expect("encode publish index"),
-        )
-        .expect("write publish index");
+        write_publish_index_fixture(&governance_dir, index);
 
         let response = handle_get_sorafs_transparency_token_issuances(
             State(app.clone()),
@@ -36534,13 +38379,8 @@ mod advert_tests {
     #[tokio::test]
     async fn appeal_finance_dashboards_limit_query_bounds_response_arrays() {
         let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let index_path = temp_dir
-            .path()
-            .join("governance")
-            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
-        let mut index: Value =
-            norito::json::from_slice(&fs::read(&index_path).expect("read publish index"))
-                .expect("decode publish index");
+        let governance_dir = temp_dir.path().join("governance");
+        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
         {
             let entries = index
                 .get_mut("entries")
@@ -36589,11 +38429,7 @@ mod advert_tests {
             .and_then(Value::as_array_mut)
             .expect("settlement receipt lookup")
             .push(Value::from(8_u64));
-        fs::write(
-            &index_path,
-            norito::json::to_vec(&index).expect("encode publish index"),
-        )
-        .expect("write publish index");
+        write_publish_index_fixture(&governance_dir, index);
 
         let response = handle_get_sorafs_appeal_finance_reports(
             State(app.clone()),
@@ -36711,24 +38547,14 @@ mod advert_tests {
     #[tokio::test]
     async fn governance_dag_publish_index_rejects_stale_reconstructed_lookup() {
         let (app, temp_dir, digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let index_path = temp_dir
-            .path()
-            .join("governance")
-            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
-        let mut index: Value = norito::json::from_slice(
-            &fs::read(&index_path).expect("read governance publish index fixture"),
-        )
-        .expect("decode governance publish index fixture");
+        let governance_dir = temp_dir.path().join("governance");
+        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
         index
             .get_mut("by_encoded_blake3")
             .and_then(Value::as_object_mut)
             .expect("publish digest lookup")
             .remove(&digest_hex);
-        fs::write(
-            &index_path,
-            norito::json::to_vec(&index).expect("encode stale publish index fixture"),
-        )
-        .expect("write stale publish index fixture");
+        write_publish_index_fixture(&governance_dir, index);
 
         let response = handle_get_sorafs_governance_dag_publish_index(
             State(app),
@@ -36740,20 +38566,20 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn governance_dag_publish_index_rejects_oversized_file_before_decode() {
+    async fn governance_dag_publish_index_rejects_oversized_state_before_decode() {
         let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
         let forbidden_root = temp_dir.path().display().to_string();
         let index_path = temp_dir
             .path()
             .join("governance")
-            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
+            .join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE);
         fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .open(&index_path)
             .expect("open governance publish index fixture")
-            .set_len(GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES + 1)
-            .expect("extend governance publish index fixture");
+            .set_len(GOVERNANCE_DAG_PUBLICATION_STATE_MAX_BYTES + 1)
+            .expect("extend governance publication state fixture");
 
         let response = handle_get_sorafs_governance_dag_publish_index(
             State(app),
@@ -36775,23 +38601,13 @@ mod advert_tests {
     #[tokio::test]
     async fn governance_dag_publish_index_rejects_absolute_root_metadata() {
         let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let index_path = temp_dir
-            .path()
-            .join("governance")
-            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
-        let mut index: Value = norito::json::from_slice(
-            &fs::read(&index_path).expect("read governance publish index fixture"),
-        )
-        .expect("decode governance publish index fixture");
+        let governance_dir = temp_dir.path().join("governance");
+        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
         index.as_object_mut().expect("publish index object").insert(
             "root".into(),
             Value::from(temp_dir.path().join("governance").display().to_string()),
         );
-        fs::write(
-            &index_path,
-            norito::json::to_vec(&index).expect("encode absolute-root publish index fixture"),
-        )
-        .expect("write absolute-root publish index fixture");
+        write_publish_index_fixture(&governance_dir, index);
 
         let response = handle_get_sorafs_governance_dag_publish_index(
             State(app),
@@ -36805,14 +38621,8 @@ mod advert_tests {
     #[tokio::test]
     async fn governance_dag_publish_index_rejects_escaping_payload_path() {
         let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let index_path = temp_dir
-            .path()
-            .join("governance")
-            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
-        let mut index: Value = norito::json::from_slice(
-            &fs::read(&index_path).expect("read governance publish index fixture"),
-        )
-        .expect("decode governance publish index fixture");
+        let governance_dir = temp_dir.path().join("governance");
+        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
         index
             .get_mut("entries")
             .and_then(Value::as_array_mut)
@@ -36820,11 +38630,7 @@ mod advert_tests {
             .and_then(Value::as_object_mut)
             .expect("first governance publish index entry")
             .insert("encoded_path".into(), Value::from("../outside.to"));
-        fs::write(
-            &index_path,
-            norito::json::to_vec(&index).expect("encode escaping publish index fixture"),
-        )
-        .expect("write escaping publish index fixture");
+        write_publish_index_fixture(&governance_dir, index);
 
         let response = handle_get_sorafs_governance_dag_publish_index(
             State(app),
@@ -36866,13 +38672,9 @@ mod advert_tests {
     async fn governance_dag_lookup_limit_query_bounds_matching_arrays() {
         let (publish_app, publish_dir, _digest_hex) =
             sorafs_app_state_with_governance_publish_index();
-        let publish_path = publish_dir
-            .path()
-            .join("governance")
-            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
-        let mut publish_index: Value =
-            norito::json::from_slice(&fs::read(&publish_path).expect("read publish index fixture"))
-                .expect("decode publish index fixture");
+        let publish_governance_dir = publish_dir.path().join("governance");
+        let mut publish_index =
+            read_publication_section_fixture(&publish_governance_dir, "publish_index");
         let publish_map = publish_index
             .as_object_mut()
             .expect("publish index object fixture");
@@ -36900,11 +38702,12 @@ mod advert_tests {
                 "repair_audit".into(),
                 Value::Array(vec![Value::from(0_u64), Value::from(6_u64)]),
             );
-        fs::write(
-            &publish_path,
-            norito::json::to_vec(&publish_index).expect("encode publish index fixture"),
-        )
-        .expect("write publish index fixture");
+        publish_map
+            .get_mut("by_encoded_blake3")
+            .and_then(Value::as_object_mut)
+            .expect("publish by encoded digest")
+            .insert("77".repeat(32), Value::Array(vec![Value::from(6_u64)]));
+        write_publish_index_fixture(&publish_governance_dir, publish_index);
 
         let response = handle_get_sorafs_governance_dag_publish_kind(
             State(publish_app),
@@ -36929,13 +38732,9 @@ mod advert_tests {
 
         let (car_app, car_dir, _digest_hex, _car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();
-        let car_path = car_dir
-            .path()
-            .join("governance")
-            .join(GOVERNANCE_DAG_CAR_QUEUE_FILE);
-        let mut car_queue: Value =
-            norito::json::from_slice(&fs::read(&car_path).expect("read CAR queue fixture"))
-                .expect("decode CAR queue fixture");
+        let car_governance_dir = car_dir.path().join("governance");
+        let mut car_queue =
+            read_publication_section_fixture(&car_governance_dir, "car_queue");
         let car_map = car_queue.as_object_mut().expect("CAR queue object fixture");
         let segments = car_map
             .get_mut("segments")
@@ -36946,6 +38745,17 @@ mod advert_tests {
             segment.insert("queue_position".into(), Value::from(2_u64));
             segment.insert("encoded_blake3".into(), Value::from("78".repeat(32)));
             segment.insert("car_archive_blake3".into(), Value::from("79".repeat(32)));
+            segment
+                .get_mut("files")
+                .and_then(Value::as_array_mut)
+                .and_then(|files| {
+                    files
+                        .iter_mut()
+                        .find(|file| file.get("role").and_then(Value::as_str) == Some("encoded"))
+                })
+                .and_then(Value::as_object_mut)
+                .expect("duplicated CAR encoded source record")
+                .insert("blake3".into(), Value::from("78".repeat(32)));
         }
         segments.push(duplicate);
         car_map.insert("segment_count".into(), Value::from(3_u64));
@@ -36968,11 +38778,7 @@ mod advert_tests {
             .and_then(Value::as_object_mut)
             .expect("CAR queue by CAR archive digest")
             .insert("79".repeat(32), Value::Array(vec![Value::from(2_u64)]));
-        fs::write(
-            &car_path,
-            norito::json::to_vec(&car_queue).expect("encode CAR queue fixture"),
-        )
-        .expect("write CAR queue fixture");
+        write_car_queue_fixture(&car_governance_dir, car_queue);
 
         let response = handle_get_sorafs_governance_dag_car_queue_kind(
             State(car_app),
@@ -37055,7 +38861,7 @@ mod advert_tests {
 
     #[tokio::test]
     async fn governance_dag_car_queue_and_lookups_read_local_queue() {
-        let (app, _temp_dir, digest_hex, car_archive_hex) =
+        let (app, _temp_dir, digest_hex, _car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();
 
         let response =
@@ -37154,11 +38960,35 @@ mod advert_tests {
                 .and_then(Value::as_str),
             Some(digest_hex.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn governance_dag_car_archive_lookup_verifies_actual_producer_artifacts() {
+        let (app, temp_dir, _digest, _block_cid, _node_cid) =
+            sorafs_app_state_with_governance_runtime_index();
+        let queue: Value = norito::json::from_slice(
+            &fs::read(
+                temp_dir
+                    .path()
+                    .join("governance")
+                    .join(GOVERNANCE_DAG_CAR_QUEUE_FILE),
+            )
+            .expect("read producer CAR queue"),
+        )
+        .expect("decode producer CAR queue");
+        let archive_digest = queue
+            .get("segments")
+            .and_then(Value::as_array)
+            .and_then(|segments| segments.first())
+            .and_then(|segment| segment.get("car_archive_blake3"))
+            .and_then(Value::as_str)
+            .expect("producer archive digest")
+            .to_owned();
 
         let response = handle_get_sorafs_governance_dag_car_queue_archive(
-            State(app.clone()),
+            State(app),
             HeaderMap::new(),
-            Path(car_archive_hex.clone()),
+            Path(archive_digest.clone()),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -37175,7 +39005,7 @@ mod advert_tests {
                 .get("segment")
                 .and_then(|segment| segment.get("car_archive_blake3"))
                 .and_then(Value::as_str),
-            Some(car_archive_hex.as_str())
+            Some(archive_digest.as_str())
         );
     }
 

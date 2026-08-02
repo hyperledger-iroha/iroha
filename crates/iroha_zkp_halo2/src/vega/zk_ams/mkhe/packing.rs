@@ -20,6 +20,8 @@ const PACKED_PLAINTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packed-pla
 const ROTATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-rotation";
 const GALOIS_KEY_SCHEDULE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-galois-key-schedule";
 const ROTATION_CERTIFICATE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-rotation-certificate";
+const RELEASE_PACKING_CERTIFICATE_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.t256-release-packing-certificate";
 
 /// Maximum number of logical values admitted by one governed packed vector.
 pub const ZK_AMS_T256_MAX_LOGICAL_VALUES_V1: u32 = 1_048_576;
@@ -55,6 +57,8 @@ pub const ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1: [u8; 32] = [
     0x19, 0xfa, 0xf6, 0x2b, 0x64, 0x9b, 0xff, 0x56, 0x6a, 0xf4, 0xcf, 0xbb, 0x03, 0xfc, 0x34, 0xd7,
     0x52, 0xb8, 0xc2, 0xd8, 0x15, 0xc6, 0xa1, 0x63, 0x4d, 0xaf, 0x6e, 0xcb, 0xbb, 0xbe, 0xaf, 0xac,
 ];
+/// Exact number of independently labelled rejection cases in the release KAT.
+pub const ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1: u16 = 30;
 
 const RELEASE_ROOT_EXPONENT_BE_V1: [u8; 64] = [
     0x00, 0x00, 0x3f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0xbf, 0xff, 0xff, 0xff, 0x80, 0x00,
@@ -294,6 +298,88 @@ pub struct ZkAmsT256RotationCertificateV1 {
     pub transformed_rns_digest: [u8; 32],
     /// Digest binding the entire checked certificate.
     pub digest: [u8; 32],
+}
+
+/// Immutable evidence identity for the exact release packing KAT.
+///
+/// The focused release test recomputes every positive artifact and the ordered
+/// adversarial catalogue from the native implementation. Runtime readiness
+/// consumes this compact, profile-bound identity instead of repeating a
+/// release-degree NTT on each admission attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkAmsT256ReleasePackingCertificateV1 {
+    /// Certificate schema version.
+    pub version: u8,
+    /// Digest of the sole release RNS-BGV profile.
+    pub profile_digest: [u8; 32],
+    /// Frozen release cyclotomic degree.
+    pub ring_degree: u32,
+    /// Frozen number of conjugate-pair T256 slots.
+    pub slot_count: u32,
+    /// Digest of the exact full-chunk packing layout exercised by the KAT.
+    pub layout_digest: [u8; 32],
+    /// Digest of the exact inverse rotation request exercised by the KAT.
+    pub rotation_digest: [u8; 32],
+    /// Exact number of keys in the canonical binary Galois schedule.
+    pub galois_key_count: u8,
+    /// Digest of the complete ordered Galois-key schedule.
+    pub galois_key_schedule_digest: [u8; 32],
+    /// Digest of the exact release-degree packed input.
+    pub packed_input_kat_digest: [u8; 32],
+    /// Digest of the exact coefficient-domain rotated output.
+    pub packed_output_kat_digest: [u8; 32],
+    /// Digest of every transformed release-RNS limb.
+    pub transformed_rns_kat_digest: [u8; 32],
+    /// Digest of the native rotation certificate produced by the KAT.
+    pub rotation_certificate_kat_digest: [u8; 32],
+    /// Number of ordered negative cases absorbed into the negative KAT.
+    pub negative_case_count: u16,
+    /// Digest of the exact ordered negative-case labels and error classes.
+    pub negative_kat_digest: [u8; 32],
+    /// Digest binding every preceding field.
+    pub digest: [u8; 32],
+}
+
+/// Return the immutable profile-bound identity of the release packing KAT.
+pub fn zk_ams_t256_release_packing_certificate_v1()
+-> Result<ZkAmsT256ReleasePackingCertificateV1, ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    profile.validate()?;
+    let layout = zk_ams_t256_packing_layout_v1(
+        u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+    )?;
+    let rotation = zk_ams_t256_rotation_v1(
+        layout,
+        0,
+        0xA55A,
+        ZkAmsT256RotationDirectionV1::Inverse,
+    )?;
+    let schedule = zk_ams_t256_galois_key_schedule_v1()?;
+    let mut certificate = ZkAmsT256ReleasePackingCertificateV1 {
+        version: PACKING_VERSION_V1,
+        profile_digest: profile.digest()?,
+        ring_degree: u32::try_from(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+        slot_count: u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+        layout_digest: layout.digest,
+        rotation_digest: rotation.digest,
+        galois_key_count: u8::try_from(ZK_AMS_T256_GALOIS_KEY_COUNT_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+        galois_key_schedule_digest: schedule.digest,
+        packed_input_kat_digest: ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1,
+        packed_output_kat_digest: ZK_AMS_T256_RELEASE_PACKED_OUTPUT_KAT_DIGEST_V1,
+        transformed_rns_kat_digest: ZK_AMS_T256_RELEASE_TRANSFORMED_RNS_KAT_DIGEST_V1,
+        rotation_certificate_kat_digest:
+            ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1,
+        negative_case_count: ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1,
+        negative_kat_digest: ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1,
+        digest: [0; 32],
+    };
+    certificate.digest = release_packing_certificate_digest(certificate);
+    validate_release_packing_certificate(certificate)?;
+    Ok(certificate)
 }
 
 /// Construct the sole canonical chunking layout for a nonempty logical vector.

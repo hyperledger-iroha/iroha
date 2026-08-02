@@ -4104,6 +4104,17 @@ mod tests {
             .collect()
     }
 
+    fn command_aliases(command: &clap::Command) -> BTreeSet<String> {
+        let mut aliases = command
+            .get_all_aliases()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        for subcommand in command.get_subcommands() {
+            aliases.extend(command_aliases(subcommand));
+        }
+        aliases
+    }
+
     fn create_test_package(temp: &TempDir) -> (PathBuf, PathBuf) {
         let root = temp.path().join("demo");
         let invocation = invoke([
@@ -4402,6 +4413,11 @@ mod tests {
     fn top_level_and_nested_command_inventory_is_exact() {
         let command = Cli::command();
         assert_eq!(
+            command_aliases(&command),
+            BTreeSet::new(),
+            "Musubi V1 must not retain hidden or visible command aliases"
+        );
+        assert_eq!(
             command_names(command.clone()),
             BTreeSet::from_iter(
                 [
@@ -4441,11 +4457,14 @@ mod tests {
     }
 
     #[test]
-    fn retired_commands_and_alias_set_are_rejected() {
+    fn retired_commands_and_subcommands_are_rejected() {
         for argv in [
             vec!["musubi", "install"],
             vec!["musubi", "pack"],
             vec!["musubi", "alias", "set"],
+            vec!["musubi", "cache", "list"],
+            vec!["musubi", "cache", "import"],
+            vec!["musubi", "cache", "fetch"],
         ] {
             let invocation = invoke(argv);
             assert_eq!(invocation.output.exit_code(), ErrorCode::Usage.exit_code());

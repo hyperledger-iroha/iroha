@@ -363,10 +363,25 @@ terminally decides both stored Eq/Ep pairs with that verifier set.
 The supported two-stage packager is:
 
 ```text
+mkdir -m 700 <private-release-input-parent>
+cargo run --locked --target-dir <external-cargo-target> \
+  -p iroha_kagami --bin kagami -- \
+  kagemusha prepare-release-circuit-params-v4 \
+  --output-dir <private-release-input-parent>/circuit-params-v4
+
 cd <clean-checkout>
 SOURCE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
-git verify-commit "$SOURCE_COMMIT"
-python3 -I scripts/build_kagemusha_v4_candidate_bundle.py --root "$PWD"
+# Configure the reviewer's global gpg.ssh.allowedSignersFile to one absolute,
+# owner-controlled, single-key policy. Optionally configure the corresponding
+# gpg.ssh.revocationFile. Repository-local signature settings are ignored.
+python3 -I scripts/kagemusha_source_tree_seal.py descriptor \
+  --root "$PWD" > <private-reviewed-source-closure.json>
+python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
+  --root "$PWD" \
+  --target-dir <new-external-cargo-target> \
+  --reviewed-source-closure <private-reviewed-source-closure.json> \
+  --reviewed-source-closure-sha256 <reviewed-descriptor-sha256> \
+  > <sealed-build-report.json>
 # Require source_commit in the build report to equal $SOURCE_COMMIT.
 
 python3 scripts/run_kagemusha_v4_generation.py \
@@ -378,8 +393,8 @@ python3 scripts/run_kagemusha_v4_generation.py \
   --generation <id> --parameter-generation <id> \
   --source-commit <40-lower-hex> --source-tree-sha256 <64-lower-hex> \
   --activation-height <u64> --withdrawal-height <u64> \
-  --step-eq-circuit-params <canonical-norito-file> \
-  --step-ep-circuit-params <canonical-norito-file> \
+  --step-eq-circuit-params <private-release-input-parent>/circuit-params-v4/step-eq-circuit-params.norito \
+  --step-ep-circuit-params <private-release-input-parent>/circuit-params-v4/step-ep-circuit-params.norito \
   --topup-finality-roster <canonical-norito-file>
 
 <binary_path-from-sealed-build-report> \
@@ -391,6 +406,24 @@ python3 scripts/run_kagemusha_v4_generation.py \
   --benchmark-evidence <exact-file> \
   --cryptographic-review <canonical-signed-norito-file>
 ```
+
+`prepare-release-circuit-params-v4` is the only supported constructor for the
+reviewed first-release Eq/Ep parameter inputs. It validates the centralized
+profile, canonical-Norito round-trips it, writes separate owner-private Eq and
+Ep files into one private staging directory, syncs both files and that
+directory, and makes the complete pair visible with one no-replace directory
+rename. The command refuses an existing output directory and reports both the
+raw file SHA-256 and domain-separated circuit-parameter SHA-256. A failed
+parent-directory sync after visibility is reported as `commit-uncertain` with
+exit status 75, never as a safely retryable failure.
+
+The source seal is a first-release clean-only contract. Descriptor emission,
+sealed build, generation, validation, and finalization all reject a nonempty
+tracked diff, any untracked file, an absent or nonempty tracked-gitlink
+directory, a mismatched ignored root `Cargo.lock`, or a commit whose signature
+cannot be verified locally. `source_repo_dirty` remains in the closure only as
+an explicit invariant and must be `false`; the tracked-diff and untracked
+manifest digests must both identify empty byte strings.
 
 The source-sealed binary always starts its own fail-closed footprint monitor;
 the launcher adds the host-global lifecycle, publication, and evidence boundary.
@@ -545,6 +578,15 @@ immutable directory. Runtime and proof-envelope validation consume the
 canonical Norito bytes; JSON remains an operator view and is never re-encoded
 into a trust anchor. A partial candidate or finalization failure cannot expose
 an active generation.
+
+Production generation, candidate validation, and finalization intentionally
+have no fault-injection option. Such an option would add a test backdoor to the
+exact release command surface and could contaminate source-sealed evidence.
+Negative qualification remains the candidate-preserving `validate-candidate` gate over a
+deliberately substituted copy, together with the existing role/header/key
+substitution and pre-/post-rename atomic-publication regressions. Those tests
+remain the failure-path authority; operators must not simulate them by adding
+a production flag.
 
 Kagami publishes both promotion records and prepared activation instruction
 files through the same descriptor-relative, no-replace durable-file primitive.

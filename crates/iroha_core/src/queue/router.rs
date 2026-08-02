@@ -73,7 +73,10 @@ use iroha_executor_data_model::permission::{
         CanBurnAssetWithDefinition, CanMintAssetToAccount, CanMintAssetWithDefinition,
         CanModifyAssetMetadataWithDefinition, CanTransferAssetWithDefinition,
     },
-    asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
+    asset_definition::{
+        AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+    },
     nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
@@ -5366,6 +5369,35 @@ fn account_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
     }
 }
 
+fn asset_definition_alias_permission_scope_dataspace_target_with_state(
+    scope: &AssetDefinitionAliasPermissionScope,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    match scope {
+        AssetDefinitionAliasPermissionScope::Domain(domain_id) => {
+            domain_dataspace_target_with_state(domain_id, dataspace_catalog, state_view)
+        }
+        AssetDefinitionAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
+        AssetDefinitionAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
+    }
+}
+
+fn asset_definition_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
+    scope: &AssetDefinitionAliasPermissionScope,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Option<DataSpaceId> {
+    match scope {
+        AssetDefinitionAliasPermissionScope::Domain(domain_id) => {
+            domain_dataspace_target_with_world(domain_id, dataspace_catalog, world, ledger_time_ms)
+        }
+        AssetDefinitionAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
+        AssetDefinitionAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
+    }
+}
+
 fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bool {
     match permission.name() {
         "CanMintAssetToAccount" => permission
@@ -5401,6 +5433,11 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
         "CanModifyAssetDefinitionMetadata" => permission
             .payload()
             .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+            .ok()
+            .is_some(),
+        "CanManageAssetDefinitionAlias" => permission
+            .payload()
+            .try_into_any_norito::<CanManageAssetDefinitionAlias>()
             .ok()
             .is_some(),
         "CanManageFeeSponsorProgram" => permission
@@ -5529,6 +5566,17 @@ fn dataspace_scoped_permission_target(
                 .ok()
                 .and_then(|token| {
                     account_alias_permission_scope_dataspace_target_with_state(
+                        &token.scope,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
+            "CanManageAssetDefinitionAlias" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAssetDefinitionAlias>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_alias_permission_scope_dataspace_target_with_state(
                         &token.scope,
                         dataspace_catalog,
                         state_view,
@@ -5728,6 +5776,18 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .ok()
                 .and_then(|token| {
                     account_alias_permission_scope_dataspace_target_with_world(
+                        &token.scope,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
+            "CanManageAssetDefinitionAlias" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAssetDefinitionAlias>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_alias_permission_scope_dataspace_target_with_world(
                         &token.scope,
                         dataspace_catalog,
                         world,
@@ -7772,6 +7832,7 @@ mod tests {
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
             CanResolveAccountAlias,
         },
+        asset_definition::{AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias},
         nexus::{
             CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
             CanPublishSpaceDirectoryManifestForUaid,
@@ -18236,6 +18297,45 @@ mod tests {
             router
                 .try_route_without_state(&tx)
                 .expect("dataspace alias permission should route without world state"),
+            Some(RoutingDecision::new(lane_id, dataspace_id))
+        );
+    }
+
+    #[test]
+    fn asset_definition_alias_dataspace_permission_grant_routes_by_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog,
+            lane_catalog,
+        );
+        let permission = Permission::from(CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Dataspace(dataspace_id),
+        });
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                permission, holder_id,
+            ))],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("asset alias permission should route without world state"),
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
     }

@@ -18,7 +18,28 @@ pub struct ZkAmsMkheNoiseCertificateV1 {
     pub hybrid_limb_count: u8,
     /// Conservative upper bound on nonzero terms in any sparse map row.
     pub sparse_map_fan_in: u32,
-    /// Residual bound of a fresh independently keyed encryption.
+    /// Exact minimum coefficient sampled by every CBD-eta RLWE/key error.
+    pub sampled_rlwe_error_min: i16,
+    /// Exact maximum coefficient sampled by every CBD-eta RLWE/key error.
+    pub sampled_rlwe_error_max: i16,
+    /// Maximum absolute sampled RLWE/key error coefficient.
+    pub sampled_rlwe_error_max_abs: u8,
+    /// `b` such that every sampled RLWE/key error has absolute value `< 2^b`.
+    pub sampled_rlwe_error_bound_bits: u8,
+    /// Minimum natural-lift proof witness `e0' = e0 - h`, where upper-half
+    /// correction `h` is exactly zero or one.
+    pub natural_lift_effective_error_min: i16,
+    /// Maximum canonical-natural-lift proof witness `e0'`.
+    pub natural_lift_effective_error_max: i16,
+    /// Symmetric verifier maximum absolute value admitted for `e0'`.
+    pub natural_lift_effective_error_verifier_max_abs: u8,
+    /// `b` such that every verifier-admitted `e0'` is `< 2^b` in magnitude.
+    pub natural_lift_effective_error_bound_bits: u8,
+    /// Minimum canonical-natural-to-centered upper-half correction.
+    pub natural_lift_upper_half_correction_min: u8,
+    /// Maximum canonical-natural-to-centered upper-half correction.
+    pub natural_lift_upper_half_correction_max: u8,
+    /// Residual bound of a fresh proof-admitted independently keyed encryption.
     pub independent_fresh_residual_bits: u16,
     /// Per-party statistically hiding CKS-smudge quotient bound.
     pub cks_smudge_quotient_bits: u16,
@@ -57,6 +78,113 @@ pub struct ZkAmsMkheNoiseCertificateV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Bound(u16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IngressErrorBoundsV1 {
+    sampled_min: i16,
+    sampled_max: i16,
+    sampled_max_abs: u8,
+    sampled_bound_bits: u8,
+    effective_min: i16,
+    effective_max: i16,
+    effective_verifier_max_abs: u8,
+    effective_bound_bits: u8,
+    upper_half_correction_min: u8,
+    upper_half_correction_max: u8,
+}
+
+fn derive_ingress_error_bounds_v1(
+    sampled_error_eta: u8,
+) -> Result<IngressErrorBoundsV1, ZkAmsMkheErrorV1> {
+    if !(1..=32).contains(&sampled_error_eta) {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    let sampled_max = i16::from(sampled_error_eta);
+    let sampled_min = -sampled_max;
+    let sampled_max_abs = sampled_error_eta;
+    let upper_half_correction_min = 0_u8;
+    let upper_half_correction_max = 1_u8;
+    let effective_min = sampled_min
+        .checked_sub(i16::from(upper_half_correction_max))
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let effective_max = sampled_max
+        .checked_sub(i16::from(upper_half_correction_min))
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let effective_verifier_max_abs = u8::try_from(
+        effective_min
+            .unsigned_abs()
+            .max(effective_max.unsigned_abs()),
+    )
+    .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    let sampled_bound_bits = strict_magnitude_bound_bits(sampled_max_abs)?;
+    let effective_bound_bits = strict_magnitude_bound_bits(effective_verifier_max_abs)?;
+    let bounds = IngressErrorBoundsV1 {
+        sampled_min,
+        sampled_max,
+        sampled_max_abs,
+        sampled_bound_bits,
+        effective_min,
+        effective_max,
+        effective_verifier_max_abs,
+        effective_bound_bits,
+        upper_half_correction_min,
+        upper_half_correction_max,
+    };
+    validate_ingress_error_bounds_v1(bounds, sampled_error_eta)?;
+    Ok(bounds)
+}
+
+fn validate_ingress_error_bounds_v1(
+    bounds: IngressErrorBoundsV1,
+    sampled_error_eta: u8,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    if !(1..=32).contains(&sampled_error_eta) {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    let eta = i16::from(sampled_error_eta);
+    let sampled_power = 1_u32
+        .checked_shl(u32::from(bounds.sampled_bound_bits))
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let effective_power = 1_u32
+        .checked_shl(u32::from(bounds.effective_bound_bits))
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let expected_effective_min = bounds
+        .sampled_min
+        .checked_sub(i16::from(bounds.upper_half_correction_max))
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let expected_effective_max = bounds
+        .sampled_max
+        .checked_sub(i16::from(bounds.upper_half_correction_min))
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    if bounds.sampled_min != -eta
+        || bounds.sampled_max != eta
+        || bounds.sampled_max_abs != sampled_error_eta
+        || bounds.upper_half_correction_min != 0
+        || bounds.upper_half_correction_max != 1
+        || bounds.effective_min != expected_effective_min
+        || bounds.effective_max != expected_effective_max
+        || u16::from(bounds.effective_verifier_max_abs)
+            != bounds
+                .effective_min
+                .unsigned_abs()
+                .max(bounds.effective_max.unsigned_abs())
+        || u32::from(bounds.sampled_max_abs) >= sampled_power
+        || u32::from(bounds.effective_verifier_max_abs) >= effective_power
+        || bounds.sampled_bound_bits != strict_magnitude_bound_bits(bounds.sampled_max_abs)?
+        || bounds.effective_bound_bits
+            != strict_magnitude_bound_bits(bounds.effective_verifier_max_abs)?
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    Ok(())
+}
+
+fn strict_magnitude_bound_bits(max_abs: u8) -> Result<u8, ZkAmsMkheErrorV1> {
+    let exclusive = usize::from(max_abs)
+        .checked_add(1)
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    u8::try_from(ceil_log2(exclusive)?).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
+}
 
 impl Bound {
     fn add(self, rhs: Self) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -98,6 +226,7 @@ impl Bound {
 }
 
 /// Derive the complete conservative schedule for the frozen construction.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn derive_noise_certificate_v1(
     ring_degree: usize,
     party_count: usize,
@@ -106,6 +235,7 @@ pub(super) fn derive_noise_certificate_v1(
     max_batch_size: usize,
     ciphertext_modulus_bits: usize,
     statistical_security_bits: u16,
+    sampled_error_eta: u8,
 ) -> Result<ZkAmsMkheNoiseCertificateV1, ZkAmsMkheErrorV1> {
     if ring_degree < 2
         || !ring_degree.is_power_of_two()
@@ -114,21 +244,30 @@ pub(super) fn derive_noise_certificate_v1(
         || sparse_map_fan_in == 0
         || !(1..=8).contains(&max_batch_size)
         || statistical_security_bits < 128
+        || !(1..=32).contains(&sampled_error_eta)
     {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
+    let error_bounds = derive_ingress_error_bounds_v1(sampled_error_eta)?;
     let log_n = u16::try_from(ring_degree.trailing_zeros())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     let plaintext = Bound(255);
     let plaintext_modulus = Bound(256);
     let ternary = Bound(1);
-    let cbd_eta_two = Bound(2);
+    let sampled_rlwe_error = Bound(u16::from(error_bounds.sampled_bound_bits));
+    let natural_lift_effective_error = Bound(u16::from(error_bounds.effective_bound_bits));
 
-    let independent_key_error_times_ephemeral = cbd_eta_two.polynomial_mul(ternary, log_n)?;
-    let independent_encryption_error_times_secret = cbd_eta_two.polynomial_mul(ternary, log_n)?;
+    // Key error and c1 encryption error retain the actual CBD-eta sampling
+    // distribution. Only the c0 proof witness uses the canonical natural-lift
+    // effective bound, derived above from `e0' = e0 - h` rather than silently
+    // reusing the sampler's eta.
+    let independent_key_error_times_ephemeral =
+        sampled_rlwe_error.polynomial_mul(ternary, log_n)?;
+    let independent_encryption_error_times_secret =
+        sampled_rlwe_error.polynomial_mul(ternary, log_n)?;
     let independent_fresh_quotient = independent_key_error_times_ephemeral
         .0
-        .max(cbd_eta_two.0)
+        .max(natural_lift_effective_error.0)
         .max(independent_encryption_error_times_secret.0);
     let independent_fresh_quotient = Bound(independent_fresh_quotient).sum(3)?;
     let independent_fresh_residual = plaintext_modulus.scalar_mul(independent_fresh_quotient)?;
@@ -149,7 +288,7 @@ pub(super) fn derive_noise_certificate_v1(
     // The three-round collective RKG terms are bounded as
     // s*sum(e0), (sum(u)-s)*sum(e2), and sum(e1/e3).
     let collective_secret = ternary.sum(party_count)?;
-    let collective_error = cbd_eta_two.sum(party_count)?;
+    let collective_error = sampled_rlwe_error.sum(party_count)?;
     let secret_times_error = collective_secret.polynomial_mul(collective_error, log_n)?;
     let ephemeral_minus_secret = collective_secret.add(collective_secret)?;
     let difference_times_error = ephemeral_minus_secret.polynomial_mul(collective_error, log_n)?;
@@ -266,6 +405,16 @@ pub(super) fn derive_noise_certificate_v1(
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
         sparse_map_fan_in: u32::try_from(sparse_map_fan_in)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+        sampled_rlwe_error_min: error_bounds.sampled_min,
+        sampled_rlwe_error_max: error_bounds.sampled_max,
+        sampled_rlwe_error_max_abs: error_bounds.sampled_max_abs,
+        sampled_rlwe_error_bound_bits: error_bounds.sampled_bound_bits,
+        natural_lift_effective_error_min: error_bounds.effective_min,
+        natural_lift_effective_error_max: error_bounds.effective_max,
+        natural_lift_effective_error_verifier_max_abs: error_bounds.effective_verifier_max_abs,
+        natural_lift_effective_error_bound_bits: error_bounds.effective_bound_bits,
+        natural_lift_upper_half_correction_min: error_bounds.upper_half_correction_min,
+        natural_lift_upper_half_correction_max: error_bounds.upper_half_correction_max,
         independent_fresh_residual_bits: independent_fresh_residual.0,
         cks_smudge_quotient_bits: cks_smudge_quotient.0,
         collective_ingress_residual_bits: collective_ingress_residual.0,
@@ -303,8 +452,22 @@ mod tests {
 
     #[test]
     fn release_schedule_has_strict_margin_and_every_phase_is_monotone() {
-        let certificate = derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 128)
+        let certificate = derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 128, 2)
             .expect("frozen conservative schedule");
+        assert_eq!(certificate.sampled_rlwe_error_min, -2);
+        assert_eq!(certificate.sampled_rlwe_error_max, 2);
+        assert_eq!(certificate.sampled_rlwe_error_max_abs, 2);
+        assert_eq!(certificate.sampled_rlwe_error_bound_bits, 2);
+        assert_eq!(certificate.natural_lift_effective_error_min, -3);
+        assert_eq!(certificate.natural_lift_effective_error_max, 2);
+        assert_eq!(certificate.natural_lift_effective_error_verifier_max_abs, 3);
+        assert_eq!(certificate.natural_lift_effective_error_bound_bits, 2);
+        assert_eq!(certificate.natural_lift_upper_half_correction_min, 0);
+        assert_eq!(certificate.natural_lift_upper_half_correction_max, 1);
+        // Although the exact integer intervals differ, both are strictly
+        // below 2^2. The frozen end-to-end result therefore stays unchanged.
+        assert_eq!(certificate.final_decryption_residual_bits, 2_115);
+        assert_eq!(certificate.correctness_margin_bits, 164);
         assert!(certificate.correctness_margin_bits >= 64);
         assert!(
             certificate.independent_fresh_residual_bits
@@ -331,8 +494,99 @@ mod tests {
     }
 
     #[test]
+    fn sampled_and_natural_lift_error_bounds_cross_power_boundaries_exactly() {
+        let eta_one = derive_ingress_error_bounds_v1(1).unwrap();
+        assert_eq!(eta_one.sampled_min, -1);
+        assert_eq!(eta_one.sampled_max, 1);
+        assert_eq!(eta_one.sampled_bound_bits, 1);
+        assert_eq!(eta_one.effective_min, -2);
+        assert_eq!(eta_one.effective_max, 1);
+        assert_eq!(eta_one.effective_verifier_max_abs, 2);
+        assert_eq!(eta_one.effective_bound_bits, 2);
+
+        let eta_two = derive_ingress_error_bounds_v1(2).unwrap();
+        assert_eq!(eta_two.sampled_bound_bits, 2);
+        assert_eq!(eta_two.effective_bound_bits, 2);
+
+        let eta_three = derive_ingress_error_bounds_v1(3).unwrap();
+        assert_eq!(eta_three.sampled_min, -3);
+        assert_eq!(eta_three.sampled_max, 3);
+        assert_eq!(eta_three.sampled_bound_bits, 2);
+        assert_eq!(eta_three.effective_min, -4);
+        assert_eq!(eta_three.effective_max, 3);
+        assert_eq!(eta_three.effective_verifier_max_abs, 4);
+        assert_eq!(eta_three.effective_bound_bits, 3);
+
+        for (maximum, expected_bits) in [(0, 0), (1, 1), (2, 2), (3, 2), (4, 3)] {
+            assert_eq!(strict_magnitude_bound_bits(maximum), Ok(expected_bits));
+        }
+        for invalid_eta in [0, 33, u8::MAX] {
+            assert_eq!(
+                derive_ingress_error_bounds_v1(invalid_eta),
+                Err(ZkAmsMkheErrorV1::InvalidProfile)
+            );
+        }
+    }
+
+    #[test]
+    fn every_error_bound_or_correction_splice_fails_invariant_validation() {
+        let expected = derive_ingress_error_bounds_v1(2).unwrap();
+        for invalid in [
+            IngressErrorBoundsV1 {
+                sampled_min: -3,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                sampled_max: 3,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                sampled_max_abs: 3,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                sampled_bound_bits: 1,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                effective_min: -2,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                effective_max: 3,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                effective_verifier_max_abs: 2,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                effective_bound_bits: 1,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                upper_half_correction_min: 1,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                upper_half_correction_max: 0,
+                ..expected
+            },
+            IngressErrorBoundsV1 {
+                upper_half_correction_max: 2,
+                ..expected
+            },
+        ] {
+            assert_eq!(
+                validate_ingress_error_bounds_v1(invalid, 2),
+                Err(ZkAmsMkheErrorV1::InvalidProfile)
+            );
+        }
+    }
+
+    #[test]
     fn one_bit_less_than_required_modulus_is_rejected() {
-        let baseline = derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 128)
+        let baseline = derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 128, 2)
             .expect("baseline schedule");
         assert_eq!(
             derive_noise_certificate_v1(
@@ -343,6 +597,7 @@ mod tests {
                 8,
                 usize::from(baseline.final_decryption_residual_bits),
                 128,
+                2,
             ),
             Err(ZkAmsMkheErrorV1::InvalidProfile)
         );
@@ -351,12 +606,14 @@ mod tests {
     #[test]
     fn adversarial_fan_in_roster_and_statistical_downgrades_fail_closed() {
         for invalid in [
-            derive_noise_certificate_v1(131_072, 1, 38, 524_378, 8, 2_280, 128),
-            derive_noise_certificate_v1(131_072, 9, 38, 524_378, 8, 2_280, 128),
-            derive_noise_certificate_v1(131_072, 8, 0, 524_378, 8, 2_280, 128),
-            derive_noise_certificate_v1(131_072, 8, 38, 0, 8, 2_280, 128),
-            derive_noise_certificate_v1(131_072, 8, 38, 524_378, 9, 2_280, 128),
-            derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 127),
+            derive_noise_certificate_v1(131_072, 1, 38, 524_378, 8, 2_280, 128, 2),
+            derive_noise_certificate_v1(131_072, 9, 38, 524_378, 8, 2_280, 128, 2),
+            derive_noise_certificate_v1(131_072, 8, 0, 524_378, 8, 2_280, 128, 2),
+            derive_noise_certificate_v1(131_072, 8, 38, 0, 8, 2_280, 128, 2),
+            derive_noise_certificate_v1(131_072, 8, 38, 524_378, 9, 2_280, 128, 2),
+            derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 127, 2),
+            derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 128, 0),
+            derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 128, 33),
         ] {
             assert_eq!(invalid, Err(ZkAmsMkheErrorV1::InvalidProfile));
         }

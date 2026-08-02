@@ -74,6 +74,11 @@ const BUNDLE_METADATA_FILE_COUNT: usize = 3;
 const MAX_CACHE_FILE_COUNT: usize = MUSUBI_MAX_FILES_V1 as usize + BUNDLE_METADATA_FILE_COUNT;
 const MAX_CACHE_PATH_COMPONENTS: usize = 64;
 const MAX_CACHE_ENTRY_COUNT: usize = MAX_CACHE_FILE_COUNT * (MAX_CACHE_PATH_COMPONENTS + 1);
+// These are deterministic retained-allocation/ingest-estimate envelopes, not a
+// claim about whole-process RSS. HTTP/TLS and JSON DOMs live in the fetch client;
+// deployment-equivalent process-RSS qualification remains a separate launch gate.
+const MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES: usize = 16 * 1024 * 1024;
+const MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES: usize = 24 * 1024 * 1024;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 #[cfg(windows)]
@@ -513,7 +518,7 @@ impl MusubiCache {
             .map_err(|source| io_error("sync verified CAR payload", &payload_path, source))?;
         let mut payload = FilePayload::from_open_file(&payload_path, payload_file)
             .map_err(|source| io_error("retain verified CAR payload", &payload_path, source))?;
-        let mut store = ChunkStore::with_profile(plan.chunk_profile);
+        let mut store = bounded_musubi_chunk_store(plan)?;
         let sink = SourceTreeSink::new(staging_path.clone(), staging_pin);
         let staging_pins = store
             .ingest_plan_source_with_sink(plan, &mut payload, sink)
@@ -1016,6 +1021,7 @@ fn validate_plan_commitment(
         .map_err(|error| CacheError::InvalidPlan(error.to_string()))?;
     plan.validate()
         .map_err(|error| CacheError::InvalidPlan(error.to_string()))?;
+    validate_musubi_plan_memory(plan)?;
     if plan.content_length != commitment.content_length {
         return Err(CacheError::InvalidPlan(format!(
             "payload length {} differs from commitment {}",
@@ -1080,6 +1086,64 @@ fn validate_plan_commitment(
         )));
     }
     Ok(())
+}
+
+fn validate_musubi_plan_memory(plan: &CarBuildPlan) -> Result<(), CacheError> {
+    if plan
+        .chunks
+        .iter()
+        .any(|chunk| chunk.taikai_segment_hint.is_some())
+    {
+        return Err(CacheError::InvalidPlan(
+            "Musubi V1 CAR plans must not carry Taikai segment hints".to_owned(),
+        ));
+    }
+    let retained = retained_plan_heap_bytes(plan).ok_or_else(|| {
+        CacheError::InvalidPlan("retained CAR plan heap accounting overflow".to_owned())
+    })?;
+    if retained > MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES {
+        return Err(CacheError::InvalidPlan(format!(
+            "retained CAR plan requires {retained} bytes; Musubi V1 permits at most {MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES}"
+        )));
+    }
+    validate_musubi_ingest_memory(plan, MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES)
+}
+
+fn validate_musubi_ingest_memory(plan: &CarBuildPlan, heap_limit: usize) -> Result<(), CacheError> {
+    plan.validate_for_ingest_with_limit(heap_limit)
+        .map_err(|error| CacheError::InvalidPlan(error.to_string()))?;
+    Ok(())
+}
+
+fn retained_plan_heap_bytes(plan: &CarBuildPlan) -> Option<usize> {
+    let mut retained = plan
+        .chunks
+        .capacity()
+        .checked_mul(std::mem::size_of::<sorafs_car::CarChunk>())?
+        .checked_add(
+            plan.files
+                .capacity()
+                .checked_mul(std::mem::size_of::<sorafs_car::FilePlan>())?,
+        )?;
+    for file in &plan.files {
+        retained = retained.checked_add(
+            file.path
+                .capacity()
+                .checked_mul(std::mem::size_of::<String>())?,
+        )?;
+        for component in &file.path {
+            retained = retained.checked_add(component.capacity())?;
+        }
+    }
+    Some(retained)
+}
+
+fn bounded_musubi_chunk_store(plan: &CarBuildPlan) -> Result<ChunkStore, CacheError> {
+    ChunkStore::with_profile_and_heap_limit(
+        plan.chunk_profile,
+        MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES,
+    )
+    .map_err(|error| CacheError::InvalidPlan(error.to_string()))
 }
 
 fn manifest_for_commitment(
@@ -1591,7 +1655,7 @@ fn verify_tree(
 
     let mut payload = DirectoryPayload::new(source_path, &plan.files)
         .map_err(|source| io_error("open cached source payload", source_path, source))?;
-    let mut store = ChunkStore::with_profile(plan.chunk_profile);
+    let mut store = bounded_musubi_chunk_store(plan)?;
     store
         .ingest_plan_source(plan, &mut payload)
         .map_err(|error| CacheError::CorruptEntry(error.to_string()))?;
@@ -3277,6 +3341,169 @@ mod tests {
 
     fn cache(temp: &TempDir) -> MusubiCache {
         MusubiCache::open(temp.path().join("user-cache")).expect("open fixture cache")
+    }
+
+    fn launch_max_sf1_geometry_plan() -> CarBuildPlan {
+        let profile = sorafs_car::chunker_registry::default_descriptor().profile;
+        let content_length = iroha_data_model::musubi::MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1;
+        let file_count = usize::try_from(iroha_data_model::musubi::MUSUBI_MAX_FILES_V1)
+            .expect("V1 file count fits usize")
+            .saturating_add(BUNDLE_METADATA_FILE_COUNT);
+        let mut extra = usize::try_from(content_length)
+            .expect("V1 payload length fits usize")
+            .checked_sub(file_count)
+            .expect("one byte per file fits launch payload");
+        let mut chunks = Vec::new();
+        let mut files = Vec::new();
+        let mut offset = 0_u64;
+
+        for file_index in 0..file_count {
+            let first_chunk = chunks.len();
+            let mut file_size = 1_u64;
+            if file_index == 0 {
+                let maximum = profile.max_size.min(extra);
+                if maximum >= profile.min_size {
+                    push_geometry_chunk(&mut chunks, &mut offset, maximum);
+                    file_size += u64::try_from(maximum).expect("registered chunk length fits u64");
+                    extra -= maximum;
+                }
+                while extra >= profile.min_size {
+                    push_geometry_chunk(&mut chunks, &mut offset, profile.min_size);
+                    file_size +=
+                        u64::try_from(profile.min_size).expect("registered chunk length fits u64");
+                    extra -= profile.min_size;
+                }
+                file_size += u64::try_from(extra).expect("registered chunk length fits u64");
+                push_geometry_chunk(&mut chunks, &mut offset, extra.saturating_add(1));
+                extra = 0;
+            } else {
+                push_geometry_chunk(&mut chunks, &mut offset, 1);
+            }
+            files.push(sorafs_car::FilePlan {
+                path: vec![format!("file-{file_index:04}")],
+                first_chunk,
+                chunk_count: chunks.len() - first_chunk,
+                size: file_size,
+            });
+        }
+        assert_eq!(offset, content_length);
+        CarBuildPlan {
+            chunk_profile: profile,
+            payload_digest: blake3::hash(b"launch-max-geometry-only"),
+            content_length,
+            chunks,
+            files,
+        }
+    }
+
+    fn push_geometry_chunk(
+        chunks: &mut Vec<sorafs_car::CarChunk>,
+        offset: &mut u64,
+        length: usize,
+    ) {
+        chunks.push(sorafs_car::CarChunk {
+            offset: *offset,
+            length: u32::try_from(length).expect("SF1 chunk length fits u32"),
+            digest: [0_u8; 32],
+            taikai_segment_hint: None,
+        });
+        *offset += u64::try_from(length).expect("registered chunk length fits u64");
+    }
+
+    #[test]
+    fn launch_max_sf1_geometry_fits_musubi_cache_accounting() {
+        let plan = launch_max_sf1_geometry_plan();
+        let validation = plan.validate().expect("valid launch-max SF1 geometry");
+        let retained = retained_plan_heap_bytes(&plan).expect("checked retained plan geometry");
+
+        assert_eq!(
+            plan.content_length,
+            iroha_data_model::musubi::MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1
+        );
+        assert!(
+            retained <= MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES,
+            "launch-max retained plan estimate {retained} exceeds {}",
+            MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES
+        );
+        assert!(
+            validation.estimated_ingest_heap_bytes() <= MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES,
+            "launch-max chunk-store estimate {} exceeds {}",
+            validation.estimated_ingest_heap_bytes(),
+            MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES
+        );
+        validate_musubi_plan_memory(&plan).expect("launch-max geometry fits cache accounting");
+    }
+
+    #[test]
+    fn musubi_cache_uses_its_fetch_specific_ingest_heap_ceiling() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fixture = fixture(&temp, "heap-ceiling");
+        let plan = fixture.car.plan();
+        let estimate = plan
+            .validate()
+            .expect("valid fixture plan")
+            .estimated_ingest_heap_bytes();
+
+        validate_musubi_plan_memory(plan).expect("fixture fits Musubi cache ceiling");
+        assert!(estimate <= MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES);
+        assert!(matches!(
+            validate_musubi_ingest_memory(plan, estimate.saturating_sub(1)),
+            Err(CacheError::InvalidPlan(_))
+        ));
+        assert_eq!(
+            bounded_musubi_chunk_store(plan)
+                .expect("bounded Musubi chunk store")
+                .max_estimated_heap_bytes(),
+            MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES
+        );
+    }
+
+    #[test]
+    fn overcapacity_plan_is_rejected_before_archive_bytes_are_read() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fixture = fixture(&temp, "retained-plan-ceiling");
+        let mut plan = fixture.car.plan().clone();
+        let item_size = std::mem::size_of::<sorafs_car::CarChunk>();
+        let required_capacity = MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES
+            .div_ceil(item_size)
+            .saturating_add(1);
+        plan.chunks
+            .reserve_exact(required_capacity.saturating_sub(plan.chunks.len()));
+        assert!(
+            retained_plan_heap_bytes(&plan).expect("checked retained plan geometry")
+                > MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES
+        );
+
+        let error = cache(&temp)
+            .install(&fixture.commitment, &plan, Cursor::new(Vec::<u8>::new()))
+            .expect_err("overcapacity plan must fail before the empty reader is consumed");
+        assert!(matches!(
+            error,
+            CacheError::InvalidPlan(reason) if reason.contains("retained CAR plan requires")
+        ));
+    }
+
+    #[test]
+    fn taikai_hint_plan_is_rejected_before_archive_bytes_are_read() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fixture = fixture(&temp, "taikai-plan");
+        let mut plan = fixture.car.plan().clone();
+        plan.chunks[0].taikai_segment_hint = Some(sorafs_car::TaikaiSegmentHint {
+            event: "event".to_owned(),
+            stream: "stream".to_owned(),
+            rendition: "rendition".to_owned(),
+            sequence: 0,
+            payload_len: None,
+            payload_digest: None,
+        });
+
+        let error = cache(&temp)
+            .install(&fixture.commitment, &plan, Cursor::new(Vec::<u8>::new()))
+            .expect_err("Musubi plan hints must fail before the empty reader is consumed");
+        assert!(matches!(
+            error,
+            CacheError::InvalidPlan(reason) if reason.contains("Taikai segment hints")
+        ));
     }
 
     #[cfg(unix)]

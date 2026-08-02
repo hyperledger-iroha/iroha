@@ -5250,6 +5250,11 @@ async fn enforce_soracloud_signed_mutation_request(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
+    let path = req.uri().path().to_owned();
+    if !soracloud::requires_signed_mutation_request(req.method(), &path) {
+        return Ok(next.run(req).await);
+    }
+
     let response_format =
         match utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT)) {
             Ok(format) => format,
@@ -5258,10 +5263,6 @@ async fn enforce_soracloud_signed_mutation_request(
                 return Ok(response);
             }
         };
-    let path = req.uri().path().to_owned();
-    if !soracloud::requires_signed_mutation_request(req.method(), &path) {
-        return Ok(next.run(req).await);
-    }
 
     let (mut parts, body) = req.into_parts();
     // These headers are an internal middleware-to-handler channel. Strip all
@@ -5346,6 +5347,104 @@ async fn enforce_soracloud_signed_mutation_request(
     Ok(next
         .run(axum::http::Request::from_parts(parts, Body::from(body)))
         .await)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod soracloud_signed_mutation_middleware_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode, header},
+        response::Response,
+        routing::{get, post},
+    };
+    use tower::ServiceExt as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn unrelated_native_route_bypasses_soracloud_media_negotiation() {
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&handler_calls);
+        let router = Router::new()
+            .route(
+                route_catalog::application_api::EXPLORER_BLOCKS_STREAM_GET.path(),
+                get(move || {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, "text/event-stream")
+                            .body(Body::from("event: ready\ndata: {}\n\n"))
+                            .expect("SSE response")
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                crate::mk_app_state_for_tests(),
+                enforce_soracloud_signed_mutation_request,
+            ));
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(route_catalog::application_api::EXPLORER_BLOCKS_STREAM_GET.path())
+                    .header(header::ACCEPT, "text/event-stream")
+                    .body(Body::empty())
+                    .expect("SSE request"),
+            )
+            .await
+            .expect("SSE response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/event-stream"))
+        );
+        assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn soracloud_mutation_still_enforces_typed_accept() {
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&handler_calls);
+        let router = Router::new()
+            .route(
+                route_catalog::application_api::SORACLOUD_DEPLOY_POST.path(),
+                post(move || {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                crate::mk_app_state_for_tests(),
+                enforce_soracloud_signed_mutation_request,
+            ));
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri(route_catalog::application_api::SORACLOUD_DEPLOY_POST.path())
+                    .header(header::ACCEPT, "text/event-stream")
+                    .body(Body::empty())
+                    .expect("SoraCloud request"),
+            )
+            .await
+            .expect("SoraCloud response");
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[cfg(feature = "app_api")]

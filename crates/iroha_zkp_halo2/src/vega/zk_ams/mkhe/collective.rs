@@ -47,6 +47,161 @@ impl Drop for ZeroizingRns {
     }
 }
 
+struct ZeroizingSecretCoefficients(Vec<i64>);
+
+impl Drop for ZeroizingSecretCoefficients {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+struct ZeroizingCanonicalPlaintext(Vec<[u8; 32]>);
+
+impl Drop for ZeroizingCanonicalPlaintext {
+    fn drop(&mut self) {
+        for coefficient in &mut self.0 {
+            coefficient.fill(0);
+        }
+    }
+}
+
+struct ZeroizingEntropyProbe([u8; 32]);
+
+impl Drop for ZeroizingEntropyProbe {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+struct ZeroizingRandomByte([u8; 1]);
+
+impl Drop for ZeroizingRandomByte {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CollectiveEncryptionInputIdentityV1 {
+    layout_digest: [u8; 32],
+    plaintext_digest: [u8; 32],
+    plaintext_chunk_index: u32,
+    plaintext_used_slots: u32,
+}
+
+impl CollectiveEncryptionInputIdentityV1 {
+    const fn from_packed(
+        layout: ZkAmsT256PackingLayoutV1,
+        plaintext: &ZkAmsT256PackedPlaintextV1,
+    ) -> Self {
+        Self {
+            layout_digest: layout.digest,
+            plaintext_digest: plaintext.digest,
+            plaintext_chunk_index: plaintext.chunk_index,
+            plaintext_used_slots: plaintext.used_slots,
+        }
+    }
+}
+
+/// Secret encryption witness retained only long enough for a sibling proof
+/// adapter to consume it.
+///
+/// This value intentionally implements neither `Clone` nor serialization.
+/// Its only sibling-visible witness boundary validates the complete public
+/// context and both RLWE equations before lending ephemeral references to the
+/// proof builder. Public encryption drops it immediately.
+pub(super) struct ZkAmsMkheCollectiveEncryptionOpeningV1 {
+    profile_digest: [u8; 32],
+    security_certificate_digest: [u8; 32],
+    roster_digest: [u8; 32],
+    key_material_digest: [u8; 32],
+    key_digest: [u8; 32],
+    epoch: u64,
+    key_transcript_digest: [u8; 32],
+    ciphertext_transcript_digest: [u8; 32],
+    sample_index: u64,
+    input_identity: CollectiveEncryptionInputIdentityV1,
+    ciphertext_digest: [u8; 32],
+    canonical_plaintext: ZeroizingCanonicalPlaintext,
+    plaintext_lift: ZeroizingRns,
+    ephemeral: SecretPolynomial,
+    error_zero: SecretPolynomial,
+    error_one: SecretPolynomial,
+    #[cfg(test)]
+    drop_audit: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl core::fmt::Debug for ZkAmsMkheCollectiveEncryptionOpeningV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ZkAmsMkheCollectiveEncryptionOpeningV1")
+            .field("profile_digest", &hex::encode(self.profile_digest))
+            .field(
+                "security_certificate_digest",
+                &hex::encode(self.security_certificate_digest),
+            )
+            .field("roster_digest", &hex::encode(self.roster_digest))
+            .field(
+                "key_material_digest",
+                &hex::encode(self.key_material_digest),
+            )
+            .field("key_digest", &hex::encode(self.key_digest))
+            .field("epoch", &self.epoch)
+            .field(
+                "key_transcript_digest",
+                &hex::encode(self.key_transcript_digest),
+            )
+            .field(
+                "ciphertext_transcript_digest",
+                &hex::encode(self.ciphertext_transcript_digest),
+            )
+            .field("sample_index", &self.sample_index)
+            .field("input_identity", &self.input_identity)
+            .field("ciphertext_digest", &hex::encode(self.ciphertext_digest))
+            .field("canonical_plaintext", &"[REDACTED]")
+            .field("plaintext_lift", &"[REDACTED]")
+            .field("ephemeral", &"[REDACTED]")
+            .field("error_zero", &"[REDACTED]")
+            .field("error_one", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Drop for ZkAmsMkheCollectiveEncryptionOpeningV1 {
+    fn drop(&mut self) {
+        for coefficient in &mut self.canonical_plaintext.0 {
+            coefficient.fill(0);
+        }
+        self.plaintext_lift.0.coefficients.fill(0);
+        self.ephemeral.coefficients.fill(0);
+        self.error_zero.coefficients.fill(0);
+        self.error_one.coefficients.fill(0);
+
+        #[cfg(test)]
+        if let Some(audit) = &self.drop_audit {
+            let zeroized = self
+                .canonical_plaintext
+                .0
+                .iter()
+                .all(|coefficient| *coefficient == [0; 32])
+                && self
+                    .plaintext_lift
+                    .0
+                    .coefficients
+                    .iter()
+                    .all(|coefficient| *coefficient == 0)
+                && self
+                    .ephemeral
+                    .coefficients
+                    .iter()
+                    .chain(&self.error_zero.coefficients)
+                    .chain(&self.error_one.coefficients)
+                    .all(|coefficient| *coefficient == 0);
+            audit.store(zeroized, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
 /// Opaque RLWE state owned by one exact governed party and secret epoch.
 ///
 /// The ternary secret and centered-binomial public-key error are generated
@@ -372,7 +527,7 @@ pub fn generate_zk_ams_mkhe_collective_party_state_v1<R: MaskedRelaxedRandomSour
     let party_public_b_native = public_a_native
         .mul(&secret_rns.0, &profile)?
         .negate(&profile)?
-        .add(&scaled_error, &profile)?;
+        .add(&scaled_error.0, &profile)?;
     let party_public_b = ZkAmsMkheRnsPolynomialWireV1::new(party_public_b_native.coefficients)?;
     let statement = ZkAmsMkheActiveCollectivePublicKeyStatementV1::new(&public_a, &party_public_b)?;
     let witness = ZkAmsMkheActiveCollectivePublicKeyWitnessV1::new(
@@ -843,6 +998,192 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
     }
 }
 
+impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
+    /// Validate the exact release encryption context and lend the opening to
+    /// one sibling proof adapter for the duration of a single call.
+    ///
+    /// No witness reference is returned or stored outside the adapter call.
+    /// The canonical T256 coefficients are included so a proof layer can
+    /// derive an exact digit decomposition without reconstructing it from CRT
+    /// residues. The fourth witness argument is the zeroizing effective error
+    /// `e0' = e0 - 1[M > (t-1)/2]` matching the canonical natural lift; the
+    /// sampled centered-lift `e0` never crosses this sibling boundary.
+    #[allow(dead_code, clippy::type_complexity)]
+    pub(super) fn with_validated_proof_witness_v1<T>(
+        &self,
+        key: &ZkAmsMkheCollectivePublicKeyV1,
+        layout: ZkAmsT256PackingLayoutV1,
+        plaintext: &ZkAmsT256PackedPlaintextV1,
+        ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+        adapter: impl FnOnce(
+            &[[u8; 32]],
+            &RnsPolynomial,
+            &SecretPolynomial,
+            &SecretPolynomial,
+            &SecretPolynomial,
+        ) -> Result<T, ZkAmsMkheErrorV1>,
+    ) -> Result<T, ZkAmsMkheErrorV1> {
+        let profile = release_profile_v1();
+        key.validate(&profile)?;
+        if key.security_certificate_digest != release_security_certificate_digest()?
+            || ciphertext.sample_index
+                >= zk_ams_mkhe_release_manifest_v1()?.max_samples_per_secret_epoch
+            || layout.profile_digest != key.profile_digest
+            || plaintext.profile_digest != key.profile_digest
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        let expected_message = ZeroizingRns(packed_plaintext_to_rns_v1(layout, plaintext)?);
+        let input_identity = CollectiveEncryptionInputIdentityV1::from_packed(layout, plaintext);
+        let expected_transcript_digest = collective_lineage_digest(
+            COLLECTIVE_ENCRYPTION_DOMAIN_V1,
+            key,
+            &[],
+            &[
+                layout.digest.as_slice(),
+                plaintext.digest.as_slice(),
+                &plaintext.chunk_index.to_be_bytes(),
+                &ciphertext.sample_index.to_be_bytes(),
+            ],
+        );
+        self.validate_against(
+            &profile,
+            key,
+            &expected_message.0,
+            &plaintext.coefficients,
+            input_identity,
+            expected_transcript_digest,
+            ciphertext,
+        )?;
+        let effective_error_zero = derive_natural_lift_effective_error_zero(
+            &profile,
+            &self.canonical_plaintext.0,
+            &self.error_zero,
+        )?;
+        adapter(
+            &self.canonical_plaintext.0,
+            &self.plaintext_lift.0,
+            &self.ephemeral,
+            &effective_error_zero,
+            &self.error_one,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn with_validated_native_proof_witness_v1<T>(
+        &self,
+        profile: &BgvProfile,
+        key: &ZkAmsMkheCollectivePublicKeyV1,
+        expected_message: &RnsPolynomial,
+        expected_canonical_plaintext: &[[u8; 32]],
+        input_identity: CollectiveEncryptionInputIdentityV1,
+        expected_transcript_digest: [u8; 32],
+        ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+        adapter: impl FnOnce(
+            &[[u8; 32]],
+            &RnsPolynomial,
+            &SecretPolynomial,
+            &SecretPolynomial,
+            &SecretPolynomial,
+        ) -> Result<T, ZkAmsMkheErrorV1>,
+    ) -> Result<T, ZkAmsMkheErrorV1> {
+        self.validate_against(
+            profile,
+            key,
+            expected_message,
+            expected_canonical_plaintext,
+            input_identity,
+            expected_transcript_digest,
+            ciphertext,
+        )?;
+        adapter(
+            &self.canonical_plaintext.0,
+            &self.plaintext_lift.0,
+            &self.ephemeral,
+            &self.error_zero,
+            &self.error_one,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_against(
+        &self,
+        profile: &BgvProfile,
+        key: &ZkAmsMkheCollectivePublicKeyV1,
+        expected_message: &RnsPolynomial,
+        expected_canonical_plaintext: &[[u8; 32]],
+        input_identity: CollectiveEncryptionInputIdentityV1,
+        expected_transcript_digest: [u8; 32],
+        ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        profile.validate()?;
+        key.validate(profile)?;
+        expected_message.validate(profile)?;
+        validate_compact_for_key(ciphertext, key, profile)?;
+        if expected_transcript_digest == [0; 32]
+            || input_identity.layout_digest == [0; 32]
+            || input_identity.plaintext_digest == [0; 32]
+            || input_identity.plaintext_used_slots == 0
+            || usize::try_from(input_identity.plaintext_used_slots)
+                .map_or(true, |used_slots| used_slots > profile.ring_degree)
+            || expected_canonical_plaintext.len() != profile.ring_degree
+            || self.profile_digest != profile.digest()?
+            || self.profile_digest != key.profile_digest
+            || self.security_certificate_digest != key.security_certificate_digest
+            || self.roster_digest != key.roster_digest
+            || self.key_material_digest != key.key_material_digest
+            || self.key_digest != key.digest
+            || self.epoch != key.epoch
+            || self.key_transcript_digest != key.transcript_digest
+            || self.ciphertext_transcript_digest != expected_transcript_digest
+            || self.ciphertext_transcript_digest != ciphertext.transcript_digest
+            || self.sample_index != ciphertext.sample_index
+            || self.input_identity != input_identity
+            || self.ciphertext_digest != ciphertext.digest
+            || ciphertext.level != 0
+            || self.canonical_plaintext.0.as_slice() != expected_canonical_plaintext
+            || self.plaintext_lift.0 != *expected_message
+            || self.ephemeral.coefficients.len() != profile.ring_degree
+            || self
+                .ephemeral
+                .coefficients
+                .iter()
+                .any(|coefficient| !(-1..=1).contains(coefficient))
+            || self
+                .ephemeral
+                .coefficients
+                .iter()
+                .all(|coefficient| *coefficient == 0)
+            || !bounded_error_polynomial(profile, &self.error_zero)
+            || !bounded_error_polynomial(profile, &self.error_one)
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+
+        self.plaintext_lift.0.validate(profile)?;
+        let ephemeral_rns = ZeroizingRns(self.ephemeral.as_rns(profile)?);
+        let scaled_error_zero = scaled_public_error(profile, &self.error_zero)?;
+        let scaled_error_one = scaled_public_error(profile, &self.error_one)?;
+        let constant_product =
+            ZeroizingRns(key.collective_public_b.mul(&ephemeral_rns.0, profile)?);
+        let constant_with_error =
+            ZeroizingRns(constant_product.0.add(&scaled_error_zero.0, profile)?);
+        let expected_constant =
+            ZeroizingRns(constant_with_error.0.add(&self.plaintext_lift.0, profile)?);
+        let linear_product = ZeroizingRns(key.public_a.mul(&ephemeral_rns.0, profile)?);
+        let expected_linear = ZeroizingRns(linear_product.0.add(&scaled_error_one.0, profile)?);
+        if expected_constant.0 != ciphertext.constant || expected_linear.0 != ciphertext.linear {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn arm_drop_zeroization_audit(&mut self, audit: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.drop_audit = Some(audit);
+    }
+}
+
 /// Encrypt one exact canonical T256 packed-plaintext chunk under the verified
 /// all-eight collective public key.
 pub fn encrypt_zk_ams_mkhe_collective_packed_v1<R: MaskedRelaxedRandomSourceV1>(
@@ -852,10 +1193,39 @@ pub fn encrypt_zk_ams_mkhe_collective_packed_v1<R: MaskedRelaxedRandomSourceV1>(
     sample_index: u64,
     random: &mut R,
 ) -> Result<ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheErrorV1> {
+    let (ciphertext, opening) = encrypt_zk_ams_mkhe_collective_packed_with_opening_v1(
+        key,
+        layout,
+        plaintext,
+        sample_index,
+        random,
+    )?;
+    drop(opening);
+    Ok(ciphertext)
+}
+
+/// Sibling-private encryption path retaining the exact zeroizing opening for
+/// an immediately adjacent proof construction.
+pub(super) fn encrypt_zk_ams_mkhe_collective_packed_with_opening_v1<
+    R: MaskedRelaxedRandomSourceV1,
+>(
+    key: &ZkAmsMkheCollectivePublicKeyV1,
+    layout: ZkAmsT256PackingLayoutV1,
+    plaintext: &ZkAmsT256PackedPlaintextV1,
+    sample_index: u64,
+    random: &mut R,
+) -> Result<
+    (
+        ZkAmsMkheCollectiveCiphertextV1,
+        ZkAmsMkheCollectiveEncryptionOpeningV1,
+    ),
+    ZkAmsMkheErrorV1,
+> {
     let profile = release_profile_v1();
     key.validate(&profile)?;
     let manifest = zk_ams_mkhe_release_manifest_v1()?;
     if sample_index >= manifest.max_samples_per_secret_epoch
+        || key.security_certificate_digest != release_security_certificate_digest()?
         || layout.profile_digest != key.profile_digest
         || plaintext.profile_digest != key.profile_digest
     {
@@ -863,7 +1233,9 @@ pub fn encrypt_zk_ams_mkhe_collective_packed_v1<R: MaskedRelaxedRandomSourceV1>(
     }
     // Canonical layout/digest/padding checks happen inside this conversion,
     // before secret randomness or ciphertext-sized output is allocated.
-    let message = packed_plaintext_to_rns_v1(layout, plaintext)?;
+    let message = ZeroizingRns(packed_plaintext_to_rns_v1(layout, plaintext)?);
+    let canonical_plaintext = ZeroizingCanonicalPlaintext(plaintext.coefficients.clone());
+    let input_identity = CollectiveEncryptionInputIdentityV1::from_packed(layout, plaintext);
     let transcript_digest = collective_lineage_digest(
         COLLECTIVE_ENCRYPTION_DOMAIN_V1,
         key,
@@ -875,10 +1247,12 @@ pub fn encrypt_zk_ams_mkhe_collective_packed_v1<R: MaskedRelaxedRandomSourceV1>(
             &sample_index.to_be_bytes(),
         ],
     );
-    encrypt_collective_native(
+    encrypt_collective_native_with_opening(
         &profile,
         key,
-        &message,
+        message,
+        canonical_plaintext,
+        input_identity,
         transcript_digest,
         sample_index,
         random,
@@ -1474,46 +1848,91 @@ pub(super) fn validate_compact_for_key(
     Ok(())
 }
 
-fn encrypt_collective_native<R: MaskedRelaxedRandomSourceV1>(
+#[allow(clippy::too_many_arguments)]
+fn encrypt_collective_native_with_opening<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     key: &ZkAmsMkheCollectivePublicKeyV1,
-    message: &RnsPolynomial,
+    message: ZeroizingRns,
+    canonical_plaintext: ZeroizingCanonicalPlaintext,
+    input_identity: CollectiveEncryptionInputIdentityV1,
     transcript_digest: [u8; 32],
     sample_index: u64,
     random: &mut R,
-) -> Result<ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheErrorV1> {
+) -> Result<
+    (
+        ZkAmsMkheCollectiveCiphertextV1,
+        ZkAmsMkheCollectiveEncryptionOpeningV1,
+    ),
+    ZkAmsMkheErrorV1,
+> {
     key.validate(profile)?;
-    message.validate(profile)?;
-    if transcript_digest == [0; 32] {
+    message.0.validate(profile)?;
+    if transcript_digest == [0; 32]
+        || input_identity.layout_digest == [0; 32]
+        || input_identity.plaintext_digest == [0; 32]
+        || input_identity.plaintext_used_slots == 0
+        || usize::try_from(input_identity.plaintext_used_slots)
+            .map_or(true, |used_slots| used_slots > profile.ring_degree)
+        || canonical_plaintext.0.len() != profile.ring_degree
+    {
         return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
     }
     checked_ring_multiplication_work(profile, 2)?;
-    let ephemeral = sample_nonzero_ternary(profile, random)?;
-    let error_zero = SecretPolynomial::sample_error(profile, random)?;
-    let error_one = SecretPolynomial::sample_error(profile, random)?;
+    validate_collective_encryption_entropy(random)?;
+    let ephemeral = sample_nonzero_ternary_zeroizing(profile, random)?;
+    let error_zero = sample_bounded_error(profile, random)?;
+    let error_one = sample_bounded_error(profile, random)?;
     let ephemeral_rns = ZeroizingRns(ephemeral.as_rns(profile)?);
     let scaled_error_zero = scaled_public_error(profile, &error_zero)?;
     let scaled_error_one = scaled_public_error(profile, &error_one)?;
-    let constant = key
-        .collective_public_b
-        .mul(&ephemeral_rns.0, profile)?
-        .add(&scaled_error_zero, profile)?
-        .add(message, profile)?;
-    let linear = key
-        .public_a
-        .mul(&ephemeral_rns.0, profile)?
-        .add(&scaled_error_one, profile)?;
-    ZkAmsMkheCollectiveCiphertextV1::new_with_key(
+    let constant_product = ZeroizingRns(key.collective_public_b.mul(&ephemeral_rns.0, profile)?);
+    let constant_with_error = ZeroizingRns(constant_product.0.add(&scaled_error_zero.0, profile)?);
+    let constant = ZeroizingRns(constant_with_error.0.add(&message.0, profile)?);
+    let linear_product = ZeroizingRns(key.public_a.mul(&ephemeral_rns.0, profile)?);
+    let linear = ZeroizingRns(linear_product.0.add(&scaled_error_one.0, profile)?);
+    // The two ciphertext components are public outputs. Secret-derived
+    // intermediates remain in zeroizing wrappers across every fallible step.
+    let ciphertext = ZkAmsMkheCollectiveCiphertextV1::new_with_key(
         profile,
         &key.parties,
         key.epoch,
         transcript_digest,
         sample_index,
         0,
-        constant,
-        linear,
+        constant.0.clone(),
+        linear.0.clone(),
         Some(key.digest),
-    )
+    )?;
+    let opening = ZkAmsMkheCollectiveEncryptionOpeningV1 {
+        profile_digest: profile.digest()?,
+        security_certificate_digest: key.security_certificate_digest,
+        roster_digest: key.roster_digest,
+        key_material_digest: key.key_material_digest,
+        key_digest: key.digest,
+        epoch: key.epoch,
+        key_transcript_digest: key.transcript_digest,
+        ciphertext_transcript_digest: transcript_digest,
+        sample_index,
+        input_identity,
+        ciphertext_digest: ciphertext.digest,
+        canonical_plaintext,
+        plaintext_lift: message,
+        ephemeral,
+        error_zero,
+        error_one,
+        #[cfg(test)]
+        drop_audit: None,
+    };
+    opening.validate_against(
+        profile,
+        key,
+        &opening.plaintext_lift.0,
+        &opening.canonical_plaintext.0,
+        input_identity,
+        transcript_digest,
+        &ciphertext,
+    )?;
+    Ok((ciphertext, opening))
 }
 
 fn collective_lineage_digest(
@@ -1549,10 +1968,9 @@ fn collective_lineage_digest(
 fn scaled_public_error(
     profile: &BgvProfile,
     error: &SecretPolynomial,
-) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
+) -> Result<ZeroizingRns, ZkAmsMkheErrorV1> {
     let raw = ZeroizingRns(error.as_rns(profile)?);
-    let scaled = raw.0.scale_plaintext_modulus(profile)?;
-    Ok(scaled)
+    Ok(ZeroizingRns(raw.0.scale_plaintext_modulus(profile)?))
 }
 
 fn sample_nonzero_ternary<R: MaskedRelaxedRandomSourceV1>(
@@ -1570,6 +1988,159 @@ fn sample_nonzero_ternary<R: MaskedRelaxedRandomSourceV1>(
         }
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
+}
+
+fn sample_nonzero_ternary_zeroizing<R: MaskedRelaxedRandomSourceV1>(
+    profile: &BgvProfile,
+    random: &mut R,
+) -> Result<SecretPolynomial, ZkAmsMkheErrorV1> {
+    for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
+        let candidate = sample_ternary_zeroizing(profile, random)?;
+        if candidate
+            .coefficients
+            .iter()
+            .any(|coefficient| *coefficient != 0)
+        {
+            return Ok(candidate);
+        }
+    }
+    Err(ZkAmsMkheErrorV1::RandomUnavailable)
+}
+
+fn validate_collective_encryption_entropy<R: MaskedRelaxedRandomSourceV1>(
+    random: &mut R,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let mut first = ZeroizingEntropyProbe([0; 32]);
+    let mut second = ZeroizingEntropyProbe([0; 32]);
+    random
+        .fill_bytes(&mut first.0)
+        .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
+    random
+        .fill_bytes(&mut second.0)
+        .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
+    if first.0 == second.0
+        || entropy_probe_has_short_period(&first.0)
+        || entropy_probe_has_short_period(&second.0)
+    {
+        return Err(ZkAmsMkheErrorV1::RandomUnavailable);
+    }
+    Ok(())
+}
+
+fn entropy_probe_has_short_period(probe: &[u8; 32]) -> bool {
+    (1..=probe.len() / 2).any(|period| {
+        probe.len().is_multiple_of(period)
+            && probe
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| *byte == probe[index % period])
+    })
+}
+
+fn sample_ternary_zeroizing<R: MaskedRelaxedRandomSourceV1>(
+    profile: &BgvProfile,
+    random: &mut R,
+) -> Result<SecretPolynomial, ZkAmsMkheErrorV1> {
+    let mut coefficients = ZeroizingSecretCoefficients(Vec::with_capacity(profile.ring_degree));
+    let max_bytes = profile
+        .ring_degree
+        .checked_mul(super::MAX_TERNARY_SAMPLE_BYTES_PER_COEFFICIENT_V1)
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    super::checked_rng_bytes(profile, max_bytes)?;
+    for _ in 0..max_bytes {
+        let mut byte = ZeroizingRandomByte([0]);
+        random
+            .fill_bytes(&mut byte.0)
+            .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
+        for shift in [0, 2, 4, 6] {
+            match (byte.0[0] >> shift) & 0x03 {
+                0 => coefficients.0.push(-1),
+                1 => coefficients.0.push(0),
+                2 => coefficients.0.push(1),
+                _ => continue,
+            }
+            if coefficients.0.len() == profile.ring_degree {
+                return Ok(SecretPolynomial {
+                    coefficients: core::mem::take(&mut coefficients.0),
+                });
+            }
+        }
+    }
+    Err(ZkAmsMkheErrorV1::RandomUnavailable)
+}
+
+fn sample_bounded_error<R: MaskedRelaxedRandomSourceV1>(
+    profile: &BgvProfile,
+    random: &mut R,
+) -> Result<SecretPolynomial, ZkAmsMkheErrorV1> {
+    let max_bytes = profile
+        .ring_degree
+        .checked_mul(usize::from(profile.error_eta))
+        .and_then(|value| value.checked_mul(2))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    super::checked_rng_bytes(profile, max_bytes)?;
+    let mut coefficients = ZeroizingSecretCoefficients(Vec::with_capacity(profile.ring_degree));
+    for _ in 0..profile.ring_degree {
+        let mut positive = 0_i64;
+        let mut negative = 0_i64;
+        for _ in 0..profile.error_eta {
+            let mut byte = ZeroizingRandomByte([0]);
+            random
+                .fill_bytes(&mut byte.0)
+                .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
+            positive += i64::from(byte.0[0] & 1);
+            let mut byte = ZeroizingRandomByte([0]);
+            random
+                .fill_bytes(&mut byte.0)
+                .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
+            negative += i64::from(byte.0[0] & 1);
+        }
+        coefficients.0.push(positive - negative);
+    }
+    Ok(SecretPolynomial {
+        coefficients: core::mem::take(&mut coefficients.0),
+    })
+}
+
+fn bounded_error_polynomial(profile: &BgvProfile, error: &SecretPolynomial) -> bool {
+    error.coefficients.len() == profile.ring_degree
+        && error
+            .coefficients
+            .iter()
+            .all(|coefficient| coefficient.unsigned_abs() <= u64::from(profile.error_eta))
+}
+
+fn derive_natural_lift_effective_error_zero(
+    profile: &BgvProfile,
+    canonical_plaintext: &[[u8; 32]],
+    sampled_error_zero: &SecretPolynomial,
+) -> Result<SecretPolynomial, ZkAmsMkheErrorV1> {
+    if profile.plaintext_modulus != super::PlaintextModulus::T256
+        || canonical_plaintext.len() != profile.ring_degree
+        || !bounded_error_polynomial(profile, sampled_error_zero)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    let mut coefficients = ZeroizingSecretCoefficients(Vec::with_capacity(profile.ring_degree));
+    for (canonical, sampled_error) in canonical_plaintext
+        .iter()
+        .zip(&sampled_error_zero.coefficients)
+    {
+        let upper_half = i64::from(*canonical > super::T256_CENTERED_MAX_BE_V1);
+        coefficients.0.push(*sampled_error - upper_half);
+    }
+    let minimum = -i64::from(profile.error_eta) - 1;
+    let maximum = i64::from(profile.error_eta);
+    if coefficients
+        .0
+        .iter()
+        .any(|coefficient| *coefficient < minimum || *coefficient > maximum)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    Ok(SecretPolynomial {
+        coefficients: core::mem::take(&mut coefficients.0),
+    })
 }
 
 fn update_rns_hash(
@@ -1658,6 +2229,58 @@ mod tests {
         }
     }
 
+    struct FailingRandom;
+
+    impl MaskedRelaxedRandomSourceV1 for FailingRandom {
+        fn fill_bytes(
+            &mut self,
+            _destination: &mut [u8],
+        ) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            Err(MaskedRelaxedRandomErrorV1::Unavailable)
+        }
+    }
+
+    struct RepeatedHealthyBlockRandom;
+
+    impl MaskedRelaxedRandomSourceV1 for RepeatedHealthyBlockRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = u8::try_from(index).unwrap_or(0).wrapping_mul(29) ^ 0xa7;
+            }
+            Ok(())
+        }
+    }
+
+    struct ProbeThenConstantRandom {
+        calls: usize,
+    }
+
+    impl ProbeThenConstantRandom {
+        const fn new() -> Self {
+            Self { calls: 0 }
+        }
+    }
+
+    impl MaskedRelaxedRandomSourceV1 for ProbeThenConstantRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            match self.calls {
+                0 | 1 => {
+                    let domain = if self.calls == 0 { 0x39 } else { 0xd2 };
+                    for (index, byte) in destination.iter_mut().enumerate() {
+                        *byte = u8::try_from(index)
+                            .unwrap_or(0)
+                            .wrapping_mul(37)
+                            .wrapping_add(domain)
+                            ^ u8::try_from(index * index).unwrap_or(0);
+                    }
+                }
+                _ => destination.fill(0x55),
+            }
+            self.calls += 1;
+            Ok(())
+        }
+    }
+
     fn test_parties() -> super::super::PartySet {
         super::super::PartySet::new(
             (1_u8..=ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 as u8)
@@ -1708,6 +2331,101 @@ mod tests {
         (key, aggregate_secret)
     }
 
+    fn test_canonical_plaintext(values: &[u64; 8]) -> Vec<[u8; 32]> {
+        values
+            .iter()
+            .map(|value| {
+                let mut coefficient = [0; 32];
+                coefficient[24..].copy_from_slice(&value.to_be_bytes());
+                coefficient
+            })
+            .collect()
+    }
+
+    fn test_input_identity(
+        profile: &BgvProfile,
+        message: &RnsPolynomial,
+        label: &[u8],
+    ) -> CollectiveEncryptionInputIdentityV1 {
+        let mut plaintext_hash = Keccak256::new();
+        plaintext_hash.update(b"iroha.zk-ams.test.collective-opening-plaintext");
+        update_rns_hash(&mut plaintext_hash, profile, message).unwrap();
+        CollectiveEncryptionInputIdentityV1 {
+            layout_digest: keccak256(&[b"layout".as_slice(), label].concat()),
+            plaintext_digest: plaintext_hash.finalize(),
+            plaintext_chunk_index: 0,
+            plaintext_used_slots: u32::try_from(profile.ring_degree).unwrap(),
+        }
+    }
+
+    fn encrypt_test_with_opening(
+        profile: &BgvProfile,
+        key: &ZkAmsMkheCollectivePublicKeyV1,
+        values: &[u64; 8],
+        sample_index: u64,
+        label: &[u8],
+    ) -> (
+        ZkAmsMkheCollectiveCiphertextV1,
+        ZkAmsMkheCollectiveEncryptionOpeningV1,
+        RnsPolynomial,
+        Vec<[u8; 32]>,
+        CollectiveEncryptionInputIdentityV1,
+        [u8; 32],
+    ) {
+        let message = RnsPolynomial::from_test_plaintext(profile, values).unwrap();
+        let canonical_plaintext = test_canonical_plaintext(values);
+        let input_identity = test_input_identity(profile, &message, label);
+        let transcript_digest = keccak256(label);
+        let (ciphertext, opening) = encrypt_collective_native_with_opening(
+            profile,
+            key,
+            ZeroizingRns(message.clone()),
+            ZeroizingCanonicalPlaintext(canonical_plaintext.clone()),
+            input_identity,
+            transcript_digest,
+            sample_index,
+            &mut KatRandom::new(label),
+        )
+        .unwrap();
+        (
+            ciphertext,
+            opening,
+            message,
+            canonical_plaintext,
+            input_identity,
+            transcript_digest,
+        )
+    }
+
+    fn try_encrypt_test_with_random<R: MaskedRelaxedRandomSourceV1>(
+        profile: &BgvProfile,
+        key: &ZkAmsMkheCollectivePublicKeyV1,
+        values: &[u64; 8],
+        sample_index: u64,
+        label: &[u8],
+        random: &mut R,
+    ) -> Result<
+        (
+            ZkAmsMkheCollectiveCiphertextV1,
+            ZkAmsMkheCollectiveEncryptionOpeningV1,
+        ),
+        ZkAmsMkheErrorV1,
+    > {
+        let message = RnsPolynomial::from_test_plaintext(profile, values).unwrap();
+        let canonical_plaintext = test_canonical_plaintext(values);
+        let input_identity = test_input_identity(profile, &message, label);
+        encrypt_collective_native_with_opening(
+            profile,
+            key,
+            ZeroizingRns(message),
+            ZeroizingCanonicalPlaintext(canonical_plaintext),
+            input_identity,
+            keccak256(label),
+            sample_index,
+            random,
+        )
+    }
+
     fn encrypt_test(
         profile: &BgvProfile,
         key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -1715,16 +2433,10 @@ mod tests {
         sample_index: u64,
         label: &[u8],
     ) -> ZkAmsMkheCollectiveCiphertextV1 {
-        let message = RnsPolynomial::from_test_plaintext(profile, values).unwrap();
-        encrypt_collective_native(
-            profile,
-            key,
-            &message,
-            keccak256(label),
-            sample_index,
-            &mut KatRandom::new(label),
-        )
-        .unwrap()
+        let (ciphertext, opening, ..) =
+            encrypt_test_with_opening(profile, key, values, sample_index, label);
+        drop(opening);
+        ciphertext
     }
 
     fn decrypt_compact(
@@ -2049,12 +2761,357 @@ mod tests {
         ));
 
         let (key, _) = test_key(0x71);
-        let message = RnsPolynomial::from_test_plaintext(&profile, &[0; 8]).unwrap();
-        let mut zero_ternary = ConstantRandom(0x55);
+        // The two initial probes are distinct and non-periodic; all subsequent
+        // ternary bytes encode zero, so bounded rejection must still stop.
+        let mut zero_ternary = ProbeThenConstantRandom::new();
+        assert!(matches!(
+            try_encrypt_test_with_random(
+                &profile,
+                &key,
+                &[0; 8],
+                0,
+                b"all-zero-r",
+                &mut zero_ternary,
+            ),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        ));
+    }
+
+    #[test]
+    fn collective_opening_adapter_recomputes_both_rlwe_equations_independently() {
+        let profile = test_profile();
+        let (key, _) = test_key(0x72);
+        let values = [1, 16, 3, 14, 5, 12, 7, 10];
+        let (ciphertext, opening, message, canonical, input_identity, transcript_digest) =
+            encrypt_test_with_opening(&profile, &key, &values, 29, b"opening-equations");
+
+        opening
+            .with_validated_native_proof_witness_v1(
+                &profile,
+                &key,
+                &message,
+                &canonical,
+                input_identity,
+                transcript_digest,
+                &ciphertext,
+                |actual_canonical, actual_message, ephemeral, error_zero, error_one| {
+                    assert_eq!(actual_canonical, canonical.as_slice());
+                    assert_eq!(actual_message, &message);
+                    assert!(
+                        ephemeral
+                            .coefficients
+                            .iter()
+                            .any(|coefficient| *coefficient != 0)
+                    );
+                    assert!(bounded_error_polynomial(&profile, error_zero));
+                    assert!(bounded_error_polynomial(&profile, error_one));
+
+                    // Recompute from the raw validated witnesses rather than
+                    // relying on the opening's validation result.
+                    let ephemeral_rns = ZeroizingRns(ephemeral.as_rns(&profile)?);
+                    let error_zero_rns = ZeroizingRns(error_zero.as_rns(&profile)?);
+                    let error_one_rns = ZeroizingRns(error_one.as_rns(&profile)?);
+                    let scaled_error_zero =
+                        ZeroizingRns(error_zero_rns.0.scale_plaintext_modulus(&profile)?);
+                    let scaled_error_one =
+                        ZeroizingRns(error_one_rns.0.scale_plaintext_modulus(&profile)?);
+                    let public_b_product =
+                        ZeroizingRns(key.collective_public_b.mul(&ephemeral_rns.0, &profile)?);
+                    let constant_with_error =
+                        ZeroizingRns(public_b_product.0.add(&scaled_error_zero.0, &profile)?);
+                    let independently_recomputed_constant =
+                        ZeroizingRns(constant_with_error.0.add(actual_message, &profile)?);
+                    let public_a_product =
+                        ZeroizingRns(key.public_a.mul(&ephemeral_rns.0, &profile)?);
+                    let independently_recomputed_linear =
+                        ZeroizingRns(public_a_product.0.add(&scaled_error_one.0, &profile)?);
+                    assert_eq!(independently_recomputed_constant.0, *ciphertext.constant());
+                    assert_eq!(independently_recomputed_linear.0, *ciphertext.linear());
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
+        let profile = test_profile();
+        let (key, _) = test_key(0x73);
+        let (other_key, _) = test_key(0x74);
+        let values = [2, 4, 6, 8, 10, 12, 14, 16];
+        let (ciphertext, opening, message, canonical, identity, transcript_digest) =
+            encrypt_test_with_opening(&profile, &key, &values, 31, b"opening-splices");
+
+        assert!(
+            opening
+                .validate_against(
+                    &profile,
+                    &other_key,
+                    &message,
+                    &canonical,
+                    identity,
+                    transcript_digest,
+                    &ciphertext,
+                )
+                .is_err()
+        );
+
+        let other_ciphertext = encrypt_test(
+            &profile,
+            &key,
+            &[1, 3, 5, 7, 9, 11, 13, 15],
+            32,
+            b"opening-other-ciphertext",
+        );
+        assert!(
+            opening
+                .validate_against(
+                    &profile,
+                    &key,
+                    &message,
+                    &canonical,
+                    identity,
+                    other_ciphertext.transcript_digest,
+                    &other_ciphertext,
+                )
+                .is_err()
+        );
+
+        let wrong_message =
+            RnsPolynomial::from_test_plaintext(&profile, &[3, 4, 6, 8, 10, 12, 14, 16]).unwrap();
+        assert!(
+            opening
+                .validate_against(
+                    &profile,
+                    &key,
+                    &wrong_message,
+                    &canonical,
+                    identity,
+                    transcript_digest,
+                    &ciphertext,
+                )
+                .is_err()
+        );
+
+        let mut wrong_canonical = canonical.clone();
+        wrong_canonical[0][31] ^= 1;
+        assert!(
+            opening
+                .validate_against(
+                    &profile,
+                    &key,
+                    &message,
+                    &wrong_canonical,
+                    identity,
+                    transcript_digest,
+                    &ciphertext,
+                )
+                .is_err()
+        );
+
+        for axis in 0..4 {
+            let mut wrong_identity = identity;
+            match axis {
+                0 => wrong_identity.layout_digest[0] ^= 1,
+                1 => wrong_identity.plaintext_digest[0] ^= 1,
+                2 => wrong_identity.plaintext_chunk_index ^= 1,
+                _ => wrong_identity.plaintext_used_slots -= 1,
+            }
+            assert!(
+                opening
+                    .validate_against(
+                        &profile,
+                        &key,
+                        &message,
+                        &canonical,
+                        wrong_identity,
+                        transcript_digest,
+                        &ciphertext,
+                    )
+                    .is_err(),
+                "context splice axis {axis} was accepted"
+            );
+        }
+
+        let mut wrong_transcript = transcript_digest;
+        wrong_transcript[0] ^= 1;
+        assert!(
+            opening
+                .validate_against(
+                    &profile,
+                    &key,
+                    &message,
+                    &canonical,
+                    identity,
+                    wrong_transcript,
+                    &ciphertext,
+                )
+                .is_err()
+        );
+        let mut corrupted_ciphertext = ciphertext.clone();
+        corrupted_ciphertext.digest[0] ^= 1;
+        assert!(
+            opening
+                .validate_against(
+                    &profile,
+                    &key,
+                    &message,
+                    &canonical,
+                    identity,
+                    transcript_digest,
+                    &corrupted_ciphertext,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn collective_opening_rejects_out_of_range_or_tampered_secret_witnesses() {
+        let profile = test_profile();
+        let (key, _) = test_key(0x75);
+        let values = [1, 2, 3, 4, 5, 6, 7, 8];
+
+        for axis in 0..4 {
+            let (ciphertext, mut opening, message, canonical, identity, transcript_digest) =
+                encrypt_test_with_opening(
+                    &profile,
+                    &key,
+                    &values,
+                    40 + axis,
+                    &[b"opening-witness-tamper".as_slice(), &[axis as u8]].concat(),
+                );
+            match axis {
+                0 => opening.ephemeral.coefficients.fill(0),
+                1 => opening.ephemeral.coefficients[0] = 2,
+                2 => {
+                    opening.error_zero.coefficients[0] = i64::from(profile.error_eta) + 1;
+                }
+                _ => opening.error_one.coefficients[0] ^= 1,
+            }
+            assert!(
+                opening
+                    .validate_against(
+                        &profile,
+                        &key,
+                        &message,
+                        &canonical,
+                        identity,
+                        transcript_digest,
+                        &ciphertext,
+                    )
+                    .is_err(),
+                "secret witness tamper axis {axis} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn collective_encryption_rejects_zero_repeating_and_failing_entropy() {
+        let mut healthy = KatRandom::new(b"entropy-healthy");
+        validate_collective_encryption_entropy(&mut healthy).unwrap();
+
+        let mut zero = ConstantRandom(0);
         assert_eq!(
-            encrypt_collective_native(&profile, &key, &message, [0x72; 32], 0, &mut zero_ternary,),
+            validate_collective_encryption_entropy(&mut zero),
             Err(ZkAmsMkheErrorV1::RandomUnavailable)
         );
+        let mut constant = ConstantRandom(0xa5);
+        assert_eq!(
+            validate_collective_encryption_entropy(&mut constant),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        );
+        let mut repeating = RepeatedHealthyBlockRandom;
+        assert_eq!(
+            validate_collective_encryption_entropy(&mut repeating),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        );
+        let mut failing = FailingRandom;
+        assert_eq!(
+            validate_collective_encryption_entropy(&mut failing),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        );
+
+        let profile = test_profile();
+        let (key, _) = test_key(0x76);
+        let mut repeating = RepeatedHealthyBlockRandom;
+        assert!(matches!(
+            try_encrypt_test_with_random(
+                &profile,
+                &key,
+                &[0; 8],
+                0,
+                b"repeating-entropy-encryption",
+                &mut repeating,
+            ),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        ));
+        let mut failing = FailingRandom;
+        assert!(matches!(
+            try_encrypt_test_with_random(
+                &profile,
+                &key,
+                &[0; 8],
+                0,
+                b"failing-entropy-encryption",
+                &mut failing,
+            ),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        ));
+    }
+
+    #[test]
+    fn collective_opening_debug_is_redacted_and_drop_zeroizes_every_witness() {
+        let profile = test_profile();
+        let (key, _) = test_key(0x77);
+        let (_, mut opening, ..) = encrypt_test_with_opening(
+            &profile,
+            &key,
+            &[16, 15, 14, 13, 12, 11, 10, 9],
+            47,
+            b"opening-redaction-drop",
+        );
+        let debug = format!("{opening:?}");
+        assert_eq!(debug.matches("[REDACTED]").count(), 5);
+        assert!(!debug.contains("coefficients:"));
+
+        let audit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        opening.arm_drop_zeroization_audit(audit.clone());
+        drop(opening);
+        assert!(audit.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn natural_lift_effective_error_uses_the_exact_centered_boundary() {
+        let profile = release_profile_v1();
+        let mut canonical = vec![[0; 32]; profile.ring_degree];
+        canonical[0] = super::super::T256_CENTERED_MAX_BE_V1;
+        canonical[1] = super::super::T256_CENTERED_MAX_BE_V1;
+        for byte in canonical[1].iter_mut().rev() {
+            let (incremented, carried) = byte.overflowing_add(1);
+            *byte = incremented;
+            if !carried {
+                break;
+            }
+        }
+        let mut sampled = SecretPolynomial {
+            coefficients: vec![0; profile.ring_degree],
+        };
+        sampled.coefficients[0] = i64::from(profile.error_eta);
+        sampled.coefficients[1] = -i64::from(profile.error_eta);
+        let effective =
+            derive_natural_lift_effective_error_zero(&profile, &canonical, &sampled).unwrap();
+        assert_eq!(effective.coefficients[0], i64::from(profile.error_eta));
+        assert_eq!(effective.coefficients[1], -i64::from(profile.error_eta) - 1);
+        assert!(
+            effective.coefficients[2..]
+                .iter()
+                .all(|coefficient| *coefficient == 0)
+        );
+
+        assert!(matches!(
+            derive_natural_lift_effective_error_zero(&test_profile(), &canonical[..8], &sampled),
+            Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+        ));
     }
 
     #[test]

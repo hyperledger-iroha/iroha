@@ -392,9 +392,12 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
    roots/counts, sample window, or seal timestamp before serving data, and sums
    all rebuilt PDP trees against the configured aggregate memory budget.
    - Restore bounded auxiliary runtime state from
-     `runtime-state/auxiliary-snapshot.to`. The checkpoint retains PoR penalty
-     high-water state, replay sequences, reputation snapshots, deal balances
-     and ticket replay IDs, capacity
+     `runtime-state/auxiliary-snapshot-v5.to`. A canonical
+     `runtime-state/initialized-v5` marker closes initialization. Earlier
+     snapshot and marker versions are rejected and require an explicit reseed;
+     this first-release format has no migration path. The checkpoint retains
+     PoR penalty high-water state, replay sequences, reputation snapshots, deal
+     balances and ticket replay IDs, capacity
      declarations and outstanding reservations, unpublished
      transparency/privacy inputs, and processed publication cycles. Capacity
      restore recomputes per-profile/lane allocations and rebuilds metering

@@ -548,7 +548,7 @@ if (
     or native["target_triple"] != "aarch64-apple-ios"
     or native["architectures"] != ["arm64"]
     or native["simulator_slice_present"] is not False
-    or native["source_repo_dirty"] is not True
+    or native["source_repo_dirty"] is not False
     or native["candidate_record_sha256"] != digest(candidate)
     or native["reviewed_source_closure_descriptor_sha256"] != digest(closure)
 ):
@@ -571,7 +571,7 @@ session = {
     "native_library_sha256": digest(native_library),
     "source_commit": native["source_commit"],
     "source_tree_sha256": native["source_tree_sha256"],
-    "source_repo_dirty": True,
+    "source_repo_dirty": False,
     "reviewed_source_closure_descriptor_sha256": digest(closure),
     "device_udid_sha256": device["device_udid_sha256"],
     "device_ecid_sha256": device["device_ecid_sha256"],

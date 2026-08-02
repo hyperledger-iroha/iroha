@@ -40,7 +40,7 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
     to_bytes,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{MappedRwLockReadGuard, Mutex, RwLock, RwLockReadGuard};
 use sorafs_manifest::por::{
     AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
     POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome,
@@ -54,7 +54,9 @@ use sorafs_manifest::por::{
 use sorafs_node::{
     ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError, PorRandomness,
 };
-use sorafs_node::{PorStatusAuthoritySnapshotV1, por_repair_source_identity_v1};
+use sorafs_node::{
+    PorStatusAuthoritySnapshotV1, PorStatusAuthorityUpdateV1, por_repair_source_identity_v1,
+};
 use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
 #[cfg(feature = "app_api")]
@@ -66,6 +68,8 @@ const POR_STATUS_CURSOR_VERSION_V1: u8 = 1;
 const POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1: usize = 256;
 /// Maximum sum of canonical status-record bytes returned by one PoR page.
 pub(crate) const POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1: usize = 4 * 1024 * 1024;
+/// Maximum status records materialized and filter-evaluated by one status query.
+pub(crate) const POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1: usize = 512;
 const POR_COORDINATOR_SNAPSHOT_VERSION_V1: u8 = 1;
 const MAX_POR_COORDINATOR_RECORDS: usize = 65_536;
 const MAX_POR_COORDINATOR_FORCED_PROVIDERS: usize = 4_096;
@@ -303,7 +307,12 @@ pub struct PorStatusPageV1 {
     pub canonical_byte_limit: u64,
     /// Exact sum of canonical bytes for all returned status records.
     pub canonical_bytes: u64,
-    /// Whether at least one later matching record exists.
+    /// Exact number of indexed status candidates evaluated for this page.
+    pub inspected_candidates: u32,
+    /// Whether traversal can continue after the last consumed candidate.
+    ///
+    /// Sparse filter intersections may therefore return no statuses together
+    /// with `has_more = true` and a non-empty continuation cursor.
     pub has_more: bool,
     /// Opaque continuation bound to this generation, selection, and last record.
     #[norito(default)]
@@ -335,6 +344,23 @@ struct PreparedWeeklyReportV1 {
 }
 
 type PorStatusOrderKey = (u64, [u8; 32]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PorStatusCursorAnchor {
+    epoch_id: u64,
+    issued_at: u64,
+    challenge_id: [u8; 32],
+}
+
+impl PorStatusCursorAnchor {
+    fn status_order_key(self) -> PorStatusOrderKey {
+        (self.issued_at, self.challenge_id)
+    }
+
+    fn epoch_order_key(self) -> (u64, u64, [u8; 32]) {
+        (self.epoch_id, self.issued_at, self.challenge_id)
+    }
+}
 
 fn por_status_selection_digest(filter: &PorStatusFilter) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
@@ -463,7 +489,6 @@ impl PorStatusIndexes {
             .insert((status.epoch_id, status.issued_at, status.challenge_id));
     }
 
-    #[cfg(test)]
     fn remove_status(&mut self, status: &PorChallengeStatusV1) {
         let key = Self::order_key(status);
         self.canonical.remove(&key);
@@ -475,7 +500,6 @@ impl PorStatusIndexes {
             .remove(&(status.epoch_id, status.issued_at, status.challenge_id));
     }
 
-    #[cfg(test)]
     fn remove_secondary<K: Ord + Copy>(
         index: &mut BTreeMap<K, BTreeSet<PorStatusOrderKey>>,
         key: &K,
@@ -490,7 +514,6 @@ impl PorStatusIndexes {
         }
     }
 
-    #[cfg(test)]
     fn commit_insert(&mut self, status: &PorChallengeStatusV1, next_generation: u64) {
         self.insert_status(status);
         self.publish_generation(next_generation);
@@ -502,7 +525,6 @@ impl PorStatusIndexes {
         self.publish_generation(next_generation);
     }
 
-    #[cfg(test)]
     fn commit_replace(
         &mut self,
         previous: &PorChallengeStatusV1,
@@ -514,7 +536,6 @@ impl PorStatusIndexes {
         self.publish_generation(next_generation);
     }
 
-    #[cfg(test)]
     fn publish_generation(&mut self, next_generation: u64) {
         debug_assert_eq!(self.generation.checked_add(1), Some(next_generation));
         self.generation = next_generation;
@@ -538,11 +559,92 @@ impl PorStatusIndexes {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct AuthoritativePorProjectionV1 {
     statuses: BTreeMap<[u8; 32], PorChallengeStatusV1>,
     indexes: PorStatusIndexes,
     forced_providers: HashMap<[u8; 32], BTreeSet<u64>>,
+}
+
+fn por_status_identity_is_unchanged(
+    previous: &PorChallengeStatusV1,
+    current: &PorChallengeStatusV1,
+) -> bool {
+    previous.version == current.version
+        && previous.challenge_id == current.challenge_id
+        && previous.manifest_digest == current.manifest_digest
+        && previous.provider_id == current.provider_id
+        && previous.epoch_id == current.epoch_id
+        && previous.drand_round == current.drand_round
+        && previous.sample_count == current.sample_count
+        && previous.forced == current.forced
+        && previous.issued_at == current.issued_at
+}
+
+fn por_status_lifecycle_advances(
+    previous: &PorChallengeStatusV1,
+    current: &PorChallengeStatusV1,
+) -> bool {
+    if previous == current
+        || previous
+            .responded_at
+            .is_some_and(|value| current.responded_at != Some(value))
+        || previous
+            .proof_digest
+            .is_some_and(|value| current.proof_digest != Some(value))
+    {
+        return false;
+    }
+
+    let open_outcome = if previous.forced {
+        PorChallengeOutcome::Forced
+    } else {
+        PorChallengeOutcome::Pending
+    };
+    if previous.status != open_outcome {
+        return false;
+    }
+    if current.status == open_outcome {
+        return previous.failure_reason == current.failure_reason
+            && previous.repair_task_id == current.repair_task_id
+            && previous.verifier_latency_ms == current.verifier_latency_ms;
+    }
+    matches!(
+        current.status,
+        PorChallengeOutcome::Verified
+            | PorChallengeOutcome::Failed
+            | PorChallengeOutcome::Repaired
+    )
+}
+
+fn remove_forced_status(
+    forced_providers: &mut HashMap<[u8; 32], BTreeSet<u64>>,
+    status: &PorChallengeStatusV1,
+) {
+    if !status.forced {
+        return;
+    }
+    let remove_provider = forced_providers
+        .get_mut(&status.provider_id)
+        .is_some_and(|epochs| {
+            epochs.remove(&status.epoch_id);
+            epochs.is_empty()
+        });
+    if remove_provider {
+        forced_providers.remove(&status.provider_id);
+    }
+}
+
+fn insert_forced_status(
+    forced_providers: &mut HashMap<[u8; 32], BTreeSet<u64>>,
+    status: &PorChallengeStatusV1,
+) {
+    if status.forced {
+        forced_providers
+            .entry(status.provider_id)
+            .or_default()
+            .insert(status.epoch_id);
+    }
 }
 
 /// Rebuildable PoR read projection and durable weekly-report publisher state.
@@ -551,7 +653,7 @@ pub struct PorCoordinator {
     #[cfg(test)]
     records: Arc<DashMap<[u8; 32], ChallengeRecord>>,
     /// One atomic, rebuildable read projection sourced from the node checkpoint.
-    authoritative_projection: Arc<RwLock<Option<Arc<AuthoritativePorProjectionV1>>>>,
+    authoritative_projection: Arc<RwLock<Option<AuthoritativePorProjectionV1>>>,
     #[cfg(test)]
     status_indexes: Arc<RwLock<PorStatusIndexes>>,
     /// Tracks recent forced challenges so we can flag providers missing VRFs.
@@ -566,6 +668,8 @@ pub struct PorCoordinator {
     pipeline_lock: Arc<tokio::sync::Mutex<()>>,
     #[cfg(test)]
     weekly_report_projection_lookups: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    status_page_projection_lookups: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl PorCoordinator {
@@ -587,6 +691,8 @@ impl PorCoordinator {
             pipeline_lock: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(test)]
             weekly_report_projection_lookups: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            status_page_projection_lookups: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -629,6 +735,8 @@ impl PorCoordinator {
             pipeline_lock: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(test)]
             weekly_report_projection_lookups: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            status_page_projection_lookups: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -650,11 +758,9 @@ impl PorCoordinator {
 
     fn require_authoritative_projection(
         &self,
-    ) -> Result<Arc<AuthoritativePorProjectionV1>, PorCoordinatorError> {
-        self.authoritative_projection
-            .read()
-            .clone()
-            .ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)
+    ) -> Result<MappedRwLockReadGuard<'_, AuthoritativePorProjectionV1>, PorCoordinatorError> {
+        RwLockReadGuard::try_map(self.authoritative_projection.read(), Option::as_ref)
+            .map_err(|_| PorCoordinatorError::AuthoritativeProjectionUnavailable)
     }
 
     fn commit_uncertain_reason(error: &PorCoordinatorError) -> Option<&str> {
@@ -748,17 +854,123 @@ impl PorCoordinator {
             statuses.insert(status.challenge_id, status);
         }
         let indexes = PorStatusIndexes::from_statuses(&statuses, snapshot.generation);
-        let projection = Arc::new(AuthoritativePorProjectionV1 {
+        let projection = AuthoritativePorProjectionV1 {
             statuses,
             indexes,
             forced_providers: forced,
-        });
+        };
 
         let _mutation = self.mutation_lock.lock();
         *self.authoritative_projection.write() = Some(projection);
         #[cfg(test)]
         self.records.clear();
         Ok(())
+    }
+
+    /// Apply one exact node-authoritative lifecycle update in logarithmic time.
+    ///
+    /// The currently installed generation must either equal the update
+    /// generation for an exact replay or immediately precede it for one insert
+    /// or forward lifecycle transition. Any rollback, gap, identity change, or
+    /// conflicting replay invalidates the rebuildable projection so reads fail
+    /// closed until startup reconciliation installs a complete checkpoint.
+    pub(crate) fn apply_authoritative_update(
+        &self,
+        update: PorStatusAuthorityUpdateV1,
+    ) -> Result<(), PorCoordinatorError> {
+        let validation_error = if update.generation == 0 {
+            Some("status generation must be non-zero".to_owned())
+        } else {
+            update.status.validate().err().map(|error| error.to_string())
+        };
+
+        let _mutation = self.mutation_lock.lock();
+        let mut installed = self.authoritative_projection.write();
+        if let Some(reason) = validation_error {
+            *installed = None;
+            return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
+                reason,
+            ));
+        }
+        let Some(current) = installed.as_ref() else {
+            return Err(PorCoordinatorError::AuthoritativeProjectionUnavailable);
+        };
+        let current_generation = current.indexes.generation;
+        let challenge_id = update.status.challenge_id;
+
+        if update.generation == current_generation {
+            if current.statuses.get(&challenge_id) == Some(&update.status) {
+                return Ok(());
+            }
+            *installed = None;
+            return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
+                "same-generation status update conflicts with the installed checkpoint"
+                    .to_owned(),
+            ));
+        }
+
+        if current_generation.checked_add(1) != Some(update.generation) {
+            *installed = None;
+            return Err(PorCoordinatorError::InvalidAuthoritativeProjection(format!(
+                "status update generation {} does not immediately follow installed generation {current_generation}",
+                update.generation
+            )));
+        }
+
+        let previous = current.statuses.get(&challenge_id);
+        if let Some(previous) = previous {
+            if !por_status_identity_is_unchanged(previous, &update.status)
+                || !por_status_lifecycle_advances(previous, &update.status)
+            {
+                *installed = None;
+                return Err(PorCoordinatorError::InvalidAuthoritativeProjection(
+                    "status update changes immutable challenge identity or regresses lifecycle state"
+                        .to_owned(),
+                ));
+            }
+        } else if current.statuses.len() >= MAX_POR_COORDINATOR_RECORDS {
+            *installed = None;
+            return Err(PorCoordinatorError::RetentionExhausted {
+                limit: MAX_POR_COORDINATOR_RECORDS,
+            });
+        }
+
+        let prospective_len = current.statuses.len() + usize::from(previous.is_none());
+        let minimum_generation = u64::try_from(prospective_len)
+            .ok()
+            .and_then(|count| count.checked_add(1))
+            .ok_or(PorCoordinatorError::StatusGenerationExhausted)?;
+        if update.generation < minimum_generation {
+            *installed = None;
+            return Err(PorCoordinatorError::InvalidAuthoritativeProjection(format!(
+                "status update generation {} is below minimum {minimum_generation}",
+                update.generation
+            )));
+        }
+
+        let projection = installed
+            .as_mut()
+            .expect("installed projection was checked before mutation");
+        if let Some(previous) = projection.statuses.insert(challenge_id, update.status.clone()) {
+            projection.indexes.commit_replace(
+                &previous,
+                &update.status,
+                update.generation,
+            );
+            remove_forced_status(&mut projection.forced_providers, &previous);
+        } else {
+            projection
+                .indexes
+                .commit_insert(&update.status, update.generation);
+        }
+        insert_forced_status(&mut projection.forced_providers, &update.status);
+        Ok(())
+    }
+
+    /// Drop the rebuildable projection after an uncertain node mutation.
+    pub(crate) fn invalidate_authoritative_projection(&self) {
+        let _mutation = self.mutation_lock.lock();
+        *self.authoritative_projection.write() = None;
     }
 
     /// Remove retired lifecycle records from coordinator persistence while
@@ -1240,20 +1452,20 @@ impl PorCoordinator {
     ) -> Result<PorStatusPageV1, PorCoordinatorError> {
         let _mutation = self.mutation_lock.lock();
         self.ensure_persistence_healthy()?;
+        let authoritative_guard = self.authoritative_projection.read();
+        let authoritative = authoritative_guard.as_ref();
         #[cfg(not(test))]
-        let authoritative = Some(self.require_authoritative_projection()?);
-        #[cfg(test)]
-        let authoritative = self.authoritative_projection.read().clone();
+        let authoritative = Some(
+            authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?,
+        );
         #[cfg(test)]
         let legacy_indexes = authoritative.is_none().then(|| self.status_indexes.read());
         #[cfg(not(test))]
         let indexes = &authoritative
-            .as_deref()
             .expect("required authoritative projection")
             .indexes;
         #[cfg(test)]
         let indexes = authoritative
-            .as_deref()
             .map(|projection| &projection.indexes)
             .unwrap_or_else(|| {
                 legacy_indexes
@@ -1261,29 +1473,41 @@ impl PorCoordinator {
                     .expect("legacy PoR indexes exist without an authoritative projection")
             });
         let selection_digest = por_status_selection_digest(filter);
-        let after_status = self.validate_page_cursor(
-            authoritative.as_deref(),
+        let after_anchor = self.validate_page_cursor(
             cursor,
             indexes.generation,
             selection_digest,
         )?;
-        if after_status
-            .as_ref()
-            .is_some_and(|status| !filter.matches(status))
+        let after = after_anchor.map(PorStatusCursorAnchor::status_order_key);
+
+        let candidates = self.smallest_status_index(&indexes, filter);
+        if let Some(after) = after
+            && !candidates.is_some_and(|candidates| candidates.contains(&after))
         {
             return Err(PorCoordinatorError::PageCursorAnchorSelectionMismatch);
         }
-        let after = after_status.as_ref().map(PorStatusIndexes::order_key);
-
-        let candidates = self.smallest_status_index(&indexes, filter);
         let mut page = PorStatusPageAccumulator::new(indexes.generation, selection_digest, limits);
         if let Some(candidates) = candidates {
             let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
-            for (_, challenge_id) in candidates.range((lower, Bound::Unbounded)) {
-                let status = self.status_for_indexed_id(authoritative.as_deref(), *challenge_id)?;
-                if filter.matches(&status) && !page.accept(status)? {
+            let mut candidates = candidates.range((lower, Bound::Unbounded)).peekable();
+            while page.inspected_candidates < POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
+                && !page.record_limit_reached()
+            {
+                let Some((_, challenge_id)) = candidates.next() else {
+                    break;
+                };
+                #[cfg(test)]
+                self.status_page_projection_lookups
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let status = self.status_for_indexed_id(authoritative, *challenge_id)?;
+                page.note_inspected_candidate()?;
+                if filter.matches(&status) && !page.accept(status.clone())? {
                     break;
                 }
+                page.consume_candidate(&status);
+            }
+            if candidates.peek().is_some() {
+                page.mark_has_more();
             }
         }
         page.finish()
@@ -1300,14 +1524,17 @@ impl PorCoordinator {
         let limits = PorStatusPageLimits::new(records, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
             .expect("test PoR status limits are valid");
         let cursor = page_token.map_or(PorStatusPageCursor::First, |challenge_id| {
-            let authoritative = self.authoritative_projection.read().clone();
-            let status = self
-                .status_for_indexed_id(authoritative.as_deref(), challenge_id)
-                .expect("test PoR page token must identify a retained challenge");
-            let snapshot_generation = authoritative.as_deref().map_or_else(
-                || self.status_indexes.read().generation,
-                |projection| projection.indexes.generation,
-            );
+            let (status, snapshot_generation) = {
+                let authoritative = self.authoritative_projection.read();
+                let status = self
+                    .status_for_indexed_id(authoritative.as_ref(), challenge_id)
+                    .expect("test PoR page token must identify a retained challenge");
+                let snapshot_generation = authoritative.as_ref().map_or_else(
+                    || self.status_indexes.read().generation,
+                    |projection| projection.indexes.generation,
+                );
+                (status, snapshot_generation)
+            };
             PorStatusPageCursor::After {
                 snapshot_generation,
                 selection_digest: por_status_selection_digest(filter),
@@ -1344,20 +1571,20 @@ impl PorCoordinator {
 
         let _mutation = self.mutation_lock.lock();
         self.ensure_persistence_healthy()?;
+        let authoritative_guard = self.authoritative_projection.read();
+        let authoritative = authoritative_guard.as_ref();
         #[cfg(not(test))]
-        let authoritative = Some(self.require_authoritative_projection()?);
-        #[cfg(test)]
-        let authoritative = self.authoritative_projection.read().clone();
+        let authoritative = Some(
+            authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?,
+        );
         #[cfg(test)]
         let legacy_indexes = authoritative.is_none().then(|| self.status_indexes.read());
         #[cfg(not(test))]
         let indexes = &authoritative
-            .as_deref()
             .expect("required authoritative projection")
             .indexes;
         #[cfg(test)]
         let indexes = authoritative
-            .as_deref()
             .map(|projection| &projection.indexes)
             .unwrap_or_else(|| {
                 legacy_indexes
@@ -1365,51 +1592,78 @@ impl PorCoordinator {
                     .expect("legacy PoR indexes exist without an authoritative projection")
             });
         let selection_digest = por_export_selection_digest(range);
-        let after_status = self.validate_page_cursor(
-            authoritative.as_deref(),
+        let after_anchor = self.validate_page_cursor(
             cursor,
             indexes.generation,
             selection_digest,
         )?;
-        if let (Some((start, end)), Some(status)) = (range, after_status.as_ref())
-            && !(start..=end).contains(&status.epoch_id)
+        if let (Some((start, end)), Some(anchor)) = (range, after_anchor)
+            && !(start..=end).contains(&anchor.epoch_id)
         {
             return Err(PorCoordinatorError::PageCursorAnchorSelectionMismatch);
+        }
+        if let Some(anchor) = after_anchor {
+            let anchor_is_indexed = match range {
+                None => indexes.canonical.contains(&anchor.status_order_key()),
+                Some(_) => indexes.epoch_order.contains(&anchor.epoch_order_key()),
+            };
+            if !anchor_is_indexed {
+                return Err(PorCoordinatorError::PageCursorAnchorMismatch {
+                    challenge_id: anchor.challenge_id,
+                });
+            }
         }
 
         let mut page = PorStatusPageAccumulator::new(indexes.generation, selection_digest, limits);
         match range {
             None => {
-                let lower = after_status
-                    .as_ref()
-                    .map(PorStatusIndexes::order_key)
+                let lower = after_anchor
+                    .map(PorStatusCursorAnchor::status_order_key)
                     .map_or(Bound::Unbounded, Bound::Excluded);
-                for (_, challenge_id) in indexes.canonical.range((lower, Bound::Unbounded)) {
-                    if !page.accept(
-                        self.status_for_indexed_id(authoritative.as_deref(), *challenge_id)?,
-                    )? {
+                let mut candidates = indexes
+                    .canonical
+                    .range((lower, Bound::Unbounded))
+                    .peekable();
+                while page.inspected_candidates < POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
+                    && !page.record_limit_reached()
+                {
+                    let Some((_, challenge_id)) = candidates.next() else {
+                        break;
+                    };
+                    let status = self.status_for_indexed_id(authoritative, *challenge_id)?;
+                    page.note_inspected_candidate()?;
+                    if !page.accept(status.clone())? {
                         break;
                     }
+                    page.consume_candidate(&status);
+                }
+                if candidates.peek().is_some() {
+                    page.mark_has_more();
                 }
             }
             Some((start, end)) => {
                 let lower =
-                    after_status
-                        .as_ref()
+                    after_anchor
                         .map_or(Bound::Included((start, 0, [0; 32])), |status| {
-                            Bound::Excluded((
-                                status.epoch_id,
-                                status.issued_at,
-                                status.challenge_id,
-                            ))
+                            Bound::Excluded(status.epoch_order_key())
                         });
                 let upper = Bound::Included((end, u64::MAX, [u8::MAX; 32]));
-                for (_, _, challenge_id) in indexes.epoch_order.range((lower, upper)) {
-                    if !page.accept(
-                        self.status_for_indexed_id(authoritative.as_deref(), *challenge_id)?,
-                    )? {
+                let mut candidates = indexes.epoch_order.range((lower, upper)).peekable();
+                while page.inspected_candidates < POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
+                    && !page.record_limit_reached()
+                {
+                    let Some((_, _, challenge_id)) = candidates.next() else {
+                        break;
+                    };
+                    let status = self.status_for_indexed_id(authoritative, *challenge_id)?;
+                    page.note_inspected_candidate()?;
+                    if !page.accept(status.clone())? {
                         break;
                     }
+                    page.consume_candidate(&status);
+                }
+                if candidates.peek().is_some() {
+                    page.mark_has_more();
                 }
             }
         }
@@ -1424,11 +1678,10 @@ impl PorCoordinator {
 
     fn validate_page_cursor(
         &self,
-        authoritative: Option<&AuthoritativePorProjectionV1>,
         cursor: PorStatusPageCursor,
         current_generation: u64,
         expected_selection_digest: [u8; 32],
-    ) -> Result<Option<PorChallengeStatusV1>, PorCoordinatorError> {
+    ) -> Result<Option<PorStatusCursorAnchor>, PorCoordinatorError> {
         match cursor {
             PorStatusPageCursor::First => Ok(None),
             PorStatusPageCursor::After {
@@ -1447,19 +1700,11 @@ impl PorCoordinator {
                         current: current_generation,
                     });
                 }
-                let status = self
-                    .status_for_indexed_id(authoritative, challenge_id)
-                    .map_err(|error| {
-                        if matches!(error, PorCoordinatorError::StatusIndexCorrupt { .. }) {
-                            PorCoordinatorError::UnknownPageCursorAnchor { challenge_id }
-                        } else {
-                            error
-                        }
-                    })?;
-                if status.epoch_id != last_epoch_id || status.issued_at != last_issued_at {
-                    return Err(PorCoordinatorError::PageCursorAnchorMismatch { challenge_id });
-                }
-                Ok(Some(status))
+                Ok(Some(PorStatusCursorAnchor {
+                    epoch_id: last_epoch_id,
+                    issued_at: last_issued_at,
+                    challenge_id,
+                }))
             }
         }
     }
@@ -1654,20 +1899,20 @@ impl PorCoordinator {
         let (start, end) = iso_week_bounds(cycle)?;
         let start_issued_at = u64::try_from(start.unix_timestamp()).unwrap_or(0);
         let end_issued_at = u64::try_from(end.unix_timestamp()).unwrap_or(0);
+        let authoritative_guard = self.authoritative_projection.read();
+        let authoritative = authoritative_guard.as_ref();
         #[cfg(not(test))]
-        let authoritative = Some(self.require_authoritative_projection()?);
-        #[cfg(test)]
-        let authoritative = self.authoritative_projection.read().clone();
+        let authoritative = Some(
+            authoritative.ok_or(PorCoordinatorError::AuthoritativeProjectionUnavailable)?,
+        );
         #[cfg(test)]
         let legacy_indexes = authoritative.is_none().then(|| self.status_indexes.read());
         #[cfg(not(test))]
         let indexes = &authoritative
-            .as_deref()
             .expect("required authoritative projection")
             .indexes;
         #[cfg(test)]
         let indexes = authoritative
-            .as_deref()
             .map(|projection| &projection.indexes)
             .unwrap_or_else(|| {
                 legacy_indexes
@@ -1687,7 +1932,7 @@ impl PorCoordinator {
             #[cfg(test)]
             self.weekly_report_projection_lookups
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            statuses.push(self.status_for_indexed_id(authoritative.as_deref(), challenge_id)?);
+            statuses.push(self.status_for_indexed_id(authoritative, challenge_id)?);
         }
 
         let challenges_total = statuses.len() as u32;
@@ -1731,7 +1976,7 @@ impl PorCoordinator {
             .filter(|(_, stats)| stats.forced > 0)
             .map(|(provider, _)| *provider)
             .collect::<Vec<_>>();
-        if let Some(projection) = authoritative.as_deref() {
+        if let Some(projection) = authoritative {
             debug_assert!(
                 providers_missing_vrf
                     .iter()
@@ -1911,6 +2156,8 @@ struct PorStatusPageAccumulator {
     selection_digest: [u8; 32],
     limits: PorStatusPageLimits,
     canonical_bytes: usize,
+    inspected_candidates: usize,
+    last_consumed_candidate: Option<(u64, u64, [u8; 32])>,
     statuses: Vec<PorChallengeStatusV1>,
     has_more: bool,
 }
@@ -1926,9 +2173,35 @@ impl PorStatusPageAccumulator {
             selection_digest,
             limits,
             canonical_bytes: 0,
+            inspected_candidates: 0,
+            last_consumed_candidate: None,
             statuses: Vec::with_capacity(limits.records),
             has_more: false,
         }
+    }
+
+    fn record_limit_reached(&self) -> bool {
+        self.statuses.len() == self.limits.records
+    }
+
+    fn note_inspected_candidate(&mut self) -> Result<(), PorCoordinatorError> {
+        self.inspected_candidates = self
+            .inspected_candidates
+            .checked_add(1)
+            .ok_or(PorCoordinatorError::StatusPageByteOverflow)?;
+        Ok(())
+    }
+
+    fn consume_candidate(&mut self, status: &PorChallengeStatusV1) {
+        self.last_consumed_candidate = Some((
+            status.epoch_id,
+            status.issued_at,
+            status.challenge_id,
+        ));
+    }
+
+    fn mark_has_more(&mut self) {
+        self.has_more = true;
     }
 
     fn accept(&mut self, status: PorChallengeStatusV1) -> Result<bool, PorCoordinatorError> {
@@ -1964,19 +2237,28 @@ impl PorStatusPageAccumulator {
             .map_err(|_| PorCoordinatorError::StatusPageByteOverflow)?;
         let canonical_bytes = u64::try_from(self.canonical_bytes)
             .map_err(|_| PorCoordinatorError::StatusPageByteOverflow)?;
+        let inspected_candidates = u32::try_from(self.inspected_candidates)
+            .map_err(|_| PorCoordinatorError::StatusPageByteOverflow)?;
         let next_cursor = if self.has_more {
-            self.statuses
-                .last()
-                .map(|status| PorStatusCursorPayloadV1 {
-                    version: POR_STATUS_CURSOR_VERSION_V1,
-                    snapshot_generation: self.snapshot_generation,
-                    selection_digest: self.selection_digest,
-                    last_epoch_id: status.epoch_id,
-                    last_issued_at: status.issued_at,
-                    last_challenge_id: status.challenge_id,
-                })
-                .map(PorStatusCursorPayloadV1::encode_opaque)
-                .transpose()?
+            Some(
+                self.last_consumed_candidate
+                    .ok_or_else(|| {
+                        PorCoordinatorError::InvalidAuthoritativeProjection(
+                            "bounded status page has no safe continuation anchor".to_owned(),
+                        )
+                    })
+                    .and_then(|(last_epoch_id, last_issued_at, last_challenge_id)| {
+                        PorStatusCursorPayloadV1 {
+                            version: POR_STATUS_CURSOR_VERSION_V1,
+                            snapshot_generation: self.snapshot_generation,
+                            selection_digest: self.selection_digest,
+                            last_epoch_id,
+                            last_issued_at,
+                            last_challenge_id,
+                        }
+                        .encode_opaque()
+                    })?,
+            )
         } else {
             None
         };
@@ -1986,6 +2268,7 @@ impl PorStatusPageAccumulator {
             record_limit,
             canonical_byte_limit,
             canonical_bytes,
+            inspected_candidates,
             has_more: self.has_more,
             next_cursor,
             statuses: self.statuses,
@@ -4515,6 +4798,9 @@ pub enum PorAutomationError {
     /// Timestamp arithmetic overflowed the supported range.
     #[error("timestamp overflow")]
     TimestampOverflow,
+    /// A physically retained blocking mutation worker failed to join.
+    #[error("PoR lifecycle persistence worker failed: {0}")]
+    BlockingWorker(String),
 }
 
 #[cfg(feature = "app_api")]
@@ -4749,36 +5035,27 @@ impl PorCoordinatorRuntime {
         {
             let publication =
                 PorChallengePublicationV1::try_new(challenge.clone(), duplicate_samples)?;
-            {
-                let _pipeline = self.coordinator.lock_pipeline().await;
-                let record_result = self.storage.record_challenge(&challenge);
-                match self.storage.status_authority_snapshot()? {
-                    Some(snapshot) => self
-                        .coordinator
-                        .install_authoritative_projection(snapshot)?,
-                    None => {
-                        #[cfg(test)]
-                        if record_result.is_ok() {
-                            // Narrow compatibility for unit-test storage doubles;
-                            // production storage must expose the node checkpoint.
-                            match self.coordinator.record_challenge(&challenge) {
-                                Ok(()) | Err(PorCoordinatorError::DuplicateChallenge { .. }) => {}
-                                Err(error) => {
-                                    return Err(PorAutomationError::Coordinator(error));
-                                }
-                            }
-                        }
-                        #[cfg(not(test))]
-                        return Err(PorAutomationError::Coordinator(
-                            PorCoordinatorError::InvalidAuthoritativeProjection(
-                                "production PoR storage did not expose an authoritative checkpoint"
-                                    .to_owned(),
-                            ),
-                        ));
+            let pipeline = self.coordinator.lock_pipeline().await;
+            let storage = Arc::clone(&self.storage);
+            let coordinator = Arc::clone(&self.coordinator);
+            let challenge_for_worker = challenge.clone();
+            tokio::task::spawn_blocking(move || {
+                // Cancellation detaches a blocking task. Retain the pipeline
+                // guard in the physical worker so no later delta can overtake
+                // the durable node mutation or its projection update.
+                let _pipeline = pipeline;
+                match storage.record_challenge(&challenge_for_worker) {
+                    Ok(update) => coordinator
+                        .apply_authoritative_update(update)
+                        .map_err(PorAutomationError::Coordinator),
+                    Err(error) => {
+                        coordinator.invalidate_authoritative_projection();
+                        Err(PorAutomationError::Storage(error))
                     }
                 }
-                record_result?;
-            }
+            })
+            .await
+            .map_err(|error| PorAutomationError::BlockingWorker(error.to_string()))??;
             if let Err(err) = self.publisher.publish_challenge(publication) {
                 iroha_logger::error!(
                     ?err,
@@ -4873,20 +5150,7 @@ pub trait PorStorage: Send + Sync {
     fn record_challenge(
         &self,
         challenge: &PorChallengeV1,
-    ) -> Result<(), sorafs_node::PorTrackerError>;
-
-    /// Return the storage node's authoritative lifecycle projection, if this
-    /// backend owns a durable PoR checkpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`sorafs_node::PorTrackerError`] when the authoritative
-    /// checkpoint cannot be read safely.
-    fn status_authority_snapshot(
-        &self,
-    ) -> Result<Option<PorStatusAuthoritySnapshotV1>, sorafs_node::PorTrackerError> {
-        Ok(None)
-    }
+    ) -> Result<PorStatusAuthorityUpdateV1, sorafs_node::PorTrackerError>;
 
     /// Return whether a provider currently owns the active local manifest target.
     fn vrf_target_is_active(
@@ -4911,14 +5175,8 @@ impl PorStorage for sorafs_node::NodeHandle {
     fn record_challenge(
         &self,
         challenge: &PorChallengeV1,
-    ) -> Result<(), sorafs_node::PorTrackerError> {
-        self.record_por_challenge(challenge)
-    }
-
-    fn status_authority_snapshot(
-        &self,
-    ) -> Result<Option<PorStatusAuthoritySnapshotV1>, sorafs_node::PorTrackerError> {
-        self.por_status_authority_snapshot().map(Some)
+    ) -> Result<PorStatusAuthorityUpdateV1, sorafs_node::PorTrackerError> {
+        self.record_por_challenge_with_authority_update(challenge)
     }
 
     fn vrf_target_is_active(
@@ -7695,14 +7953,20 @@ mod tests {
             fn record_challenge(
                 &self,
                 challenge: &PorChallengeV1,
-            ) -> Result<(), sorafs_node::PorTrackerError> {
+            ) -> Result<PorStatusAuthorityUpdateV1, sorafs_node::PorTrackerError> {
                 let mut recorded = self.recorded.lock();
                 match recorded.as_ref() {
-                    Some(existing) if existing == challenge => Ok(()),
+                    Some(existing) if existing == challenge => Ok(PorStatusAuthorityUpdateV1 {
+                        generation: 2,
+                        status: ChallengeRecord::from_challenge(challenge.clone()).to_status(),
+                    }),
                     Some(_) => Err(sorafs_node::PorTrackerError::ChallengeConflict),
                     None => {
                         *recorded = Some(challenge.clone());
-                        Ok(())
+                        Ok(PorStatusAuthorityUpdateV1 {
+                            generation: 2,
+                            status: ChallengeRecord::from_challenge(challenge.clone()).to_status(),
+                        })
                     }
                 }
             }
@@ -7998,6 +8262,12 @@ mod tests {
                 drand_signature: challenge.drand_signature,
             };
             let coordinator = Arc::new(PorCoordinator::new());
+            coordinator
+                .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                    generation: 1,
+                    statuses: Vec::new(),
+                })
+                .expect("install empty node-authoritative projection");
             let runtime = PorCoordinatorRuntime::new_with_publisher(
                 storage,
                 Arc::clone(&coordinator),

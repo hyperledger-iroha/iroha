@@ -59,6 +59,7 @@ ROSTER_NAME = "topup-finality-roster-v4.norito"
 SCENARIO_ROSTER_NAME = "init-top-up-finality-roster-artifact-v2.norito"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 PORTABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PUBLIC_TAIRA_CHAIN_DISCRIMINANT = 369
 AUTHORITY_BUILD_FEATURES = (
@@ -372,7 +373,20 @@ def _safe_system_environment(temporary: Path | None = None) -> dict[str, str]:
 
 
 SOURCE_IDENTITY_KEYS = frozenset(
-    {"schema", "source_commit", "source_repo_dirty", "source_tree_sha256"}
+    {
+        "schema",
+        "base_commit",
+        "source_commit",
+        "source_repo_dirty",
+        "source_tree_sha256",
+        "tracked_binary_diff_sha256",
+        "untracked_file_count",
+        "untracked_path_mode_blob_oid_manifest",
+        "untracked_path_mode_blob_oid_manifest_sha256",
+        "ignored_cargo_lock_size_bytes",
+        "ignored_cargo_lock_sha256",
+        "combined_source_fingerprint_sha256",
+    }
 )
 
 
@@ -389,7 +403,7 @@ def _source_identity() -> SourceIdentity:
                 sys.executable,
                 "-I",
                 str(REPOSITORY_ROOT / "scripts/kagemusha_source_tree_seal.py"),
-                "identity",
+                "descriptor",
                 "--root",
                 str(REPOSITORY_ROOT),
             ],
@@ -401,7 +415,7 @@ def _source_identity() -> SourceIdentity:
     except (OSError, subprocess.CalledProcessError) as exc:
         raise StageError("current Iroha source-tree identity failed") from exc
     payload = completed.stdout
-    if len(payload) > 1024 or not payload.endswith(b"\n"):
+    if len(payload) > MAX_CANDIDATE_METADATA_BYTES or not payload.endswith(b"\n"):
         raise StageError("current Iroha source-tree identity is oversized or non-canonical")
     try:
         parsed = _exact_object(
@@ -418,15 +432,20 @@ def _source_identity() -> SourceIdentity:
     if payload != _canonical_json(parsed):
         raise StageError("current Iroha source-tree identity is not canonical JSON")
     if (
-        parsed["schema"] != "iroha.kagemusha.full_source_tree_identity.v1"
-        or parsed["source_repo_dirty"] is not True
+        parsed["schema"] != "iroha.reviewed-source-closure.v1"
+        or parsed["base_commit"] != parsed["source_commit"]
+        or parsed["source_repo_dirty"] is not False
+        or parsed["tracked_binary_diff_sha256"] != EMPTY_SHA256
+        or parsed["untracked_file_count"] != 0
+        or parsed["untracked_path_mode_blob_oid_manifest"] != []
+        or parsed["untracked_path_mode_blob_oid_manifest_sha256"] != EMPTY_SHA256
         or not isinstance(parsed["source_commit"], str)
         or not COMMIT_RE.fullmatch(parsed["source_commit"])
         or not isinstance(parsed["source_tree_sha256"], str)
         or not SHA256_RE.fullmatch(parsed["source_tree_sha256"])
         or parsed["source_tree_sha256"] == "0" * 64
     ):
-        raise StageError("current Iroha source-tree identity is malformed or dirty")
+        raise StageError("current Iroha source-tree identity is malformed or not clean")
     return SourceIdentity(
         commit=parsed["source_commit"], tree_sha256=parsed["source_tree_sha256"]
     )
@@ -437,19 +456,9 @@ def verify_current_source() -> SourceIdentity:
     if discovered != REPOSITORY_ROOT:
         raise StageError("stager is not running from its exact Iroha source repository")
     first = _source_identity()
-    try:
-        subprocess.run(
-            ["git", "-C", str(REPOSITORY_ROOT), "verify-commit", first.commit],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=_safe_system_environment(),
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise StageError("current Iroha HEAD must carry a locally verifiable signature") from exc
     second = _source_identity()
     if second != first:
-        raise StageError("Iroha source commit/tree pair changed during signature verification")
+        raise StageError("Iroha signed source commit/tree pair changed during verification")
     return first
 
 
@@ -942,8 +951,8 @@ def parse_validation_report(payload: bytes) -> dict[str, Any]:
     if not isinstance(report["source_commit"], str) or not COMMIT_RE.fullmatch(report["source_commit"]):
         raise StageError("candidate source commit is not canonical")
     _digest(report["source_tree_sha256"], "candidate source-tree digest")
-    if report["source_repo_dirty"] is not True:
-        raise StageError("candidate reports a dirty source repository")
+    if report["source_repo_dirty"] is not False:
+        raise StageError("candidate does not report a clean source repository")
     if not isinstance(report["generation"], str) or not PORTABLE_ID_RE.fullmatch(report["generation"]):
         raise StageError("candidate generation is not portable")
     memory_limit = _positive_int(
@@ -1308,7 +1317,7 @@ def build_stage_manifest(
         "scenario_inventory_sha256": scenario_inventory,
         "source_commit": source.commit,
         "source_tree_sha256": source.tree_sha256,
-        "source_repo_dirty": True,
+        "source_repo_dirty": False,
         "validator": validate_validator_identity(dict(validator)),
         "entry_count": len(entries),
         "scenario_entry_count": len(SCENARIO_FILES),
@@ -1351,7 +1360,7 @@ def parse_stage_manifest(
         or manifest["stage_manifest_path"] != STAGE_MANIFEST_NAME
         or manifest["stage_manifest_mode"] != "0600"
         or manifest["stage_manifest_size_bytes"] != len(payload)
-        or manifest["source_repo_dirty"] is not True
+        or manifest["source_repo_dirty"] is not False
         or manifest["entry_count"] != len(STAGED_NON_SELF_PATHS)
         or manifest["scenario_entry_count"] != len(SCENARIO_FILES)
     ):

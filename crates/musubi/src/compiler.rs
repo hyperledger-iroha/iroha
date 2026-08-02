@@ -18,6 +18,7 @@ use iroha_data_model::musubi::{
 };
 use ivm::{
     SyscallPolicy,
+    koto_test_driver::discover_declared_test_names_source_v1,
     kotodama::{
         compiler::{CompilerMode, CompilerOptions},
         driver::{
@@ -25,7 +26,8 @@ use ivm::{
             discover_source_link_request, discover_source_modules,
         },
         linker::{
-            ImportBinding, SourceLinkRequest, SourceModuleUnit, SourcePackageGraphRequest,
+            ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, MAX_MODULE_GRAPH_SOURCES,
+            ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit, SourcePackageGraphRequest,
             SourcePackageUnit,
         },
         session::CompilerSession,
@@ -37,7 +39,7 @@ use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     graph::{GraphErrorV1, collect_local_members},
     lockfile::LockfileV1,
-    manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
+    manifest::{ConcreteDependency, DependencySpec, LocalTarget, PortablePath, parse_manifest},
     package::PackagePlan,
     workspace::{EffectiveDependency, Workspace, WorkspaceMember},
 };
@@ -262,29 +264,290 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
             alias: edge.alias.to_string(),
             package: edge.selected.to_string(),
         })
-        .collect();
+        .collect::<Vec<_>>();
     let root = SourcePackageUnit {
         identity: verification_lock.root.to_string(),
         modules,
         exports: library.exports.iter().map(ToString::to_string).collect(),
-        imports,
+        imports: imports.clone(),
     };
+    let target_packages = std::iter::once(root.clone())
+        .chain(dependencies.iter().cloned())
+        .collect::<Vec<_>>();
     let options = CompilerOptions {
         chain_discriminant,
         mode: CompilerMode::Production,
         ..CompilerOptions::default()
     };
+    validate_exact_registry_interfaces_v1(
+        verification_lock.nodes.iter(),
+        &dependencies,
+        options.clone(),
+    )
+    .map_err(CompilerBridgeErrorV1::Cache)?;
     let driver = BuildDriver::for_current_executable(CompilerSession::new(options))
         .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
     let validated = driver
         .validate_package_project(SourcePackageGraphRequest {
             package: root,
-            dependencies,
+            dependencies: dependencies.clone(),
         })
         .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
-    Ok(MusubiContentDigestV1::new(
-        *validated.interface_fingerprint.as_ref(),
-    ))
+    let interface_digest = MusubiContentDigestV1::new(*validated.interface_fingerprint.as_ref());
+    validate_packaged_contract_targets(
+        &driver,
+        plan,
+        &manifest.contracts,
+        &imports,
+        &target_packages,
+    )?;
+    validate_packaged_test_targets(
+        plan,
+        &manifest.tests,
+        &imports,
+        &target_packages,
+        chain_discriminant,
+    )?;
+    Ok(interface_digest)
+}
+
+/// Recompute every authenticated registry package interface against one exact source graph.
+///
+/// The caller supplies source units copied out of authenticated immutable cache entries. This
+/// helper never opens their recorded source paths. Every package is selected as the local package
+/// once so its semantic interface can be compared with the corresponding exact lock commitment.
+pub(crate) fn validate_exact_registry_interfaces_v1<'a>(
+    nodes: impl IntoIterator<Item = &'a MusubiVerificationNodeV1>,
+    packages: &[SourcePackageUnit],
+    options: CompilerOptions,
+) -> Result<(), String> {
+    if options.mode != CompilerMode::Production {
+        return Err("exact registry interfaces require production compiler mode".to_owned());
+    }
+    let nodes = nodes.into_iter().collect::<Vec<_>>();
+    if nodes.len() != packages.len() {
+        return Err("authenticated registry node/package counts disagree".to_owned());
+    }
+    let packages_by_identity = packages
+        .iter()
+        .enumerate()
+        .map(|(index, package)| (package.identity.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    if packages_by_identity.len() != packages.len() {
+        return Err("the exact registry graph contains duplicate source identities".to_owned());
+    }
+
+    let graph = ModuleBuildGraph::default();
+    let session = CompilerSession::new(options);
+    for node in nodes {
+        let identity = node.release.to_string();
+        let package_index = packages_by_identity.get(identity.as_str()).ok_or_else(|| {
+            format!(
+                "release `{}` has no authenticated source package in the exact graph",
+                node.release
+            )
+        })?;
+        let dependencies = packages
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| index != package_index)
+            .map(|(_, candidate)| candidate)
+            .cloned()
+            .collect();
+        let validated = session
+            .validate_package_graph(
+                &graph,
+                SourcePackageGraphRequest {
+                    package: packages[*package_index].clone(),
+                    dependencies,
+                },
+            )
+            .map_err(|error| {
+                format!(
+                    "release `{}` failed exact typed-interface validation: {error}",
+                    node.release
+                )
+            })?;
+        if validated.interface_fingerprint.as_ref() != node.interface_digest.as_bytes() {
+            return Err(format!(
+                "release `{}` typed interface disagrees with its exact lock digest",
+                node.release
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PackagedTargetKindV1 {
+    Contract,
+    Test,
+}
+
+impl PackagedTargetKindV1 {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Contract => "contract",
+            Self::Test => "test",
+        }
+    }
+}
+
+fn validate_packaged_contract_targets(
+    driver: &BuildDriver,
+    plan: &PackagePlan,
+    targets: &[LocalTarget],
+    imports: &[ImportBinding],
+    dependencies: &[SourcePackageUnit],
+) -> Result<(), CompilerBridgeErrorV1> {
+    for target in targets {
+        for root in
+            packaged_target_source_units(plan, &target.path, PackagedTargetKindV1::Contract)?
+        {
+            let source_name = root.source_name.clone();
+            driver
+                .check_project(SourceLinkRequest {
+                    root,
+                    imports: imports.to_vec(),
+                    packages: dependencies.to_vec(),
+                })
+                .map_err(|error| {
+                    CompilerBridgeErrorV1::Compiler(format!(
+                        "packaged contract target `{}` source `{source_name}` failed clean validation: {error}",
+                        target.name
+                    ))
+                })?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_packaged_test_targets(
+    plan: &PackagePlan,
+    targets: &[LocalTarget],
+    imports: &[ImportBinding],
+    dependencies: &[SourcePackageUnit],
+    chain_discriminant: u16,
+) -> Result<(), CompilerBridgeErrorV1> {
+    let graph = ModuleBuildGraph::default();
+    for target in targets {
+        for root in packaged_target_source_units(plan, &target.path, PackagedTargetKindV1::Test)? {
+            let source_name = root.source_name.clone();
+            discover_declared_test_names_source_v1(&root).map_err(|error| {
+                CompilerBridgeErrorV1::Package(format!(
+                    "packaged test target `{}` source `{source_name}` is not a direct V1 test root: {error}",
+                    target.name
+                ))
+            })?;
+            graph
+                .build_test_project(
+                    SourceLinkRequest {
+                        root,
+                        imports: imports.to_vec(),
+                        packages: dependencies.to_vec(),
+                    },
+                    CompilerOptions {
+                        chain_discriminant,
+                        mode: CompilerMode::Test,
+                        ..CompilerOptions::default()
+                    },
+                    &source_name,
+                )
+                .map_err(|diagnostics| {
+                    CompilerBridgeErrorV1::Compiler(format!(
+                        "packaged test target `{}` source `{source_name}` failed clean validation against normal dependencies only; development dependencies do not propagate: {}",
+                        target.name,
+                        diagnostics.render_human()
+                    ))
+                })?;
+        }
+    }
+    Ok(())
+}
+
+fn packaged_target_source_units(
+    plan: &PackagePlan,
+    target: &PortablePath,
+    kind: PackagedTargetKindV1,
+) -> Result<Vec<SourceModuleUnit>, CompilerBridgeErrorV1> {
+    let target_path = target.as_str();
+    if target_path != "."
+        && let Some(file) = plan.files().iter().find(|file| file.path() == target_path)
+    {
+        if kind == PackagedTargetKindV1::Test && !file.path().ends_with(".ko") {
+            return Err(CompilerBridgeErrorV1::Package(format!(
+                "packaged test target `{target_path}` must be a `.ko` file or directory"
+            )));
+        }
+        return packaged_source_unit(file.path(), file.path(), file.bytes(), kind)
+            .map(|unit| vec![unit]);
+    }
+
+    let prefix = (target_path != ".").then(|| format!("{target_path}/"));
+    let mut source_bytes = 0usize;
+    let mut units = Vec::new();
+    for file in plan.files() {
+        let relative = match prefix.as_deref() {
+            Some(prefix) => match file.path().strip_prefix(prefix) {
+                Some(relative) => relative,
+                None => continue,
+            },
+            None => file.path(),
+        };
+        if relative.is_empty() || !relative.ends_with(".ko") {
+            continue;
+        }
+        source_bytes = source_bytes
+            .checked_add(file.bytes().len())
+            .ok_or_else(|| {
+                CompilerBridgeErrorV1::Package(format!(
+                    "packaged {} target `{target_path}` source byte count overflowed",
+                    kind.label()
+                ))
+            })?;
+        let source_name = match kind {
+            PackagedTargetKindV1::Contract => relative,
+            PackagedTargetKindV1::Test => file.path(),
+        };
+        units.push(packaged_source_unit(
+            file.path(),
+            source_name,
+            file.bytes(),
+            kind,
+        )?);
+    }
+    if units.is_empty() {
+        return Err(CompilerBridgeErrorV1::Package(format!(
+            "packaged {} target directory `{target_path}` contains no `.ko` sources",
+            kind.label()
+        )));
+    }
+    if kind == PackagedTargetKindV1::Contract
+        && (units.len() > MAX_MODULE_GRAPH_SOURCES || source_bytes > MAX_MODULE_GRAPH_SOURCE_BYTES)
+    {
+        return Err(CompilerBridgeErrorV1::Package(format!(
+            "packaged contract target directory `{target_path}` exceeds the V1 compiler graph bound of {MAX_MODULE_GRAPH_SOURCES} sources or {MAX_MODULE_GRAPH_SOURCE_BYTES} UTF-8 bytes"
+        )));
+    }
+    Ok(units)
+}
+
+fn packaged_source_unit(
+    packaged_path: &str,
+    source_name: &str,
+    bytes: &[u8],
+    kind: PackagedTargetKindV1,
+) -> Result<SourceModuleUnit, CompilerBridgeErrorV1> {
+    let source = std::str::from_utf8(bytes).map_err(|_| {
+        CompilerBridgeErrorV1::Package(format!(
+            "packaged {} source `{packaged_path}` is not UTF-8",
+            kind.label()
+        ))
+    })?;
+    Ok(SourceModuleUnit {
+        source_name: source_name.to_owned(),
+        source: source.to_owned(),
+    })
 }
 
 fn execute_with_source<S: RegistryCompilerSourceV1>(
@@ -584,9 +847,9 @@ fn cached_source_package(
 ) -> Result<SourcePackageUnit, CompilerBridgeErrorV1> {
     let manifest = parse_manifest(&cached.manifest)
         .map_err(|error| CompilerBridgeErrorV1::Package(error.to_string()))?;
-    if manifest.workspace.is_some() {
+    if manifest.workspace.is_some() || !manifest.dev_dependencies.is_empty() {
         return Err(CompilerBridgeErrorV1::Package(format!(
-            "cached release `{}` contains workspace state",
+            "cached release `{}` contains workspace or development state",
             node.release
         )));
     }
@@ -757,8 +1020,11 @@ mod tests {
 
     use iroha_data_model::{
         musubi::{
-            MUSUBI_REGISTRY_VERSION_V1, MusubiPackageIdV1, MusubiPackageScopeV1,
-            MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiVerificationLockV1,
+            ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiExactDependencyEdgeV1,
+            MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
+            MusubiRegistrySnapshotV1, MusubiReleaseDigestV1, MusubiReleaseIdV1,
+            MusubiReleaseMetadataV1, MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
+            MusubiVerificationNodeV1,
         },
         nexus::DataSpaceId,
     };
@@ -766,6 +1032,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        cache::CachedKotodamaSourceV1,
         lockfile::{LockedRootV1, LockfileV1},
         package::{PackageLayout, plan_package},
         workspace::load_workspace,
@@ -783,6 +1050,45 @@ mod tests {
                 node.release
             )))
         }
+    }
+
+    struct FixedRegistry {
+        package: CachedCompilerPackageV1,
+    }
+
+    impl RegistryCompilerSourceV1 for FixedRegistry {
+        fn load(
+            &self,
+            node: &MusubiVerificationNodeV1,
+        ) -> Result<CachedCompilerPackageV1, CompilerBridgeErrorV1> {
+            if node.release != self.package.semantic_release.release {
+                return Err(CompilerBridgeErrorV1::Cache(format!(
+                    "unexpected node `{}`",
+                    node.release
+                )));
+            }
+            Ok(self.package.clone())
+        }
+    }
+
+    fn clean_verification_lock() -> MusubiVerificationLockV1 {
+        let package = MusubiPackageIdV1::new(
+            DataSpaceId::new(9),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "demo".parse().expect("package name"),
+        );
+        MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: MusubiReleaseIdV1::new(package, "1.0.0".parse().expect("version")),
+            root_dependencies: Vec::new(),
+            nodes: Vec::new(),
+        }
+    }
+
+    fn write_clean_library(root: &std::path::Path) {
+        fs::create_dir_all(root.join("src")).expect("source directory");
+        fs::write(root.join("src/lib.ko"), "module Demo {}").expect("library source");
     }
 
     #[test]
@@ -853,6 +1159,369 @@ exports = ["value"]
         );
         assert_eq!(relative_library_source("src2/add.ko", &source_dir), None);
         assert_eq!(relative_library_source("src/readme.txt", &source_dir), None);
+    }
+
+    #[test]
+    fn clean_publication_recomputes_each_locked_dependency_interface() {
+        let temp = TempDir::new().expect("temporary directory");
+        write_clean_library(temp.path());
+        let root_package = MusubiPackageIdV1::new(
+            DataSpaceId::new(9),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "demo".parse().expect("root package name"),
+        );
+        let dependency_package = MusubiPackageIdV1::new(
+            DataSpaceId::new(10),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "dep".parse().expect("dependency package name"),
+        );
+        let dependency_release = MusubiReleaseIdV1::new(
+            dependency_package.clone(),
+            "1.0.0".parse().expect("dependency version"),
+        );
+        let dependency_requirement = "^1.0.0".parse().expect("dependency requirement");
+        let dependency_edge = MusubiExactDependencyEdgeV1 {
+            alias: "dep".parse().expect("dependency alias"),
+            kind: MusubiDependencyKindV1::Normal,
+            package: dependency_package.clone(),
+            requirement: dependency_requirement,
+            selected: dependency_release.clone(),
+        };
+        let expected_abi =
+            MusubiAbiBindingV1::new(compute_abi_hash(SyscallPolicy::AbiV1)).expect("ABI binding");
+        let substituted_interface = MusubiContentDigestV1::new([99; 32]);
+        let dependency_node = MusubiVerificationNodeV1 {
+            release: dependency_release.clone(),
+            release_digest: MusubiReleaseDigestV1::new([11; 32]),
+            archive_id: ArchiveId::new([12; 32]),
+            source_digest: MusubiContentDigestV1::new([13; 32]),
+            interface_digest: substituted_interface,
+            abi: expected_abi,
+            dependencies: Vec::new(),
+        };
+        let verification_lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: MusubiReleaseIdV1::new(root_package, "1.0.0".parse().expect("root version")),
+            root_dependencies: vec![dependency_edge],
+            nodes: vec![dependency_node],
+        };
+        let dependency_publication_lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: dependency_release.clone(),
+            root_dependencies: Vec::new(),
+            nodes: Vec::new(),
+        };
+        let registry = FixedRegistry {
+            package: CachedCompilerPackageV1 {
+                source_path: temp.path().join("authenticated-cache-path-is-not-reopened"),
+                manifest: r#"manifest-version = 1
+[package]
+namespace = "deps.sora"
+name = "dep"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = ["value"]
+"#
+                .to_owned(),
+                kotodama_sources: vec![CachedKotodamaSourceV1 {
+                    path: "src/lib.ko".to_owned(),
+                    source: "module Dep { fn value() -> int { return 1; } }".to_owned(),
+                }],
+                semantic_release: MusubiSemanticReleaseManifestV1 {
+                    release: dependency_release,
+                    edition: MusubiKotodamaEditionV1::V1,
+                    abi: expected_abi,
+                    dependencies: Vec::new(),
+                    exports: vec!["value".parse().expect("export name")],
+                    interface_digest: substituted_interface,
+                    metadata: MusubiReleaseMetadataV1::default(),
+                    verification_lock_digest: dependency_publication_lock.digest(),
+                },
+                publication_lock: dependency_publication_lock,
+            },
+        };
+        let manifest = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = []
+[dependencies]
+dep = { package = "deps.sora/dep", version = "^1.0.0" }
+"#;
+        let mut layout = PackageLayout::new(temp.path());
+        layout.set_library("src");
+        let plan = plan_package(&layout, manifest, &verification_lock).expect("package plan");
+
+        assert!(matches!(
+            validate_packaged_with_source(&registry, &plan, &verification_lock, 1),
+            Err(CompilerBridgeErrorV1::Cache(reason))
+                if reason.contains("typed interface disagrees with its exact lock digest")
+        ));
+    }
+
+    #[test]
+    fn packaged_directory_targets_expand_deterministically_from_plan_paths() {
+        let temp = TempDir::new().expect("temporary directory");
+        write_clean_library(temp.path());
+        for (path, source) in [
+            ("contracts/z.ko", "seiyaku Z { hajimari() {} }"),
+            ("contracts/nested/a.ko", "seiyaku A { hajimari() {} }"),
+            ("contracts/readme.txt", "ignored"),
+            ("tests/nested/z.ko", "seiyaku ZTests { #[test] fn z() {} }"),
+            ("tests/a.ko", "seiyaku ATests { #[test] fn a() {} }"),
+            ("tests/readme.txt", "ignored"),
+        ] {
+            let path = temp.path().join(path);
+            fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
+            fs::write(path, source).expect("fixture source");
+        }
+        let manifest = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = []
+[[contract]]
+name = "contracts"
+path = "contracts"
+[[test]]
+name = "tests"
+path = "tests"
+"#;
+        let lock = clean_verification_lock();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.set_library("src");
+        layout.add_contract("contracts");
+        layout.add_test("tests");
+        let plan = plan_package(&layout, manifest, &lock).expect("package plan");
+
+        let contracts = packaged_target_source_units(
+            &plan,
+            &PortablePath::new("contracts").expect("contract target"),
+            PackagedTargetKindV1::Contract,
+        )
+        .expect("contract roots");
+        assert_eq!(
+            contracts
+                .iter()
+                .map(|source| source.source_name.as_str())
+                .collect::<Vec<_>>(),
+            ["nested/a.ko", "z.ko"]
+        );
+        let tests = packaged_target_source_units(
+            &plan,
+            &PortablePath::new("tests").expect("test target"),
+            PackagedTargetKindV1::Test,
+        )
+        .expect("test roots");
+        assert_eq!(
+            tests
+                .iter()
+                .map(|source| source.source_name.as_str())
+                .collect::<Vec<_>>(),
+            ["tests/a.ko", "tests/nested/z.ko"]
+        );
+    }
+
+    #[test]
+    fn invalid_packaged_contract_is_not_reopened_from_a_repaired_workspace() {
+        let temp = TempDir::new().expect("temporary directory");
+        write_clean_library(temp.path());
+        fs::create_dir_all(temp.path().join("contracts")).expect("contract directory");
+        let contract = temp.path().join("contracts/deploy.ko");
+        fs::write(&contract, "seiyaku Broken { fn").expect("invalid packaged contract");
+        let manifest = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = []
+[[contract]]
+name = "deploy"
+path = "contracts/deploy.ko"
+"#;
+        let lock = clean_verification_lock();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.set_library("src");
+        layout.add_contract("contracts/deploy.ko");
+        let plan = plan_package(&layout, manifest, &lock).expect("snapshot invalid contract");
+        fs::write(&contract, "seiyaku Repaired { hajimari() {} }")
+            .expect("repair ambient contract");
+
+        assert!(matches!(
+            validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
+            Err(CompilerBridgeErrorV1::Compiler(reason))
+                if reason.contains("packaged contract target `deploy`")
+        ));
+    }
+
+    #[test]
+    fn invalid_packaged_test_bytes_are_not_reopened_from_a_repaired_workspace() {
+        let temp = TempDir::new().expect("temporary directory");
+        write_clean_library(temp.path());
+        fs::create_dir_all(temp.path().join("tests")).expect("test directory");
+        let test = temp.path().join("tests/unit.ko");
+        fs::write(&test, [0xff, 0xfe]).expect("invalid packaged test bytes");
+        let manifest = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = []
+[[test]]
+name = "unit"
+path = "tests/unit.ko"
+"#;
+        let lock = clean_verification_lock();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.set_library("src");
+        layout.add_test("tests/unit.ko");
+        let plan = plan_package(&layout, manifest, &lock).expect("snapshot invalid test");
+        fs::write(
+            &test,
+            "seiyaku Repaired { #[test] fn repaired() { test::assert(true); } }",
+        )
+        .expect("repair ambient test");
+
+        assert!(matches!(
+            validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
+            Err(CompilerBridgeErrorV1::Package(reason))
+                if reason.contains("packaged test source `tests/unit.ko` is not UTF-8")
+        ));
+    }
+
+    #[test]
+    fn clean_targets_ignore_ambient_mutation_and_do_not_change_library_interface() {
+        let temp = TempDir::new().expect("temporary directory");
+        write_clean_library(temp.path());
+        for (path, source) in [
+            ("contracts/deploy.ko", "seiyaku Deploy { hajimari() {} }"),
+            (
+                "tests/unit.ko",
+                "seiyaku Tests { #[test] fn compile_only() { test::assert(false); } }",
+            ),
+            ("ambient/undeclared.ko", "this is not Kotodama"),
+        ] {
+            let path = temp.path().join(path);
+            fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
+            fs::write(path, source).expect("fixture source");
+        }
+        let manifest = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = []
+[[contract]]
+name = "deploy"
+path = "contracts/deploy.ko"
+[[test]]
+name = "unit"
+path = "tests/unit.ko"
+"#;
+        let library_only_manifest = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = []
+"#;
+        let lock = clean_verification_lock();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.set_library("src");
+        layout.add_contract("contracts/deploy.ko");
+        layout.add_test("tests/unit.ko");
+        let plan = plan_package(&layout, manifest, &lock).expect("package target snapshot");
+        assert!(
+            !plan
+                .files()
+                .iter()
+                .any(|file| file.path() == "ambient/undeclared.ko")
+        );
+        fs::write(
+            temp.path().join("contracts/deploy.ko"),
+            "invalid ambient contract",
+        )
+        .expect("mutate ambient contract");
+        fs::write(temp.path().join("tests/unit.ko"), "invalid ambient test")
+            .expect("mutate ambient test");
+
+        let with_targets = validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1)
+            .expect("validate immutable target snapshot");
+        let mut library_layout = PackageLayout::new(temp.path());
+        library_layout.set_library("src");
+        let library_plan = plan_package(&library_layout, library_only_manifest, &lock)
+            .expect("library-only package plan");
+        let library_only = validate_packaged_with_source(&EmptyRegistry, &library_plan, &lock, 1)
+            .expect("validate library-only package");
+        assert_eq!(with_targets, library_only);
+    }
+
+    #[test]
+    fn packaged_test_missing_a_normal_dependency_has_a_dev_boundary_diagnostic() {
+        let temp = TempDir::new().expect("temporary directory");
+        write_clean_library(temp.path());
+        fs::create_dir_all(temp.path().join("tests")).expect("test directory");
+        fs::write(
+            temp.path().join("tests/unit.ko"),
+            "seiyaku Tests { #[test] fn needs_dev() { test::assert(helper::truth()); } }",
+        )
+        .expect("test source");
+        let manifest = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = []
+[[test]]
+name = "unit"
+path = "tests/unit.ko"
+"#;
+        let lock = clean_verification_lock();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.set_library("src");
+        layout.add_test("tests/unit.ko");
+        let plan = plan_package(&layout, manifest, &lock).expect("package plan");
+
+        assert!(matches!(
+            validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
+            Err(CompilerBridgeErrorV1::Compiler(reason))
+                if reason.contains("development dependencies do not propagate")
+        ));
     }
 
     #[test]

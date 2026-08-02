@@ -60,6 +60,10 @@ const RKG_LINEAR_PROOF_SIGNED_COEFFICIENT_BYTES_V1: u8 = 8;
 const RKG_LINEAR_PROOF_WIRE_TAG_V1: [u8; 4] = *b"ZARP";
 const RKG_LINEAR_PROOF_WIRE_HEADER_BYTES_V1: usize = 4 + 1 + 32 + 1 + 4;
 const RKG_LINEAR_PROOF_WIRE_HEADER_BYTES_U32_V1: u32 = 4 + 1 + 32 + 1 + 4;
+const ACTIVE_RKG_EVIDENCE_TAG_V1: [u8; 4] = *b"ZARE";
+const ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1: usize = 4 + 1 + 32 + 1 + 4;
+const ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1: usize =
+    1 + 32 + 32 + 8 + 32 + 1 + 4 + 32 + 32 + 1 + 32 + 33 + 65;
 
 /// One proof of possession for a governed T256 authentication key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -567,6 +571,17 @@ pub enum ZkAmsMkheActiveRoundV1 {
 impl ZkAmsMkheActiveRoundV1 {
     fn tag(self) -> u8 {
         self as u8
+    }
+
+    fn decode(tag: u8) -> Result<Self, ZkAmsMkheErrorV1> {
+        match tag {
+            1 => Ok(Self::CollectivePublicKey),
+            2 => Ok(Self::Cks),
+            3 => Ok(Self::RkgRoundOne),
+            4 => Ok(Self::RkgRoundTwo),
+            5 => Ok(Self::GaloisSource),
+            _ => Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
+        }
     }
 }
 
@@ -1680,18 +1695,7 @@ impl<'a> ZkAmsMkheActiveGaloisSourceStatementV1<'a> {
         exponent: u32,
         digit_index: usize,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let profile = release_profile_v1();
-        let schedule = zk_ams_t256_galois_key_schedule_v1()?;
-        validate_zk_ams_t256_galois_key_schedule_v1(&schedule)?;
-        if schedule_index >= ZK_AMS_T256_GALOIS_KEY_COUNT_V1
-            || schedule
-                .entries
-                .get(schedule_index)
-                .is_none_or(|entry| entry.exponent != exponent)
-            || digit_index >= profile.gadget_digits
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
+        validate_galois_source_coordinate(schedule_index, exponent, digit_index)?;
         source_constant.encoded_len()?;
         source_linear.encoded_len()?;
         Ok(Self {
@@ -1705,6 +1709,26 @@ impl<'a> ZkAmsMkheActiveGaloisSourceStatementV1<'a> {
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
         })
     }
+}
+
+fn validate_galois_source_coordinate(
+    schedule_index: usize,
+    exponent: u32,
+    digit_index: usize,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    let schedule = zk_ams_t256_galois_key_schedule_v1()?;
+    validate_zk_ams_t256_galois_key_schedule_v1(&schedule)?;
+    if schedule_index >= ZK_AMS_T256_GALOIS_KEY_COUNT_V1
+        || schedule
+            .entries
+            .get(schedule_index)
+            .is_none_or(|entry| entry.exponent != exponent)
+        || digit_index >= profile.gadget_digits
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(())
 }
 
 /// Borrowed bounded witness for one automorphism-linked Galois-source digit.
@@ -1793,6 +1817,321 @@ impl ZkAmsMkheActiveRkgProofV1 {
     pub const fn contribution(&self) -> &ZkAmsMkheActiveContributionV1 {
         &self.contribution
     }
+
+    /// Exact bytes in the complete durable proof/authentication record.
+    pub fn evidence_encoded_len(&self) -> Result<usize, ZkAmsMkheErrorV1> {
+        self.validate_evidence()
+    }
+
+    /// Visit the complete durable proof/authentication record without first
+    /// materializing a second release-sized byte vector.
+    ///
+    /// The algebraic public statement is intentionally carried by the enclosing
+    /// evaluated-key evidence record; this stream preserves every proof and
+    /// authenticated-contribution byte needed to replay it.
+    pub fn write_evidence_chunks(
+        &self,
+        mut write: impl FnMut(&[u8]) -> Result<(), ZkAmsMkheErrorV1>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_evidence()?;
+        write(&ACTIVE_RKG_EVIDENCE_TAG_V1)?;
+        write(&[MKHE_VERSION_V1])?;
+        write(&self.statement_digest)?;
+        write(&[self.witness_polynomials])?;
+        write(
+            &u32::try_from(self.proof_bytes.len())
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+                .to_be_bytes(),
+        )?;
+        write(&self.proof_bytes)?;
+        let contribution = &self.contribution;
+        write(&[contribution.version])?;
+        write(&contribution.profile_digest)?;
+        write(&contribution.roster_digest)?;
+        write(&contribution.epoch.to_be_bytes())?;
+        write(&contribution.transcript_digest)?;
+        write(&[contribution.round.tag()])?;
+        write(&contribution.contribution_index.to_be_bytes())?;
+        write(&contribution.party.to_bytes())?;
+        write(&contribution.payload_digest)?;
+        write(&[contribution.authentication.version])?;
+        write(&contribution.authentication.party.to_bytes())?;
+        write(&contribution.authentication.public_key)?;
+        write(&contribution.authentication.signature)
+    }
+
+    /// Encode the complete durable audit record, including authentication bytes.
+    pub fn encode_evidence(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
+        let total = self.evidence_encoded_len()?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(total)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        self.write_evidence_chunks(|chunk| {
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        })?;
+        if bytes.len() != total {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        Ok(bytes)
+    }
+
+    fn validate_evidence(&self) -> Result<usize, ZkAmsMkheErrorV1> {
+        let profile = release_profile_v1();
+        if self.statement_digest == [0; 32]
+            || self.witness_polynomials == 0
+            || usize::from(self.witness_polynomials) > RKG_LINEAR_PROOF_MAX_WITNESSES_V1
+            || self.proof_bytes.len()
+                != linear_proof_wire_bytes(
+                    usize::from(self.witness_polynomials),
+                    profile.ring_degree,
+                )?
+            || self.contribution.authentication.version != MKHE_VERSION_V1
+            || self.contribution.authentication.party != self.contribution.party
+            || ZkAmsMkhePartyIdV1::from_authentication_key(
+                &self.contribution.authentication.public_key,
+            )? != self.contribution.party
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let contribution_statement = active_contribution_statement_digest(&self.contribution)?;
+        self.contribution
+            .authentication
+            .verify(ACTIVE_CONTRIBUTION_DOMAIN_V1, contribution_statement)?;
+        ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1
+            .checked_add(self.proof_bytes.len())
+            .and_then(|value| value.checked_add(ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1))
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
+    }
+
+    /// Decode one exact durable audit record with complete length preflight.
+    pub fn decode_evidence_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
+        if bytes.len()
+            < ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1 + ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1
+            || bytes.get(..4) != Some(ACTIVE_RKG_EVIDENCE_TAG_V1.as_slice())
+            || bytes.get(4).copied() != Some(MKHE_VERSION_V1)
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        let witness_polynomials = bytes
+            .get(37)
+            .copied()
+            .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+        if witness_polynomials == 0
+            || usize::from(witness_polynomials) > RKG_LINEAR_PROOF_MAX_WITNESSES_V1
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        let proof_len = u32::from_be_bytes(
+            bytes
+                .get(38..42)
+                .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?
+                .try_into()
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+        );
+        let proof_len =
+            usize::try_from(proof_len).map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+        let profile = release_profile_v1();
+        if proof_len
+            != linear_proof_wire_bytes(usize::from(witness_polynomials), profile.ring_degree)?
+            || ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1
+                .checked_add(proof_len)
+                .and_then(|value| value.checked_add(ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1))
+                != Some(bytes.len())
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        let statement_digest = bytes
+            .get(5..37)
+            .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?
+            .try_into()
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+        let mut cursor = ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1;
+        let proof_bytes = bytes
+            .get(cursor..cursor + proof_len)
+            .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?
+            .to_vec();
+        LinearRelationProofV1::decode_wire_exact(
+            &proof_bytes,
+            usize::from(witness_polynomials),
+            profile.ring_degree,
+        )?;
+        cursor += proof_len;
+        let contribution = decode_active_evidence_contribution_exact(
+            bytes
+                .get(cursor..)
+                .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+        )?;
+        let value = Self {
+            statement_digest,
+            witness_polynomials,
+            proof_bytes,
+            contribution,
+        };
+        if value.statement_digest == [0; 32] || value.evidence_encoded_len()? != bytes.len() {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        Ok(value)
+    }
+
+    /// Decode one exact framed proof record from a reader without retaining a
+    /// second encoded copy. The caller supplies the enclosing record's trusted
+    /// length and owns any desired EOF check.
+    pub fn decode_evidence_from_reader<R: std::io::Read>(
+        reader: &mut R,
+        encoded_len: u64,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        let encoded_len =
+            usize::try_from(encoded_len).map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+        let minimum = ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1
+            .checked_add(ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if encoded_len < minimum {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        let mut header = [0_u8; ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1];
+        read_active_evidence_io_exact(reader, &mut header)?;
+        if header[..4] != ACTIVE_RKG_EVIDENCE_TAG_V1 || header[4] != MKHE_VERSION_V1 {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        let statement_digest: [u8; 32] = header[5..37]
+            .try_into()
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+        let witness_polynomials = header[37];
+        if statement_digest == [0; 32]
+            || witness_polynomials == 0
+            || usize::from(witness_polynomials) > RKG_LINEAR_PROOF_MAX_WITNESSES_V1
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        let proof_len = usize::try_from(u32::from_be_bytes(
+            header[38..42]
+                .try_into()
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+        ))
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+        let profile = release_profile_v1();
+        if proof_len
+            != linear_proof_wire_bytes(usize::from(witness_polynomials), profile.ring_degree)?
+            || minimum.checked_add(proof_len) != Some(encoded_len)
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        let mut proof_bytes = Vec::new();
+        proof_bytes
+            .try_reserve_exact(proof_len)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        proof_bytes.resize(proof_len, 0);
+        read_active_evidence_io_exact(reader, &mut proof_bytes)?;
+        LinearRelationProofV1::decode_wire_exact(
+            &proof_bytes,
+            usize::from(witness_polynomials),
+            profile.ring_degree,
+        )?;
+        let mut contribution_bytes = [0_u8; ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1];
+        read_active_evidence_io_exact(reader, &mut contribution_bytes)?;
+        let contribution = decode_active_evidence_contribution_exact(&contribution_bytes)?;
+        let value = Self {
+            statement_digest,
+            witness_polynomials,
+            proof_bytes,
+            contribution,
+        };
+        if value.evidence_encoded_len()? != encoded_len {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        Ok(value)
+    }
+}
+
+fn decode_active_evidence_contribution_exact(
+    bytes: &[u8],
+) -> Result<ZkAmsMkheActiveContributionV1, ZkAmsMkheErrorV1> {
+    if bytes.len() != ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1 {
+        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+    }
+    let mut cursor = 0;
+    let contribution_version = read_active_evidence_u8(bytes, &mut cursor)?;
+    let profile_digest = read_active_evidence_array(bytes, &mut cursor)?;
+    let roster_digest = read_active_evidence_array(bytes, &mut cursor)?;
+    let epoch = u64::from_be_bytes(read_active_evidence_array(bytes, &mut cursor)?);
+    let transcript_digest = read_active_evidence_array(bytes, &mut cursor)?;
+    let round = ZkAmsMkheActiveRoundV1::decode(read_active_evidence_u8(bytes, &mut cursor)?)?;
+    let contribution_index = u32::from_be_bytes(read_active_evidence_array(bytes, &mut cursor)?);
+    let party = ZkAmsMkhePartyIdV1::new(read_active_evidence_array(bytes, &mut cursor)?)?;
+    let payload_digest = read_active_evidence_array(bytes, &mut cursor)?;
+    let authentication_version = read_active_evidence_u8(bytes, &mut cursor)?;
+    let authentication_party =
+        ZkAmsMkhePartyIdV1::new(read_active_evidence_array(bytes, &mut cursor)?)?;
+    let authentication_public_key = read_active_evidence_array(bytes, &mut cursor)?;
+    let authentication_signature = read_active_evidence_array(bytes, &mut cursor)?;
+    if cursor != bytes.len()
+        || contribution_version != MKHE_VERSION_V1
+        || authentication_version != MKHE_VERSION_V1
+        || authentication_party != party
+        || ZkAmsMkhePartyIdV1::from_authentication_key(&authentication_public_key)? != party
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+    }
+    let contribution = ZkAmsMkheActiveContributionV1 {
+        version: contribution_version,
+        profile_digest,
+        roster_digest,
+        epoch,
+        transcript_digest,
+        round,
+        contribution_index,
+        party,
+        payload_digest,
+        authentication: ArtifactAuthentication {
+            version: authentication_version,
+            party: authentication_party,
+            public_key: authentication_public_key,
+            signature: authentication_signature,
+        },
+    };
+    let statement = active_contribution_statement_digest(&contribution)?;
+    contribution
+        .authentication
+        .verify(ACTIVE_CONTRIBUTION_DOMAIN_V1, statement)?;
+    Ok(contribution)
+}
+
+fn read_active_evidence_io_exact(
+    reader: &mut impl std::io::Read,
+    bytes: &mut [u8],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    reader
+        .read_exact(bytes)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
+}
+
+fn read_active_evidence_array<const N: usize>(
+    bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], ZkAmsMkheErrorV1> {
+    let end = cursor
+        .checked_add(N)
+        .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+    let value = bytes
+        .get(*cursor..end)
+        .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?
+        .try_into()
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+    *cursor = end;
+    Ok(value)
+}
+
+fn read_active_evidence_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, ZkAmsMkheErrorV1> {
+    let value = bytes
+        .get(*cursor)
+        .copied()
+        .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+    *cursor = cursor
+        .checked_add(1)
+        .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+    Ok(value)
 }
 
 /// Derive the sole uniformly sampled collective-public-key `a` polynomial for
@@ -1983,9 +2322,7 @@ pub fn verify_zk_ams_mkhe_active_rkg_round_two_v1(
 }
 
 /// Prove and authenticate one exact automorphism-linked Galois-source digit.
-pub(super) fn prove_zk_ams_mkhe_active_galois_source_v1<
-    R: MaskedRelaxedRandomSourceV1,
->(
+pub(super) fn prove_zk_ams_mkhe_active_galois_source_v1<R: MaskedRelaxedRandomSourceV1>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
     party_index: usize,
@@ -1995,32 +2332,15 @@ pub(super) fn prove_zk_ams_mkhe_active_galois_source_v1<
     random: &mut R,
 ) -> Result<ZkAmsMkheActiveRkgProofV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
-    let context = galois_source_linear_context(
-        &profile,
-        roster,
-        transcript_digest,
-        party_index,
-        statement,
-    )?;
+    let context =
+        galois_source_linear_context(&profile, roster, transcript_digest, party_index, statement)?;
     let relation = galois_source_relation(&profile, statement)?;
     let witnesses = vec![
         secret_polynomial_exact(&profile, witness.secret, 1)?,
-        secret_polynomial_exact(
-            &profile,
-            witness.public_error,
-            i64::from(profile.error_eta),
-        )?,
+        secret_polynomial_exact(&profile, witness.public_error, i64::from(profile.error_eta))?,
         secret_polynomial_exact(&profile, witness.ephemeral, 1)?,
-        secret_polynomial_exact(
-            &profile,
-            witness.error_zero,
-            i64::from(profile.error_eta),
-        )?,
-        secret_polynomial_exact(
-            &profile,
-            witness.error_one,
-            i64::from(profile.error_eta),
-        )?,
+        secret_polynomial_exact(&profile, witness.error_zero, i64::from(profile.error_eta))?,
+        secret_polynomial_exact(&profile, witness.error_one, i64::from(profile.error_eta))?,
     ];
     prove_authenticated_active_relation(
         &profile,
@@ -2042,13 +2362,8 @@ pub(super) fn verify_zk_ams_mkhe_active_galois_source_v1(
     proof: &ZkAmsMkheActiveRkgProofV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
-    let context = galois_source_linear_context(
-        &profile,
-        roster,
-        transcript_digest,
-        party_index,
-        statement,
-    )?;
+    let context =
+        galois_source_linear_context(&profile, roster, transcript_digest, party_index, statement)?;
     let relation = galois_source_relation(&profile, statement)?;
     verify_authenticated_active_relation(&profile, roster, context, &relation, proof)
 }
@@ -2182,8 +2497,8 @@ fn galois_source_linear_context(
     let schedule = zk_ams_t256_galois_key_schedule_v1()?;
     validate_zk_ams_t256_galois_key_schedule_v1(&schedule)?;
     let schedule_index = usize::from(statement.schedule_index);
-    let digit_index = usize::try_from(statement.digit_index)
-        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let digit_index =
+        usize::try_from(statement.digit_index).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
     if schedule
         .entries
         .get(schedule_index)
@@ -2369,9 +2684,7 @@ fn rkg_round_two_relation(
 ) -> Result<LinearRelationStatementV1, ZkAmsMkheErrorV1> {
     let mut relation = rkg_round_one_relation(profile, statement.round_one, party)?;
     relation.witness_bounds.push(i64::from(profile.error_eta));
-    relation
-        .witness_challenge_automorphism_exponents
-        .push(1);
+    relation.witness_challenge_automorphism_exponents.push(1);
     let aggregate_h0 = release_wire_polynomial(profile, statement.aggregate_h0)?;
     let aggregate_h1 = release_wire_polynomial(profile, statement.aggregate_h1)?;
     let mut secret_multiplier = aggregate_h1.negate(profile)?;
@@ -2396,8 +2709,8 @@ fn galois_source_relation(
     profile: &super::BgvProfile,
     statement: ZkAmsMkheActiveGaloisSourceStatementV1<'_>,
 ) -> Result<LinearRelationStatementV1, ZkAmsMkheErrorV1> {
-    let exponent = usize::try_from(statement.exponent)
-        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let exponent =
+        usize::try_from(statement.exponent).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
     let mut relation = collective_public_key_relation(profile, statement.public_key)?;
     relation.witness_bounds.extend([
         1,
@@ -2411,8 +2724,7 @@ fn galois_source_relation(
     let public_b = release_wire_polynomial(profile, statement.public_key.party_public_b)?;
     let plaintext_multiplier = ring_one(profile)?.scale_plaintext_modulus(profile)?;
     let gadget_multiplier = ring_one(profile)?.scale_gadget(
-        usize::try_from(statement.digit_index)
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+        usize::try_from(statement.digit_index).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
         profile,
     )?;
     relation.outputs.extend([
@@ -2632,8 +2944,7 @@ impl LinearRelationStatementV1 {
         profile.validate()?;
         if self.witness_bounds.is_empty()
             || self.witness_bounds.len() > RKG_LINEAR_PROOF_MAX_WITNESSES_V1
-            || self.witness_challenge_automorphism_exponents.len()
-                != self.witness_bounds.len()
+            || self.witness_challenge_automorphism_exponents.len() != self.witness_bounds.len()
             || self.outputs.is_empty()
             || self.outputs.len() > RKG_LINEAR_PROOF_MAX_OUTPUTS_V1
             || self
@@ -3014,10 +3325,8 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
             .zip(&statement.witness_bounds)
             .zip(&statement.witness_challenge_automorphism_exponents)
         {
-            let witness_challenge =
-                automorphism_signed(&challenge, *challenge_exponent)?;
-            let folded =
-                sparse_negacyclic_mul_signed(&witness_challenge, &witness.coefficients)?;
+            let witness_challenge = automorphism_signed(&challenge, *challenge_exponent)?;
+            let folded = sparse_negacyclic_mul_signed(&witness_challenge, &witness.coefficients)?;
             let (_, response_limit) = linear_response_parameters(*bound, challenge_weight)?;
             let mut response = Vec::with_capacity(profile.ring_degree);
             for (mask, folded) in mask.iter().copied().zip(folded) {
@@ -3088,10 +3397,7 @@ fn verify_linear_relation_proof(
                 automorphism_signed(&challenge, output.challenge_automorphism_exponent)?;
             let output_challenge_rns =
                 super::RnsPolynomial::from_signed(profile, &output_challenge)?;
-            response.sub(
-                &output.target.mul(&output_challenge_rns, profile)?,
-                profile,
-            )
+            response.sub(&output.target.mul(&output_challenge_rns, profile)?, profile)
         })
         .collect::<Result<Vec<_>, ZkAmsMkheErrorV1>>()?;
     let expected = linear_commitment_challenge_seed(profile, context, statement, &commitments)?;
@@ -3192,10 +3498,7 @@ fn apply_linear_relation(
                     .get(term.witness_index)
                     .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?
                     .automorphism(term.witness_automorphism_exponent, profile)?;
-                value = value.add(
-                    &term.multiplier.mul(&witness, profile)?,
-                    profile,
-                )?;
+                value = value.add(&term.multiplier.mul(&witness, profile)?, profile)?;
             }
             Ok(value)
         })
@@ -4379,6 +4682,113 @@ mod tests {
     }
 
     #[test]
+    fn active_rkg_evidence_codec_is_exact_and_rejects_every_authenticated_splice_class() {
+        let profile = release_profile_v1();
+        let proof_bytes = LinearRelationProofV1 {
+            challenge_seed: keccak256(b"active-rkg-evidence-release-proof"),
+            responses: vec![vec![0; profile.ring_degree]; 2],
+        }
+        .encode_wire()
+        .unwrap();
+        let fixture = fixture(b"active-rkg-evidence", 98);
+        let transcript = keccak256(b"active-rkg-evidence-transcript");
+        let contribution = authenticate_active_contribution(
+            &fixture.roster,
+            transcript,
+            ZkAmsMkheActiveRoundV1::GaloisSource,
+            0,
+            keccak256(&proof_bytes),
+            &fixture.secrets[0],
+            &mut KatRandom::new(b"active-rkg-evidence-authentication"),
+        )
+        .unwrap();
+        validate_active_contribution(
+            &fixture.roster,
+            transcript,
+            ZkAmsMkheActiveRoundV1::GaloisSource,
+            0,
+            &contribution,
+        )
+        .unwrap();
+        let evidence = ZkAmsMkheActiveRkgProofV1 {
+            statement_digest: keccak256(b"active-rkg-evidence-statement"),
+            witness_polynomials: 2,
+            proof_bytes,
+            contribution,
+        };
+        let encoded = evidence.encode_evidence().unwrap();
+        let decoded = ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&encoded).unwrap();
+        assert_eq!(decoded, evidence);
+        assert_eq!(decoded.encode_evidence().unwrap(), encoded);
+
+        let proof_start = ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1;
+        let contribution_start = proof_start + evidence.proof_bytes.len();
+        let authenticated_mutations = [
+            ("profile", contribution_start + 1),
+            ("roster", contribution_start + 33),
+            ("epoch", contribution_start + 72),
+            ("transcript", contribution_start + 73),
+            ("round", contribution_start + 105),
+            ("index", contribution_start + 109),
+            ("party", contribution_start + 110),
+            ("payload", contribution_start + 142),
+            ("authentication party", contribution_start + 175),
+            ("authentication key", contribution_start + 207),
+            ("authentication signature", contribution_start + 304),
+        ];
+        for (label, offset) in authenticated_mutations {
+            let mut changed = encoded.clone();
+            changed[offset] ^= 1;
+            assert!(
+                ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&changed).is_err(),
+                "authenticated {label} splice must fail"
+            );
+        }
+
+        for (label, offset) in [
+            ("outer tag", 0),
+            ("outer version", 4),
+            ("witness count", 37),
+            ("proof length", 38),
+            ("proof tag", proof_start),
+            ("proof version", proof_start + 4),
+            ("proof witness count", proof_start + 37),
+            ("proof ring degree", proof_start + 38),
+            ("contribution version", contribution_start),
+            ("authentication version", contribution_start + 174),
+        ] {
+            let mut changed = encoded.clone();
+            changed[offset] ^= 1;
+            assert!(
+                ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&changed).is_err(),
+                "structural {label} splice must fail"
+            );
+        }
+
+        let mut zero_statement = encoded.clone();
+        zero_statement[5..37].fill(0);
+        assert!(ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&zero_statement).is_err());
+        assert!(
+            ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&encoded[..encoded.len() - 1])
+                .is_err()
+        );
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&trailing).is_err());
+
+        // The enclosing source-evidence verifier owns algebraic statement replay.
+        // This codec must preserve those bytes exactly so that replay sees any
+        // statement, challenge, or response mutation rather than normalizing it.
+        for offset in [5, proof_start + 5, proof_start + 42] {
+            let mut changed = encoded.clone();
+            changed[offset] ^= 1;
+            let decoded = ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&changed).unwrap();
+            assert_eq!(decoded.encode_evidence().unwrap(), changed);
+            assert_ne!(changed, encoded);
+        }
+    }
+
+    #[test]
     fn rkg_wire_decodes_all_i64_patterns_but_verification_enforces_exact_bounds() {
         let profile = linear_test_profile();
         let (statement, secret, error) = linear_statement_fixture(&profile);
@@ -4854,6 +5264,298 @@ mod tests {
                 &mut KatRandom::new(b"dimension-mismatch-random"),
             ),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        );
+    }
+
+    fn tiny_galois_relation_fixture(
+        profile: &super::super::BgvProfile,
+        exponent: usize,
+    ) -> (
+        LinearRelationStatementV1,
+        Vec<super::super::SecretPolynomial>,
+    ) {
+        let secret = super::super::SecretPolynomial {
+            coefficients: vec![-1, 0, 1, 1, 0, -1, 1, 0],
+        };
+        let public_error = super::super::SecretPolynomial {
+            coefficients: vec![2, -1, 0, 1, -2, 2, 0, -1],
+        };
+        let ephemeral = super::super::SecretPolynomial {
+            coefficients: vec![1, 0, -1, 0, 1, 1, 0, -1],
+        };
+        let error_zero = super::super::SecretPolynomial {
+            coefficients: vec![0, 2, -1, 0, 1, -2, 1, 0],
+        };
+        let error_one = super::super::SecretPolynomial {
+            coefficients: vec![-2, 0, 1, 2, 0, -1, 0, 1],
+        };
+        let public_a =
+            super::super::RnsPolynomial::from_unsigned(profile, &[3, 5, 7, 11, 13, 17, 19, 23])
+                .unwrap();
+        let plaintext = ring_one(profile)
+            .unwrap()
+            .scale_plaintext_modulus(profile)
+            .unwrap();
+        let gadget = ring_one(profile).unwrap().scale_gadget(0, profile).unwrap();
+        let public_b = public_a
+            .mul(&secret.as_rns(profile).unwrap(), profile)
+            .unwrap()
+            .negate(profile)
+            .unwrap()
+            .add(
+                &plaintext
+                    .mul(&public_error.as_rns(profile).unwrap(), profile)
+                    .unwrap(),
+                profile,
+            )
+            .unwrap();
+        let transformed_secret = secret
+            .automorphism(exponent, profile)
+            .unwrap()
+            .as_rns(profile)
+            .unwrap();
+        let source_constant = public_b
+            .mul(&ephemeral.as_rns(profile).unwrap(), profile)
+            .unwrap()
+            .add(
+                &plaintext
+                    .mul(&error_zero.as_rns(profile).unwrap(), profile)
+                    .unwrap(),
+                profile,
+            )
+            .unwrap()
+            .add(&gadget.mul(&transformed_secret, profile).unwrap(), profile)
+            .unwrap();
+        let source_linear = public_a
+            .mul(&ephemeral.as_rns(profile).unwrap(), profile)
+            .unwrap()
+            .add(
+                &plaintext
+                    .mul(&error_one.as_rns(profile).unwrap(), profile)
+                    .unwrap(),
+                profile,
+            )
+            .unwrap();
+        (
+            LinearRelationStatementV1 {
+                witness_bounds: vec![1, 2, 1, 2, 2],
+                witness_challenge_automorphism_exponents: vec![1, 1, exponent, exponent, exponent],
+                outputs: vec![
+                    LinearRelationOutputV1 {
+                        target: public_b.clone(),
+                        challenge_automorphism_exponent: 1,
+                        terms: vec![
+                            LinearRelationTermV1 {
+                                witness_index: 0,
+                                multiplier: public_a.negate(profile).unwrap(),
+                                witness_automorphism_exponent: 1,
+                            },
+                            LinearRelationTermV1 {
+                                witness_index: 1,
+                                multiplier: plaintext.clone(),
+                                witness_automorphism_exponent: 1,
+                            },
+                        ],
+                    },
+                    LinearRelationOutputV1 {
+                        target: source_constant,
+                        challenge_automorphism_exponent: exponent,
+                        terms: vec![
+                            LinearRelationTermV1 {
+                                witness_index: 0,
+                                multiplier: gadget,
+                                witness_automorphism_exponent: exponent,
+                            },
+                            LinearRelationTermV1 {
+                                witness_index: 2,
+                                multiplier: public_b,
+                                witness_automorphism_exponent: 1,
+                            },
+                            LinearRelationTermV1 {
+                                witness_index: 3,
+                                multiplier: plaintext.clone(),
+                                witness_automorphism_exponent: 1,
+                            },
+                        ],
+                    },
+                    LinearRelationOutputV1 {
+                        target: source_linear,
+                        challenge_automorphism_exponent: exponent,
+                        terms: vec![
+                            LinearRelationTermV1 {
+                                witness_index: 2,
+                                multiplier: public_a,
+                                witness_automorphism_exponent: 1,
+                            },
+                            LinearRelationTermV1 {
+                                witness_index: 4,
+                                multiplier: plaintext,
+                                witness_automorphism_exponent: 1,
+                            },
+                        ],
+                    },
+                ],
+            },
+            vec![secret, public_error, ephemeral, error_zero, error_one],
+        )
+    }
+
+    #[test]
+    fn galois_source_proof_links_the_transformed_secret_and_rejects_every_splice_class() {
+        let profile = linear_test_profile();
+        let exponent = 3;
+        let (statement, witnesses) = tiny_galois_relation_fixture(&profile, exponent);
+        statement.validate(&profile).unwrap();
+        let context = linear_context(&profile, ZkAmsMkheActiveRoundV1::GaloisSource);
+        let witness_refs = witnesses.iter().collect::<Vec<_>>();
+        let proof = prove_linear_relation_v1(
+            &profile,
+            context,
+            &statement,
+            &witness_refs,
+            &mut KatRandom::new(b"galois-source-proof-positive"),
+        )
+        .unwrap();
+        verify_linear_relation_proof(&profile, context, &statement, &proof).unwrap();
+
+        let mut wrong_exponent = statement.clone();
+        wrong_exponent.witness_challenge_automorphism_exponents[2..].fill(5);
+        wrong_exponent.outputs[1].challenge_automorphism_exponent = 5;
+        wrong_exponent.outputs[1].terms[0].witness_automorphism_exponent = 5;
+        wrong_exponent.outputs[2].challenge_automorphism_exponent = 5;
+        wrong_exponent.validate(&profile).unwrap();
+        assert!(verify_linear_relation_proof(&profile, context, &wrong_exponent, &proof).is_err());
+
+        for mutation in 0..5 {
+            let mut changed = statement.clone();
+            match mutation {
+                0 => changed.outputs[1].target.coefficients[0] ^= 1,
+                1 => changed.outputs[1].terms[0].multiplier.coefficients[0] ^= 1,
+                2 => {
+                    changed.outputs[0].target.coefficients[1] ^= 1;
+                    changed.outputs[1].terms[1].multiplier.coefficients[1] ^= 1;
+                }
+                3 => {
+                    changed.outputs[0].terms[0].multiplier.coefficients[2] ^= 1;
+                    changed.outputs[2].terms[0].multiplier.coefficients[2] ^= 1;
+                }
+                4 => changed.outputs[2].target.coefficients[3] ^= 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                verify_linear_relation_proof(&profile, context, &changed, &proof).is_err(),
+                "statement splice {mutation} must fail"
+            );
+        }
+
+        for mutation in 0..4 {
+            let mut changed = context;
+            match mutation {
+                0 => changed.transcript_digest[0] ^= 1,
+                1 => changed.party_index += 1,
+                2 => changed.party = ZkAmsMkhePartyIdV1::new([0x72; 32]).unwrap(),
+                3 => changed.relation_index += 1,
+                _ => unreachable!(),
+            }
+            assert!(verify_linear_relation_proof(&profile, changed, &statement, &proof).is_err());
+        }
+
+        let mut changed_proof = proof.clone();
+        changed_proof.responses[0][0] += 1;
+        assert!(
+            verify_linear_relation_proof(&profile, context, &statement, &changed_proof).is_err()
+        );
+        let mut changed_proof = proof.clone();
+        changed_proof.challenge_seed[0] ^= 1;
+        assert!(
+            verify_linear_relation_proof(&profile, context, &statement, &changed_proof).is_err()
+        );
+
+        let encoded = proof.encode_wire().unwrap();
+        assert!(
+            LinearRelationProofV1::decode_wire_exact(
+                &encoded[..encoded.len() - 1],
+                5,
+                profile.ring_degree,
+            )
+            .is_err()
+        );
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(
+            LinearRelationProofV1::decode_wire_exact(&trailing, 5, profile.ring_degree).is_err()
+        );
+    }
+
+    #[test]
+    fn galois_source_coordinate_is_exactly_the_frozen_schedule_and_38_digits() {
+        let schedule = zk_ams_t256_galois_key_schedule_v1().unwrap();
+        assert_eq!(schedule.entries.len(), ZK_AMS_T256_GALOIS_KEY_COUNT_V1);
+        for (index, entry) in schedule.entries.iter().enumerate() {
+            validate_galois_source_coordinate(index, entry.exponent, 0).unwrap();
+            validate_galois_source_coordinate(index, entry.exponent, 37).unwrap();
+            assert!(validate_galois_source_coordinate(index, entry.exponent ^ 2, 0).is_err());
+        }
+        assert!(
+            validate_galois_source_coordinate(
+                ZK_AMS_T256_GALOIS_KEY_COUNT_V1,
+                schedule.entries[0].exponent,
+                0,
+            )
+            .is_err()
+        );
+        assert!(validate_galois_source_coordinate(0, schedule.entries[0].exponent, 38).is_err());
+    }
+
+    #[test]
+    fn galois_source_authentication_rejects_party_transcript_round_proof_and_key_mutations() {
+        let fixture = fixture(b"galois-source-auth", 97);
+        let transcript = keccak256(b"galois-source-auth-transcript");
+        let baseline = contributions(
+            &fixture,
+            ZkAmsMkheActiveRoundV1::GaloisSource,
+            transcript,
+            b"galois-source-auth-contributions",
+        );
+        zk_ams_mkhe_collect_active_round_v1(
+            &fixture.roster,
+            transcript,
+            ZkAmsMkheActiveRoundV1::GaloisSource,
+            &baseline,
+        )
+        .unwrap();
+        for mutation in 0..6 {
+            let mut changed = baseline.clone();
+            match mutation {
+                0 => changed[0].party = changed[1].party,
+                1 => changed[0].contribution_index = 1,
+                2 => changed[0].transcript_digest[0] ^= 1,
+                3 => changed[0].round = ZkAmsMkheActiveRoundV1::RkgRoundOne,
+                4 => changed[0].payload_digest[0] ^= 1,
+                5 => changed[0].authentication.public_key = changed[1].authentication.public_key,
+                _ => unreachable!(),
+            }
+            assert!(
+                zk_ams_mkhe_collect_active_round_v1(
+                    &fixture.roster,
+                    transcript,
+                    ZkAmsMkheActiveRoundV1::GaloisSource,
+                    &changed,
+                )
+                .is_err(),
+                "authentication splice {mutation} must fail"
+            );
+        }
+        let mut changed = baseline;
+        changed[0].authentication.signature[64] ^= 1;
+        assert!(
+            zk_ams_mkhe_collect_active_round_v1(
+                &fixture.roster,
+                transcript,
+                ZkAmsMkheActiveRoundV1::GaloisSource,
+                &changed,
+            )
+            .is_err()
         );
     }
 }

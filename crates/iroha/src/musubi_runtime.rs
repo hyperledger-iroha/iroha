@@ -437,10 +437,22 @@ impl MusubiStorageCoordinationResponseV1 {
                 "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
             )
         })?;
+        let registered_binding = &self.archive.staging_receipt.payload.binding;
+        self.archive
+            .staging_receipt
+            .verify(
+                registered_binding,
+                self.archive.staging_receipt.payload.issued_at_ms,
+            )
+            .map_err(|_| {
+                MusubiPublicationRuntimeTransportErrorV1::permanent(
+                    "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
+                )
+            })?;
         if self.version != 1
             || self.archive.archive_id != request.commitment.archive_id()
             || self.archive.commitment != request.commitment
-            || self.archive.staging_receipt != request.staging_receipt
+            || registered_binding != &request.staging_receipt.payload.binding
             || self.archive.registered_by != request.publisher
             || self.location_id.is_zero()
             || self.pin_manifest.as_bytes().iter().all(|byte| *byte == 0)
@@ -5835,6 +5847,50 @@ mod tests {
             norito::decode_canonical_with_limits(&readback.body, RESPONSE_DECODE_LIMITS)
                 .expect("readback response");
         assert_eq!(readback_response, fixture.readback_response);
+    }
+
+    #[test]
+    fn storage_response_accepts_a_refreshed_receipt_for_the_registered_operation() {
+        let fixture = control_service_fixture(false, false);
+        let broker_key = KeyPair::try_from_seed(
+            b"musubi-publication-control-broker".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("broker key");
+        let mut request = fixture.storage_request.clone();
+        let payload = MusubiSeedIngressReceiptPayloadV1 {
+            version: 1,
+            binding: request.staging_receipt.payload.binding.clone(),
+            issued_at_ms: request.staging_receipt.payload.expires_at_ms + 1,
+            expires_at_ms: request.staging_receipt.payload.expires_at_ms + 60_001,
+        };
+        request.staging_receipt = MusubiSeedIngressReceiptV1 {
+            approvals: vec![MusubiSeedIngressReceiptApprovalV1 {
+                public_key: broker_key.public_key().clone(),
+                signature: SignatureOf::try_from_hash(
+                    broker_key.private_key(),
+                    payload.signing_hash(),
+                )
+                .expect("refreshed receipt signature"),
+            }],
+            payload,
+        };
+        assert_ne!(
+            fixture.storage_response.archive.staging_receipt,
+            request.staging_receipt
+        );
+        fixture
+            .storage_response
+            .validate_for(&request)
+            .expect("same-binding refreshed receipt must recover coordination");
+
+        request.staging_receipt.payload.binding.nonce = [0xee; 32];
+        request.staging_receipt.approvals[0].signature = SignatureOf::try_from_hash(
+            broker_key.private_key(),
+            request.staging_receipt.payload.signing_hash(),
+        )
+        .expect("different-operation receipt signature");
+        assert!(fixture.storage_response.validate_for(&request).is_err());
     }
 
     #[test]

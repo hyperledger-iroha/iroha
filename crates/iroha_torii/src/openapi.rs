@@ -1253,92 +1253,92 @@ fn musubi_paths() -> Map {
 
     for (path, summary, request_type) in [
         (
-            "/v1/musubi/instructions/namespace-binding-register",
+            musubi_routes::NAMESPACE_BINDING_REGISTER.path(),
             "Build a Musubi V1 namespace-binding registration.",
             "RegisterMusubiNamespaceBindingV1",
         ),
         (
-            "/v1/musubi/instructions/archive-register",
+            musubi_routes::ARCHIVE_REGISTER.path(),
             "Build a Musubi V1 archive registration.",
             "RegisterMusubiArchiveV1",
         ),
         (
-            "/v1/musubi/instructions/archive-location-add",
+            musubi_routes::ARCHIVE_LOCATION_ADD.path(),
             "Build a Musubi V1 archive-location add or renewal.",
             "AddMusubiArchiveLocationV1",
         ),
         (
-            "/v1/musubi/instructions/archive-location-retire",
+            musubi_routes::ARCHIVE_LOCATION_RETIRE.path(),
             "Build a Musubi V1 archive-location retirement.",
             "RetireMusubiArchiveLocationV1",
         ),
         (
-            "/v1/musubi/instructions/release-publish",
+            musubi_routes::RELEASE_PUBLISH.path(),
             "Build a Musubi V1 release publication.",
             "PublishMusubiReleaseV1",
         ),
         (
-            "/v1/musubi/instructions/release-yank-set",
+            musubi_routes::RELEASE_YANK_SET.path(),
             "Build a reversible Musubi V1 yank transition.",
             "SetMusubiReleaseYankV1",
         ),
         (
-            "/v1/musubi/instructions/package-metadata-set",
+            musubi_routes::PACKAGE_METADATA_SET.path(),
             "Build a Musubi V1 package metadata replacement.",
             "SetMusubiPackageMetadataV1",
         ),
         (
-            "/v1/musubi/instructions/package-member-invite",
+            musubi_routes::PACKAGE_MEMBER_INVITE.path(),
             "Build a Musubi V1 package-member invitation.",
             "InviteMusubiPackageMaintainerV1",
         ),
         (
-            "/v1/musubi/instructions/package-member-accept",
+            musubi_routes::PACKAGE_MEMBER_ACCEPT.path(),
             "Build a Musubi V1 package-member invitation acceptance.",
             "AcceptMusubiPackageMaintainerV1",
         ),
         (
-            "/v1/musubi/instructions/package-member-invitation-revoke",
+            musubi_routes::PACKAGE_MEMBER_INVITATION_REVOKE.path(),
             "Build a Musubi V1 pending package-member invitation revocation.",
             "RevokeMusubiPackageMaintainerInvitationV1",
         ),
         (
-            "/v1/musubi/instructions/package-member-set-role",
+            musubi_routes::PACKAGE_MEMBER_SET_ROLE.path(),
             "Build a Musubi V1 package-member role replacement.",
             "SetMusubiPackageMaintainerRoleV1",
         ),
         (
-            "/v1/musubi/instructions/package-member-remove",
+            musubi_routes::PACKAGE_MEMBER_REMOVE.path(),
             "Build a Musubi V1 package-member removal.",
             "RemoveMusubiPackageMaintainerV1",
         ),
         (
-            "/v1/musubi/instructions/alias-register",
+            musubi_routes::ALIAS_REGISTER.path(),
             "Build a paid permanent Musubi V1 alias registration.",
             "RegisterMusubiAliasV1",
         ),
         (
-            "/v1/musubi/instructions/package-recover",
+            musubi_routes::PACKAGE_RECOVER.path(),
             "Build a Parliament-enacted Musubi V1 package recovery.",
             "RecoverMusubiPackageV1",
         ),
         (
-            "/v1/musubi/instructions/alias-retarget",
+            musubi_routes::ALIAS_RETARGET.path(),
             "Build a Parliament-enacted Musubi V1 alias retarget.",
             "RetargetMusubiAliasV1",
         ),
         (
-            "/v1/musubi/instructions/artifact-takedown",
+            musubi_routes::ARTIFACT_TAKEDOWN.path(),
             "Build a Parliament-enacted Musubi V1 artifact takedown.",
             "SetMusubiArtifactTakedownV1",
         ),
         (
-            "/v1/musubi/instructions/registry-policy-set",
+            musubi_routes::REGISTRY_POLICY_SET.path(),
             "Build a Parliament-enacted Musubi V1 registry-policy replacement.",
             "SetMusubiRegistryPolicyV1",
         ),
         (
-            "/v1/musubi/instructions/release-digest-assert",
+            musubi_routes::RELEASE_DIGEST_ASSERT.path(),
             "Build an exact Musubi V1 release-digest assertion.",
             "AssertMusubiReleaseDigestV1",
         ),
@@ -38384,6 +38384,64 @@ mod tests {
                 .map(|code| code.as_str())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn musubi_v1_openapi_matches_the_complete_catalog_and_declares_models() {
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        let actual = paths
+            .keys()
+            .map(String::as_str)
+            .filter(|path| path.starts_with("/v1/musubi/"))
+            .collect::<BTreeSet<_>>();
+        let expected = musubi_routes::ROUTES
+            .iter()
+            .map(|route| route.path())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(musubi_routes::ROUTES.len(), 29);
+        assert_eq!(actual, expected);
+
+        for route in musubi_routes::ROUTES {
+            let path = route.path();
+            let path_item = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("Musubi OpenAPI path {path}"));
+            assert_eq!(
+                path_item.keys().map(String::as_str).collect::<Vec<_>>(),
+                vec!["post"],
+                "{path} must remain POST-only"
+            );
+            let operation = path_item
+                .get("post")
+                .and_then(Value::as_object)
+                .expect("Musubi POST operation");
+            for extension in [
+                "x-iroha-norito-request-type",
+                "x-iroha-norito-response-type",
+            ] {
+                assert!(
+                    operation
+                        .get(extension)
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| name.ends_with("V1")),
+                    "{path} must declare an exact V1 model through {extension}"
+                );
+            }
+            assert_eq!(
+                operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+                Some(if path.starts_with("/v1/musubi/queries/") {
+                    "read"
+                } else {
+                    "build_instruction"
+                }),
+                "{path} tool effect"
+            );
+        }
     }
 
     #[test]

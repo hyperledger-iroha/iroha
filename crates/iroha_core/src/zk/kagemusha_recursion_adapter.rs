@@ -17337,10 +17337,8 @@ mod tests {
     }
 
     fn first_release_generation_params_v4() -> KagemushaStepCircuitParamsV4 {
-        let mut params = valid_step_circuit_params_v4();
-        params.num_advice_per_phase = KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4.to_vec();
-        params.num_lookup_advice_per_phase = KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4.to_vec();
-        params
+        KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+            .expect("reviewed first-release generation profile")
     }
 
     #[test]

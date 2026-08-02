@@ -39,8 +39,8 @@ use iroha_data_model::offline::{
     KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
     KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendQualificationReceiptV4,
     KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
-    KagemushaTopUpFinalityRosterArtifactV2, OfflineDeviceAttestationPolicy,
-    kagemusha_recursive_spend_release_sha256,
+    KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactV2,
+    OfflineDeviceAttestationPolicy, kagemusha_recursive_spend_release_sha256,
 };
 
 use crate::{ExplicitExitError, Outcome, RunArgs};
@@ -62,7 +62,11 @@ const REPORT_ROSTER_PURPOSE: &str = "topup_finality_roster";
 const REPORT_ARTIFACT_PURPOSES_V4: [&str; 8] = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4;
 const DURABLE_FILE_PUBLICATION_OUTCOME_SCHEMA_V1: &str =
     "iroha.kagami.kagemusha.durable_file_publication.v1";
+const RELEASE_CIRCUIT_PARAMS_PUBLICATION_OUTCOME_SCHEMA_V1: &str =
+    "iroha.kagami.kagemusha.release_circuit_params_publication.v1";
 const DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE: u8 = 75;
+const RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4: &str = "step-eq-circuit-params.norito";
+const RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4: &str = "step-ep-circuit-params.norito";
 const AUTHENTICATED_ARTIFACT_ROLES_V4: [(
     KagemushaPastaCycleParityV1,
     KagemushaPastaCycleArtifactKindV4,
@@ -133,6 +137,9 @@ enum Command {
     /// Build one release-bound activation instruction from an authenticated V4 catalog.
     #[command(name = "prepare-activation-v4")]
     PrepareActivationV4(PrepareActivationV4Args),
+    /// Atomically publish the canonical reviewed Eq/Ep first-release circuit parameters.
+    #[command(name = "prepare-release-circuit-params-v4")]
+    PrepareReleaseCircuitParamsV4(PrepareReleaseCircuitParamsV4Args),
     /// Build the actual rendered Taira validator roster for signed V4 release generation.
     #[command(name = "prepare-taira-release-roster-v4")]
     PrepareTairaReleaseRosterV4(taira::PrepareReleaseRosterV4Args),
@@ -203,6 +210,13 @@ struct PrepareActivationV4Args {
     /// New private file receiving a JSON array accepted by `iroha multisig propose`.
     #[arg(long)]
     output: PathBuf,
+}
+
+#[derive(Debug, ClapArgs)]
+struct PrepareReleaseCircuitParamsV4Args {
+    /// New owner-private directory atomically receiving the canonical Eq/Ep Norito files.
+    #[arg(long)]
+    output_dir: PathBuf,
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -283,6 +297,9 @@ impl<T: Write> RunArgs<T> for Args {
                     policy_state_sha256,
                 )?;
             }
+            Command::PrepareReleaseCircuitParamsV4(args) => {
+                prepare_release_circuit_params_v4(args, writer)?;
+            }
             Command::PrepareTairaReleaseRosterV4(args) => {
                 taira::prepare_release_roster_v4(args, writer)?;
             }
@@ -292,6 +309,75 @@ impl<T: Write> RunArgs<T> for Args {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+struct ReleaseCircuitParamsArtifactReportV4 {
+    file_name: String,
+    size_bytes: u64,
+    file_sha256: String,
+    circuit_params_sha256: String,
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct ReleaseCircuitParamsReportV4 {
+    status: String,
+    profile: String,
+    output_dir: String,
+    step_eq: ReleaseCircuitParamsArtifactReportV4,
+    step_ep: ReleaseCircuitParamsArtifactReportV4,
+}
+
+fn prepare_release_circuit_params_v4<T: Write>(
+    args: PrepareReleaseCircuitParamsV4Args,
+    writer: &mut std::io::BufWriter<T>,
+) -> Outcome {
+    let output_dir = args
+        .output_dir
+        .to_str()
+        .ok_or_else(|| eyre!("release circuit-parameter output directory is not UTF-8"))?
+        .to_owned();
+    let params = KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+        .map_err(|error| eyre!("reviewed first-release circuit parameters are invalid: {error}"))?;
+    let bytes = norito::to_bytes(&params)
+        .wrap_err("failed to encode reviewed first-release circuit parameters")?;
+    let decoded: KagemushaStepCircuitParamsV4 = norito::decode_from_bytes(&bytes)
+        .wrap_err("failed to decode canonical first-release circuit parameters")?;
+    if decoded != params
+        || norito::to_bytes(&decoded)
+            .wrap_err("failed to re-encode canonical first-release circuit parameters")?
+            != bytes
+    {
+        bail!("reviewed first-release circuit parameters are not canonical Norito");
+    }
+    let file_sha256 = kagemusha_recursive_spend_release_sha256(&bytes);
+    let circuit_params_sha256 = params
+        .sha256()
+        .map_err(|error| eyre!("failed to identify first-release circuit parameters: {error}"))?;
+    let size_bytes = u64::try_from(bytes.len())
+        .map_err(|_| eyre!("first-release circuit-parameter length does not fit u64"))?;
+    publish_release_circuit_params_directory_v4(writer, &args.output_dir, &bytes)?;
+
+    let artifact = |file_name: &str| ReleaseCircuitParamsArtifactReportV4 {
+        file_name: file_name.to_owned(),
+        size_bytes,
+        file_sha256: hex::encode(file_sha256),
+        circuit_params_sha256: hex::encode(circuit_params_sha256),
+    };
+    let report = ReleaseCircuitParamsReportV4 {
+        status: "prepared".to_owned(),
+        profile: "reviewed_first_release_generation_profile".to_owned(),
+        output_dir,
+        step_eq: artifact(RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4),
+        step_ep: artifact(RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4),
+    };
+    writeln!(
+        writer,
+        "{}",
+        norito::json::to_json(&report)
+            .wrap_err("failed to encode release circuit-parameter report")?
+    )?;
+    Ok(())
 }
 
 fn parse_manifest_sha256(value: &str) -> std::result::Result<[u8; 32], String> {
@@ -1224,6 +1310,37 @@ impl DurableFilePublicationOutcomeV1 {
     }
 }
 
+#[derive(Debug)]
+#[must_use = "a post-rename circuit-parameter commit outcome must be handled explicitly"]
+enum ReleaseCircuitParamsPublicationOutcomeV1 {
+    Committed { final_path: PathBuf },
+    CommitUncertain { final_path: PathBuf, reason: String },
+}
+
+impl ReleaseCircuitParamsPublicationOutcomeV1 {
+    fn operator_record(&self) -> String {
+        let (status, final_path, durable, reason) = match self {
+            Self::Committed { final_path } => ("committed", final_path, true, None),
+            Self::CommitUncertain { final_path, reason } => {
+                ("commit-uncertain", final_path, false, Some(reason.as_str()))
+            }
+        };
+        #[cfg(unix)]
+        let final_path_hex = {
+            use std::os::unix::ffi::OsStrExt as _;
+            hex::encode(final_path.as_os_str().as_bytes())
+        };
+        #[cfg(not(unix))]
+        let final_path_hex = hex::encode(final_path.to_string_lossy().as_bytes());
+        let reason_hex =
+            reason.map_or_else(|| "-".to_owned(), |value| hex::encode(value.as_bytes()));
+        format!(
+            "{RELEASE_CIRCUIT_PARAMS_PUBLICATION_OUTCOME_SCHEMA_V1} status={status} final_path_encoding=bytes-hex final_path_hex={final_path_hex} parent_directory_durable={} reason_utf8_hex={reason_hex}",
+            u8::from(durable),
+        )
+    }
+}
+
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PromotionDirectorySnapshotV1 {
@@ -1257,6 +1374,17 @@ impl PromotionDirectorySnapshotV1 {
             bail!(
                 "{label} must be owned by root or the effective uid, non-writable by group/other, and linked"
             );
+        }
+        Ok(())
+    }
+
+    fn validate_private(self, label: &str) -> Result<()> {
+        self.validate_trusted(label)?;
+        if self.uid != rustix::process::geteuid().as_raw()
+            || self.mode & 0o777 != 0o700
+            || self.links == 0
+        {
+            bail!("{label} must be an owner-private 0700 directory");
         }
         Ok(())
     }
@@ -1614,6 +1742,296 @@ where
 }
 
 #[cfg(unix)]
+fn release_circuit_params_file_snapshot_matches_stat_v1(
+    snapshot: PromotionFileSnapshotV1,
+    stat: &rustix::fs::Stat,
+) -> bool {
+    u64::try_from(stat.st_dev).ok() == Some(snapshot.device)
+        && u64::try_from(stat.st_ino).ok() == Some(snapshot.inode)
+        && u32::try_from(stat.st_mode).ok() == Some(snapshot.mode)
+        && u32::try_from(stat.st_uid).ok() == Some(snapshot.uid)
+        && u32::try_from(stat.st_gid).ok() == Some(snapshot.gid)
+        && u64::try_from(stat.st_nlink).ok() == Some(snapshot.links)
+        && u64::try_from(stat.st_size).ok() == Some(snapshot.length)
+}
+
+#[cfg(unix)]
+fn release_circuit_params_directory_snapshot_matches_stat_v1(
+    snapshot: PromotionDirectorySnapshotV1,
+    stat: &rustix::fs::Stat,
+) -> bool {
+    u64::try_from(stat.st_dev).ok() == Some(snapshot.device)
+        && u64::try_from(stat.st_ino).ok() == Some(snapshot.inode)
+        && u32::try_from(stat.st_mode).ok() == Some(snapshot.mode)
+        && u32::try_from(stat.st_uid).ok() == Some(snapshot.uid)
+        && u32::try_from(stat.st_gid).ok() == Some(snapshot.gid)
+        && u64::try_from(stat.st_nlink).ok() == Some(snapshot.links)
+}
+
+#[cfg(unix)]
+fn write_release_circuit_params_staged_file_v1(
+    directory: &File,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<PromotionFileSnapshotV1> {
+    use rustix::fs::{AtFlags, Mode, OFlags, openat, statat};
+
+    let mut file = File::from(
+        openat(
+            directory,
+            file_name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )
+        .wrap_err_with(|| format!("failed to create staged `{file_name}`"))?,
+    );
+    PromotionFileSnapshotV1::from_metadata(
+        &file
+            .metadata()
+            .wrap_err_with(|| format!("failed to inspect staged `{file_name}`"))?,
+    )
+    .ok_or_else(|| eyre!("staged `{file_name}` is not a single-link regular file"))?
+    .validate_private()?;
+    file.write_all(bytes)
+        .wrap_err_with(|| format!("failed to write staged `{file_name}`"))?;
+    file.sync_all()
+        .wrap_err_with(|| format!("failed to sync staged `{file_name}`"))?;
+    let snapshot = PromotionFileSnapshotV1::from_metadata(
+        &file
+            .metadata()
+            .wrap_err_with(|| format!("failed to re-inspect staged `{file_name}`"))?,
+    )
+    .ok_or_else(|| eyre!("staged `{file_name}` lost its regular-file identity"))?;
+    snapshot.validate_private()?;
+    if snapshot.length
+        != u64::try_from(bytes.len())
+            .map_err(|_| eyre!("staged `{file_name}` length does not fit u64"))?
+    {
+        bail!("staged `{file_name}` has the wrong final length");
+    }
+    let linked = statat(directory, file_name, AtFlags::SYMLINK_NOFOLLOW)
+        .wrap_err_with(|| format!("failed to inspect staged `{file_name}` binding"))?;
+    if !release_circuit_params_file_snapshot_matches_stat_v1(snapshot, &linked) {
+        bail!("staged `{file_name}` changed identity or custody");
+    }
+    Ok(snapshot)
+}
+
+#[cfg(unix)]
+fn cleanup_release_circuit_params_staging_v1(
+    parent: &PinnedPromotionParentV1,
+    staging: &File,
+    temporary_name: &std::ffi::OsStr,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, unlinkat};
+
+    for file_name in [
+        RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+        RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+    ] {
+        match unlinkat(staging, file_name, AtFlags::empty()) {
+            Ok(()) => {}
+            Err(error) if error == rustix::io::Errno::NOENT => {}
+            Err(error) => {
+                return Err(error)
+                    .wrap_err_with(|| format!("failed to remove staged `{file_name}`"));
+            }
+        }
+    }
+    staging
+        .sync_all()
+        .wrap_err("failed to sync cleaned circuit-parameter staging directory")?;
+    unlinkat(&parent.file, temporary_name, AtFlags::REMOVEDIR)
+        .wrap_err("failed to remove circuit-parameter staging directory")?;
+    parent
+        .file
+        .sync_all()
+        .wrap_err("failed to sync circuit-parameter parent after cleanup")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the two-file private staging set, single directory rename, and post-publication durability classification form one ordered operation"
+)]
+fn write_release_circuit_params_directory_with_hooks_v1<B, S>(
+    path: &Path,
+    bytes: &[u8],
+    before_publish: B,
+    sync_parent: S,
+) -> Result<ReleaseCircuitParamsPublicationOutcomeV1>
+where
+    B: FnOnce() -> Result<()>,
+    S: FnOnce(&File) -> std::io::Result<()>,
+{
+    use rustix::fs::{
+        AtFlags, Mode, OFlags, RenameFlags, mkdirat, openat, renameat_with, statat, unlinkat,
+    };
+
+    let parent_path = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| eyre!("release circuit-parameter directory has no parent"))?;
+    let target_name = path
+        .file_name()
+        .ok_or_else(|| eyre!("release circuit-parameter directory has no file name"))?;
+    let mut components = Path::new(target_name).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(name)) if name == target_name)
+        || components.next().is_some()
+    {
+        bail!("release circuit-parameter directory name must be one normal path component");
+    }
+    let parent = PinnedPromotionParentV1::open(parent_path)?;
+    match statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => bail!("refusing to overwrite or alias an existing circuit-parameter directory"),
+        Err(error) if error == rustix::io::Errno::NOENT => {}
+        Err(error) => {
+            return Err(error).wrap_err("failed to inspect circuit-parameter destination");
+        }
+    }
+
+    let temporary_name = random_promotion_temporary_name_v1(target_name)?;
+    mkdirat(&parent.file, &temporary_name, Mode::from_raw_mode(0o700))
+        .wrap_err("failed to create private circuit-parameter staging directory")?;
+    let staging = match openat(
+        &parent.file,
+        &temporary_name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(file) => File::from(file),
+        Err(error) => {
+            unlinkat(&parent.file, &temporary_name, AtFlags::REMOVEDIR)
+                .wrap_err("failed to remove unopened circuit-parameter staging directory")?;
+            parent
+                .file
+                .sync_all()
+                .wrap_err("failed to sync parent after removing unopened staging directory")?;
+            return Err(error).wrap_err("failed to pin circuit-parameter staging directory");
+        }
+    };
+    let staging_snapshot = (|| -> Result<PromotionDirectorySnapshotV1> {
+        let snapshot = PromotionDirectorySnapshotV1::from_metadata(
+            &staging
+                .metadata()
+                .wrap_err("failed to inspect circuit-parameter staging directory")?,
+        )
+        .ok_or_else(|| eyre!("circuit-parameter staging path is not a directory"))?;
+        snapshot.validate_private("circuit-parameter staging directory")?;
+        Ok(snapshot)
+    })();
+    let staging_snapshot = match staging_snapshot {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
+            return Err(error);
+        }
+    };
+
+    let prepare_result = (|| -> Result<()> {
+        write_release_circuit_params_staged_file_v1(
+            &staging,
+            RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+            bytes,
+        )?;
+        write_release_circuit_params_staged_file_v1(
+            &staging,
+            RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+            bytes,
+        )?;
+        staging
+            .sync_all()
+            .wrap_err("failed to sync complete circuit-parameter staging directory")?;
+        let linked = statat(&parent.file, &temporary_name, AtFlags::SYMLINK_NOFOLLOW)
+            .wrap_err("failed to inspect circuit-parameter staging binding")?;
+        if !release_circuit_params_directory_snapshot_matches_stat_v1(staging_snapshot, &linked) {
+            bail!("circuit-parameter staging directory changed identity or custody");
+        }
+        before_publish()?;
+        parent.verify_path_identity()
+    })();
+    if let Err(error) = prepare_result {
+        cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
+        return Err(error);
+    }
+
+    if let Err(error) = renameat_with(
+        &parent.file,
+        &temporary_name,
+        &parent.file,
+        target_name,
+        RenameFlags::NOREPLACE,
+    ) {
+        cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
+        return Err(error).wrap_err("failed to atomically publish circuit-parameter directory");
+    }
+
+    let final_path = parent.path.join(target_name);
+    let after_publication = (|| -> Result<()> {
+        let opened = PromotionDirectorySnapshotV1::from_metadata(
+            &staging
+                .metadata()
+                .wrap_err("failed to re-inspect published circuit-parameter directory")?,
+        );
+        let linked = statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW)
+            .wrap_err("failed to inspect published circuit-parameter directory")?;
+        if opened != Some(staging_snapshot)
+            || !release_circuit_params_directory_snapshot_matches_stat_v1(staging_snapshot, &linked)
+        {
+            bail!("published circuit-parameter directory changed identity or custody");
+        }
+        sync_parent(&parent.file)
+            .wrap_err("failed to durably sync circuit-parameter parent directory")?;
+        parent.verify_path_identity()?;
+        Ok(())
+    })();
+    Ok(match after_publication {
+        Ok(()) => ReleaseCircuitParamsPublicationOutcomeV1::Committed { final_path },
+        Err(error) => ReleaseCircuitParamsPublicationOutcomeV1::CommitUncertain {
+            final_path,
+            reason: error.to_string(),
+        },
+    })
+}
+
+#[cfg(unix)]
+fn write_release_circuit_params_directory_v1(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<ReleaseCircuitParamsPublicationOutcomeV1> {
+    write_release_circuit_params_directory_with_hooks_v1(path, bytes, || Ok(()), File::sync_all)
+}
+
+#[cfg(not(unix))]
+fn write_release_circuit_params_directory_v1(
+    _path: &Path,
+    _bytes: &[u8],
+) -> Result<ReleaseCircuitParamsPublicationOutcomeV1> {
+    bail!("safe circuit-parameter directory publication requires Unix descriptor-relative APIs")
+}
+
+fn publish_release_circuit_params_directory_v4<W: Write>(
+    writer: &mut W,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<()> {
+    match write_release_circuit_params_directory_v1(path, bytes)? {
+        committed @ ReleaseCircuitParamsPublicationOutcomeV1::Committed { .. } => {
+            writeln!(writer, "{}", committed.operator_record())?;
+            Ok(())
+        }
+        uncertain @ ReleaseCircuitParamsPublicationOutcomeV1::CommitUncertain { .. } => {
+            Err(ExplicitExitError::new(
+                DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE,
+                uncertain.operator_record(),
+            )
+            .into())
+        }
+    }
+}
+
+#[cfg(unix)]
 fn write_new_durable_file(path: &Path, bytes: &[u8]) -> Result<DurableFilePublicationOutcomeV1> {
     write_new_durable_file_with_hooks_v1(path, bytes, || Ok(()), File::sync_all)
 }
@@ -1781,13 +2199,16 @@ mod tests {
     use std::{cell::Cell, collections::BTreeSet, rc::Rc};
 
     use iroha_data_model::offline::{
-        OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
-        OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
+        KagemushaStepCircuitParamsV4, OfflineAndroidAppAttestationPolicy,
+        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationTrustedRoot,
+        OfflineIosAppAttestationPolicy,
     };
 
     use super::{
-        AUTHENTICATED_ARTIFACT_ROLES_V4, REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE,
-        insert_expected_release_file_v4, parse_manifest_sha256, parse_nonzero_canonical_u64,
+        AUTHENTICATED_ARTIFACT_ROLES_V4, PrepareReleaseCircuitParamsV4Args,
+        RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4, RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+        REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, insert_expected_release_file_v4,
+        parse_manifest_sha256, parse_nonzero_canonical_u64, prepare_release_circuit_params_v4,
         roster_release_generations_match_v4, validate_artifacts_sequentially,
         validate_device_attestation_policy_for_atomic_activation,
     };
@@ -1795,7 +2216,8 @@ mod tests {
     #[cfg(unix)]
     use super::{
         DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE, DurableFilePublicationOutcomeV1,
-        write_new_durable_file_with_hooks_v1,
+        ReleaseCircuitParamsPublicationOutcomeV1, write_new_durable_file_with_hooks_v1,
+        write_release_circuit_params_directory_with_hooks_v1,
     };
 
     struct LivePayload {
@@ -1861,6 +2283,193 @@ mod tests {
         for invalid in ["", "0", "01", "+1", "-1", "1 ", "18446744073709551616"] {
             assert!(parse_nonzero_canonical_u64(invalid).is_err(), "{invalid:?}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_circuit_params_command_publishes_one_canonical_atomic_directory() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+
+        let root = tempfile::tempdir().expect("temporary circuit-parameter root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter root");
+        let parent = root.path().join("release-inputs");
+        fs::create_dir(&parent).expect("create circuit-parameter parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter parent");
+        let output_dir = parent.join("circuit-params-v4");
+        let mut writer = std::io::BufWriter::new(Vec::new());
+
+        prepare_release_circuit_params_v4(
+            PrepareReleaseCircuitParamsV4Args {
+                output_dir: output_dir.clone(),
+            },
+            &mut writer,
+        )
+        .expect("publish canonical release circuit parameters");
+        let report =
+            String::from_utf8(writer.into_inner().expect("flush report")).expect("report is UTF-8");
+
+        let expected = KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+            .expect("reviewed first-release profile");
+        let expected_bytes = norito::to_bytes(&expected).expect("encode reviewed profile");
+        let mut entries = fs::read_dir(&output_dir)
+            .expect("read published circuit-parameter directory")
+            .map(|entry| {
+                entry
+                    .expect("inspect circuit-parameter entry")
+                    .file_name()
+                    .into_string()
+                    .expect("canonical file name")
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(
+            entries,
+            [
+                RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4.to_owned(),
+                RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4.to_owned(),
+            ]
+        );
+        assert_eq!(
+            fs::metadata(&output_dir)
+                .expect("published directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        for file_name in [
+            RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+            RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+        ] {
+            let path = output_dir.join(file_name);
+            let bytes = fs::read(&path).expect("read published circuit parameters");
+            assert_eq!(bytes, expected_bytes);
+            assert_eq!(
+                fs::metadata(&path)
+                    .expect("published file metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            let decoded: KagemushaStepCircuitParamsV4 =
+                norito::decode_from_bytes(&bytes).expect("decode published circuit parameters");
+            assert_eq!(decoded, expected);
+            assert_eq!(
+                norito::to_bytes(&decoded).expect("re-encode profile"),
+                bytes
+            );
+        }
+        assert!(report.contains("status=committed"));
+        assert!(report.contains(&hex::encode(
+            super::kagemusha_recursive_spend_release_sha256(&expected_bytes)
+        )));
+        assert!(report.contains(&hex::encode(
+            expected.sha256().expect("reviewed profile identity")
+        )));
+
+        let mut retry_report = std::io::BufWriter::new(Vec::new());
+        prepare_release_circuit_params_v4(
+            PrepareReleaseCircuitParamsV4Args { output_dir },
+            &mut retry_report,
+        )
+        .expect_err("closed publication must refuse to overwrite the complete directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_circuit_params_publication_rejects_parent_substitution_before_visibility() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+
+        let root = tempfile::tempdir().expect("temporary circuit-parameter root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter root");
+        let parent = root.path().join("release-inputs");
+        let displaced = root.path().join("displaced-release-inputs");
+        fs::create_dir(&parent).expect("create circuit-parameter parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter parent");
+        let output_dir = parent.join("circuit-params-v4");
+
+        let error = write_release_circuit_params_directory_with_hooks_v1(
+            &output_dir,
+            b"canonical circuit parameters",
+            || {
+                fs::rename(&parent, &displaced).expect("move pinned parent");
+                fs::create_dir(&parent).expect("create same-name impostor parent");
+                fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+                    .expect("secure impostor parent");
+                fs::write(parent.join("attacker-sentinel"), b"must survive")
+                    .expect("write attacker sentinel");
+                Ok(())
+            },
+            std::fs::File::sync_all,
+        )
+        .expect_err("a swapped parent must fail before pair visibility");
+
+        assert!(error.to_string().contains("parent"));
+        assert!(!output_dir.exists());
+        assert!(!displaced.join("circuit-params-v4").exists());
+        assert_eq!(
+            fs::read(parent.join("attacker-sentinel")).expect("read attacker sentinel"),
+            b"must survive"
+        );
+        assert_eq!(
+            fs::read_dir(&displaced)
+                .expect("read cleaned pinned parent")
+                .count(),
+            0,
+            "the unpublished private staging directory must be removed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_circuit_params_parent_sync_failure_is_complete_but_commit_uncertain() {
+        use std::{fs, io, os::unix::fs::PermissionsExt as _};
+
+        let root = tempfile::tempdir().expect("temporary circuit-parameter root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter root");
+        let parent = root.path().join("release-inputs");
+        fs::create_dir(&parent).expect("create circuit-parameter parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter parent");
+        let output_dir = parent.join("circuit-params-v4");
+        let bytes = b"canonical circuit parameters";
+
+        let outcome = write_release_circuit_params_directory_with_hooks_v1(
+            &output_dir,
+            bytes,
+            || Ok(()),
+            |_| Err(io::Error::other("injected parent sync failure")),
+        )
+        .expect("post-rename sync failure is an explicit outcome");
+        match &outcome {
+            ReleaseCircuitParamsPublicationOutcomeV1::CommitUncertain { final_path, reason } => {
+                assert_eq!(final_path, &output_dir);
+                assert!(reason.contains("injected parent sync failure"));
+            }
+            ReleaseCircuitParamsPublicationOutcomeV1::Committed { .. } => {
+                panic!("failed parent sync cannot be committed")
+            }
+        }
+        for file_name in [
+            RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+            RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+        ] {
+            assert_eq!(
+                fs::read(output_dir.join(file_name)).expect("read complete visible pair"),
+                bytes
+            );
+        }
+        assert!(
+            outcome
+                .operator_record()
+                .contains("status=commit-uncertain")
+        );
     }
 
     #[cfg(unix)]
@@ -1959,6 +2568,17 @@ mod tests {
         assert!(
             !source.contains("write_new_durable_file(&args."),
             "command dispatch must not discard a low-level publication outcome"
+        );
+        assert_eq!(
+            source
+                .matches("publish_release_circuit_params_directory_v4(writer, &args.output_dir")
+                .count(),
+            1,
+            "release circuit parameters must use the explicit atomic-directory outcome boundary"
+        );
+        assert!(
+            !source.contains("write_release_circuit_params_directory_v1(&args.output_dir"),
+            "command dispatch must not discard a low-level directory publication outcome"
         );
     }
 

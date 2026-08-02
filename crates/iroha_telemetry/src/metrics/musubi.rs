@@ -295,7 +295,7 @@ impl MusubiMetrics {
         .expect("Musubi metric definition is valid");
         let replication_shortfall_releases = GenericGauge::new(
             "musubi_replication_shortfall_releases",
-            "Musubi releases currently below the fresh-selection replica quorum",
+            "Musubi release references bound to archives below the fresh-selection replica quorum",
         )
         .expect("Musubi metric definition is valid");
         let ingest_deadletters_total = IntCounterVec::new(
@@ -397,16 +397,6 @@ impl MusubiMetrics {
         self.replication_shortfall_releases.set(releases);
     }
 
-    /// Apply an exact transition delta to the replica-shortfall projection.
-    ///
-    /// The gauge is telemetry-only. Saturation prevents a scrape-side counter
-    /// inconsistency from wrapping while consensus state remains unaffected.
-    pub fn adjust_replication_shortfall_releases(&self, added: u64, removed: u64) {
-        let current = self.replication_shortfall_releases.get();
-        self.replication_shortfall_releases
-            .set(current.saturating_add(added).saturating_sub(removed));
-    }
-
     /// Record one terminal authenticated seed-ingress failure.
     pub fn inc_ingest_deadletter(&self, reason: MusubiIngestDeadletterReasonV1) {
         self.ingest_deadletters_total
@@ -498,7 +488,7 @@ mod tests {
         let metrics = MusubiMetrics::new(&registry);
         metrics.set_publication_phase_age(MusubiPublicationPhaseMetricV1::Readback, 31);
         metrics.set_replication_shortfall_releases(2);
-        metrics.adjust_replication_shortfall_releases(3, 1);
+        metrics.set_replication_shortfall_releases(4);
         metrics.inc_ingest_deadletter(MusubiIngestDeadletterReasonV1::ReceiptExpired);
         metrics.inc_integrity_failure(MusubiIntegritySurfaceV1::ProviderReadback);
         metrics.inc_cache_corruption(MusubiCacheOperationV1::Verify);

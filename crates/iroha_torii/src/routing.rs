@@ -33534,13 +33534,35 @@ pub(crate) async fn handle_post_sorafs_record_por_proof(
     authenticated_signer: PublicKey,
     admitted_provider_key: Vec<u8>,
 ) -> Result<impl IntoResponse> {
-    let _pipeline = por_coordinator.lock_pipeline().await;
     verify_authenticated_por_proof(&proof, &authenticated_signer, &admitted_provider_key)?;
     if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &proof.provider_id) {
         return Err(quota_limit_error(err));
     }
-    let node_result = sorafs_node.record_por_proof(&proof, &admitted_provider_key);
-    refresh_authoritative_por_projection(&sorafs_node, &por_coordinator)?;
+    let pipeline = por_coordinator.lock_pipeline().await;
+    let node_for_worker = sorafs_node.clone();
+    let coordinator_for_worker = Arc::clone(&por_coordinator);
+    let proof_for_worker = proof.clone();
+    let (node_result, projection_result) = tokio::task::spawn_blocking(move || {
+        // Keep serialization through physical completion: cancellation of the
+        // HTTP future must not let a later authority delta overtake this one.
+        let _pipeline = pipeline;
+        match node_for_worker
+            .record_por_proof_with_authority_update(&proof_for_worker, &admitted_provider_key)
+        {
+            Ok(update) => (Ok(()), coordinator_for_worker.apply_authoritative_update(update)),
+            Err(error) => {
+                coordinator_for_worker.invalidate_authoritative_projection();
+                (Err(error), Ok(()))
+            }
+        }
+    })
+    .await
+    .map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "PoR proof persistence worker failed: {error}"
+        )))
+    })?;
+    projection_result.map_err(por_coordinator_error)?;
     node_result.map_err(por_tracker_error)?;
 
     iroha_logger::info!(
@@ -33577,7 +33599,6 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
     auditor_threshold: usize,
     repair_handoff: &dyn sorafs_node::PorRepairHandoff,
 ) -> Result<impl IntoResponse> {
-    let _pipeline = por_coordinator.lock_pipeline().await;
     verify_authenticated_por_verdict(
         &verdict,
         &authenticated_signer,
@@ -33587,9 +33608,36 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
     if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &verdict.provider_id) {
         return Err(quota_limit_error(err));
     }
-    let node_result =
-        sorafs_node.record_por_verdict(&verdict, &trusted_auditor_keys, auditor_threshold);
-    refresh_authoritative_por_projection(&sorafs_node, &por_coordinator)?;
+    let pipeline = por_coordinator.lock_pipeline().await;
+    let node_for_worker = sorafs_node.clone();
+    let coordinator_for_worker = Arc::clone(&por_coordinator);
+    let verdict_for_worker = verdict.clone();
+    let (node_result, projection_result) = tokio::task::spawn_blocking(move || {
+        // The owned pipeline guard stays with the non-cancellable physical
+        // worker, including its in-place projection update.
+        let _pipeline = pipeline;
+        match node_for_worker.record_por_verdict_with_authority_update(
+            &verdict_for_worker,
+            &trusted_auditor_keys,
+            auditor_threshold,
+        ) {
+            Ok((outcome, update)) => (
+                Ok(outcome),
+                coordinator_for_worker.apply_authoritative_update(update),
+            ),
+            Err(error) => {
+                coordinator_for_worker.invalidate_authoritative_projection();
+                (Err(error), Ok(()))
+            }
+        }
+    })
+    .await
+    .map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "PoR verdict persistence worker failed: {error}"
+        )))
+    })?;
+    projection_result.map_err(por_coordinator_error)?;
     let outcome = node_result.map_err(por_tracker_error)?;
     debug_assert_eq!(
         outcome.repair_task_id.is_some(),
@@ -33956,19 +34004,6 @@ fn por_tracker_error(err: sorafs_node::PorTrackerError) -> Error {
     }
 }
 
-#[cfg(feature = "app_api")]
-fn refresh_authoritative_por_projection(
-    node: &sorafs_node::NodeHandle,
-    coordinator: &sorafs::PorCoordinator,
-) -> Result<(), Error> {
-    let snapshot = node
-        .por_status_authority_snapshot()
-        .map_err(por_tracker_error)?;
-    coordinator
-        .install_authoritative_projection(snapshot)
-        .map_err(por_coordinator_error)
-}
-
 fn por_coordinator_error(err: PorCoordinatorError) -> Error {
     use iroha_data_model::query::error::QueryExecutionFail;
     match err {
@@ -33976,6 +34011,7 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
             iroha_data_model::ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
         ),
         internal @ (PorCoordinatorError::AuthoritativeProjectionUnavailable
+        | PorCoordinatorError::InvalidAuthoritativeProjection(_)
         | PorCoordinatorError::RetentionExhausted { .. }
         | PorCoordinatorError::StatusGenerationExhausted
         | PorCoordinatorError::PageCursorEncoding(_)
@@ -59233,6 +59269,7 @@ fn normalize_account_onboarding_request(
             name,
             "CanResolveAccountAlias"
                 | "CanManageAccountAlias"
+                | "CanManageAssetDefinitionAlias"
                 | "CanDelegateAccountAliasResolution"
                 | "CanManageFeeSponsorProgram"
                 | "CanEnrollFeeSponsorProgram"

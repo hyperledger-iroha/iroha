@@ -942,6 +942,8 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             ));
         }
         Ok(Some(PublicationFinalEvidenceV1 {
+            chain_id: page.chain_id,
+            genesis_block_hash: page.genesis_hash,
             snapshot: page.snapshot,
             home_release,
             universal_release,

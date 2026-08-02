@@ -12,10 +12,15 @@ use std::{
     io::{self, Cursor, Read, Write},
     net::{IpAddr, ToSocketAddrs},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+mod bounded_stream;
+mod json_preflight;
+
+use json_preflight::{JsonDomEnvelopeV1, preflight_json_dom};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model::{
@@ -68,10 +73,37 @@ const MAX_TOKEN_RESPONSE_BYTES: u64 = 64 * 1024;
 const MAX_RETAINED_PLAN_HEAP_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PREPARED_PLANS: usize = 128;
 const MAX_STREAM_CHUNK_BYTES: usize = 16 * 1024 * 1024;
-const STREAM_FRAME_BYTES: usize = 32 * 1024;
-const STREAM_FRAME_COUNT: usize = 4;
 const TOKEN_BYTE_WINDOW_GUARD: Duration = Duration::from_millis(1_100);
 const BUNDLE_METADATA_FILE_COUNT: usize = 3;
+
+const MANIFEST_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
+    max_tokens: 4_096,
+    max_depth: 16,
+    max_single_string_bytes: 700 * 1024,
+    max_total_string_bytes: 1024 * 1024,
+    max_atom_bytes: 64,
+};
+const PLAN_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
+    // A full page may contain 500 files with 64 path components each, plus
+    // chunk records, digest strings, object keys, and scalar fields.
+    max_tokens: 65_536,
+    max_depth: 16,
+    max_single_string_bytes: 4 * 1024,
+    max_total_string_bytes: 4 * 1024 * 1024,
+    max_atom_bytes: 64,
+};
+const TOKEN_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
+    max_tokens: 128,
+    max_depth: 8,
+    max_single_string_bytes: STREAM_TOKEN_MAX_BASE64_BYTES_V1,
+    max_total_string_bytes: 16 * 1024,
+    max_atom_bytes: 64,
+};
+
+// TODO: Qualify the complete HTTP/TLS + JSON DOM + CAR/cache fetch process against the 64 MiB
+// peak-RSS gate in an isolated deployment-equivalent child. These allocation-free envelopes stop
+// hostile JSON structure before DOM allocation, but they are intentionally not presented as an
+// allocator or process-RSS measurement.
 
 // TODO: Replace the platform-configured provider-origin map with a finalized provider-advert
 // projection that binds each DNS answer and stream-token verifying key to its enacted advert.
@@ -344,6 +376,9 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         plan: &CarBuildPlan,
     ) -> Result<Box<dyn Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
         self.stream_failure = None;
+        // Account the caller-retained allocation before cloning it into the worker. Exact plan
+        // binding intentionally ignores Vec capacities, so this check must precede the clone.
+        enforce_plan_memory_bound(plan)?;
         let key = (*pin_manifest, provider, commitment.archive_id());
         let prepared = self
             .prepared
@@ -499,6 +534,8 @@ fn parse_and_validate_manifest(
     body: &[u8],
     commitment: &MusubiArchiveCommitmentV1,
 ) -> Result<VerifiedManifestV1, MusubiArchiveRuntimeErrorV1> {
+    preflight_json_dom(body, MANIFEST_JSON_ENVELOPE)
+        .map_err(|_| integrity("MUSUBI_ARCHIVE_MANIFEST_RESPONSE_INVALID"))?;
     let value: norito::json::Value = norito::json::from_slice(body)
         .map_err(|_| integrity("MUSUBI_ARCHIVE_MANIFEST_RESPONSE_INVALID"))?;
     let root = value
@@ -674,6 +711,8 @@ fn parse_plan_page(
     manifest: &VerifiedManifestV1,
     file_payload_offset: &mut u64,
 ) -> Result<PlanPageV1, MusubiArchiveRuntimeErrorV1> {
+    preflight_json_dom(body, PLAN_JSON_ENVELOPE)
+        .map_err(|_| integrity("MUSUBI_ARCHIVE_PLAN_RESPONSE_INVALID"))?;
     let value: norito::json::Value = norito::json::from_slice(body)
         .map_err(|_| integrity("MUSUBI_ARCHIVE_PLAN_RESPONSE_INVALID"))?;
     if value
@@ -930,6 +969,8 @@ fn mint_stream_token(
         .filter(|value| is_lower_hex(value, 64))
         .ok_or_else(|| control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"))?
         .to_owned();
+    preflight_json_dom(&body, TOKEN_JSON_ENVELOPE)
+        .map_err(|_| control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"))?;
     let value: norito::json::Value = norito::json::from_slice(&body)
         .map_err(|_| control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"))?;
     let encoded = value
@@ -993,33 +1034,20 @@ fn canonical_car_reader(
     stream_failure: Arc<Mutex<Option<MusubiArchiveRuntimeErrorV1>>>,
 ) -> Result<Box<dyn Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
     enforce_plan_memory_bound(&plan)?;
-    let (sender, receiver) = mpsc::sync_channel(STREAM_FRAME_COUNT);
     let expected_car_size = commitment.car_size;
-    thread::Builder::new()
-        .name("musubi-sorafs-car-v1".to_owned())
-        .spawn(move || {
-            let result =
-                stream_canonical_car(&plan, &commitment, sessions, initial_session, &sender);
-            match result {
-                Ok(()) => {
-                    let _ = sender.send(StreamMessageV1::Done);
+    bounded_stream::bounded_car_reader(expected_car_size, move |output| {
+        let result = stream_canonical_car(&plan, &commitment, sessions, initial_session, output);
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if let Ok(mut failure) = stream_failure.lock() {
+                    *failure = Some(error);
                 }
-                Err(error) => {
-                    if let Ok(mut failure) = stream_failure.lock() {
-                        *failure = Some(error);
-                    }
-                    let _ = sender.send(StreamMessageV1::Failed(error.code()));
-                }
+                Err(error.code())
             }
-        })
-        .map_err(|_| permanent("MUSUBI_ARCHIVE_STREAM_THREAD_FAILED"))?;
-    Ok(Box::new(ChannelCarReaderV1 {
-        receiver,
-        current: Cursor::new(Vec::new()),
-        expected_car_size,
-        received: 0,
-        finished: false,
-    }))
+        }
+    })
+    .map_err(|_| permanent("MUSUBI_ARCHIVE_STREAM_THREAD_FAILED"))
 }
 
 fn stream_canonical_car(
@@ -1027,7 +1055,7 @@ fn stream_canonical_car(
     commitment: &MusubiArchiveCommitmentV1,
     sessions: GatewaySessionFactoryV1,
     initial_session: GatewaySessionV1,
-    sender: &mpsc::SyncSender<StreamMessageV1>,
+    output: &mut dyn Write,
 ) -> Result<(), MusubiArchiveRuntimeErrorV1> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1044,12 +1072,11 @@ fn stream_canonical_car(
         current: Cursor::new(Vec::new()),
         failure: None,
     };
-    let mut output = ChannelCarWriterV1 { sender };
     let writer = CarStreamingWriter::with_expected_roots(
         plan,
         vec![commitment.root_cid.as_bytes().to_vec()],
     );
-    let stats = match writer.write_from_reader(&mut payload, &mut output) {
+    let stats = match writer.write_from_reader(&mut payload, output) {
         Ok(stats) => stats,
         Err(_) => {
             return Err(payload
@@ -1225,95 +1252,6 @@ impl GatewayPayloadReaderV1 {
             io::ErrorKind::Other
         };
         io::Error::new(kind, error.code())
-    }
-}
-
-enum StreamMessageV1 {
-    Data(Vec<u8>),
-    Done,
-    Failed(&'static str),
-}
-
-struct ChannelCarWriterV1<'sender> {
-    sender: &'sender mpsc::SyncSender<StreamMessageV1>,
-}
-
-impl Write for ChannelCarWriterV1<'_> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        for frame in bytes.chunks(STREAM_FRAME_BYTES) {
-            self.sender
-                .send(StreamMessageV1::Data(frame.to_vec()))
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "CAR reader closed"))?;
-        }
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-struct ChannelCarReaderV1 {
-    receiver: mpsc::Receiver<StreamMessageV1>,
-    current: Cursor<Vec<u8>>,
-    expected_car_size: u64,
-    received: u64,
-    finished: bool,
-}
-
-impl Read for ChannelCarReaderV1 {
-    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-        if output.is_empty() {
-            return Ok(0);
-        }
-        loop {
-            let read = self.current.read(output)?;
-            if read != 0 {
-                self.received = self
-                    .received
-                    .checked_add(u64::try_from(read).unwrap_or(u64::MAX))
-                    .ok_or_else(|| io::Error::other("CAR stream byte count overflow"))?;
-                if self.received > self.expected_car_size {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "CAR stream exceeded its commitment",
-                    ));
-                }
-                return Ok(read);
-            }
-            if self.finished {
-                return Ok(0);
-            }
-            match self.receiver.recv() {
-                Ok(StreamMessageV1::Data(bytes)) if !bytes.is_empty() => {
-                    self.current = Cursor::new(bytes);
-                }
-                Ok(StreamMessageV1::Data(_)) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "CAR stream contained an empty frame",
-                    ));
-                }
-                Ok(StreamMessageV1::Done) => {
-                    if self.received != self.expected_car_size {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "CAR stream ended before its committed size",
-                        ));
-                    }
-                    self.finished = true;
-                }
-                Ok(StreamMessageV1::Failed(code)) => {
-                    return Err(io::Error::other(code));
-                }
-                Err(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "CAR stream worker stopped unexpectedly",
-                    ));
-                }
-            }
-        }
     }
 }
 
@@ -1916,19 +1854,22 @@ fn http_status_error(status: StatusCode, prefix: &'static str) -> MusubiArchiveR
 fn enforce_plan_memory_bound(plan: &CarBuildPlan) -> Result<(), MusubiArchiveRuntimeErrorV1> {
     let chunk_bytes = plan
         .chunks
-        .len()
+        .capacity()
         .checked_mul(std::mem::size_of::<CarChunk>())
         .ok_or_else(|| permanent("MUSUBI_ARCHIVE_PLAN_MEMORY_LIMIT"))?;
     let file_bytes = plan
         .files
-        .len()
+        .capacity()
         .checked_mul(std::mem::size_of::<FilePlan>())
         .ok_or_else(|| permanent("MUSUBI_ARCHIVE_PLAN_MEMORY_LIMIT"))?;
     let path_bytes = plan.files.iter().try_fold(0_usize, |total, file| {
+        let total = total.checked_add(
+            file.path
+                .capacity()
+                .checked_mul(std::mem::size_of::<String>())?,
+        )?;
         file.path.iter().try_fold(total, |total, component| {
-            total
-                .checked_add(component.len())
-                .and_then(|value| value.checked_add(std::mem::size_of::<String>()))
+            total.checked_add(component.capacity())
         })
     });
     let estimated = chunk_bytes
@@ -1941,16 +1882,30 @@ fn enforce_plan_memory_bound(plan: &CarBuildPlan) -> Result<(), MusubiArchiveRun
         .map(|chunk| usize::try_from(chunk.length).unwrap_or(usize::MAX))
         .max()
         .unwrap_or(0);
+    let fetch_specs = plan
+        .chunks
+        .len()
+        .checked_mul(std::mem::size_of::<ChunkFetchSpec>())
+        .ok_or_else(|| permanent("MUSUBI_ARCHIVE_PLAN_MEMORY_LIMIT"))?;
     if estimated > MAX_RETAINED_PLAN_HEAP_BYTES
         || max_chunk == 0
         || max_chunk > MAX_STREAM_CHUNK_BYTES
         || estimated
             // One plan remains with the cache caller while one is owned by the stream worker.
             .checked_mul(2)
+            // The worker derives one exact authenticated chunk-fetch inventory.
+            .and_then(|value| value.checked_add(fetch_specs))
             // Cover the authenticated response, CAR writer section, and current reader chunk.
-            .and_then(|value| value.checked_add(max_chunk.saturating_mul(3)))
             .and_then(|value| {
-                value.checked_add(STREAM_FRAME_BYTES.saturating_mul(STREAM_FRAME_COUNT))
+                max_chunk
+                    .checked_mul(3)
+                    .and_then(|chunks| value.checked_add(chunks))
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    bounded_stream::STREAM_FRAME_BYTES
+                        .saturating_mul(bounded_stream::STREAM_FRAME_COUNT),
+                )
             })
             .is_none_or(|working| working > 64 * 1024 * 1024)
     {
@@ -2356,5 +2311,38 @@ token = "must-not-be-inline"
             original,
             exact_plan_binding(&plan).expect("bind substituted plan")
         );
+    }
+
+    #[test]
+    fn stream_memory_preflight_counts_retained_vector_capacity() {
+        let payload = [7_u8; 64];
+        let mut plan = CarBuildPlan {
+            chunk_profile: sorafs_car::chunker_registry::default_descriptor().profile,
+            payload_digest: blake3::hash(&payload),
+            content_length: payload.len() as u64,
+            chunks: vec![CarChunk {
+                offset: 0,
+                length: payload.len() as u32,
+                digest: *blake3::hash(&payload).as_bytes(),
+                taikai_segment_hint: None,
+            }],
+            files: vec![FilePlan {
+                path: vec!["source.ko".to_owned()],
+                first_chunk: 0,
+                chunk_count: 1,
+                size: payload.len() as u64,
+            }],
+        };
+        enforce_plan_memory_bound(&plan).expect("small exact plan fits stream envelope");
+        let item_size = std::mem::size_of::<CarChunk>();
+        let required_capacity = MAX_RETAINED_PLAN_HEAP_BYTES
+            .div_ceil(item_size)
+            .saturating_add(1);
+        plan.chunks
+            .reserve_exact(required_capacity.saturating_sub(plan.chunks.len()));
+
+        let error = enforce_plan_memory_bound(&plan)
+            .expect_err("overcapacity plan must fail before the worker clone");
+        assert_eq!(error.code(), "MUSUBI_ARCHIVE_PLAN_MEMORY_LIMIT");
     }
 }

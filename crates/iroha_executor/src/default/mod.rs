@@ -3305,6 +3305,16 @@ pub mod domain {
                     iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(_) => false,
                 }
             }
+            AnyPermission::CanManageAssetDefinitionAlias(permission) => {
+                match &permission.scope {
+                    iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(domain) => domain == domain_id,
+                    iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(alias) => {
+                        alias.canonical_name.domain_segment() == Some(domain_id.name().as_ref())
+                            && alias.canonical_name.dataspace_segment() == domain_id.dataspace().as_ref()
+                    }
+                    iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Dataspace(_) => false,
+                }
+            }
             AnyPermission::CanUnregisterAssetDefinition(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
@@ -3670,6 +3680,7 @@ pub mod account {
             | AnyPermission::CanResolveAccountAlias(_)
             | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
+            | AnyPermission::CanManageAssetDefinitionAlias(_)
             | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanManagePeers(_)
@@ -3895,7 +3906,11 @@ pub mod asset_definition {
         );
     }
 
-    /// Updates an asset-definition alias when genesis or the definition owner invokes it.
+    /// Enforces the asset-owner half of an asset-definition alias update.
+    ///
+    /// Core independently requires the matching
+    /// [`CanManageAssetDefinitionAlias`](iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionAlias)
+    /// namespace capability before applying the mutation.
     pub fn visit_set_asset_definition_alias<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SetAssetDefinitionAlias,
@@ -3969,6 +3984,13 @@ pub mod asset_definition {
             AnyPermission::CanSetAssetHoldingLimit(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
+            AnyPermission::CanManageAssetDefinitionAlias(permission) => match permission.scope {
+                iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(alias) => {
+                    &alias.asset_definition_id == asset_definition_id
+                }
+                iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(_)
+                | iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Dataspace(_) => false,
+            },
             AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
@@ -5483,6 +5505,7 @@ pub mod trigger {
             | AnyPermission::CanResolveAccountAlias(_)
             | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
+            | AnyPermission::CanManageAssetDefinitionAlias(_)
             | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadAccountData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
@@ -5563,6 +5586,9 @@ pub mod trigger {
             asset::{
                 CanMintAssetWithDefinition, CanModifyAssetMetadata,
                 CanModifyAssetMetadataWithDefinition,
+            },
+            asset_definition::{
+                AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
             },
             nexus::{
                 CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -5872,6 +5898,11 @@ pub mod trigger {
                     scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
                 },
             ));
+            let manage_asset_alias_permission = Permission::from(
+                AnyPermission::CanManageAssetDefinitionAlias(CanManageAssetDefinitionAlias {
+                    scope: AssetDefinitionAliasPermissionScope::Domain(domain_id.clone()),
+                }),
+            );
 
             assert!(
                 domain::is_permission_domain_associated(&resolve_permission, &domain_id, &[]),
@@ -5896,6 +5927,22 @@ pub mod trigger {
             assert!(
                 !domain::is_permission_domain_associated(&manage_permission, &other_domain, &[]),
                 "alias manage permission should not bind to other domains"
+            );
+            assert!(
+                domain::is_permission_domain_associated(
+                    &manage_asset_alias_permission,
+                    &domain_id,
+                    &[]
+                ),
+                "asset-alias manage permission should bind to the matching domain"
+            );
+            assert!(
+                !domain::is_permission_domain_associated(
+                    &manage_asset_alias_permission,
+                    &other_domain,
+                    &[]
+                ),
+                "asset-alias manage permission should not bind to other domains"
             );
         }
     }

@@ -116,7 +116,8 @@ impl Execute for RegisterMusubiArchiveV1 {
                 let archive_id = self.commitment.archive_id();
                 if let Some(existing) = state_transaction.world.musubi_archives.get(&archive_id) {
                     if existing.commitment != self.commitment
-                        || existing.staging_receipt != self.staging_receipt
+                        || existing.staging_receipt.payload.binding
+                            != self.staging_receipt.payload.binding
                     {
                         return Err(invariant(format!(
                             "Musubi archive '{}' is already registered with different commitments",
@@ -131,6 +132,14 @@ impl Execute for RegisterMusubiArchiveV1 {
                                 "only the original Musubi archive registrant may replay registration",
                             ),
                         );
+                    }
+                    if existing.staging_receipt != self.staging_receipt {
+                        validate_seed_ingress_receipt(
+                            &self.commitment,
+                            &self.staging_receipt,
+                            authority,
+                            state_transaction,
+                        )?;
                     }
                     return Ok(());
                 }
@@ -4188,6 +4197,17 @@ fn refresh_archive_availability(
     {
         return Ok(());
     }
+    let release_count = u64::try_from(references.len())
+        .map_err(|_| invariant("Musubi archive reverse-reference count overflows u64"))?;
+    let replication_shortfall_update = plan_replication_shortfall_transition(
+        *state_transaction
+            .world
+            .musubi_replication_shortfall_releases
+            .get(),
+        previous.availability,
+        availability,
+        release_count,
+    )?;
     let index_revision = bump_resolver_index_revision(state_transaction)?;
     let projection = MusubiArchiveAvailabilityV1 {
         archive_id,
@@ -4205,23 +4225,11 @@ fn refresh_archive_availability(
         .world
         .musubi_archive_availability
         .insert(archive_id, projection);
-    #[cfg(feature = "telemetry")]
-    {
-        if (previous.availability == MusubiStorageAvailabilityV1::Selectable)
-            != (projection.availability == MusubiStorageAvailabilityV1::Selectable)
-        {
-            let release_count = u64::try_from(references.len())
-                .map_err(|_| invariant("Musubi archive reverse-reference count overflows u64"))?;
-            if projection.availability == MusubiStorageAvailabilityV1::Selectable {
-                state_transaction
-                    .telemetry
-                    .adjust_musubi_replication_shortfall_releases(0, release_count);
-            } else {
-                state_transaction
-                    .telemetry
-                    .adjust_musubi_replication_shortfall_releases(release_count, 0);
-            }
-        }
+    if let Some(replication_shortfall_releases) = replication_shortfall_update {
+        *state_transaction
+            .world
+            .musubi_replication_shortfall_releases
+            .get_mut() = replication_shortfall_releases;
     }
     let mut packages = BTreeSet::new();
     for release in references {
@@ -4556,6 +4564,30 @@ fn bump_resolver_index_revision(
     Ok(next.get())
 }
 
+fn plan_replication_shortfall_transition(
+    current: u64,
+    previous: MusubiStorageAvailabilityV1,
+    next: MusubiStorageAvailabilityV1,
+    release_count: u64,
+) -> Result<Option<u64>, Error> {
+    let previous_selectable = previous == MusubiStorageAvailabilityV1::Selectable;
+    let next_selectable = next == MusubiStorageAvailabilityV1::Selectable;
+    if previous_selectable == next_selectable || release_count == 0 {
+        return Ok(None);
+    }
+    if next_selectable {
+        current
+            .checked_sub(release_count)
+            .map(Some)
+            .ok_or_else(|| invariant("Musubi replication-shortfall release count would underflow"))
+    } else {
+        current
+            .checked_add(release_count)
+            .map(Some)
+            .ok_or_else(|| invariant("Musubi replication-shortfall release count would overflow"))
+    }
+}
+
 fn plan_resolver_index_revision(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<MusubiResolverIndexRevisionV1, Error> {
@@ -4641,6 +4673,7 @@ fn emit_musubi_event(event: MusubiEvent, state_transaction: &mut StateTransactio
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use mv::storage::Cell;
 
     use super::*;
     use crate::{
@@ -5046,6 +5079,8 @@ mod tests {
             .map(|release| release.manifest.release.clone())
             .collect::<Vec<_>>();
         release_ids.sort();
+        let release_count =
+            u64::try_from(release_ids.len()).expect("release fixture count fits u64");
         for release in releases {
             world
                 .musubi_releases
@@ -5071,7 +5106,57 @@ mod tests {
                 releases: release_ids,
             },
         );
+        let shortfall = *world.musubi_replication_shortfall_releases.view().get();
+        world.musubi_replication_shortfall_releases = Cell::new(
+            shortfall
+                .checked_add(release_count)
+                .expect("retention fixture shortfall count fits u64"),
+        );
         archive_id
+    }
+
+    #[test]
+    fn replication_shortfall_transition_is_checked_and_boundary_scoped() {
+        use MusubiStorageAvailabilityV1::{BelowQuorum, Selectable, Unavailable};
+
+        assert_eq!(
+            plan_replication_shortfall_transition(5, Selectable, BelowQuorum, 3)
+                .expect("selectable-to-shortfall transition"),
+            Some(8)
+        );
+        assert_eq!(
+            plan_replication_shortfall_transition(5, Selectable, Unavailable, 3)
+                .expect("selectable-to-unavailable transition"),
+            Some(8)
+        );
+        assert_eq!(
+            plan_replication_shortfall_transition(5, BelowQuorum, Selectable, 3)
+                .expect("shortfall-to-selectable transition"),
+            Some(2)
+        );
+        assert_eq!(
+            plan_replication_shortfall_transition(5, Unavailable, Selectable, 3)
+                .expect("unavailable-to-selectable transition"),
+            Some(2)
+        );
+        assert_eq!(
+            plan_replication_shortfall_transition(5, BelowQuorum, Unavailable, 3)
+                .expect("non-selectable transition"),
+            None
+        );
+        assert_eq!(
+            plan_replication_shortfall_transition(5, Selectable, BelowQuorum, 0)
+                .expect("empty reverse-reference transition"),
+            None
+        );
+        assert!(
+            plan_replication_shortfall_transition(u64::MAX, Selectable, BelowQuorum, 1).is_err(),
+            "consensus aggregate overflow must fail closed"
+        );
+        assert!(
+            plan_replication_shortfall_transition(0, Unavailable, Selectable, 1).is_err(),
+            "consensus aggregate underflow must fail closed"
+        );
     }
 
     #[test]
@@ -5110,6 +5195,10 @@ mod tests {
             .get(&archive_id)
             .expect("fixture archive has availability");
         let index_revision_before = transaction.world.musubi_resolver_index_revision.get().get();
+        let shortfall_before = *transaction
+            .world
+            .musubi_replication_shortfall_releases
+            .get();
 
         let error = refresh_archive_availability(archive_id, &mut transaction)
             .expect_err("a reverse-referenced release must have an exact resolver row");
@@ -5132,6 +5221,13 @@ mod tests {
         assert_eq!(
             transaction.world.musubi_resolver_index_revision.get().get(),
             index_revision_before
+        );
+        assert_eq!(
+            *transaction
+                .world
+                .musubi_replication_shortfall_releases
+                .get(),
+            shortfall_before
         );
 
         let row = MusubiResolverReleaseRowV1 {
@@ -5168,6 +5264,13 @@ mod tests {
         assert_eq!(
             transaction.world.musubi_resolver_index_revision.get().get(),
             index_revision_before
+        );
+        assert_eq!(
+            *transaction
+                .world
+                .musubi_replication_shortfall_releases
+                .get(),
+            shortfall_before
         );
     }
 

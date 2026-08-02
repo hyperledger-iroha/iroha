@@ -25,6 +25,8 @@ mod active;
 mod cks;
 #[path = "mkhe/collective.rs"]
 mod collective;
+#[path = "mkhe/collective_eval_keys.rs"]
+mod collective_eval_keys;
 #[path = "mkhe/collective_keys.rs"]
 mod collective_keys;
 #[path = "mkhe/decryption.rs"]
@@ -76,8 +78,7 @@ pub use collective::{
     ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1,
     ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
     ZkAmsMkheCollectivePublicKeyV1, aggregate_zk_ams_mkhe_collective_public_key_v1,
-    encrypt_zk_ams_mkhe_collective_packed_v1,
-    generate_zk_ams_mkhe_collective_party_state_v1,
+    encrypt_zk_ams_mkhe_collective_packed_v1, generate_zk_ams_mkhe_collective_party_state_v1,
 };
 pub use collective_keys::{
     ZkAmsMkheCollectiveEvaluatedKeyEntryV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
@@ -88,9 +89,8 @@ pub use decryption::{
     ZkAmsMkheDecryptionAbortReasonV1, ZkAmsMkheDecryptionProofV1,
     ZkAmsMkheDecryptionResourceEvidenceV1, ZkAmsMkheDecryptionStatementV1,
     ZkAmsMkheFullRosterDecryptionResultV1, ZkAmsMkheIdentifiableDecryptionAbortV1,
-    prove_zk_ams_mkhe_decryption_share_v1,
-    verify_combine_decode_zk_ams_mkhe_decryption_v1, verify_zk_ams_mkhe_decryption_share_v1,
-    zk_ams_mkhe_decryption_resource_evidence_v1,
+    prove_zk_ams_mkhe_decryption_share_v1, verify_combine_decode_zk_ams_mkhe_decryption_v1,
+    verify_zk_ams_mkhe_decryption_share_v1, zk_ams_mkhe_decryption_resource_evidence_v1,
 };
 pub(super) use manifest::require_release_ready_v1;
 pub use manifest::{
@@ -135,6 +135,17 @@ pub use phase23_encrypted::{
     ZkAmsPhase23StrictPublicInstanceV1, zk_ams_phase23_encrypted_implementation_v1,
     zk_ams_phase23_materialize_release_accumulators_v1, zk_ams_phase23_release_map_set_digest_v1,
     zk_ams_phase23_release_maps_v1,
+};
+pub use phase23_ingress::{
+    ZK_AMS_PHASE23_FRESHNESS_CERTIFIES_HIDDEN_MASK_SHARES_V1,
+    ZK_AMS_PHASE23_FRESHNESS_COMMIT_WIRE_BYTES_V1, ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1,
+    ZK_AMS_PHASE23_FRESHNESS_REVEAL_WIRE_BYTES_V1, ZkAmsPhase23FreshnessCommitV1,
+    ZkAmsPhase23FreshnessContextV1, ZkAmsPhase23FreshnessPhaseV1, ZkAmsPhase23FreshnessReceiptV1,
+    ZkAmsPhase23FreshnessRevealV1, ZkAmsPhase23PendingRevealV1,
+    ZkAmsPhase23PublicChallengeFamilyV1, ZkAmsPhase23PublicChallengeRoleV1,
+    ZkAmsPhase23PublicChallengeV1, ZkAmsPhase23VerifiedCommitSetV1,
+    commit_zk_ams_phase23_freshness_v1, finalize_zk_ams_phase23_freshness_v1,
+    open_zk_ams_phase23_freshness_reveal_v1,
 };
 pub use resource::ZkAmsMkheResourceCertificateV1;
 pub use security::{

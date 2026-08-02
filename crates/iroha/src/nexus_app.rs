@@ -1051,7 +1051,11 @@ mod tests {
         .expect("fixture public key");
         let config = NexusAppConfig {
             signing_public_key: Some(public_key),
-            ..NexusAppConfig::new(fixture_string("chain_id").into())
+            ..NexusAppConfig::new(
+                fixture_string("chain_id")
+                    .parse()
+                    .expect("fixture chain id"),
+            )
         };
         let client = NexusAppClient::new(
             config,
@@ -1082,7 +1086,11 @@ mod tests {
         .expect("fixture public key");
         let config = NexusAppConfig {
             signing_public_key: Some(public_key),
-            ..NexusAppConfig::new(fixture_string("chain_id").into())
+            ..NexusAppConfig::new(
+                fixture_string("chain_id")
+                    .parse()
+                    .expect("fixture chain id"),
+            )
         };
         let submitter = FakeSubmitter::default();
         let client = NexusAppClient::new(config, UnsupportedConnectTransport, submitter);

@@ -910,9 +910,9 @@ fn validate_candidate_parent(
 
 fn canonicalize_records(records: &mut [CandidateRecord]) {
     records.sort_by(|left, right| {
-        left.source_ordinal
-            .cmp(&right.source_ordinal)
-            .then_with(|| left.entrypoint_hash.cmp(&right.entrypoint_hash))
+        left.entrypoint_hash
+            .cmp(&right.entrypoint_hash)
+            .then_with(|| left.source_ordinal.cmp(&right.source_ordinal))
     });
 }
 
@@ -1674,7 +1674,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_order_preserves_fifo_before_hash_tiebreak() {
+    fn canonical_order_matches_block_builder_hash_order() {
         let mut records = vec![
             record(1, "third", 2),
             record(3, "first", 0),
@@ -1682,8 +1682,8 @@ mod tests {
         ];
         canonicalize_records(&mut records);
         assert!(records.windows(2).all(|window| {
-            (window[0].source_ordinal, window[0].entrypoint_hash)
-                <= (window[1].source_ordinal, window[1].entrypoint_hash)
+            (window[0].entrypoint_hash, window[0].source_ordinal)
+                <= (window[1].entrypoint_hash, window[1].source_ordinal)
         }));
     }
 

@@ -677,11 +677,30 @@ cargo run -p iroha_kagami --bin kagami -- \
   kagemusha prepare-taira-release-roster-v4 \
   --validator-config /absolute/path/to/rendered-validator/config.toml \
   --output /absolute/private/path/taira-release-roster.norito
+
+mkdir -m 700 /absolute/private/path/kagemusha-release-inputs
+cargo run --locked --target-dir /absolute/private/path/kagami-target \
+  -p iroha_kagami --bin kagami -- \
+  kagemusha prepare-release-circuit-params-v4 \
+  --output-dir /absolute/private/path/kagemusha-release-inputs/circuit-params-v4
 ```
 
+The circuit-parameter command is the official constructor for both reviewed
+first-release inputs. It publishes the two canonical Norito files together by
+one no-replace directory rename, with owner-private custody and raw-file plus
+domain-separated parameter hashes in its report. Refuse to continue on the
+exit-75 `commit-uncertain` outcome until the visible directory has been
+inspected; rerunning cannot overwrite it.
+
 Generate the real Eq/Ep artifacts through the source-sealed two-stage
-packager. Start from a checkout whose `HEAD` commit signature has been
-verified, then explicitly review and seal its complete dirty closure before
+packager. Configure the reviewer's user-level
+`gpg.ssh.allowedSignersFile` to one absolute, owner-controlled, single-key
+policy (and `gpg.ssh.revocationFile` when applicable). The seal ignores
+repository-local signature configuration, pins `/usr/bin/ssh-keygen`, and
+requires exactly one trusted SSH signature on `HEAD`. Then explicitly review
+and seal its exact clean closure (index equal to `HEAD`, exact worktree blob
+and mode identity, zero untracked files, present-empty tracked gitlink directories,
+and the separately bound root `Cargo.lock`) before
 building the exact candidate binary and entering the non-raiseable 64 GiB /
 half-physical-RAM generation guard. Its polling stop uses process-tree RSS and
 its final gate uses the direct child's kernel peak RSS; macOS footprint remains
@@ -690,7 +709,8 @@ disk-backed output filesystem for the raw proving-key spools and framed
 artifact copy.
 Retain the helper's canonical JSON report. The reviewed source closure and its
 digest are release inputs; the report's `source_commit` must equal the verified
-`HEAD`, and unreviewed working-tree changes fail closed.
+`HEAD`, `source_repo_dirty` must be `false`, and any working-tree change fails
+closed with no dirty-closure compatibility path.
 
 ```bash
 python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
@@ -715,8 +735,8 @@ python3 scripts/run_kagemusha_v4_generation.py \
   --source-tree-sha256 '<source_tree_sha256-from-sealed-build-report>' \
   --activation-height 2 \
   --withdrawal-height 1000000000 \
-  --step-eq-circuit-params /absolute/private/path/step-eq-circuit-params.norito \
-  --step-ep-circuit-params /absolute/private/path/step-ep-circuit-params.norito \
+  --step-eq-circuit-params /absolute/private/path/kagemusha-release-inputs/circuit-params-v4/step-eq-circuit-params.norito \
+  --step-ep-circuit-params /absolute/private/path/kagemusha-release-inputs/circuit-params-v4/step-ep-circuit-params.norito \
   --topup-finality-roster /absolute/private/path/taira-release-roster.norito
 
 /absolute/path/from/sealed-build-report/kagemusha_recursive_spend_v4_bundle \
@@ -732,6 +752,12 @@ python3 scripts/run_kagemusha_v4_generation.py \
 `generate-candidate` is the only command accepted by the guarded runner; do not
 wrap Cargo, a shell, or `env`. It publishes an immutable pre-evidence candidate
 and owner-private JSONL/summary resource evidence, not an approved release.
+The production generator, `validate-candidate`, and finalizer expose no
+fault-injection flag: adding one would create a test backdoor on the exact
+source-sealed release surface. Use a substituted copy with the
+candidate-preserving validation command and retain the existing
+role/header/key-substitution plus atomic-publication regressions as the
+negative gate.
 `finalize-release` authenticates the supplied policy, attestation, physical
 benchmark, and signed cryptographic review, then copies the exact candidate
 bytes into a new sixteen-file release directory without regenerating proof

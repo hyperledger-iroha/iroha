@@ -644,7 +644,7 @@ mod tests {
         source_commit: &str,
         source_tree_sha256: [u8; 32],
     ) -> (KagemushaReviewedSourceClosureV1, [u8; 32]) {
-        let tracked_binary_diff_sha256 = Sha256::digest([0x93; 32]).into();
+        let tracked_binary_diff_sha256 = Sha256::digest([]).into();
         let untracked_path_mode_blob_oid_manifest_sha256 = Sha256::digest([]).into();
         let mut combined = Sha256::new();
         combined.update(b"iroha-source-diff-v1\0");
@@ -656,7 +656,7 @@ mod tests {
             schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
             base_commit: source_commit.to_owned(),
             source_commit: source_commit.to_owned(),
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             source_tree_sha256,
             tracked_binary_diff_sha256,
             untracked_file_count: 0,
@@ -840,7 +840,7 @@ mod tests {
             generation: "release-generation-1".to_owned(),
             source_commit: source_commit.to_owned(),
             source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id: chain_id.clone(),

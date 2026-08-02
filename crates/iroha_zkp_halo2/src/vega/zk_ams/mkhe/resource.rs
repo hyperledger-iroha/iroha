@@ -121,9 +121,11 @@ pub(super) fn derive_resource_certificate_v1(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let workspace = checked_hybrid_streaming_workspace_bytes(profile)?;
     let multiplication_work = ring_multiplication_work(profile)?;
+    let key_switch_multiplications =
+        compact_collective_key_switch_ring_multiplication_count(profile, 1)?;
     let key_switch_work = multiplication_work
         .checked_mul(
-            u64::try_from(profile.gadget_digits)
+            u64::try_from(key_switch_multiplications)
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
         )
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -220,7 +222,7 @@ mod tests {
         assert_eq!(certificate.max_decryption_share_proof_bytes, 27_262_691);
         assert_eq!(certificate.streamed_hybrid_workspace_bytes, 122_683_404);
         assert_eq!(certificate.ring_multiplication_work_units, 89_653_248);
-        assert_eq!(certificate.hybrid_key_switch_work_units, 3_406_823_424);
+        assert_eq!(certificate.hybrid_key_switch_work_units, 6_813_646_848);
         assert_eq!(certificate.max_composed_rotation_key_switch_count, 8);
         assert_eq!(certificate.max_composed_rotation_work_units, 54_509_174_784);
         assert!(certificate.ciphertext_ceiling_met);

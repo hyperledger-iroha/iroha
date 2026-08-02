@@ -33,13 +33,19 @@ pub mod isi {
         Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512,
     };
     use iroha_executor_data_model::permission::{
-        account::CanRegisterAccount,
+        account::{
+            AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
+            CanRegisterAccount, CanResolveAccountAlias,
+        },
         asset::{
             CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
             CanMintAssetWithDefinition, CanModifyAssetMetadata,
             CanModifyAssetMetadataWithDefinition, CanTransferAsset, CanTransferAssetWithDefinition,
         },
-        asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
+        asset_definition::{
+            AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+            CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+        },
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
         executor::CanUpgradeExecutor,
         governance::{CanEnactGovernance, CanManageVerifyingKeys},
@@ -19372,6 +19378,47 @@ pub mod isi {
         if let Ok(permission) = CanRegisterAccount::try_from(permission) {
             return &permission.domain == domain_id;
         }
+        if let Ok(permission) = CanResolveAccountAlias::try_from(permission) {
+            return match &permission.scope {
+                AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                AccountAliasPermissionScope::Alias(alias) => {
+                    alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                        && &alias.canonical_name.dataspace == domain_id.dataspace()
+                }
+                AccountAliasPermissionScope::Dataspace(_) => false,
+            };
+        }
+        if let Ok(permission) = CanDelegateAccountAliasResolution::try_from(permission) {
+            return match &permission.scope {
+                AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                AccountAliasPermissionScope::Alias(alias) => {
+                    alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                        && &alias.canonical_name.dataspace == domain_id.dataspace()
+                }
+                AccountAliasPermissionScope::Dataspace(_) => false,
+            };
+        }
+        if let Ok(permission) = CanManageAccountAlias::try_from(permission) {
+            return match &permission.scope {
+                AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                AccountAliasPermissionScope::Alias(alias) => {
+                    alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                        && &alias.canonical_name.dataspace == domain_id.dataspace()
+                }
+                AccountAliasPermissionScope::Dataspace(_) => false,
+            };
+        }
+        if let Ok(permission) = CanManageAssetDefinitionAlias::try_from(permission) {
+            return match &permission.scope {
+                AssetDefinitionAliasPermissionScope::Domain(domain) => domain == domain_id,
+                AssetDefinitionAliasPermissionScope::Alias(alias) => {
+                    alias.canonical_name.domain_segment() == Some(domain_id.name().as_ref())
+                        && alias.canonical_name.dataspace_segment()
+                            == domain_id.dataspace().as_ref()
+                }
+                AssetDefinitionAliasPermissionScope::Dataspace(_) => false,
+            };
+        }
         if let Ok(permission) = CanUnregisterAssetDefinition::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
@@ -20157,6 +20204,19 @@ pub mod isi {
             role.ensure_permission_epochs(state_transaction.block_height());
 
             if role.permissions().any(|permission| {
+                !crate::alias::asset_definition_alias_permission_targets_active_binding(
+                    &state_transaction.world,
+                    permission,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "exact asset-definition alias role permission does not target its current live binding"
+                        .into(),
+                ));
+            }
+
+            if role.permissions().any(|permission| {
                 crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                     state_transaction,
                     permission,
@@ -20245,6 +20305,17 @@ pub mod isi {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
             let current_epoch = state_transaction.block_height();
+
+            if !crate::alias::asset_definition_alias_permission_targets_active_binding(
+                &state_transaction.world,
+                &permission,
+                state_transaction.block_unix_timestamp_ms(),
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "exact asset-definition alias role permission does not target its current live binding"
+                        .into(),
+                ));
+            }
 
             if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                 state_transaction,

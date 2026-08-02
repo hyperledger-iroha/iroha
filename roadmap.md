@@ -22,6 +22,12 @@ Remaining release gates, in order, are:
   ignored `Cargo.lock` matches the committed exact pin; do not bless the
   present unrelated uncommitted dependency work by changing that pin in
   isolation.
+- Split archive registration and permanent-pin coordination into separately
+  journaled idempotent substeps. A crash after the registry accepts the exact
+  staging receipt but before the client records the coordinator result must
+  recover that receipt instead of refreshing it after expiry and colliding with
+  the immutable archive record. Add the corresponding crash/expiry/retry
+  regression before calling phase three resumable.
 
 - Supply and qualify the deployment-owned private HTTPS/TLS runner, concrete
   HSM/KMS or threshold implementations of the completed publisher-request and
@@ -51,22 +57,33 @@ Remaining release gates, in order, are:
   adapter now supplies a typed exact-once attempt boundary but the one-shot CLI
   intentionally has no Prometheus producer. Core governance rejection
   telemetry is already emitted once at each tracked mutation's authoritative
-  error boundary with bounded typed action/reason labels. Replace the
-  process-local replication-shortfall transition gauge with a restart-safe
-  exact projection that does not add a scale-breaking registry scan, and carry
-  the existing exact cursor-failure enum through Core's query-error boundary so
-  Torii need not collapse every stale cause to `other`.
+  error boundary with bounded typed action/reason labels. The persisted
+  replication-shortfall aggregate and post-commit gauge synchronization are in
+  place; retain alert/rule soak validation as a release gate. The six paged
+  Musubi query paths now carry their exact cursor-failure enum through an internal
+  Core error and Torii exports the corresponding bounded reason while retaining
+  the existing public `Expired` query error.
 - Execute focused model/Core/Torii/CLI/publication/cache tests from the final
   source, then strict workspace clippy, serialization guards, Kotlin/Java/Swift
   suites, and the full workspace suite. Add the required archive/cache
   crash-at-every-write, malformed-plan, race, secret, disk-full, and bounded-
   memory fuzz campaigns.
-- Build on the deterministic publication-route and snapshot fault-cut
-  regressions by adding and passing four-or-more-peer multi-lane Native AMX
-  failure/crash/replay tests proving home and universal registry projections
-  are never half-visible at live commit/apply boundaries.
+- A four-peer below-quorum queue-journal crash/restart smoke is now present and
+  asserts that a replayed unavailable-archive publication is canonically
+  rejected once and leaves no package, release, resolver, directory, or archive
+  reverse-reference projection on any peer. Execute it, then build on it and the
+  deterministic snapshot fault-cut regressions. The feature-isolated daemon
+  now provides source-bound, one-shot aborts after PrepareQC, after CommitQC,
+  and immediately before world commit, with a durable canonical acknowledgement
+  before each process cut. Drive a selectable three-replica publication through
+  all three cuts on four peers and prove exact home/universal visibility before
+  closing the no-half-visible release gate.
   Qualify the one-million-package/twenty-million-row lookup, search, resolver,
-  and 64-MiB fetch-memory scale targets.
+  and 64-MiB fetch-memory scale targets. The bounded production CAR bridge now
+  has an isolated logical-heap regression plus JSON structural envelopes and
+  cache plan/ingest accounting; the remaining fetch gate is a
+  deployment-equivalent HTTP/TLS + JSON-DOM + cache process-RSS or cgroup
+  measurement.
 - Run the four-peer devnet, five-to-ten-namespace Taira allowlist/two-week soak,
   and 30-day invite beta. Open admission only after zero critical/high findings,
   recovery drills, load/chaos success, and sustained SLO evidence.
@@ -108,9 +125,6 @@ commands and the final reconciliation pass are recorded.
 
 ## Repository structure follow-ups
 
-- Repair the current `iroha_core` library-test compile blockers in the Falcon
-  fixtures, query fallback, Kura sidecar fixture, and mixed `rand_core`
-  versions, then rerun the focused transcript and SHA word-row regressions.
 - Continue extracting cohesive production modules from the exact source-budget
   exceptions, prioritizing Kura, Torii routing/API, core state, and other files
   still above 20,000 lines. Preserve public facades and wire behavior; every
@@ -189,7 +203,9 @@ Remaining work stays ordered and fail-closed:
   the fresh guarded k17 shape probe and bind its exact result; this probe and
   authentic generation have not passed yet.
 - Seal the final reviewed source closure over signed `optimizations` anchor
-  `7d0d0d29544cbeaae114c1c098ee1e41187634e2`. Build and hash the candidate
+  `7d0d0d29544cbeaae114c1c098ee1e41187634e2`, requiring an empty tracked
+  diff, zero untracked files, present-empty gitlink directories, and the exact
+  separately bound root `Cargo.lock`. Build and hash the candidate
   generator, runtime binaries, configuration, and reset tooling from that one
   provenance set; no earlier r5/r6 binary or artifact seal attests the k17
   layout.

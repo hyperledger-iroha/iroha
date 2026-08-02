@@ -35,16 +35,15 @@ use ivm::{
         compiler::{CompilerMode, CompilerOptions},
         driver::discover_source_modules,
         linker::{
-            ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, ModuleBuildGraph, SourceModuleUnit,
-            SourcePackageGraphRequest, SourcePackageUnit,
+            ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, SourceModuleUnit, SourcePackageUnit,
         },
-        session::CompilerSession,
     },
     syscalls::compute_abi_hash,
 };
 
 use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
+    compiler::validate_exact_registry_interfaces_v1,
     graph::collect_local_members,
     lockfile::{LockedRootV1, LockfileV1},
     manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
@@ -601,47 +600,17 @@ fn validate_registry_interfaces(
     packages: &[SourcePackageUnit],
     options: &WorkspaceTestOptionsV1,
 ) -> Result<(), WorkspaceTestErrorV1> {
-    if nodes.len() != packages.len() {
-        return Err(WorkspaceTestErrorV1::Cache(
-            "authenticated registry node/package counts disagree".to_owned(),
-        ));
-    }
-    let graph = ModuleBuildGraph::default();
-    let session = CompilerSession::new(CompilerOptions {
-        force_zk: options.zk_enabled,
-        chain_discriminant: options.chain_discriminant,
-        mode: CompilerMode::Production,
-        ..CompilerOptions::default()
-    });
-    for (index, (node, package)) in nodes.iter().zip(packages).enumerate() {
-        let dependencies = packages
-            .iter()
-            .enumerate()
-            .filter(|(candidate, _)| *candidate != index)
-            .map(|(_, package)| package.clone())
-            .collect();
-        let validated = session
-            .validate_package_graph(
-                &graph,
-                SourcePackageGraphRequest {
-                    package: package.clone(),
-                    dependencies,
-                },
-            )
-            .map_err(|error| {
-                WorkspaceTestErrorV1::Cache(format!(
-                    "release `{}` failed exact typed-interface validation: {error}",
-                    node.release
-                ))
-            })?;
-        if validated.interface_fingerprint.as_ref() != node.interface_digest.as_bytes() {
-            return Err(WorkspaceTestErrorV1::Cache(format!(
-                "release `{}` typed interface disagrees with its exact lock digest",
-                node.release
-            )));
-        }
-    }
-    Ok(())
+    validate_exact_registry_interfaces_v1(
+        nodes.iter().copied(),
+        packages,
+        CompilerOptions {
+            force_zk: options.zk_enabled,
+            chain_discriminant: options.chain_discriminant,
+            mode: CompilerMode::Production,
+            ..CompilerOptions::default()
+        },
+    )
+    .map_err(WorkspaceTestErrorV1::Cache)
 }
 
 fn cached_source_package(
@@ -1336,6 +1305,10 @@ mod tests {
             MusubiReleaseIdV1, MusubiVerificationNodeV1,
         },
         nexus::DataSpaceId,
+    };
+    use ivm::kotodama::{
+        linker::{ModuleBuildGraph, SourcePackageGraphRequest},
+        session::CompilerSession,
     };
     use tempfile::tempdir;
 

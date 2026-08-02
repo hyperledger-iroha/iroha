@@ -2143,6 +2143,7 @@ enum ReportOutputFormat {
 
 const POR_STATUS_CURSOR_MAX_LENGTH_V1: usize = 256;
 const POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1: usize = 64 * 1024;
+const POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1: usize = 512;
 
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ToriiPorStatusPageV1 {
@@ -2151,6 +2152,7 @@ struct ToriiPorStatusPageV1 {
     record_limit: u32,
     canonical_byte_limit: u64,
     canonical_bytes: u64,
+    inspected_candidates: u32,
     has_more: bool,
     #[norito(default)]
     next_cursor: Option<String>,
@@ -2205,8 +2207,12 @@ fn validate_torii_por_status_page(
         || usize::try_from(page.canonical_bytes)
             .ok()
             .is_none_or(|bytes| bytes > expected_max_bytes)
+        || usize::try_from(page.inspected_candidates).ok().is_none_or(|count| {
+            count < page.statuses.len()
+                || count > POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
+        })
         || page.has_more != page.next_cursor.is_some()
-        || (page.has_more && page.statuses.is_empty())
+        || (page.has_more && page.inspected_candidates == 0)
     {
         return Err("PoR status page metadata violates the requested bounds".into());
     }

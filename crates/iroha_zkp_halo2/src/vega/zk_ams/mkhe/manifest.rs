@@ -143,8 +143,28 @@ pub struct ZkAmsMkheReleaseManifestV1 {
     pub hybrid_digit_bits: u8,
     /// Exact number of streamed hybrid digits.
     pub hybrid_digit_count: u8,
-    /// Centered-binomial error parameter.
+    /// Centered-binomial parameter used only by actual RLWE/key sampling.
     pub error_eta: u8,
+    /// Exact minimum coefficient sampled by actual RLWE/key errors.
+    pub sampled_rlwe_error_min: i16,
+    /// Exact maximum coefficient sampled by actual RLWE/key errors.
+    pub sampled_rlwe_error_max: i16,
+    /// Maximum absolute coefficient sampled by actual RLWE/key errors.
+    pub sampled_rlwe_error_max_abs: u8,
+    /// Strict power-of-two magnitude bound for sampled RLWE/key errors.
+    pub sampled_rlwe_error_bound_bits: u8,
+    /// Exact asymmetric minimum of canonical-natural-lift proof witness `e0'`.
+    pub natural_lift_effective_error_min: i16,
+    /// Exact asymmetric maximum of canonical-natural-lift proof witness `e0'`.
+    pub natural_lift_effective_error_max: i16,
+    /// Symmetric verifier maximum absolute value admitted for `e0'`.
+    pub natural_lift_effective_error_verifier_max_abs: u8,
+    /// Strict power-of-two magnitude bound for verifier-admitted `e0'`.
+    pub natural_lift_effective_error_bound_bits: u8,
+    /// Minimum natural-to-centered upper-half correction bit.
+    pub natural_lift_upper_half_correction_min: u8,
+    /// Maximum natural-to-centered upper-half correction bit.
+    pub natural_lift_upper_half_correction_max: u8,
     /// Claimed target classical security strength.
     pub target_security_bits: u16,
     /// Statistical CKS/share-hiding strength.
@@ -243,7 +263,23 @@ pub(super) fn release_profile_v1() -> BgvProfile {
     }
 }
 
-const COLLECTIVE_INGRESS_CONSTRUCTION_V1: &[u8] = b"iroha.zk-ams.v1.collective-ingress-hybrid:not-cdks19:on-entry-independent-owner-key:fixed-roster-sum-secret:proof-bound-cks:collective-s2-rkg:all-roster-decryption:transparent-seeded-a";
+const COLLECTIVE_INGRESS_CONSTRUCTION_V1: &[u8] = b"iroha.zk-ams.v1.collective-ingress-hybrid:not-cdks19:on-entry-independent-owner-key:fixed-roster-sum-secret:proof-bound-cks:collective-s2-rkg:all-roster-decryption:transparent-seeded-a:sampled-cbd-error:canonical-natural-lift-effective-error";
+
+fn collective_ingress_construction_digest_v1(noise: ZkAmsMkheNoiseCertificateV1) -> [u8; 32] {
+    let mut frame = Vec::with_capacity(COLLECTIVE_INGRESS_CONSTRUCTION_V1.len() + 32);
+    frame.extend_from_slice(COLLECTIVE_INGRESS_CONSTRUCTION_V1);
+    frame.extend_from_slice(&noise.sampled_rlwe_error_min.to_be_bytes());
+    frame.extend_from_slice(&noise.sampled_rlwe_error_max.to_be_bytes());
+    frame.push(noise.sampled_rlwe_error_max_abs);
+    frame.push(noise.sampled_rlwe_error_bound_bits);
+    frame.extend_from_slice(&noise.natural_lift_effective_error_min.to_be_bytes());
+    frame.extend_from_slice(&noise.natural_lift_effective_error_max.to_be_bytes());
+    frame.push(noise.natural_lift_effective_error_verifier_max_abs);
+    frame.push(noise.natural_lift_effective_error_bound_bits);
+    frame.push(noise.natural_lift_upper_half_correction_min);
+    frame.push(noise.natural_lift_upper_half_correction_max);
+    keccak256(&frame)
+}
 
 /// Return the machine-checked conservative Phase-II/III noise certificate.
 pub fn zk_ams_mkhe_noise_certificate_v1() -> Result<ZkAmsMkheNoiseCertificateV1, ZkAmsMkheErrorV1> {
@@ -255,6 +291,7 @@ pub fn zk_ams_mkhe_noise_certificate_v1() -> Result<ZkAmsMkheNoiseCertificateV1,
         8,
         usize::from(ZK_AMS_MKHE_CIPHERTEXT_MODULUS_BITS_V1),
         ZK_AMS_MKHE_STATISTICAL_SECURITY_BITS_V1,
+        release_profile_v1().error_eta,
     )
 }
 
@@ -343,7 +380,19 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
     let noise = zk_ams_mkhe_noise_certificate_v1()?;
     let security = zk_ams_mkhe_security_candidate_v1()?;
     let security_certificate = zk_ams_mkhe_security_certificate_v1()?;
+    let sampled_eta = i16::from(profile.error_eta);
     if modulus_bits != ZK_AMS_MKHE_CIPHERTEXT_MODULUS_BITS_V1
+        || profile.error_eta != 2
+        || noise.sampled_rlwe_error_min != -sampled_eta
+        || noise.sampled_rlwe_error_max != sampled_eta
+        || noise.sampled_rlwe_error_max_abs != profile.error_eta
+        || noise.sampled_rlwe_error_bound_bits != 2
+        || noise.natural_lift_effective_error_min != -sampled_eta - 1
+        || noise.natural_lift_effective_error_max != sampled_eta
+        || noise.natural_lift_effective_error_verifier_max_abs != profile.error_eta + 1
+        || noise.natural_lift_effective_error_bound_bits != 2
+        || noise.natural_lift_upper_half_correction_min != 0
+        || noise.natural_lift_upper_half_correction_max != 1
         || noise.final_decryption_residual_bits != ZK_AMS_MKHE_FINAL_DECRYPTION_BOUND_BITS_V1
         || noise.correctness_margin_bits != ZK_AMS_MKHE_CORRECTNESS_MARGIN_BITS_V1
     {
@@ -358,7 +407,7 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
         roster_size: u8::try_from(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
-        construction_digest: keccak256(COLLECTIVE_INGRESS_CONSTRUCTION_V1),
+        construction_digest: collective_ingress_construction_digest_v1(noise),
         rns_limb_count: u8::try_from(profile.moduli.len())
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
         ciphertext_modulus_bits: modulus_bits,
@@ -366,6 +415,17 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
         hybrid_digit_count: u8::try_from(profile.gadget_digits)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
         error_eta: profile.error_eta,
+        sampled_rlwe_error_min: noise.sampled_rlwe_error_min,
+        sampled_rlwe_error_max: noise.sampled_rlwe_error_max,
+        sampled_rlwe_error_max_abs: noise.sampled_rlwe_error_max_abs,
+        sampled_rlwe_error_bound_bits: noise.sampled_rlwe_error_bound_bits,
+        natural_lift_effective_error_min: noise.natural_lift_effective_error_min,
+        natural_lift_effective_error_max: noise.natural_lift_effective_error_max,
+        natural_lift_effective_error_verifier_max_abs: noise
+            .natural_lift_effective_error_verifier_max_abs,
+        natural_lift_effective_error_bound_bits: noise.natural_lift_effective_error_bound_bits,
+        natural_lift_upper_half_correction_min: noise.natural_lift_upper_half_correction_min,
+        natural_lift_upper_half_correction_max: noise.natural_lift_upper_half_correction_max,
         target_security_bits: ZK_AMS_MKHE_TARGET_SECURITY_BITS_V1,
         statistical_security_bits: ZK_AMS_MKHE_STATISTICAL_SECURITY_BITS_V1,
         certified_security_bits: security_certificate.minimum_security_bits(),
@@ -389,6 +449,10 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
 /// Return the consensus digest of the exact release manifest and prime/root chain.
 pub fn zk_ams_mkhe_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let manifest = zk_ams_mkhe_release_manifest_v1()?;
+    Ok(release_manifest_digest_v1(manifest))
+}
+
+fn release_manifest_digest_v1(manifest: ZkAmsMkheReleaseManifestV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(512);
     frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.release-manifest");
     frame.push(manifest.version);
@@ -402,6 +466,16 @@ pub fn zk_ams_mkhe_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     frame.push(manifest.hybrid_digit_bits);
     frame.push(manifest.hybrid_digit_count);
     frame.push(manifest.error_eta);
+    frame.extend_from_slice(&manifest.sampled_rlwe_error_min.to_be_bytes());
+    frame.extend_from_slice(&manifest.sampled_rlwe_error_max.to_be_bytes());
+    frame.push(manifest.sampled_rlwe_error_max_abs);
+    frame.push(manifest.sampled_rlwe_error_bound_bits);
+    frame.extend_from_slice(&manifest.natural_lift_effective_error_min.to_be_bytes());
+    frame.extend_from_slice(&manifest.natural_lift_effective_error_max.to_be_bytes());
+    frame.push(manifest.natural_lift_effective_error_verifier_max_abs);
+    frame.push(manifest.natural_lift_effective_error_bound_bits);
+    frame.push(manifest.natural_lift_upper_half_correction_min);
+    frame.push(manifest.natural_lift_upper_half_correction_max);
     frame.extend_from_slice(&manifest.target_security_bits.to_be_bytes());
     frame.extend_from_slice(&manifest.statistical_security_bits.to_be_bytes());
     frame.extend_from_slice(&manifest.certified_security_bits.to_be_bytes());
@@ -427,7 +501,7 @@ pub fn zk_ams_mkhe_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     frame.extend_from_slice(&manifest.resource_certificate_digest);
     frame.extend_from_slice(&manifest.phase23_equation_certificate_digest);
     frame.extend_from_slice(&manifest.release_kat_digest);
-    Ok(keccak256(&frame))
+    keccak256(&frame)
 }
 
 /// Evaluate every release-readiness gate without silently downgrading.
@@ -447,6 +521,30 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
             && security.certificate_digest() == manifest.security_certificate_digest,
         noise_gate: noise.final_decryption_residual_bits == manifest.final_decryption_bound_bits
             && noise.correctness_margin_bits == manifest.correctness_margin_bits
+            && manifest.error_eta == release_profile_v1().error_eta
+            && manifest.construction_digest == collective_ingress_construction_digest_v1(noise)
+            && manifest.sampled_rlwe_error_min == noise.sampled_rlwe_error_min
+            && manifest.sampled_rlwe_error_max == noise.sampled_rlwe_error_max
+            && manifest.sampled_rlwe_error_max_abs == noise.sampled_rlwe_error_max_abs
+            && manifest.sampled_rlwe_error_bound_bits == noise.sampled_rlwe_error_bound_bits
+            && manifest.natural_lift_effective_error_min == noise.natural_lift_effective_error_min
+            && manifest.natural_lift_effective_error_max == noise.natural_lift_effective_error_max
+            && manifest.natural_lift_effective_error_verifier_max_abs
+                == noise.natural_lift_effective_error_verifier_max_abs
+            && manifest.natural_lift_effective_error_bound_bits
+                == noise.natural_lift_effective_error_bound_bits
+            && manifest.natural_lift_upper_half_correction_min
+                == noise.natural_lift_upper_half_correction_min
+            && manifest.natural_lift_upper_half_correction_max
+                == noise.natural_lift_upper_half_correction_max
+            && manifest.sampled_rlwe_error_min == -i16::from(manifest.error_eta)
+            && manifest.sampled_rlwe_error_max == i16::from(manifest.error_eta)
+            && manifest.natural_lift_effective_error_min
+                == manifest.sampled_rlwe_error_min
+                    - i16::from(manifest.natural_lift_upper_half_correction_max)
+            && manifest.natural_lift_effective_error_max
+                == manifest.sampled_rlwe_error_max
+                    - i16::from(manifest.natural_lift_upper_half_correction_min)
             && manifest.correctness_margin_bits >= 64,
         resource_gate: resource.is_release_ready()
             && manifest.resource_certificate_digest
@@ -495,6 +593,146 @@ pub(in crate::vega::zk_ams) fn require_release_ready_v1() -> Result<(), ZkAmsMkh
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_distinguishes_sampled_eta_two_from_natural_lift_effective_error() {
+        let noise = zk_ams_mkhe_noise_certificate_v1().unwrap();
+        let manifest = zk_ams_mkhe_release_manifest_v1().unwrap();
+        assert_eq!(manifest.error_eta, 2);
+        assert_eq!(manifest.sampled_rlwe_error_min, -2);
+        assert_eq!(manifest.sampled_rlwe_error_max, 2);
+        assert_eq!(manifest.sampled_rlwe_error_max_abs, 2);
+        assert_eq!(manifest.sampled_rlwe_error_bound_bits, 2);
+        assert_eq!(manifest.natural_lift_effective_error_min, -3);
+        assert_eq!(manifest.natural_lift_effective_error_max, 2);
+        assert_eq!(manifest.natural_lift_effective_error_verifier_max_abs, 3);
+        assert_eq!(manifest.natural_lift_effective_error_bound_bits, 2);
+        assert_eq!(manifest.natural_lift_upper_half_correction_min, 0);
+        assert_eq!(manifest.natural_lift_upper_half_correction_max, 1);
+        assert_eq!(
+            manifest.construction_digest,
+            collective_ingress_construction_digest_v1(noise)
+        );
+        assert_eq!(manifest.final_decryption_bound_bits, 2_115);
+        assert_eq!(manifest.correctness_margin_bits, 164);
+        assert!(zk_ams_mkhe_readiness_v1().unwrap().noise_gate);
+    }
+
+    #[test]
+    fn construction_and_manifest_digests_bind_every_error_bound_axis() {
+        let noise = zk_ams_mkhe_noise_certificate_v1().unwrap();
+        let construction_digest = collective_ingress_construction_digest_v1(noise);
+        for changed in [
+            ZkAmsMkheNoiseCertificateV1 {
+                sampled_rlwe_error_min: noise.sampled_rlwe_error_min - 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                sampled_rlwe_error_max: noise.sampled_rlwe_error_max + 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                sampled_rlwe_error_max_abs: noise.sampled_rlwe_error_max_abs + 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                sampled_rlwe_error_bound_bits: noise.sampled_rlwe_error_bound_bits + 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                natural_lift_effective_error_min: noise.natural_lift_effective_error_min - 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                natural_lift_effective_error_max: noise.natural_lift_effective_error_max + 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                natural_lift_effective_error_verifier_max_abs: noise
+                    .natural_lift_effective_error_verifier_max_abs
+                    + 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                natural_lift_effective_error_bound_bits: noise
+                    .natural_lift_effective_error_bound_bits
+                    + 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                natural_lift_upper_half_correction_min: 1,
+                ..noise
+            },
+            ZkAmsMkheNoiseCertificateV1 {
+                natural_lift_upper_half_correction_max: 0,
+                ..noise
+            },
+        ] {
+            assert_ne!(
+                collective_ingress_construction_digest_v1(changed),
+                construction_digest
+            );
+        }
+
+        let manifest = zk_ams_mkhe_release_manifest_v1().unwrap();
+        let manifest_digest = release_manifest_digest_v1(manifest);
+        for changed in [
+            ZkAmsMkheReleaseManifestV1 {
+                error_eta: manifest.error_eta + 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                sampled_rlwe_error_min: manifest.sampled_rlwe_error_min - 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                sampled_rlwe_error_max: manifest.sampled_rlwe_error_max + 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                sampled_rlwe_error_max_abs: manifest.sampled_rlwe_error_max_abs + 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                sampled_rlwe_error_bound_bits: manifest.sampled_rlwe_error_bound_bits + 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                natural_lift_effective_error_min: manifest.natural_lift_effective_error_min - 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                natural_lift_effective_error_max: manifest.natural_lift_effective_error_max + 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                natural_lift_effective_error_verifier_max_abs: manifest
+                    .natural_lift_effective_error_verifier_max_abs
+                    + 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                natural_lift_effective_error_bound_bits: manifest
+                    .natural_lift_effective_error_bound_bits
+                    + 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                natural_lift_upper_half_correction_min: 1,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                natural_lift_upper_half_correction_max: 0,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                construction_digest: [0; 32],
+                ..manifest
+            },
+        ] {
+            assert_ne!(release_manifest_digest_v1(changed), manifest_digest);
+        }
+    }
 
     #[test]
     fn estimator_input_identity_binds_every_input_class() {
