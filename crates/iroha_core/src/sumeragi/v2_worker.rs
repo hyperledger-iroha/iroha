@@ -881,6 +881,7 @@ impl CertifiedServeBarrier {
     }
 
     /// Immutable logical Serve lifecycle retained by every retransmission.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn lifecycle_id(self) -> CertifiedServeLifecycleId {
         self.lifecycle_id
     }
@@ -1025,6 +1026,7 @@ impl CertifiedServeIngressGate {
     /// one immutable admission prefix.  Fair ingress compares this value with
     /// the durable leader-wire gate before selecting either source, so a later
     /// carrier cannot pass an earlier provisional or physical Serve owner.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn earliest_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
         let state = self.queue.lock();
         let mut earliest = None;
@@ -1698,6 +1700,7 @@ impl std::fmt::Debug for V2IoTrySendError {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn v2_io_command_channel(
     capacity: usize,
     roster_serve_capacity: usize,
@@ -5845,6 +5848,7 @@ impl V2IoCommandQueue {
         )))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn serve_completion_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -6474,6 +6478,7 @@ impl V2IoCommandSender {
         self.queue.rollback_serve_barrier_for_shutdown()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn serve_completion_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,

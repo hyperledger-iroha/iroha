@@ -1842,6 +1842,7 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     #[error(transparent)]
     Envelope(Box<PrivacyEnvelopeFailureV1>),
     /// The selected protocol has no complete native verifier.
+    #[cfg_attr(feature = "zk-stark", allow(dead_code))]
     #[error(transparent)]
     EngineUnavailable(Box<PrivacyEngineUnavailableFailureV1>),
     /// Native VeRange decoding or verification failed.

@@ -1022,6 +1022,7 @@ impl QueuePlanJournal {
     /// Returns malformed-target, duplicate, absent, mismatched, snapshot, capacity, compaction,
     /// append, or synchronization errors. Any ambiguous append or synchronization boundary
     /// poisons this open journal.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn remove_many_exact_atomic_strict_durable(
         &mut self,
         removals: &[(HashOf<TransactionEntrypoint>, Hash, Hash)],
@@ -1431,6 +1432,7 @@ impl QueuePlanJournal {
     /// # Errors
     /// Returns file or parent-directory synchronization errors. Any failure poisons this open
     /// journal because the caller cannot prove which boundary reached stable storage.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn sync_all_with_parent(&mut self) -> io::Result<()> {
         self.ensure_healthy()?;
         if let Err(error) = self.sync_all_raw(SyncPhase::General) {

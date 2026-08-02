@@ -781,6 +781,7 @@ impl LiveQueryStoreHandle {
     /// cursors must not be reusable after the context ends.
     /// # Errors
     /// Returns an error if the first batch cannot be produced by the iterator.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn handle_iter_start_ephemeral(
         &self,
         mut live_query: ErasedQueryIterator,

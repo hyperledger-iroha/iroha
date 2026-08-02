@@ -237,6 +237,7 @@ where
 {
     /// Range-constrain every Base source byte, queue its exact SHA-256
     /// relation, and return eight Base placeholders for the digest words.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn digest(
         &mut self,
         ctx: &mut Context<F>,

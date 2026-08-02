@@ -1672,6 +1672,7 @@ impl StreamingRowCommitmentV1 {
 /// This type deliberately implements neither `Clone` nor `Debug`. Dropping it
 /// recursively overwrites every mask coefficient through
 /// [`ReplayableTraceMaskV1`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct StreamingTraceMaskSetV1 {
     native_trace_log2: u8,
     lde_log2: u8,
@@ -1734,6 +1735,7 @@ fn zeroize_extension_field_column_v1(values: &mut [E]) {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl StreamingTraceMaskSetV1 {
     /// Number of committed columns.
     pub(crate) fn width(&self) -> usize {
@@ -1876,6 +1878,7 @@ fn validate_masked_trace_commitment_shape_v1(
 }
 
 /// Sample replayable masks and commit columns generated one at a time.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn commit_masked_trace_columns_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -1944,6 +1947,7 @@ where
 
 /// Deterministically replay one streamed trace commitment with the original
 /// secret masks after Fiat–Shamir queries are fixed.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn replay_masked_trace_columns_v1<S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2110,10 +2114,14 @@ pub(crate) fn replay_masked_trace_polynomial_columns_v1(
     commitment.finish()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 const ENCRYPTED_FIELD_SCRATCH_AAD_DOMAIN_V1: &[u8] =
     b"iroha:privacy:aggregate-stark:encrypted-field-scratch-record:v1";
+#[cfg_attr(not(test), allow(dead_code))]
 const XCHACHA20_POLY1305_TAG_BYTES_V1: usize = 16;
+#[cfg_attr(not(test), allow(dead_code))]
 const XCHACHA20_NONCE_PREFIX_BYTES_V1: usize = 16;
+#[cfg_attr(not(test), allow(dead_code))]
 const XCHACHA20_NONCE_BYTES_V1: usize = 24;
 
 /// Default number of common-domain rows authenticated in one scratch record.
@@ -2123,6 +2131,7 @@ const XCHACHA20_NONCE_BYTES_V1: usize = 24;
 /// domain at or above this size.
 pub(crate) const DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1: usize = 1 << 12;
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn encrypted_field_scratch_record_aad_v1(
     rows: usize,
     width: usize,
@@ -2146,6 +2155,7 @@ fn encrypted_field_scratch_record_aad_v1(
     .map_err(map_transparent_error_v1)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn encrypted_field_scratch_nonce_v1(
     nonce_prefix: &[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1],
     record_index: u64,
@@ -2156,6 +2166,7 @@ fn encrypted_field_scratch_nonce_v1(
     bytes.into()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn encrypted_field_scratch_shape_v1(
     rows: usize,
     width: usize,
@@ -2205,6 +2216,7 @@ fn encrypted_field_scratch_shape_v1(
 /// substitution, reordering, and cross-matrix record reuse all fail closed.
 /// The ephemeral key is drawn independently from operating-system entropy so
 /// scratch encryption never perturbs deterministic proof-mask KATs.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct EncryptedFieldMatrixScratchWriterV1 {
     file: std::fs::File,
     rows: usize,
@@ -2219,6 +2231,7 @@ pub(crate) struct EncryptedFieldMatrixScratchWriterV1 {
     nonce_prefix: Zeroizing<[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn encrypted_field_scratch_entropy_is_healthy_v1(
     key: &[u8; 32],
     nonce_prefix: &[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1],
@@ -2235,6 +2248,7 @@ std::thread_local! {
         const { std::cell::Cell::new(0) };
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn create_anonymous_scratch_file_v1() -> Result<std::fs::File, AggregateStarkErrorV1> {
     #[cfg(test)]
     ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1.with(|attempts| {
@@ -2274,6 +2288,7 @@ fn encrypted_scratch_file_creation_attempts_v1() -> usize {
     ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1.with(std::cell::Cell::get)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl EncryptedFieldMatrixScratchWriterV1 {
     /// Create an owner-private anonymous scratch with an independent ephemeral
     /// encryption key.
@@ -2429,6 +2444,7 @@ impl EncryptedFieldMatrixScratchWriterV1 {
 ///
 /// This type deliberately implements neither `Clone` nor `Debug`; all
 /// decrypted field cells are overwritten when it leaves scope.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct EncryptedFieldMatrixBlockV1 {
     row_start: usize,
     row_count: usize,
@@ -2436,6 +2452,7 @@ pub(crate) struct EncryptedFieldMatrixBlockV1 {
     values: Vec<F>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl EncryptedFieldMatrixBlockV1 {
     /// First common-domain row represented by this block.
     pub(crate) fn row_start(&self) -> usize {
@@ -2478,6 +2495,7 @@ impl Drop for EncryptedFieldMatrixBlockV1 {
 /// Only masked polynomial evaluations are ever written. The anonymous file is
 /// closed and unlinked on drop, and its ephemeral key is recursively zeroized.
 /// At most one fixed-size row block is decrypted by [`Self::read_chunk`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct EncryptedFieldMatrixScratchV1 {
     file: std::fs::File,
     rows: usize,
@@ -2491,6 +2509,7 @@ pub(crate) struct EncryptedFieldMatrixScratchV1 {
     nonce_prefix: Zeroizing<[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl EncryptedFieldMatrixScratchV1 {
     /// Number of common-domain rows in the stored matrix.
     pub(crate) fn rows(&self) -> usize {
@@ -2632,6 +2651,7 @@ impl EncryptedFieldMatrixScratchV1 {
 
 /// Commit the exact row framing of a sealed encrypted scratch while retaining
 /// only one decrypted block, logarithmic Merkle state, and requested rows.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn commit_encrypted_field_scratch_rows_v1(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2683,6 +2703,7 @@ pub(crate) fn commit_encrypted_field_scratch_rows_v1(
 
 /// Replay a masked trace into authenticated anonymous scratch storage without
 /// retaining more than one native column and one LDE column in memory.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn spill_replayed_masked_trace_columns_v1<S>(
     masks: &StreamingTraceMaskSetV1,
     mut source: S,
@@ -2720,6 +2741,7 @@ where
 /// for composition or post-query openings. Returning the sealed scratch
 /// prevents a second interpolation/FFT pass while retaining only one native
 /// column, one LDE column, and one decrypted row block in resident memory.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn commit_masked_trace_columns_retaining_encrypted_scratch_with_chunk_rows_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2805,6 +2827,7 @@ where
 
 /// Sample masks, commit, and retain the encrypted masked-LDE matrix using the
 /// generic bounded scratch-record height.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn commit_masked_trace_columns_retaining_encrypted_scratch_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2850,6 +2873,7 @@ where
 /// Callers that need composition or later openings must use
 /// [`commit_masked_trace_columns_retaining_encrypted_scratch_v1`] so the
 /// already-computed masked LDE is not discarded and recomputed.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn commit_masked_trace_columns_via_encrypted_scratch_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2883,6 +2907,7 @@ where
 }
 
 /// Low-resident-memory replay counterpart for an already sampled mask set.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn replay_masked_trace_columns_via_encrypted_scratch_v1<S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -3036,6 +3061,7 @@ pub(crate) fn split_composition_evaluations_v1(
 /// complete remainder is checked to be zero before the quotient is returned;
 /// a numerator that is only pointwise divisible on some evaluation set is
 /// therefore rejected.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
     numerator_coefficients: &[E],
     trace_log2: u8,
@@ -3188,6 +3214,7 @@ pub(crate) fn composition_chunks_from_quotient_coset_v1(
 }
 
 /// Divide one constraint coset and canonically chunk the exact quotient.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn composition_chunks_from_constraint_coset_v1(
     numerator_evaluations: &[E],
     trace_log2: u8,
@@ -3319,6 +3346,7 @@ pub(crate) fn evaluate_fp4_coset_polynomial_at_point_v1(
     Ok(evaluate_fp4_coefficients_at_fp4_v1(&coefficients, point))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn evaluate_masked_native_column_at_points_v1(
     native: &[F],
     native_trace_log2: u8,
@@ -3345,6 +3373,7 @@ fn evaluate_masked_native_column_at_points_v1(
 
 /// Evaluate all replayable masked-native columns at `z` and
 /// `z * omega_H` without retaining their common-domain LDEs.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn evaluate_masked_native_columns_at_deep_v1<S>(
     masks: &StreamingTraceMaskSetV1,
     point: E,
@@ -5722,6 +5751,7 @@ fn verify_fri_query_v1(
 }
 
 /// Invoke the relation callback for every opened row and bind its results to FRI.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn verify_opened_query_relations_v1<Evaluator: AggregateOpenedRowEvaluatorV1>(
     proof: &AggregateStarkProofV1,
     parameters: AggregateStarkParametersV1,

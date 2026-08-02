@@ -1043,6 +1043,7 @@ where
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[cfg_attr(not(test), allow(dead_code))]
 fn verify_halo2_ipa_payload_no_instances(
     params: &PastaParams,
     vk: &halo2_backend::VerifyingKey,
@@ -1072,6 +1073,7 @@ fn verify_halo2_ipa_payload_columns(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[cfg_attr(not(test), allow(dead_code))]
 fn verify_halo2_ipa_payload_optional_columns(
     params: &PastaParams,
     vk: &halo2_backend::VerifyingKey,
@@ -2609,6 +2611,7 @@ type CachedVk = Arc<halo2_backend::VerifyingKey>;
 static VK_CACHE: OnceLock<Mutex<BTreeMap<VkCacheKey, CachedVk>>> = OnceLock::new();
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct BuiltinVkCacheKey {
     backend: String,
@@ -2616,6 +2619,7 @@ struct BuiltinVkCacheKey {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[cfg_attr(not(test), allow(dead_code))]
 static BUILTIN_VK_CACHE: OnceLock<Mutex<BTreeMap<BuiltinVkCacheKey, CachedVk>>> = OnceLock::new();
 
 #[cfg(feature = "telemetry")]
@@ -2779,6 +2783,7 @@ macro_rules! cached_vk_for {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[cfg_attr(not(test), allow(dead_code))]
 fn keygen_vk_cached<C>(
     backend: &str,
     params: &PastaParams,

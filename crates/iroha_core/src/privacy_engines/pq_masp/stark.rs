@@ -1574,6 +1574,7 @@ pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRngCore>(
 }
 
 /// Construct the canonical PQ-MASP proof with operating-system entropy.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn prove_pq_masp_stark_v1(
     statement: &PqMaspStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,

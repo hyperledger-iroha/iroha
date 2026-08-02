@@ -161,6 +161,7 @@ pub(super) enum PqMaspAirErrorV1 {
     #[error("PQ-MASP AIR SHA-256 schedule is invalid")]
     Sha256,
     #[error("PQ-MASP AIR copy permutation is invalid")]
+    #[cfg_attr(not(test), allow(dead_code))]
     Copy,
 }
 
@@ -243,14 +244,18 @@ pub(super) enum PqMaspFixedRowV1 {
         side: SumSideV1,
         byte: u8,
     },
+    #[cfg_attr(not(test), allow(dead_code))]
     VmHeader,
+    #[cfg_attr(not(test), allow(dead_code))]
     VmProgram {
         instruction: u8,
     },
+    #[cfg_attr(not(test), allow(dead_code))]
     VmPrevious {
         instruction: u8,
         byte: u8,
     },
+    #[cfg_attr(not(test), allow(dead_code))]
     VmNext {
         instruction: u8,
         byte: u8,
@@ -317,6 +322,7 @@ struct OutputVariablesV1 {
 }
 
 struct TraceBuilderV1<'a> {
+    #[cfg_attr(not(test), allow(dead_code))]
     statement: &'a PqMaspStarkStatementV1,
     witness: Option<&'a PqMaspWitnessV1>,
     assignment: Vec<u8>,

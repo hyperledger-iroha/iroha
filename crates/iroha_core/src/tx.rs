@@ -1325,12 +1325,14 @@ impl<'tx> AcceptedTransaction<'tx> {
         norito::codec::encode_with_header_flags(tx)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn external_entrypoint_hash_from_signed(
         tx: &SignedTransaction,
     ) -> HashOf<TransactionEntrypoint> {
         tx.hash_as_entrypoint()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn external_entrypoint_hash_from_signed_frame(
         signed_frame: &[u8],
     ) -> Result<HashOf<TransactionEntrypoint>, norito::core::Error> {

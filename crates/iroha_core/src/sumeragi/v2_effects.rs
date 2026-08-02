@@ -762,6 +762,7 @@ impl ConsensusSignTask {
         self.ownership.owner().lifecycle_ordinal()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn ownership(&self) -> &RuntimeEffectOwnership {
         &self.ownership
     }
@@ -1420,6 +1421,7 @@ pub(crate) enum CertifiedBodyFetchCompletionDisposition {
     Completed,
     /// A typed transient boundary rejected the handoff without changing the
     /// exact service owner; only the identical response may retry it.
+    #[cfg_attr(not(test), allow(dead_code))]
     Retryable,
 }
 
@@ -2378,6 +2380,7 @@ pub(crate) trait EffectRuntime {
     ) -> Result<(), String> {
         Err("runtime does not support validated-body authority binding".to_owned())
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     fn enqueue_body_available(
         &mut self,
         tag: EventTag,
@@ -2994,6 +2997,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
 impl V2EffectExecutor<SerializedV2Runtime> {
     /// Open the exact-body store under an explicit signature-authority policy
     /// and take ownership of the serialized runtime.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn open(
         runtime: SerializedV2Runtime,
         body_store_root: impl AsRef<Path>,

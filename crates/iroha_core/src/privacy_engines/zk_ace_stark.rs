@@ -194,6 +194,7 @@ pub(crate) fn proof_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .expect("ZK-ACE proof test mutex must not be poisoned")
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 const FIELD_MODULUS: u64 = GOLDILOCKS_MODULUS_V1;
 const FIELD_GENERATOR: u64 = GOLDILOCKS_GENERATOR_V1;
 
@@ -1055,6 +1056,7 @@ fn primitive_root(log_size: u8) -> Result<F, ZkAceStarkError> {
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn fft(values: &mut [F], root: F) -> Result<(), ZkAceStarkError> {
     goldilocks_fft_v1(values, root).map_err(|_| {
         ZkAceStarkError::InternalInvariant("FFT requires an exact power-of-two Goldilocks domain")
@@ -1743,9 +1745,11 @@ const LOCAL_CONSTRAINT_COUNT: usize = 12 + LIMB_BITS + 1 + 1 + 8 + 3 * (LIMB_BIT
 const TRANSITION_CONSTRAINT_COUNT: usize = 3 + PRIVATE_LIMBS;
 const CONSTRAINT_COUNT: usize = LOCAL_CONSTRAINT_COUNT + TRANSITION_CONSTRAINT_COUNT;
 /// Number of distinct quartic-extension challenges in one proof transcript.
+#[cfg_attr(not(test), allow(dead_code))]
 const DISTINCT_FIELD_CHALLENGE_COUNT: usize =
     1 + SECURITY_LANES * (CONSTRAINT_COUNT + TRACE_WIDTH + 1 + FRI_ROUNDS);
 /// Absolute SHA-256 call budget for all field-challenge rejection samplers.
+#[cfg_attr(not(test), allow(dead_code))]
 const MAX_FIELD_CHALLENGE_HASH_CALLS: usize =
     DISTINCT_FIELD_CHALLENGE_COUNT * MAX_FIELD_CHALLENGE_DERIVATION_ATTEMPTS;
 

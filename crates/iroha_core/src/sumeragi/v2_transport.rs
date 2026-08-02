@@ -247,6 +247,7 @@ impl AuthenticatedCertifiedBodyResponse {
     }
 
     /// Consume the token and recover the authenticated response.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn into_inner(self) -> wire::CertifiedBodyResponse {
         self.response
     }
