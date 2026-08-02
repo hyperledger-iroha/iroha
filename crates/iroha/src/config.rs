@@ -25,7 +25,13 @@ use crate::{
 
 mod user;
 
-pub use user::{ParseError, Root as UserConfig};
+pub use user::{
+    MusubiFetch as MusubiFetchConfig,
+    MusubiFetchProviderGateway as MusubiFetchProviderGatewayConfig,
+    MusubiPublication as MusubiPublicationConfig,
+    MusubiPublicationProviderGateway as MusubiPublicationProviderGatewayConfig, ParseError,
+    Root as UserConfig,
+};
 
 use crate::secrecy::SecretString;
 
@@ -187,6 +193,48 @@ pub struct Config {
 #[error("Failed to load configuration")]
 pub struct LoadError;
 
+/// Invalid signer-free account network context from a client configuration.
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AccountChainDiscriminantError {
+    /// The configured public network profile is unknown.
+    #[error("unknown account network profile")]
+    UnknownProfile,
+    /// An explicit discriminant disagrees with the selected public profile.
+    #[error("account network profile and chain discriminant disagree")]
+    ProfileMismatch,
+    /// Zero is not a valid public account chain discriminant.
+    #[error("account chain discriminant must be nonzero")]
+    Zero,
+}
+
+/// Resolve a public account profile and optional explicit I105 chain discriminant.
+///
+/// This helper does not parse or construct an account or key pair, so signer-free
+/// clients can validate the same public network context as [`Config::load`].
+///
+/// # Errors
+/// Returns an error for an unknown profile, a profile/discriminant mismatch, or zero.
+pub fn resolve_account_chain_discriminant(
+    profile: Option<&str>,
+    explicit: Option<u16>,
+) -> Result<u16, AccountChainDiscriminantError> {
+    let profile = profile.map(str::trim).filter(|profile| !profile.is_empty());
+    let discriminant = if let Some(profile) = profile {
+        let profile = iroha_torii_shared::network_profile(profile)
+            .ok_or(AccountChainDiscriminantError::UnknownProfile)?;
+        if explicit.is_some_and(|value| value != profile.chain_discriminant) {
+            return Err(AccountChainDiscriminantError::ProfileMismatch);
+        }
+        profile.chain_discriminant
+    } else {
+        explicit.unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant)
+    };
+    if discriminant == 0 {
+        return Err(AccountChainDiscriminantError::Zero);
+    }
+    Ok(discriminant)
+}
+
 /// Where to load configuration from
 pub enum LoadPath<P> {
     /// Path specified explicitly, therefore, loading will fail if the file is not found
@@ -209,11 +257,61 @@ impl Config {
         let toml_source = TomlSource::from_file(path).change_context(LoadError)?;
         let config = ConfigReader::new()
             .with_toml_source(toml_source)
+            .with_env(|_: &str| None::<std::borrow::Cow<'static, str>>)
             .read_and_complete::<user::Root>()
             .change_context(LoadError)?
             .parse()
             .change_context(LoadError)?;
         Ok(config)
+    }
+
+    /// Load a required platform client file and return its typed Musubi publication subtree.
+    ///
+    /// This path does not consult environment variables. Service URLs remain encapsulated in the
+    /// returned redacting configuration and are never copied into the generic [`Client`](crate::client::Client).
+    ///
+    /// # Errors
+    /// Returns an error when the selected file cannot be read, contains unknown or invalid
+    /// parameters, or fails client configuration validation.
+    pub fn load_file_with_musubi_publication(
+        path: impl AsRef<Path>,
+    ) -> ReportResult<(Self, MusubiPublicationConfig), LoadError> {
+        let toml_source = TomlSource::from_file(path).change_context(LoadError)?;
+        Self::load_source_with_musubi_publication(toml_source)
+    }
+
+    /// Parse an already-read client TOML source and return its Musubi publication subtree.
+    ///
+    /// Security-sensitive callers use this entry point after opening a configuration file with
+    /// no-follow semantics and reading it from one stable descriptor. The supplied `path` is
+    /// retained as configuration provenance and as the base for relative public-proof paths;
+    /// this function never reopens it.
+    ///
+    /// # Errors
+    /// Returns an error when `bytes` are not UTF-8 TOML, contain unknown or invalid parameters,
+    /// or fail client configuration validation.
+    pub fn load_bytes_with_musubi_publication(
+        path: impl AsRef<Path>,
+        bytes: &[u8],
+    ) -> ReportResult<(Self, MusubiPublicationConfig), LoadError> {
+        let source = core::str::from_utf8(bytes).change_context(LoadError)?;
+        let table = source.parse::<toml::Table>().change_context(LoadError)?;
+        Self::load_source_with_musubi_publication(TomlSource::new(
+            path.as_ref().to_path_buf(),
+            table,
+        ))
+    }
+
+    fn load_source_with_musubi_publication(
+        toml_source: TomlSource,
+    ) -> ReportResult<(Self, MusubiPublicationConfig), LoadError> {
+        Ok(ConfigReader::new()
+            .with_toml_source(toml_source)
+            .with_env(|_: &str| None::<std::borrow::Cow<'static, str>>)
+            .read_and_complete::<user::Root>()
+            .change_context(LoadError)?
+            .parse_with_musubi()
+            .change_context(LoadError)?)
     }
 
     /// Loads configuration from a file
@@ -388,6 +486,43 @@ mod tests {
         assert!(
             Config::load_file(file.path().with_extension("missing")).is_err(),
             "the selected file is mandatory"
+        );
+    }
+
+    #[test]
+    fn load_bytes_with_musubi_publication_never_reopens_path() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("already-read-client.toml");
+        let bytes = toml::to_string(&config_sample()).expect("serialize client fixture");
+        let (config, publication) =
+            Config::load_bytes_with_musubi_publication(&path, bytes.as_bytes())
+                .expect("parse supplied client bytes");
+
+        assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
+        assert!(publication.seed_ingress_url.is_none());
+        assert!(
+            !path.exists(),
+            "parsing an already-read source must not create or reopen its provenance path"
+        );
+    }
+
+    #[test]
+    fn signer_free_chain_discriminant_resolution_matches_profiles() {
+        assert_eq!(
+            resolve_account_chain_discriminant(Some("taira"), None).expect("known profile"),
+            iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
+        );
+        assert_eq!(
+            resolve_account_chain_discriminant(None, Some(777)).expect("explicit discriminant"),
+            777
+        );
+        assert_eq!(
+            resolve_account_chain_discriminant(Some("taira"), Some(753)),
+            Err(AccountChainDiscriminantError::ProfileMismatch)
+        );
+        assert_eq!(
+            resolve_account_chain_discriminant(None, Some(0)),
+            Err(AccountChainDiscriminantError::Zero)
         );
     }
 

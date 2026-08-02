@@ -21,11 +21,17 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob_account = Account::new(bob_id.clone()).build(&ALICE_ID);
 
-    let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "rose".parse().expect("asset name"),
     );
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+    let asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
         Quantity::from(100_u32),
@@ -79,11 +85,18 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let bob_account = Account::new(bob_id.clone()).build(&ALICE_ID);
     let carol_account = Account::new(carol_id.clone()).build(&ALICE_ID);
 
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    let asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
         Quantity::from(100_u32),

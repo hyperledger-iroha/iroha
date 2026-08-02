@@ -803,7 +803,7 @@ mod tests {
             .map(|(_, _, key)| key)
             .collect::<Vec<_>>();
         let chain_id = ChainId::from("kagemusha-finality-chain");
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
             "rose".parse().expect("asset name"),
         );
@@ -831,7 +831,7 @@ mod tests {
         let source_tree_sha256 = [0x52; 32];
         let (reviewed_source_closure, reviewed_source_closure_descriptor_sha256) =
             reviewed_source_closure(source_commit, source_tree_sha256);
-        let manifest = KagemushaRecursiveSpendArtifactManifestV4 {
+        let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
@@ -849,6 +849,10 @@ mod tests {
             activation_height,
             withdrawal_height,
             max_proof_bytes: 9_000,
+            generation_memory_limit_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
+            qualification_receipt_sha256: [0; 32],
+            qualified_candidate_sha256: [0; 32],
             profiles: vec![
                 profile(KagemushaPastaCycleParityV1::StepEq, 0x20),
                 profile(KagemushaPastaCycleParityV1::StepEp, 0x30),
@@ -863,10 +867,25 @@ mod tests {
                 artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
                 required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             },
-            benchmark_evidence_sha256: [0x71; 32],
-            cryptographic_review_sha256: [0x72; 32],
-            release_attestation_sha256: [0x73; 32],
+            benchmark_evidence_sha256: [0; 32],
+            cryptographic_review_sha256: [0; 32],
+            release_attestation_sha256: [0; 32],
         };
+        let candidate = iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 {
+            schema: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4
+                .to_owned(),
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: manifest.clone(),
+        };
+        manifest.qualification_receipt_sha256 = [0x74; 32];
+        manifest.qualified_candidate_sha256 =
+            iroha_data_model::offline::kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("candidate digest"),
+                manifest.qualification_receipt_sha256,
+            );
+        manifest.benchmark_evidence_sha256 = [0x71; 32];
+        manifest.cryptographic_review_sha256 = [0x72; 32];
+        manifest.release_attestation_sha256 = [0x73; 32];
         manifest.validate().expect("manifest");
         let manifest_digest = canonical_sha256(&manifest).expect("manifest digest");
         let operation_id = [0xA5; 32];
@@ -1296,7 +1315,7 @@ mod tests {
         );
 
         let mut manifest = fixture.manifest.clone();
-        manifest.asset = AssetDefinitionId::new(
+        manifest.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
             "other".parse().expect("asset name"),
         );

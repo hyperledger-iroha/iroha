@@ -87,9 +87,16 @@ fn domain_owner_domain_permissions() -> Result<()> {
 
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, _bob_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId =
-        AssetDefinitionId::new(DomainId::try_new("kingdom", "universal")?, "coin".parse()?);
-    let coin = AssetDefinition::numeric(coin_id.clone()).with_name(coin_id.name().to_string());
+    let coin_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("kingdom", "universal")?,
+        "coin".parse()?,
+    );
+    let coin = AssetDefinition::numeric(
+        coin_id.clone(),
+        "coin".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    );
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -231,8 +238,10 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
     let (rabbit_id, _rabbit_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId =
-        AssetDefinitionId::new(DomainId::try_new("kingdom", "universal")?, "coin".parse()?);
+    let coin_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("kingdom", "universal")?,
+        "coin".parse()?,
+    );
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -251,7 +260,12 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     )?;
 
     // Register asset definition by "bob@kingdom" so he is owner of it.
-    let coin = AssetDefinition::numeric(coin_id.clone()).with_name(coin_id.name().to_string());
+    let coin = AssetDefinition::numeric(
+        coin_id.clone(),
+        "coin".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    );
     let transaction = TransactionBuilder::new(
         network.chain_id(),
         bob_id.clone(),
@@ -317,8 +331,10 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let alice_id = ALICE_ID.clone();
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId =
-        AssetDefinitionId::new(DomainId::try_new("kingdom", "universal")?, "coin".parse()?);
+    let coin_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("kingdom", "universal")?,
+        "coin".parse()?,
+    );
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -331,7 +347,12 @@ fn domain_owner_asset_permissions() -> Result<()> {
     )?;
 
     // Register asset definition by "bob@kingdom" so he is owner of it.
-    let coin = AssetDefinition::numeric(coin_id.clone()).with_name(coin_id.name().to_string());
+    let coin = AssetDefinition::numeric(
+        coin_id.clone(),
+        "coin".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    );
     let transaction = TransactionBuilder::new(
         network.chain_id(),
         bob_id.clone(),
@@ -448,7 +469,8 @@ fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Re
     let destination = checked_random_account_id();
     let alias_domain = DomainId::try_new("fi", "universal")?;
     let asset_domain = DomainId::try_new("assets", "universal")?;
-    let asset_definition = AssetDefinitionId::new(asset_domain.clone(), "alias_safe_coin".parse()?);
+    let asset_definition =
+        AssetDefinitionId::derive_from_components(asset_domain.clone(), "alias_safe_coin".parse()?);
     let source_asset = AssetId::new(asset_definition.clone(), source.clone());
 
     client.submit_all_blocking::<InstructionBox>(
@@ -481,9 +503,12 @@ fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Re
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([
-        InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition).with_name("alias-safe coin".to_owned()),
-        )),
+        InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            asset_definition,
+            "alias-safe coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))),
         InstructionBox::from(Mint::asset_quantity(10_u32, source_asset.clone())),
     ])
     .sign(definition_owner_keypair.private_key());
@@ -608,7 +633,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
 
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "rose".parse()?,
     );

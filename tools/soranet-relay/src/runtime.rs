@@ -2000,7 +2000,7 @@ impl RelayRuntime {
         let admin_addr = self.config.admin_addr()?;
         let mode = self.config.mode;
 
-        let endpoint = Endpoint::server(self.server_config, listen_addr)
+        let endpoint = Endpoint::server(self.server_config.clone(), listen_addr)
             .map_err(|error| RelayError::Quic(error.to_string()))?;
 
         let actual_addr = endpoint

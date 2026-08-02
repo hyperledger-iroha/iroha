@@ -302,7 +302,13 @@ fn oracle_state_with_accounts(
     let sora_domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let sora_domain: Domain = Domain::new(sora_domain_id.clone()).build(&reward_pool);
 
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&reward_pool);
+    let asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&reward_pool);
     let mut assets = vec![
         Asset::new(
             AssetId::new(asset_def_id.clone(), reward_pool.clone()),

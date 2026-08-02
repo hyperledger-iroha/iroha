@@ -32,9 +32,11 @@ from scripts.formal import run_sumeragi_v2_tlapm_guard as resource_guard
 
 BINARY_NAME = "kagemusha_recursive_spend_v4_bundle"
 SEALED_FEATURE = "kagemusha-candidate-source-seal"
+CANDIDATE_EVIDENCE_FEATURE = "kagemusha-candidate-evidence-lab"
 CANDIDATE_BUILD_FEATURES = (
     "iroha_core/dev-tools",
     f"iroha_core/{SEALED_FEATURE}",
+    f"iroha_core/{CANDIDATE_EVIDENCE_FEATURE}",
 )
 # The measured single-rustc frontend high-water mark is about 11.466 GiB.
 # Requiring 24 GiB of installed physical memory leaves slightly more than a

@@ -8,6 +8,17 @@ use tower::ServiceExt as _;
 
 const TEST_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
+fn assert_batch_outcome(value: &norito::json::Value, status: &str, code: Option<&str>) {
+    assert_eq!(
+        value.get("status").and_then(norito::json::Value::as_str),
+        Some(status)
+    );
+    assert_eq!(
+        value.get("code").and_then(norito::json::Value::as_str),
+        code
+    );
+}
+
 fn sample_pallas_envelope(label: &str) -> iroha_zkp_halo2::OpenVerifyEnvelope {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
@@ -154,8 +165,8 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 2);
-    assert_eq!(statuses[0].as_bool(), Some(true));
-    assert_eq!(statuses[1].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "verified", None);
+    assert_batch_outcome(&statuses[1], "invalid", None);
 }
 
 #[tokio::test]
@@ -210,8 +221,8 @@ async fn zk_verify_batch_endpoint_accepts_json_array_and_returns_mixed_statuses(
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 2);
-    assert_eq!(statuses[0].as_bool(), Some(true));
-    assert_eq!(statuses[1].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "verified", None);
+    assert_batch_outcome(&statuses[1], "invalid", None);
 }
 
 #[tokio::test]
@@ -326,17 +337,18 @@ async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "error", Some("verification_limit_exceeded"));
 }
 
 #[tokio::test]
-async fn zk_verify_batch_json_preserves_false_statuses_for_bad_entries() {
+async fn zk_verify_batch_json_classifies_decode_errors_per_entry() {
     use base64::Engine as _;
 
     let env = sample_pallas_envelope("torii-json");
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(norito::to_bytes(&env).expect("encode envelope"));
-    let body = format!(r#"["{encoded}","not base64",7]"#);
+    let invalid_envelope = base64::engine::general_purpose::STANDARD.encode(b"not norito");
+    let body = format!(r#"["{encoded}","not base64",7,"{invalid_envelope}"]"#);
     let v = post_json_batch_with_limits(
         body,
         iroha_zkp_halo2::OpenVerifyLimits::default(),
@@ -351,10 +363,11 @@ async fn zk_verify_batch_json_preserves_false_statuses_for_bad_entries() {
         .and_then(|x| x.as_array())
         .cloned()
         .unwrap_or_default();
-    assert_eq!(statuses.len(), 3);
-    assert_eq!(statuses[0].as_bool(), Some(true));
-    assert_eq!(statuses[1].as_bool(), Some(false));
-    assert_eq!(statuses[2].as_bool(), Some(false));
+    assert_eq!(statuses.len(), 4);
+    assert_batch_outcome(&statuses[0], "verified", None);
+    assert_batch_outcome(&statuses[1], "error", Some("invalid_base64"));
+    assert_batch_outcome(&statuses[2], "error", Some("invalid_entry_type"));
+    assert_batch_outcome(&statuses[3], "error", Some("invalid_envelope"));
 }
 
 #[tokio::test]
@@ -378,7 +391,7 @@ async fn zk_verify_batch_json_applies_per_entry_diagnostic_limits() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "error", Some("envelope_too_large"));
 
     let label = String::from_utf8(vec![b't', b'o', b'r', b'i', b'i', b'-', 0xc2, 0xb5])
         .expect("valid utf-8 label");
@@ -399,7 +412,7 @@ async fn zk_verify_batch_json_applies_per_entry_diagnostic_limits() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "error", Some("non_ascii_transcript_label"));
 }
 
 #[tokio::test]
@@ -425,7 +438,7 @@ async fn zk_verify_batch_json_applies_open_verify_limits() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "error", Some("verification_limit_exceeded"));
 }
 
 #[tokio::test]
@@ -539,8 +552,8 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 2);
-    assert_eq!(statuses[0].as_bool(), Some(true));
-    assert_eq!(statuses[1].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "verified", None);
+    assert_batch_outcome(&statuses[1], "error", Some("non_ascii_transcript_label"));
 
     let encoded_good = norito::to_bytes(&good).expect("encode envelope");
     let v = post_batch_with_limits(
@@ -558,7 +571,7 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "error", Some("envelope_too_large"));
 }
 
 #[tokio::test]
@@ -698,8 +711,8 @@ async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 2);
-    assert_eq!(statuses[0].as_bool(), Some(true));
-    assert_eq!(statuses[1].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "verified", None);
+    assert_batch_outcome(&statuses[1], "invalid", None);
 }
 
 #[tokio::test]
@@ -769,6 +782,6 @@ async fn zk_verify_batch_endpoint_rejects_bound_metadata_tampering() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 2);
-    assert_eq!(statuses[0].as_bool(), Some(true));
-    assert_eq!(statuses[1].as_bool(), Some(false));
+    assert_batch_outcome(&statuses[0], "verified", None);
+    assert_batch_outcome(&statuses[1], "invalid", None);
 }

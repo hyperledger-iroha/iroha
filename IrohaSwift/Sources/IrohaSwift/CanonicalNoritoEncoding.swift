@@ -464,6 +464,10 @@ enum CompactNorito {
         Data([value])
     }
 
+    static func encodeBool(_ value: Bool) -> Data {
+        Data([value ? 1 : 0])
+    }
+
     static func encodeUInt16(_ value: UInt16) -> Data {
         var writer = CompactNoritoWriter()
         writer.writeUInt16LE(value)
@@ -495,9 +499,28 @@ enum CompactNorito {
 
     static func encodeVec<T>(_ values: [T], encode: (T) throws -> Data) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeLength(UInt64(values.count))
+        // `COMPACT_LEN` applies to fields, not sequence element counts.
+        writer.writeUInt64LE(UInt64(values.count))
         for value in values {
             writer.writeField(try encode(value))
+        }
+        return writer.data
+    }
+
+    /// Encode a flat `Vec<u8>` with its fixed-width element count and raw bytes.
+    static func encodeBytesVec(_ bytes: Data) -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeUInt64LE(UInt64(bytes.count))
+        writer.writeBytes(bytes)
+        return writer.data
+    }
+
+    /// Encode `ConstVec<u8>` with compact per-element field prefixes.
+    static func encodeConstVec(_ bytes: Data) -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeUInt64LE(UInt64(bytes.count))
+        for byte in bytes {
+            writer.writeField(Data([byte]))
         }
         return writer.data
     }

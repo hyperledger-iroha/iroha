@@ -51,7 +51,7 @@ const REQUESTED_FEE_PAYMENT = process.env.FEE_SPONSOR_PROGRAM
 
 const SAMPLE_CONTRACT_ADDRESS =
   process.env.GOV_CONTRACT_ADDRESS ??
-  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+  "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 const SAMPLE_REFERENDUM_ID = "demo-referendum";
 const SAMPLE_REFERENDUM_HASH = Buffer.alloc(32, 0xaa);
 const SAMPLE_PROPOSAL_HASH = Buffer.alloc(32, 0xbb);

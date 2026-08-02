@@ -7,6 +7,217 @@ import {fileURLToPath} from 'node:url';
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(testDir, '..', '..', '..', '..');
 
+const MUSUBI_V1_PATHS = [
+  '/v1/musubi/instructions/alias-register',
+  '/v1/musubi/instructions/alias-retarget',
+  '/v1/musubi/instructions/archive-location-add',
+  '/v1/musubi/instructions/archive-location-retire',
+  '/v1/musubi/instructions/archive-register',
+  '/v1/musubi/instructions/artifact-takedown',
+  '/v1/musubi/instructions/namespace-binding-register',
+  '/v1/musubi/instructions/package-member-accept',
+  '/v1/musubi/instructions/package-member-invitation-revoke',
+  '/v1/musubi/instructions/package-member-invite',
+  '/v1/musubi/instructions/package-member-remove',
+  '/v1/musubi/instructions/package-member-set-role',
+  '/v1/musubi/instructions/package-metadata-set',
+  '/v1/musubi/instructions/package-recover',
+  '/v1/musubi/instructions/registry-policy-set',
+  '/v1/musubi/instructions/release-digest-assert',
+  '/v1/musubi/instructions/release-publish',
+  '/v1/musubi/instructions/release-yank-set',
+  '/v1/musubi/queries/alias',
+  '/v1/musubi/queries/alias-history',
+  '/v1/musubi/queries/archive-locations',
+  '/v1/musubi/queries/archive-retention',
+  '/v1/musubi/queries/exact-package',
+  '/v1/musubi/queries/exact-release',
+  '/v1/musubi/queries/maintainers',
+  '/v1/musubi/queries/ordered-prefix',
+  '/v1/musubi/queries/resolver-index',
+  '/v1/musubi/queries/search',
+  '/v1/musubi/queries/versions',
+];
+
+const MUSUBI_V1_MODELS = {
+  '/v1/musubi/instructions/alias-register': [
+    'RegisterMusubiAliasV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/alias-retarget': [
+    'RetargetMusubiAliasV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/archive-location-add': [
+    'AddMusubiArchiveLocationV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/archive-location-retire': [
+    'RetireMusubiArchiveLocationV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/archive-register': [
+    'RegisterMusubiArchiveV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/artifact-takedown': [
+    'SetMusubiArtifactTakedownV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/namespace-binding-register': [
+    'RegisterMusubiNamespaceBindingV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/package-member-accept': [
+    'AcceptMusubiPackageMaintainerV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/package-member-invitation-revoke': [
+    'RevokeMusubiPackageMaintainerInvitationV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/package-member-invite': [
+    'InviteMusubiPackageMaintainerV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/package-member-remove': [
+    'RemoveMusubiPackageMaintainerV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/package-member-set-role': [
+    'SetMusubiPackageMaintainerRoleV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/package-metadata-set': [
+    'SetMusubiPackageMetadataV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/package-recover': [
+    'RecoverMusubiPackageV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/registry-policy-set': [
+    'SetMusubiRegistryPolicyV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/release-digest-assert': [
+    'AssertMusubiReleaseDigestV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/release-publish': [
+    'PublishMusubiReleaseV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/instructions/release-yank-set': [
+    'SetMusubiReleaseYankV1',
+    'MusubiInstructionEnvelopeV1',
+  ],
+  '/v1/musubi/queries/alias': [
+    'MusubiAliasQueryV1',
+    'MusubiAliasRecordV1',
+  ],
+  '/v1/musubi/queries/alias-history': [
+    'MusubiAliasQueryV1',
+    'MusubiAliasHistoryPageV1',
+  ],
+  '/v1/musubi/queries/archive-locations': [
+    'MusubiArchiveLocationQueryV1',
+    'MusubiArchiveLocationPageV1',
+  ],
+  '/v1/musubi/queries/archive-retention': [
+    'MusubiArchiveRetentionQueryV1',
+    'MusubiArchiveRetentionPageV1',
+  ],
+  '/v1/musubi/queries/exact-package': [
+    'MusubiExactPackageQueryV1',
+    'MusubiPackageRecordV1',
+  ],
+  '/v1/musubi/queries/exact-release': [
+    'MusubiExactReleaseQueryV1',
+    'MusubiReleaseRecordV1',
+  ],
+  '/v1/musubi/queries/maintainers': [
+    'MusubiPackagePageQueryV1',
+    'MusubiMaintainerPageV1',
+  ],
+  '/v1/musubi/queries/ordered-prefix': [
+    'MusubiOrderedPrefixQueryV1',
+    'MusubiOrderedPackagePageV1',
+  ],
+  '/v1/musubi/queries/resolver-index': [
+    'MusubiResolverIndexQueryV1',
+    'MusubiResolverIndexPageV1',
+  ],
+  '/v1/musubi/queries/search': [
+    'MusubiSearchQueryV1',
+    'MusubiSearchPageV1',
+  ],
+  '/v1/musubi/queries/versions': [
+    'MusubiPackagePageQueryV1',
+    'MusubiVersionPageV1',
+  ],
+};
+
+const RETIRED_MUSUBI_PATHS = [
+  '/v1/musubi/aliases/{alias}',
+  '/v1/musubi/instructions/assert-release-exists',
+  '/v1/musubi/instructions/publish-release',
+  '/v1/musubi/instructions/set-alias',
+  '/v1/musubi/instructions/yank-release',
+  '/v1/musubi/packages',
+  '/v1/musubi/release',
+  '/v1/musubi/releases',
+  '/v1/musubi/versions',
+];
+
+test('checked OpenAPI artifacts expose only the Musubi V1 route contract', async () => {
+  assert.equal(MUSUBI_V1_PATHS.length, 29);
+  assert.deepEqual(Object.keys(MUSUBI_V1_MODELS).sort(), MUSUBI_V1_PATHS);
+
+  for (const relativePath of [
+    join('artifacts', 'openapi', 'torii.json'),
+    join('artifacts', 'openapi', 'versions', 'current', 'torii.json'),
+  ]) {
+    const document = JSON.parse(await readFile(join(repoRoot, relativePath), 'utf8'));
+    const paths = document.paths;
+    assert.ok(paths && typeof paths === 'object' && !Array.isArray(paths));
+
+    const musubiPaths = Object.keys(paths)
+      .filter((path) => path.startsWith('/v1/musubi/'))
+      .sort();
+    assert.deepEqual(musubiPaths, MUSUBI_V1_PATHS, relativePath);
+
+    for (const path of MUSUBI_V1_PATHS) {
+      assert.deepEqual(Object.keys(paths[path]), ['post'], `${relativePath}: ${path}`);
+      const operation = paths[path].post;
+      const [requestType, responseType] = MUSUBI_V1_MODELS[path];
+      assert.deepEqual(operation.tags, ['Musubi'], `${relativePath}: ${path} tag`);
+      assert.equal(
+        operation['x-iroha-norito-request-type'],
+        requestType,
+        `${relativePath}: ${path} request model`,
+      );
+      assert.equal(
+        operation['x-iroha-norito-response-type'],
+        responseType,
+        `${relativePath}: ${path} response model`,
+      );
+      assert.equal(
+        operation['x-iroha-tool-effect'],
+        path.startsWith('/v1/musubi/queries/') ? 'read' : 'build_instruction',
+        `${relativePath}: ${path} effect`,
+      );
+    }
+    for (const retiredPath of RETIRED_MUSUBI_PATHS) {
+      assert.equal(
+        Object.hasOwn(paths, retiredPath),
+        false,
+        `${relativePath} retains retired Musubi path ${retiredPath}`,
+      );
+    }
+  }
+});
+
 test('OpenAPI CI uses a locked graph and detached-only signing', async () => {
   const gate = await readFile(join(repoRoot, 'ci', 'check_openapi_spec.sh'), 'utf8');
 

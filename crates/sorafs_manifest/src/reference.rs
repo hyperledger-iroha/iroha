@@ -7912,11 +7912,9 @@ mod tests {
         assert!(context.iter().any(|field| {
             field.key == "submission_publisher_account_digest_hex"
                 && field.value
-                    == hex::encode(
-                        crate::governance_dag_submission_account_digest_v1(
-                            b"canonical-norito-reference-publisher",
-                        ),
-                    )
+                    == hex::encode(crate::governance_dag_submission_account_digest_v1(
+                        b"canonical-norito-reference-publisher",
+                    ))
         }));
         assert!(context.iter().any(|field| {
             field.key == "submission_origin" && field.value == "appeal_finance_report"

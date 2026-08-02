@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,14 +21,20 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocationQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionPage;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ComparatorOp;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactPackageQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactReleaseQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.MaintainerDirectoryEntry;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Namespace;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageName;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackagePageQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Version;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionComparator;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionReq;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.WireValue;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
@@ -45,9 +52,11 @@ public final class MusubiSdkV1FixtureTests {
               MusubiToriiClientV1.VERSIONS_PATH,
               MusubiToriiClientV1.MAINTAINERS_PATH,
               MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH,
+              MusubiToriiClientV1.ARCHIVE_RETENTION_PATH,
               MusubiToriiClientV1.ALIAS_PATH,
               MusubiToriiClientV1.ALIAS_HISTORY_PATH,
-              MusubiToriiClientV1.ORDERED_PREFIX_PATH));
+              MusubiToriiClientV1.ORDERED_PREFIX_PATH,
+              MusubiToriiClientV1.SEARCH_PATH));
 
   @Test
   public void canonicalNamesVersionsAndRequirementsMatchRustFixture() throws Exception {
@@ -69,6 +78,55 @@ public final class MusubiSdkV1FixtureTests {
       final Map<String, Object> item = object(raw);
       assertWireEquals(item.get("wire"), VersionReq.parse((String) item.get("text")));
     }
+    for (final Object raw : array(canonical.get("requirement_aliases"))) {
+      final Map<String, Object> item = object(raw);
+      final VersionReq requirement = VersionReq.parse((String) item.get("input"));
+      assertEquals(item.get("canonical"), requirement.canonicalText());
+      assertWireEquals(item.get("wire"), requirement);
+    }
+    for (final Object raw : array(canonical.get("requirement_matches"))) {
+      final Map<String, Object> item = object(raw);
+      final VersionReq requirement = VersionReq.parse((String) item.get("requirement"));
+      final Version candidate = Version.parse((String) item.get("candidate"));
+      assertEquals(item.get("matches"), Boolean.valueOf(requirement.matches(candidate)));
+    }
+  }
+
+  @Test
+  public void decodedComparatorRequirementsRejectNoncanonicalExactForms() {
+    final VersionComparator first =
+        new VersionComparator(ComparatorOp.EQUAL, Version.parse("1.0.0"));
+    final VersionComparator second =
+        new VersionComparator(ComparatorOp.EQUAL, Version.parse("2.0.0"));
+    expectFailure(
+        () ->
+            VersionReq.fromWire(
+                VersionReq.Kind.COMPARATORS,
+                null,
+                null,
+                null,
+                Collections.singletonList(first)));
+    expectFailure(
+        () ->
+            VersionReq.fromWire(
+                VersionReq.Kind.COMPARATORS,
+                null,
+                null,
+                null,
+                Arrays.asList(first, second)));
+  }
+
+  @Test
+  public void nameBackedFieldsRejectEveryUnicodeBidiControl() {
+    final char[] controls = {
+      '\u061c', '\u200e', '\u200f',
+      '\u202a', '\u202b', '\u202c', '\u202d', '\u202e',
+      '\u2066', '\u2067', '\u2068', '\u2069'
+    };
+    for (final char control : controls) {
+      expectFailure(() -> new Namespace("domain" + control + ".dataspace"));
+      expectFailure(() -> MusubiModelsV1.PackageScope.domain("domain" + control));
+    }
   }
 
   @Test
@@ -83,8 +141,63 @@ public final class MusubiSdkV1FixtureTests {
       assertWireEquals(route.get("request"), request);
       assertWireEquals(route.get("response"), response);
     }
-    assertEquals(9, routes.size());
+    assertEquals(11, routes.size());
     assertEquals(EXPECTED_PATHS, actualPaths);
+  }
+
+  @Test
+  public void archiveRetentionIsBoundedTypedAndBindsTheExactRequest() throws Exception {
+    final Map<String, Object> route = route(MusubiToriiClientV1.ARCHIVE_RETENTION_PATH);
+    final ArchiveRetentionQuery request =
+        (ArchiveRetentionQuery) MusubiJsonV1.decodeQuery(
+            MusubiToriiClientV1.ARCHIVE_RETENTION_PATH, route.get("request"));
+    final ArchiveRetentionPage page = MusubiJsonV1.parseArchiveRetentionPage(
+        JsonEncoder.encode(route.get("response")).getBytes(StandardCharsets.UTF_8));
+    page.requireMatches(request);
+    assertEquals(4, page.items().size());
+    assertTrue(page.items().get(0).mustRetain());
+    assertTrue(page.items().get(1).mustRetain());
+    assertFalse(page.items().get(2).mustRetain());
+    assertFalse(page.items().get(3).mustRetain());
+
+    final Map<String, Object> mismatched = object(deepMutableCopy(route.get("response")));
+    final Map<String, Object> first = object(array(mismatched.get("items")).get(0));
+    final List<Object> changedBytes = new ArrayList<>();
+    for (int index = 0; index < 32; index++) changedBytes.add(Long.valueOf(17L));
+    first.put("archive_id", Collections.<Object>singletonList(changedBytes));
+    final ArchiveRetentionPage mismatchedPage = MusubiJsonV1.parseArchiveRetentionPage(
+        JsonEncoder.encode(mismatched).getBytes(StandardCharsets.UTF_8));
+    expectFailure(() -> mismatchedPage.requireMatches(request));
+  }
+
+  @Test
+  public void maintainerDirectoryDecodesAcceptedAndPendingInvitationVariants() throws Exception {
+    final Map<String, Object> route = route(MusubiToriiClientV1.MAINTAINERS_PATH);
+    final byte[] response =
+        JsonEncoder.encode(route.get("response")).getBytes(StandardCharsets.UTF_8);
+    final MusubiModelsV1.Page<MaintainerDirectoryEntry> page =
+        MusubiJsonV1.parseMaintainerPage(response);
+    assertEquals(2, page.items().size());
+
+    final MaintainerDirectoryEntry accepted = page.items().get(0);
+    assertEquals(MaintainerDirectoryEntry.Kind.ACCEPTED, accepted.kind());
+    assertEquals("Owner", accepted.acceptedMember().roleKind());
+
+    final MaintainerDirectoryEntry pending = page.items().get(1);
+    assertEquals(MaintainerDirectoryEntry.Kind.PENDING_INVITATION, pending.kind());
+    assertEquals("Maintainer", pending.pendingInvitation().roleKind());
+    assertEquals("Pending", pending.pendingInvitation().stateKind());
+    assertEquals(BigInteger.valueOf(2L), pending.pendingInvitation().expectedGovernanceRevision());
+    for (final byte value : pending.pendingInvitation().inviteId().bytes()) {
+      assertEquals(13, value & 0xff);
+    }
+
+    final Map<String, Object> malformed = object(deepMutableCopy(route.get("response")));
+    final Map<String, Object> malformedPending =
+        object(object(array(malformed.get("items")).get(1)).get("value"));
+    object(malformedPending.get("state")).put("kind", "Accepted");
+    expectFailure(
+        () -> MusubiJsonV1.decodeResponse(MusubiToriiClientV1.MAINTAINERS_PATH, malformed));
   }
 
   @Test
@@ -117,6 +230,38 @@ public final class MusubiSdkV1FixtureTests {
       actualPaths.add(request.uri().getPath());
     }
     assertEquals(EXPECTED_PATHS, actualPaths);
+  }
+
+  @Test
+  public void governedTakedownRequiresOnlyAppliedHeight() throws Exception {
+    final Map<String, Object> exactRelease = route(MusubiToriiClientV1.EXACT_RELEASE_PATH);
+    final Map<String, Object> canonical =
+        object(deepMutableCopy(exactRelease.get("response")));
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("action_digest", canonical.get("release_digest"));
+    payload.put("reason", Collections.singletonList("security response"));
+    payload.put("applied_at_height", Long.valueOf(50L));
+    final Map<String, Object> governance = new LinkedHashMap<>();
+    governance.put("kind", "TakenDown");
+    governance.put("value", payload);
+    canonical.put("artifact_governance", governance);
+    object(canonical.get("revisions"))
+        .put("artifact_governance", Long.valueOf(2L));
+    MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, canonical);
+
+    final Map<String, Object> legacy = object(deepMutableCopy(canonical));
+    final Map<String, Object> legacyPayload =
+        object(object(legacy.get("artifact_governance")).get("value"));
+    legacyPayload.put("enacted_at_height", legacyPayload.remove("applied_at_height"));
+    expectFailure(
+        () -> MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, legacy));
+
+    final Map<String, Object> zeroHeight = object(deepMutableCopy(canonical));
+    final Map<String, Object> zeroPayload =
+        object(object(zeroHeight.get("artifact_governance")).get("value"));
+    zeroPayload.put("applied_at_height", Long.valueOf(0L));
+    expectFailure(
+        () -> MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, zeroHeight));
   }
 
   @Test
@@ -158,6 +303,18 @@ public final class MusubiSdkV1FixtureTests {
     expectFailure(
         () ->
             MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, response));
+
+    final Map<String, Object> archiveRoute = route(MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH);
+    final Map<String, Object> archiveResponse =
+        object(deepMutableCopy(archiveRoute.get("response")));
+    final Map<String, Object> archive = object(archiveResponse.get("archive"));
+    final Map<String, Object> receipt = object(archive.get("staging_receipt"));
+    final Map<String, Object> payload = object(receipt.get("payload"));
+    payload.put("version", Long.valueOf(2L));
+    expectFailure(
+        () ->
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH, archiveResponse));
   }
 
   private static void invoke(
@@ -181,6 +338,9 @@ public final class MusubiSdkV1FixtureTests {
       case MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH:
         client.findArchiveLocations((ArchiveLocationQuery) request).join();
         break;
+      case MusubiToriiClientV1.ARCHIVE_RETENTION_PATH:
+        client.findArchiveRetention((ArchiveRetentionQuery) request).join();
+        break;
       case MusubiToriiClientV1.ALIAS_PATH:
         client.findAlias((AliasQuery) request).join();
         break;
@@ -189,6 +349,9 @@ public final class MusubiSdkV1FixtureTests {
         break;
       case MusubiToriiClientV1.ORDERED_PREFIX_PATH:
         client.findOrderedPrefix((OrderedPrefixQuery) request).join();
+        break;
+      case MusubiToriiClientV1.SEARCH_PATH:
+        client.search((SearchQuery) request).join();
         break;
       default:
         throw new AssertionError("unhandled fixture path " + path);

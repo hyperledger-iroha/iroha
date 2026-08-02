@@ -298,9 +298,11 @@ Read tools:
 - `iroha.musubi.queries.versions`
 - `iroha.musubi.queries.maintainers`
 - `iroha.musubi.queries.archive_locations`
+- `iroha.musubi.queries.archive_retention`
 - `iroha.musubi.queries.alias`
 - `iroha.musubi.queries.alias_history`
 - `iroha.musubi.queries.ordered_prefix`
+- `iroha.musubi.queries.search`
 
 Instruction-builder tools:
 
@@ -313,6 +315,7 @@ Instruction-builder tools:
 - `iroha.musubi.instructions.package_metadata_set`
 - `iroha.musubi.instructions.package_member_invite`
 - `iroha.musubi.instructions.package_member_accept`
+- `iroha.musubi.instructions.package_member_invitation_revoke`
 - `iroha.musubi.instructions.package_member_set_role`
 - `iroha.musubi.instructions.package_member_remove`
 - `iroha.musubi.instructions.alias_register`

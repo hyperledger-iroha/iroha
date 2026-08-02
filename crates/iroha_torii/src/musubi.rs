@@ -8,7 +8,9 @@
 use axum::extract::State;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_core::{
-    smartcontracts::ValidSingularQuery, telemetry::MusubiCursorFailureReasonV1,
+    musubi_search::MusubiSearchError,
+    smartcontracts::{ValidSingularQuery, isi::musubi::ValidMusubiSingularQuery},
+    telemetry::MusubiCursorFailureReasonV1,
 };
 use iroha_data_model::{
     ValidationFail,
@@ -19,18 +21,20 @@ use iroha_data_model::{
             AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
             RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
             RegisterMusubiNamespaceBindingV1, RemoveMusubiPackageMaintainerV1,
-            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1, SetMusubiArtifactTakedownV1,
+            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+            RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
             SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
         },
     },
     musubi::{
         MusubiAliasHistoryPageV1, MusubiAliasQueryV1, MusubiAliasRecordV1,
-        MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiExactPackageQueryV1,
+        MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveRetentionPageV1,
+        MusubiArchiveRetentionQueryV1, MusubiCursorFailureV1, MusubiExactPackageQueryV1,
         MusubiExactReleaseQueryV1, MusubiMaintainerPageV1, MusubiOrderedPackagePageV1,
         MusubiOrderedPrefixQueryV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
         MusubiPageRequestV1, MusubiReleaseRecordV1, MusubiResolverIndexPageV1,
-        MusubiResolverIndexQueryV1, MusubiVersionPageV1,
+        MusubiResolverIndexQueryV1, MusubiSearchPageV1, MusubiSearchQueryV1, MusubiVersionPageV1,
     },
     query::{SingularQuery, error::QueryExecutionFail, musubi::prelude::*},
 };
@@ -94,7 +98,7 @@ pub async fn handler_find_resolver_index(
         requirement.validate().map_err(invalid_query_request)?;
     }
     validate_cursor_page(&app, &request.page)?;
-    Ok(JsonBody(execute_query(
+    Ok(JsonBody(execute_musubi_query(
         &app,
         FindMusubiResolverIndexV1::new(request),
     )?))
@@ -106,19 +110,19 @@ pub async fn handler_find_versions(
     NoritoJson(request): NoritoJson<MusubiPackagePageQueryV1>,
 ) -> Result<JsonBody<MusubiVersionPageV1>> {
     validate_package_page_request(&app, &request)?;
-    Ok(JsonBody(execute_query(
+    Ok(JsonBody(execute_musubi_query(
         &app,
         FindMusubiVersionsV1::new(request),
     )?))
 }
 
-/// Execute a finalized accepted-maintainer page query.
+/// Execute a finalized accepted-member and pending-invitation page query.
 pub async fn handler_find_maintainers(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<MusubiPackagePageQueryV1>,
 ) -> Result<JsonBody<MusubiMaintainerPageV1>> {
     validate_package_page_request(&app, &request)?;
-    Ok(JsonBody(execute_query(
+    Ok(JsonBody(execute_musubi_query(
         &app,
         FindMusubiMaintainersV1::new(request),
     )?))
@@ -135,9 +139,21 @@ pub async fn handler_find_archive_locations(
         ));
     }
     validate_cursor_page(&app, &request.page)?;
-    Ok(JsonBody(execute_query(
+    Ok(JsonBody(execute_musubi_query(
         &app,
         FindMusubiArchiveLocationsV1::new(request),
+    )?))
+}
+
+/// Execute a bounded exact finalized archive cache-retention query.
+pub async fn handler_find_archive_retention(
+    State(app): State<SharedAppState>,
+    NoritoJson(request): NoritoJson<MusubiArchiveRetentionQueryV1>,
+) -> Result<JsonBody<MusubiArchiveRetentionPageV1>> {
+    request.validate().map_err(invalid_query_request)?;
+    Ok(JsonBody(execute_query(
+        &app,
+        FindMusubiArchiveRetentionV1::new(request),
     )?))
 }
 
@@ -159,7 +175,7 @@ pub async fn handler_find_alias_history(
     NoritoJson(request): NoritoJson<MusubiAliasQueryV1>,
 ) -> Result<JsonBody<MusubiAliasHistoryPageV1>> {
     validate_alias_query_request(&app, &request)?;
-    Ok(JsonBody(execute_query(
+    Ok(JsonBody(execute_musubi_query(
         &app,
         FindMusubiAliasHistoryV1::new(request),
     )?))
@@ -172,10 +188,50 @@ pub async fn handler_find_ordered_prefix(
 ) -> Result<JsonBody<MusubiOrderedPackagePageV1>> {
     request.prefix.validate().map_err(invalid_query_request)?;
     validate_cursor_page(&app, &request.page)?;
-    Ok(JsonBody(execute_query(
+    Ok(JsonBody(execute_musubi_query(
         &app,
         FindMusubiOrderedPrefixV1::new(request),
     )?))
+}
+
+/// Execute an exact-token query against the rebuildable finalized-event search projection.
+pub async fn handler_search_packages(
+    State(app): State<SharedAppState>,
+    NoritoJson(request): NoritoJson<MusubiSearchQueryV1>,
+) -> Result<JsonBody<MusubiSearchPageV1>> {
+    request.validate().map_err(invalid_query_request)?;
+    let result = app.musubi_search.read().await.search(&request);
+    match result {
+        Ok(page) => Ok(JsonBody(page)),
+        Err(MusubiSearchError::StaleCursor) => {
+            record_cursor_failure(&app, MusubiCursorFailureReasonV1::Other);
+            Err(Error::Query(ValidationFail::QueryFailed(
+                QueryExecutionFail::Expired,
+            )))
+        }
+        Err(
+            error @ (MusubiSearchError::InvalidQuery
+            | MusubiSearchError::InvalidPageSize
+            | MusubiSearchError::QueryTooBroad),
+        ) => Err(crate::routing::conversion_error(format!(
+            "invalid Musubi V1 search request: {error}"
+        ))),
+        Err(MusubiSearchError::ProjectionUnavailable) => Err(Error::AppServiceUnavailable {
+            code: "musubi_search_projection_unavailable",
+            message: "The finalized Musubi package-search projection is unavailable.".to_owned(),
+        }),
+        Err(
+            error @ (MusubiSearchError::InconsistentFinalizedEvent
+            | MusubiSearchError::RevisionOverflow),
+        ) => {
+            iroha_logger::error!(%error, "Musubi package-search projection failed closed");
+            Err(Error::AppServiceUnavailable {
+                code: "musubi_search_projection_inconsistent",
+                message: "The finalized Musubi package-search projection requires recovery."
+                    .to_owned(),
+            })
+        }
+    }
 }
 
 macro_rules! instruction_handler {
@@ -238,6 +294,11 @@ instruction_handler!(
     "Build an unsigned first-release package-member invitation acceptance."
 );
 instruction_handler!(
+    handler_build_package_member_invitation_revoke,
+    RevokeMusubiPackageMaintainerInvitationV1,
+    "Build an unsigned first-release pending package-member invitation revocation."
+);
+instruction_handler!(
     handler_build_package_member_set_role,
     SetMusubiPackageMaintainerRoleV1,
     "Build an unsigned first-release package-member role replacement."
@@ -293,10 +354,13 @@ fn validate_alias_query_request(app: &SharedAppState, request: &MusubiAliasQuery
 
 fn validate_cursor_page(app: &SharedAppState, page: &MusubiPageRequestV1) -> Result<()> {
     page.validate().map_err(|error| {
-        record_cursor_failure(app, MusubiCursorFailureReasonV1::Invalid);
+        record_cursor_failure(app, INVALID_CURSOR_FAILURE_REASON);
         invalid_query_request(error)
     })
 }
+
+const INVALID_CURSOR_FAILURE_REASON: MusubiCursorFailureReasonV1 =
+    MusubiCursorFailureReasonV1::Invalid;
 
 fn invalid_query_request(error: impl core::fmt::Display) -> Error {
     crate::routing::conversion_error(format!("invalid Musubi V1 query request: {error}"))
@@ -312,6 +376,28 @@ where
         }
         Error::Query(ValidationFail::QueryFailed(error))
     })
+}
+
+fn execute_musubi_query<Q>(app: &SharedAppState, query: Q) -> Result<Q::Output>
+where
+    Q: ValidMusubiSingularQuery + SingularQuery,
+{
+    ValidMusubiSingularQuery::execute_musubi(&query, &app.state.view()).map_err(|error| {
+        if let Some(reason) = error.cursor_failure() {
+            record_cursor_failure(app, cursor_metric_reason(reason));
+        }
+        Error::Query(ValidationFail::QueryFailed(error.into_query_error()))
+    })
+}
+
+const fn cursor_metric_reason(reason: MusubiCursorFailureV1) -> MusubiCursorFailureReasonV1 {
+    match reason {
+        MusubiCursorFailureV1::FinalizedAnchorMismatch => MusubiCursorFailureReasonV1::StaleAnchor,
+        MusubiCursorFailureV1::IndexRevisionMismatch => MusubiCursorFailureReasonV1::StaleRevision,
+        MusubiCursorFailureV1::QueryMismatch => MusubiCursorFailureReasonV1::WrongQuery,
+        MusubiCursorFailureV1::CallerMismatch => MusubiCursorFailureReasonV1::WrongCaller,
+        MusubiCursorFailureV1::LastKeyStale => MusubiCursorFailureReasonV1::Boundary,
+    }
 }
 
 const fn core_cursor_failure_reason(
@@ -439,6 +525,38 @@ mod tests {
         assert_eq!(
             core_cursor_failure_reason(&QueryExecutionFail::NotFound),
             None
+        );
+    }
+
+    #[test]
+    fn exact_musubi_cursor_failures_map_to_closed_metric_reasons() {
+        for (failure, expected) in [
+            (
+                MusubiCursorFailureV1::FinalizedAnchorMismatch,
+                MusubiCursorFailureReasonV1::StaleAnchor,
+            ),
+            (
+                MusubiCursorFailureV1::IndexRevisionMismatch,
+                MusubiCursorFailureReasonV1::StaleRevision,
+            ),
+            (
+                MusubiCursorFailureV1::QueryMismatch,
+                MusubiCursorFailureReasonV1::WrongQuery,
+            ),
+            (
+                MusubiCursorFailureV1::CallerMismatch,
+                MusubiCursorFailureReasonV1::WrongCaller,
+            ),
+            (
+                MusubiCursorFailureV1::LastKeyStale,
+                MusubiCursorFailureReasonV1::Boundary,
+            ),
+        ] {
+            assert_eq!(cursor_metric_reason(failure), expected);
+        }
+        assert_eq!(
+            INVALID_CURSOR_FAILURE_REASON,
+            MusubiCursorFailureReasonV1::Invalid
         );
     }
 }

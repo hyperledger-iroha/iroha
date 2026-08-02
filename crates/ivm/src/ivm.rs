@@ -50,6 +50,7 @@ use crate::{
     prepared::PreparedContract,
     registers::Registers,
     simple_instruction::Instruction as SimpleInstruction,
+    stack_policy::IvmStackPolicy,
     syscall_metering::{
         STAGED_SYSCALL_ENTRY_GAS, StagedSyscallContext, SyscallCompletion, SyscallMetering,
         SyscallMeteringPhase,
@@ -684,13 +685,7 @@ pub struct IvmConfig {
     gas_limit: u64,
     acceleration: AccelerationPolicy,
     capabilities: HardwareCapabilities,
-    stack_limit_bytes: u64,
-    /// Per-route stack budget (bytes) used as an additional cap when deriving the effective stack.
-    ///
-    /// Hosts can set this to a compute route/profile budget (e.g.,
-    /// `ComputeResourceBudget.max_stack_bytes`) to ensure guest stacks never exceed the
-    /// advertised per-call limit.
-    stack_budget_bytes: u64,
+    stack_policy: IvmStackPolicy,
 }
 
 impl IvmConfig {
@@ -701,8 +696,7 @@ impl IvmConfig {
             gas_limit,
             acceleration: AccelerationPolicy::default(),
             capabilities: *hardware_capabilities_snapshot(),
-            stack_limit_bytes: crate::memory::Memory::default_stack_limit(),
-            stack_budget_bytes: crate::memory::Memory::stack_budget_limit(),
+            stack_policy: IvmStackPolicy::V1,
         }
     }
 
@@ -738,19 +732,6 @@ impl IvmConfig {
         self
     }
 
-    /// Override the guest stack limit applied when constructing the VM.
-    #[must_use]
-    pub fn with_stack_limit_bytes(mut self, stack_limit_bytes: u64) -> Self {
-        self.stack_limit_bytes = stack_limit_bytes;
-        self
-    }
-
-    /// Update the guest stack limit without consuming the builder.
-    pub fn set_stack_limit_bytes(&mut self, stack_limit_bytes: u64) -> &mut Self {
-        self.stack_limit_bytes = stack_limit_bytes;
-        self
-    }
-
     /// Gas limit to enforce for the VM.
     #[must_use]
     pub const fn gas_limit(&self) -> u64 {
@@ -769,49 +750,16 @@ impl IvmConfig {
         self.capabilities
     }
 
-    /// Stack limit (bytes) enforced for the VM's guest stack.
+    /// Immutable ABI policy used to derive the VM's guest stack.
     #[must_use]
-    pub const fn stack_limit_bytes(&self) -> u64 {
-        self.stack_limit_bytes
+    pub const fn stack_policy(&self) -> IvmStackPolicy {
+        self.stack_policy
     }
 
-    /// Per-route stack budget (bytes) applied when deriving the guest stack limit.
+    /// Derive the ABI-defined stack limit for this configuration's gas limit.
     #[must_use]
-    pub const fn stack_budget_bytes(&self) -> u64 {
-        self.stack_budget_bytes
-    }
-
-    /// Return a copy with the guest stack limit overridden.
-    #[must_use]
-    pub fn map_stack_limit(self, bytes: u64) -> Self {
-        self.with_stack_limit_bytes(bytes)
-    }
-
-    /// Override the per-route stack budget applied when constructing the VM.
-    #[must_use]
-    pub fn with_stack_budget_bytes(mut self, stack_budget_bytes: u64) -> Self {
-        self.stack_budget_bytes = stack_budget_bytes;
-        self
-    }
-
-    /// Update the per-route stack budget without consuming the builder.
-    pub fn set_stack_budget_bytes(&mut self, stack_budget_bytes: u64) -> &mut Self {
-        self.stack_budget_bytes = stack_budget_bytes;
-        self
-    }
-
-    /// Derive a stack limit bounded by both the configured stack cap and a gas-aware ceiling.
-    #[must_use]
-    pub fn stack_limit_for_gas(&self) -> u64 {
-        // Policy: clamp to min(configured cap, gas_limit*multiplier bytes, global budget), with a 64 KiB floor.
-        let gas_cap_bytes = self
-            .gas_limit
-            .saturating_mul(crate::gas_to_stack_multiplier());
-        let configured = self.stack_limit_bytes.max(64 * 1024);
-        let budget = self.stack_budget_bytes.max(1);
-        crate::memory::Memory::align_stack_bytes(
-            configured.min(gas_cap_bytes).min(budget).max(64 * 1024),
-        )
+    pub const fn stack_limit_for_gas(&self) -> u64 {
+        self.stack_policy.stack_limit_for_gas(self.gas_limit)
     }
 
     /// Create a builder seeded with this configuration's values.
@@ -854,8 +802,7 @@ pub struct IvmConfigBuilder {
     gas_limit: u64,
     acceleration: AccelerationPolicy,
     capabilities: HardwareCapabilities,
-    stack_limit_bytes: u64,
-    stack_budget_bytes: u64,
+    stack_policy: IvmStackPolicy,
 }
 
 impl IvmConfigBuilder {
@@ -866,8 +813,7 @@ impl IvmConfigBuilder {
             gas_limit,
             acceleration: AccelerationPolicy::default(),
             capabilities: *hardware_capabilities_snapshot(),
-            stack_limit_bytes: crate::memory::Memory::default_stack_limit(),
-            stack_budget_bytes: crate::memory::Memory::stack_budget_limit(),
+            stack_policy: IvmStackPolicy::V1,
         }
     }
 
@@ -878,8 +824,7 @@ impl IvmConfigBuilder {
             gas_limit: config.gas_limit(),
             acceleration: config.acceleration(),
             capabilities: config.capabilities(),
-            stack_limit_bytes: config.stack_limit_bytes(),
-            stack_budget_bytes: config.stack_budget_bytes(),
+            stack_policy: config.stack_policy(),
         }
     }
 
@@ -923,20 +868,6 @@ impl IvmConfigBuilder {
         self
     }
 
-    /// Override the guest stack limit (bytes).
-    #[must_use]
-    pub fn with_stack_limit_bytes(mut self, stack_limit_bytes: u64) -> Self {
-        self.stack_limit_bytes = stack_limit_bytes;
-        self
-    }
-
-    /// Override the per-route stack budget (bytes).
-    #[must_use]
-    pub fn with_stack_budget_bytes(mut self, stack_budget_bytes: u64) -> Self {
-        self.stack_budget_bytes = stack_budget_bytes;
-        self
-    }
-
     /// Finalise the builder and produce a configuration.
     #[must_use]
     pub fn build(self) -> IvmConfig {
@@ -944,8 +875,7 @@ impl IvmConfigBuilder {
             gas_limit: self.gas_limit,
             acceleration: self.acceleration,
             capabilities: self.capabilities,
-            stack_limit_bytes: self.stack_limit_bytes,
-            stack_budget_bytes: self.stack_budget_bytes,
+            stack_policy: self.stack_policy,
         }
     }
 
@@ -1054,20 +984,6 @@ impl IvmBuilder {
         self
     }
 
-    /// Override the guest stack limit (bytes) for subsequent builds.
-    #[must_use]
-    pub fn with_stack_limit_bytes(mut self, stack_limit_bytes: u64) -> Self {
-        self.config.stack_limit_bytes = stack_limit_bytes;
-        self
-    }
-
-    /// Override the per-route stack budget (bytes) for subsequent builds.
-    #[must_use]
-    pub fn with_stack_budget_bytes(mut self, stack_budget_bytes: u64) -> Self {
-        self.config.stack_budget_bytes = stack_budget_bytes;
-        self
-    }
-
     /// Update the acceleration policy without consuming the builder.
     pub fn set_acceleration(&mut self, policy: AccelerationPolicy) -> &mut Self {
         self.config.acceleration = policy;
@@ -1084,18 +1000,6 @@ impl IvmBuilder {
     /// Override the gas limit for subsequent builds.
     pub fn set_gas_limit(&mut self, gas_limit: u64) -> &mut Self {
         self.config.gas_limit = gas_limit;
-        self
-    }
-
-    /// Update the guest stack limit (bytes) without consuming the builder.
-    pub fn set_stack_limit_bytes(&mut self, stack_limit_bytes: u64) -> &mut Self {
-        self.config.stack_limit_bytes = stack_limit_bytes;
-        self
-    }
-
-    /// Update the per-route stack budget (bytes) without consuming the builder.
-    pub fn set_stack_budget_bytes(&mut self, stack_budget_bytes: u64) -> &mut Self {
-        self.config.stack_budget_bytes = stack_budget_bytes;
         self
     }
 
@@ -8780,9 +8684,7 @@ mod tests {
     fn execution_proof_summary_is_stable_for_same_program() {
         set_banner_enabled(false);
         let program = program_with_imm(7);
-        let config = IvmConfig::deterministic(u64::MAX)
-            .with_stack_limit_bytes(Memory::STACK_SIZE)
-            .with_stack_budget_bytes(Memory::STACK_SIZE);
+        let config = IvmConfig::deterministic(u64::MAX);
         let mut first = IVM::new_with_config(config);
         first.load_program(&program).expect("first program loads");
         let mut second = first.clone();
@@ -10026,23 +9928,19 @@ seiyaku Demo {
     }
 
     #[test]
-    fn stack_limit_for_gas_respects_multiplier_and_budget() {
+    fn stack_limit_for_gas_uses_immutable_v1_policy() {
         set_banner_enabled(false);
-        let prev_multiplier = crate::gas_to_stack_multiplier();
-        // Keep the budget low enough to observe multiplier effects without hitting the default stack cap.
-        let cfg = IvmConfig::adaptive(100_000).with_stack_budget_bytes(2 * 1024 * 1024);
-        crate::set_gas_to_stack_multiplier(4);
-        let baseline = cfg.stack_limit_for_gas();
-
-        crate::set_gas_to_stack_multiplier(8);
-        let raised = cfg.stack_limit_for_gas();
-        assert!(
-            raised > baseline,
-            "increasing the multiplier should raise the derived stack cap"
+        let cfg = IvmConfig::adaptive(100_000);
+        assert_eq!(cfg.stack_policy(), IvmStackPolicy::V1);
+        assert_eq!(cfg.stack_limit_for_gas(), 400_000);
+        assert_eq!(
+            IvmConfig::adaptive(0).stack_limit_for_gas(),
+            IvmStackPolicy::V1.minimum_stack_bytes()
         );
-        assert_eq!(raised, 800_000_u64.clamp(64 * 1024, 2 * 1024 * 1024));
-
-        crate::set_gas_to_stack_multiplier(prev_multiplier);
+        assert_eq!(
+            IvmConfig::adaptive(u64::MAX).stack_limit_for_gas(),
+            IvmStackPolicy::V1.maximum_stack_bytes()
+        );
     }
 
     #[test]

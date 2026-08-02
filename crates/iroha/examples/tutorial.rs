@@ -120,7 +120,7 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
 
     // #region register_asset_create_asset
     // Create an asset
-    let asset_def_id = AssetDefinitionId::new(
+    let asset_def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("looking_glass", "universal").expect("valid domain identifier"),
         "time".parse().expect("valid asset identifier"),
     );
@@ -129,9 +129,13 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
     // #region register_asset_init_submit
     // Initialise the registration time
     let register_time = Register::asset_definition(
-        AssetDefinition::numeric(asset_def_id.clone())
-            .with_name("time".to_owned())
-            .mintable_once(),
+        AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "time".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .mintable_once(),
     );
 
     // Submit a registration time
@@ -179,7 +183,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // Define the instances of an Asset and Account
     // #region mint_asset_define_asset_account
-    let roses = AssetDefinitionId::new(
+    let roses = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("valid domain identifier"),
         "rose".parse().expect("valid asset identifier"),
     );
@@ -240,7 +244,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_define_asset_account
     // Define the instances of an Asset and Account
-    let roses = AssetDefinitionId::new(
+    let roses = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("valid domain identifier"),
         "rose".parse().expect("valid asset identifier"),
     );

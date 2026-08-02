@@ -14,7 +14,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+};
 use futures::SinkExt;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -1229,6 +1232,147 @@ impl ExplorerPaginationMeta {
     }
 }
 
+const EXPLORER_CURSOR_MAX_LENGTH: usize = 1_424;
+const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
+
+fn require_exact_explorer_fields(
+    record: &json::Map,
+    expected: &[&str],
+    context: &str,
+) -> ToriiResult<()> {
+    if record.len() != expected.len() || expected.iter().any(|field| !record.contains_key(*field)) {
+        return Err(decode_error(
+            context,
+            format!("must contain exactly these fields: {}", expected.join(", ")),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_explorer_items_len(
+    items_len: usize,
+    pagination: &ExplorerCursorMeta,
+    context: &str,
+) -> ToriiResult<()> {
+    if items_len > pagination.limit as usize {
+        return Err(decode_error(
+            context,
+            format!(
+                "must contain at most {} entries, matching pagination.limit",
+                pagination.limit
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Seek-pagination metadata returned by Explorer world-collection APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerCursorMeta {
+    /// Maximum number of entries requested for this page.
+    pub limit: u32,
+    /// Opaque cursor for the next page, when another page exists.
+    pub next_cursor: Option<String>,
+    /// Whether another page exists for the same collection and filters.
+    pub has_more: bool,
+}
+
+impl ExplorerCursorMeta {
+    fn from_json(value: &json::Value, context: &str) -> ToriiResult<Self> {
+        let record = value
+            .as_object()
+            .ok_or_else(|| decode_error(context, "must be a JSON object"))?;
+        require_exact_explorer_fields(record, &["limit", "next_cursor", "has_more"], context)?;
+        let limit_value = record
+            .get("limit")
+            .ok_or_else(|| decode_error(&format!("{context}.limit"), "missing field"))?;
+        let limit = parse_u64_value(limit_value, false, &format!("{context}.limit"))?;
+        let limit = u32::try_from(limit)
+            .ok()
+            .filter(|limit| *limit <= EXPLORER_CURSOR_MAX_LIMIT)
+            .ok_or_else(|| {
+                decode_error(
+                    &format!("{context}.limit"),
+                    format!("must be between 1 and {EXPLORER_CURSOR_MAX_LIMIT}"),
+                )
+            })?;
+        let next_cursor = match record.get("next_cursor") {
+            Some(value) if value.is_null() => None,
+            Some(value) => {
+                let cursor = value.as_str().ok_or_else(|| {
+                    decode_error(
+                        &format!("{context}.next_cursor"),
+                        "must be a string or null",
+                    )
+                })?;
+                validate_explorer_cursor(cursor, &format!("{context}.next_cursor"))?;
+                Some(cursor.to_owned())
+            }
+            None => {
+                return Err(decode_error(
+                    &format!("{context}.next_cursor"),
+                    "missing field",
+                ));
+            }
+        };
+        let has_more = record
+            .get("has_more")
+            .and_then(json::Value::as_bool)
+            .ok_or_else(|| decode_error(&format!("{context}.has_more"), "must be a boolean"))?;
+        if has_more != next_cursor.is_some() {
+            return Err(decode_error(
+                context,
+                "has_more must match next_cursor availability",
+            ));
+        }
+        Ok(Self {
+            limit,
+            next_cursor,
+            has_more,
+        })
+    }
+}
+
+fn validate_explorer_cursor<'a>(cursor: &'a str, context: &str) -> ToriiResult<&'a str> {
+    let canonical = !cursor.is_empty()
+        && cursor.len() <= EXPLORER_CURSOR_MAX_LENGTH
+        && URL_SAFE_NO_PAD
+            .decode(cursor)
+            .map(|decoded| URL_SAFE_NO_PAD.encode(decoded) == cursor)
+            .unwrap_or(false);
+    if !canonical {
+        return Err(decode_error(
+            context,
+            format!(
+                "must be canonical base64url without padding and at most {EXPLORER_CURSOR_MAX_LENGTH} characters"
+            ),
+        ));
+    }
+    Ok(cursor)
+}
+
+fn append_explorer_cursor_params(
+    params: &mut Vec<(&'static str, String)>,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    context: &str,
+) -> ToriiResult<()> {
+    if let Some(cursor) = cursor {
+        validate_explorer_cursor(&cursor, &format!("{context}.cursor"))?;
+        params.push(("cursor", cursor));
+    }
+    if let Some(limit) = limit {
+        if !(1..=EXPLORER_CURSOR_MAX_LIMIT).contains(&limit) {
+            return Err(decode_error(
+                &format!("{context}.limit"),
+                format!("must be between 1 and {EXPLORER_CURSOR_MAX_LIMIT}"),
+            ));
+        }
+        params.push(("limit", limit.to_string()));
+    }
+    Ok(())
+}
+
 /// Explorer block summary returned by `/v1/blocks` endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerBlockRecord {
@@ -1431,8 +1575,8 @@ impl ExplorerAccountRecord {
 /// Explorer `/v1/explorer/accounts` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountsPage {
-    /// Pagination metadata returned by Explorer.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Explorer.
+    pub pagination: ExplorerCursorMeta,
     /// Account entries in the requested page.
     pub items: Vec<ExplorerAccountRecord>,
 }
@@ -1442,16 +1586,20 @@ impl ExplorerAccountsPage {
         let doc = value
             .as_object()
             .ok_or_else(|| decode_error("explorer accounts page", "must be a JSON object"))?;
+        require_exact_explorer_fields(doc, &["pagination", "items"], "explorer accounts page")?;
         let pagination = doc
             .get("pagination")
             .ok_or_else(|| decode_error("explorer accounts page", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer accounts page.pagination")
+            })?;
         let items_value = doc
             .get("items")
             .ok_or_else(|| decode_error("explorer accounts page", "missing items field"))?;
         let items = items_value
             .as_array()
             .ok_or_else(|| decode_error("explorer accounts page.items", "must be a JSON array"))?;
+        validate_explorer_items_len(items.len(), &pagination, "explorer accounts page.items")?;
         let mut parsed = Vec::with_capacity(items.len());
         for (index, entry) in items.iter().enumerate() {
             let record = ExplorerAccountRecord::from_json(entry).map_err(|err| {
@@ -1472,10 +1620,10 @@ impl ExplorerAccountsPage {
 /// Parameters accepted by `/v1/explorer/accounts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAccountsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional domain filter (canonical identifier).
     pub domain: Option<String>,
     /// Optional asset definition filter (`definition#domain` literal).
@@ -1548,8 +1696,8 @@ impl ExplorerDomainRecord {
 /// Explorer `/v1/explorer/domains` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerDomainsPage {
-    /// Pagination metadata returned by Torii.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
     /// Domain entries contained in the page.
     pub items: Vec<ExplorerDomainRecord>,
 }
@@ -1559,16 +1707,28 @@ impl ExplorerDomainsPage {
         let record = value
             .as_object()
             .ok_or_else(|| decode_error("explorer domains response", "must be a JSON object"))?;
+        require_exact_explorer_fields(
+            record,
+            &["pagination", "items"],
+            "explorer domains response",
+        )?;
         let pagination = record
             .get("pagination")
             .ok_or_else(|| decode_error("explorer domains response", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer domains response.pagination")
+            })?;
         let items_value = record
             .get("items")
             .ok_or_else(|| decode_error("explorer domains response", "missing items field"))?;
         let items_array = items_value.as_array().ok_or_else(|| {
             decode_error("explorer domains response.items", "must be a JSON array")
         })?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer domains response.items",
+        )?;
         let mut items = Vec::with_capacity(items_array.len());
         for (index, entry) in items_array.iter().enumerate() {
             let record = ExplorerDomainRecord::from_json(entry).map_err(|err| {
@@ -1586,10 +1746,10 @@ impl ExplorerDomainsPage {
 /// Parameters accepted by `/v1/explorer/domains`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerDomainsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional filter restricting the owning account.
     pub owned_by: Option<String>,
 }
@@ -1657,8 +1817,8 @@ impl ExplorerAssetDefinitionRecord {
 /// Explorer `/v1/explorer/asset-definitions` response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetDefinitionsPage {
-    /// Pagination metadata returned by Torii.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
     /// Asset definition entries contained in the page.
     pub items: Vec<ExplorerAssetDefinitionRecord>,
 }
@@ -1671,6 +1831,11 @@ impl ExplorerAssetDefinitionsPage {
                 "must be a JSON object",
             )
         })?;
+        require_exact_explorer_fields(
+            record,
+            &["pagination", "items"],
+            "explorer asset definitions response",
+        )?;
         let pagination = record
             .get("pagination")
             .ok_or_else(|| {
@@ -1679,7 +1844,12 @@ impl ExplorerAssetDefinitionsPage {
                     "missing pagination field",
                 )
             })
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(
+                    value,
+                    "explorer asset definitions response.pagination",
+                )
+            })?;
         let items_value = record.get("items").ok_or_else(|| {
             decode_error("explorer asset definitions response", "missing items field")
         })?;
@@ -1689,6 +1859,11 @@ impl ExplorerAssetDefinitionsPage {
                 "must be a JSON array",
             )
         })?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer asset definitions response.items",
+        )?;
         let mut items = Vec::with_capacity(items_array.len());
         for (index, entry) in items_array.iter().enumerate() {
             let record = ExplorerAssetDefinitionRecord::from_json(entry).map_err(|err| {
@@ -1706,10 +1881,10 @@ impl ExplorerAssetDefinitionsPage {
 /// Parameters accepted by `/v1/explorer/asset-definitions`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAssetDefinitionsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional domain filter restricting results.
     pub domain: Option<String>,
     /// Optional owning account filter.
@@ -1755,8 +1930,8 @@ impl ExplorerAssetRecord {
 /// Explorer `/v1/explorer/assets` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetsPage {
-    /// Pagination metadata returned by Torii.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
     /// Asset entries in the page.
     pub items: Vec<ExplorerAssetRecord>,
 }
@@ -1766,16 +1941,28 @@ impl ExplorerAssetsPage {
         let record = value
             .as_object()
             .ok_or_else(|| decode_error("explorer assets response", "must be a JSON object"))?;
+        require_exact_explorer_fields(
+            record,
+            &["pagination", "items"],
+            "explorer assets response",
+        )?;
         let pagination = record
             .get("pagination")
             .ok_or_else(|| decode_error("explorer assets response", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer assets response.pagination")
+            })?;
         let items_value = record
             .get("items")
             .ok_or_else(|| decode_error("explorer assets response", "missing items field"))?;
         let items_array = items_value.as_array().ok_or_else(|| {
             decode_error("explorer assets response.items", "must be a JSON array")
         })?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer assets response.items",
+        )?;
         let mut items = Vec::with_capacity(items_array.len());
         for (index, entry) in items_array.iter().enumerate() {
             let record = ExplorerAssetRecord::from_json(entry).map_err(|err| {
@@ -1793,10 +1980,10 @@ impl ExplorerAssetsPage {
 /// Parameters accepted by `/v1/explorer/assets`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAssetsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional owning account filter.
     pub owned_by: Option<String>,
     /// Optional definition filter (`definition#domain` literal).
@@ -1837,8 +2024,8 @@ impl ExplorerNftRecord {
 /// Explorer `/v1/explorer/nfts` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerNftsPage {
-    /// Pagination metadata returned by Torii.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
     /// NFT entries included in the page.
     pub items: Vec<ExplorerNftRecord>,
 }
@@ -1848,16 +2035,24 @@ impl ExplorerNftsPage {
         let record = value
             .as_object()
             .ok_or_else(|| decode_error("explorer nfts response", "must be a JSON object"))?;
+        require_exact_explorer_fields(record, &["pagination", "items"], "explorer nfts response")?;
         let pagination = record
             .get("pagination")
             .ok_or_else(|| decode_error("explorer nfts response", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer nfts response.pagination")
+            })?;
         let items_value = record
             .get("items")
             .ok_or_else(|| decode_error("explorer nfts response", "missing items field"))?;
         let items_array = items_value
             .as_array()
             .ok_or_else(|| decode_error("explorer nfts response.items", "must be a JSON array"))?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer nfts response.items",
+        )?;
         let mut items = Vec::with_capacity(items_array.len());
         for (index, entry) in items_array.iter().enumerate() {
             let record = ExplorerNftRecord::from_json(entry).map_err(|err| {
@@ -1875,13 +2070,182 @@ impl ExplorerNftsPage {
 /// Parameters accepted by `/v1/explorer/nfts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerNftsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional owning account filter.
     pub owned_by: Option<String>,
     /// Optional domain filter restricting NFT IDs.
+    pub domain: Option<String>,
+}
+
+/// Parent-lot quantity returned with an Explorer RWA record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerRwaParentRecord {
+    /// Canonical parent RWA identifier.
+    pub rwa: String,
+    /// Quantity inherited from the parent lot.
+    pub quantity: String,
+}
+
+impl ExplorerRwaParentRecord {
+    fn from_json(value: &json::Value) -> ToriiResult<Self> {
+        let record = value
+            .as_object()
+            .ok_or_else(|| decode_error("explorer RWA parent", "must be a JSON object"))?;
+        Ok(Self {
+            rwa: parse_required_string(record, &["rwa"], "explorer RWA parent.rwa")?,
+            quantity: parse_required_string(record, &["quantity"], "explorer RWA parent.quantity")?,
+        })
+    }
+}
+
+/// Explorer RWA entry returned by `/v1/explorer/rwas`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerRwaRecord {
+    /// Canonical RWA identifier.
+    pub id: String,
+    /// Account that currently owns the RWA.
+    pub owned_by: String,
+    /// Total lot quantity.
+    pub quantity: String,
+    /// Quantity currently held from transfer.
+    pub held_quantity: String,
+    /// Primary external reference for the RWA.
+    pub primary_reference: String,
+    /// Optional lifecycle status.
+    pub status: Option<String>,
+    /// Whether transfers are frozen.
+    pub is_frozen: bool,
+    /// Metadata attached to the RWA.
+    pub metadata: json::Value,
+    /// Parent-lot relationships.
+    pub parents: Vec<ExplorerRwaParentRecord>,
+}
+
+impl ExplorerRwaRecord {
+    fn from_json(value: &json::Value) -> ToriiResult<Self> {
+        let record = value
+            .as_object()
+            .ok_or_else(|| decode_error("explorer RWA record", "must be a JSON object"))?;
+        let status = match record.get("status") {
+            None | Some(json::Value::Null) => None,
+            Some(value) => {
+                let status = value.as_str().ok_or_else(|| {
+                    decode_error("explorer RWA record.status", "must be a string or null")
+                })?;
+                if status.is_empty() {
+                    return Err(decode_error(
+                        "explorer RWA record.status",
+                        "must not be empty",
+                    ));
+                }
+                Some(status.to_owned())
+            }
+        };
+        let is_frozen = record
+            .get("is_frozen")
+            .and_then(json::Value::as_bool)
+            .ok_or_else(|| decode_error("explorer RWA record.is_frozen", "must be a boolean"))?;
+        let parents = match record.get("parents") {
+            None => Vec::new(),
+            Some(value) => value
+                .as_array()
+                .ok_or_else(|| decode_error("explorer RWA record.parents", "must be a JSON array"))?
+                .iter()
+                .enumerate()
+                .map(|(index, parent)| {
+                    ExplorerRwaParentRecord::from_json(parent).map_err(|error| {
+                        decode_error(
+                            "explorer RWA record.parents",
+                            format!("failed to decode entry {index}: {error}"),
+                        )
+                    })
+                })
+                .collect::<ToriiResult<Vec<_>>>()?,
+        };
+        Ok(Self {
+            id: parse_required_string(record, &["id"], "explorer RWA record.id")?,
+            owned_by: parse_required_string(record, &["owned_by"], "explorer RWA record.owned_by")?,
+            quantity: parse_required_string(record, &["quantity"], "explorer RWA record.quantity")?,
+            held_quantity: parse_required_string(
+                record,
+                &["held_quantity"],
+                "explorer RWA record.held_quantity",
+            )?,
+            primary_reference: parse_required_string(
+                record,
+                &["primary_reference"],
+                "explorer RWA record.primary_reference",
+            )?,
+            status,
+            is_frozen,
+            metadata: record
+                .get("metadata")
+                .cloned()
+                .unwrap_or_else(|| json::Value::Object(json::Map::new())),
+            parents,
+        })
+    }
+}
+
+/// Explorer `/v1/explorer/rwas` response model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerRwasPage {
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
+    /// RWA entries included in the page.
+    pub items: Vec<ExplorerRwaRecord>,
+}
+
+impl ExplorerRwasPage {
+    fn from_json(value: &json::Value) -> ToriiResult<Self> {
+        let record = value
+            .as_object()
+            .ok_or_else(|| decode_error("explorer rwas response", "must be a JSON object"))?;
+        require_exact_explorer_fields(record, &["pagination", "items"], "explorer rwas response")?;
+        let pagination = record
+            .get("pagination")
+            .ok_or_else(|| decode_error("explorer rwas response", "missing pagination field"))
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer rwas response.pagination")
+            })?;
+        let items_array = record
+            .get("items")
+            .and_then(json::Value::as_array)
+            .ok_or_else(|| decode_error("explorer rwas response.items", "must be a JSON array"))?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer rwas response.items",
+        )?;
+        let items = items_array
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                ExplorerRwaRecord::from_json(value).map_err(|error| {
+                    decode_error(
+                        "explorer rwas response.items",
+                        format!("failed to decode entry {index}: {error}"),
+                    )
+                })
+            })
+            .collect::<ToriiResult<Vec<_>>>()?;
+        Ok(Self { pagination, items })
+    }
+}
+
+/// Parameters accepted by `/v1/explorer/rwas`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExplorerRwasQuery {
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
+    /// Optional owning account filter.
+    pub owned_by: Option<String>,
+    /// Optional domain filter restricting RWA IDs.
     pub domain: Option<String>,
 }
 
@@ -2623,6 +2987,11 @@ impl ToriiClient {
     /// URL of the `/v1/explorer/nfts` endpoint.
     pub fn explorer_nfts_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/nfts")
+    }
+
+    /// URL of the `/v1/explorer/rwas` endpoint.
+    pub fn explorer_rwas_endpoint(&self) -> ToriiResult<Url> {
+        self.http_endpoint("v1/explorer/rwas")
     }
 
     /// URL of the `/v1/explorer/transactions/{hash}` endpoint.
@@ -3396,12 +3765,12 @@ impl ToriiClient {
         let url = self.explorer_accounts_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer accounts query",
+        )?;
         if let Some(domain) = query.domain {
             let trimmed = domain.trim();
             if !trimmed.is_empty() {
@@ -3438,12 +3807,12 @@ impl ToriiClient {
         let url = self.explorer_domains_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer domains query",
+        )?;
         if let Some(owned_by) = query
             .owned_by
             .as_ref()
@@ -3476,12 +3845,12 @@ impl ToriiClient {
         let url = self.explorer_asset_definitions_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer asset definitions query",
+        )?;
         if let Some(domain) = query
             .domain
             .as_ref()
@@ -3522,12 +3891,12 @@ impl ToriiClient {
         let url = self.explorer_assets_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer assets query",
+        )?;
         if let Some(owned_by) = query
             .owned_by
             .as_ref()
@@ -3568,12 +3937,12 @@ impl ToriiClient {
         let url = self.explorer_nfts_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer nfts query",
+        )?;
         if let Some(owned_by) = query
             .owned_by
             .as_ref()
@@ -3604,6 +3973,52 @@ impl ToriiClient {
         let bytes = response.bytes().await?;
         let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
         ExplorerNftsPage::from_json(&value)
+    }
+
+    /// Fetch Explorer RWA summaries from `/v1/explorer/rwas`.
+    pub async fn fetch_explorer_rwas_page(
+        &self,
+        query: ExplorerRwasQuery,
+    ) -> ToriiResult<ExplorerRwasPage> {
+        let url = self.explorer_rwas_endpoint()?;
+        let mut request = self.http.get(url);
+        let mut params: Vec<(&str, String)> = Vec::new();
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer rwas query",
+        )?;
+        if let Some(owned_by) = query
+            .owned_by
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            params.push(("owned_by", owned_by.to_owned()));
+        }
+        if let Some(domain) = query
+            .domain
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            params.push(("domain", domain.to_owned()));
+        }
+        if !params.is_empty() {
+            request = request.query(&params);
+        }
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        ExplorerRwasPage::from_json(&value)
     }
 
     /// List triggers exposed by `/v1/triggers`.
@@ -4400,6 +4815,9 @@ fn data_summary(event: &DataEvent) -> (String, String) {
     match event {
         DataEvent::Peer(peer) => peer_event_summary(peer),
         DataEvent::Domain(domain) => domain_event_summary(domain),
+        DataEvent::Account(account) => account_event_summary(account),
+        DataEvent::Asset(asset) => asset_event_summary(asset),
+        DataEvent::AssetDefinition(definition) => asset_definition_event_summary(definition),
         DataEvent::Trigger(trigger) => ("Trigger".to_owned(), format!("{trigger:?}")),
         DataEvent::Role(role) => ("Role".to_owned(), format!("{role:?}")),
         DataEvent::Configuration(config) => ("Configuration".to_owned(), format!("{config:?}")),
@@ -4431,8 +4849,11 @@ fn domain_event_summary(event: &DomainEvent) -> (String, String) {
     match event {
         DomainEvent::Created(domain) => ("Domain created".to_owned(), domain.id().to_string()),
         DomainEvent::Deleted(id) => ("Domain deleted".to_owned(), id.to_string()),
-        DomainEvent::Account(account) => account_event_summary(account),
-        DomainEvent::AssetDefinition(definition) => asset_definition_event_summary(definition),
+        DomainEvent::Account(account) => account_event_summary(&account.event),
+        DomainEvent::Asset(asset) => asset_event_summary(&asset.event),
+        DomainEvent::AssetDefinition(definition) => {
+            asset_definition_event_summary(&definition.event)
+        }
         DomainEvent::Nft(nft) => nft_event_summary(nft),
         DomainEvent::MetadataInserted(change) => (
             "Domain metadata inserted".to_owned(),
@@ -4456,7 +4877,6 @@ fn account_event_summary(event: &AccountEvent) -> (String, String) {
             account.account.id().to_string(),
         ),
         AccountEvent::Deleted(id) => ("Account deleted".to_owned(), id.to_string()),
-        AccountEvent::Asset(asset_event) => asset_event_summary(asset_event),
         AccountEvent::ControllerReplaced(change) => (
             "Account controller replaced".to_owned(),
             format!(
@@ -9773,10 +10193,9 @@ state_tiered_cold_entries 2
     fn explorer_accounts_page_decodes_entries() {
         let value = norito::json!({
             "pagination": {
-                "page": 1,
-                "per_page": 10,
-                "total_pages": 1,
-                "total_items": 1
+                "limit": 10,
+                "next_cursor": null,
+                "has_more": false
             },
             "items": [
                 {
@@ -9791,8 +10210,8 @@ state_tiered_cold_entries 2
             ]
         });
         let page = ExplorerAccountsPage::from_json(&value).expect("page");
-        assert_eq!(page.pagination.page, 1);
-        assert_eq!(page.pagination.per_page, 10);
+        assert_eq!(page.pagination.limit, 10);
+        assert!(!page.pagination.has_more);
         assert_eq!(page.items.len(), 1);
         assert_eq!(
             page.items[0].id,
@@ -9826,7 +10245,7 @@ state_tiered_cold_entries 2
     #[test]
     fn explorer_domains_page_validates_entries() {
         let value = norito::json!({
-            "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "pagination":{"limit":10,"next_cursor":null,"has_more":false},
             "items":[{ "id":"sora","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","accounts":1,"assets":0,"nfts":0 }]
         });
         let page = ExplorerDomainsPage::from_json(&value).expect("page");
@@ -9857,7 +10276,7 @@ state_tiered_cold_entries 2
     #[test]
     fn explorer_asset_definition_page_validates_entries() {
         let value = norito::json!({
-            "pagination":{"page":1,"per_page":5,"total_pages":1,"total_items":1},
+            "pagination":{"limit":5,"next_cursor":null,"has_more":false},
             "items":[
                 {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","assets":2}
             ]
@@ -9887,7 +10306,7 @@ state_tiered_cold_entries 2
     #[test]
     fn explorer_assets_page_validates_entries() {
         let value = norito::json!({
-            "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "pagination":{"limit":10,"next_cursor":null,"has_more":false},
             "items":[
                 {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","value":"10"}
             ]
@@ -9916,7 +10335,7 @@ state_tiered_cold_entries 2
     #[test]
     fn explorer_nfts_page_validates_entries() {
         let value = norito::json!({
-            "pagination":{"page":1,"per_page":1,"total_pages":1,"total_items":1},
+            "pagination":{"limit":1,"next_cursor":null,"has_more":false},
             "items":[{"id":"art#gallery","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","metadata":{}}]
         });
         let page = ExplorerNftsPage::from_json(&value).expect("page");
@@ -9934,10 +10353,9 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination": {
-                "page": 2,
-                "per_page": 25,
-                "total_pages": 3,
-                "total_items": 60
+                "limit": 25,
+                "next_cursor": "Y3Vyc29yLTI",
+                "has_more": true
             },
             "items": [
                 {
@@ -9954,8 +10372,8 @@ state_tiered_cold_entries 2
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/v1/explorer/accounts")
-                .query_param("page", "2")
-                .query_param("per_page", "25")
+                .query_param("cursor", "Y3Vyc29yLTE")
+                .query_param("limit", "25")
                 .query_param("domain", "sora")
                 .query_param("with_asset", "usd#sora");
             then.status(200)
@@ -9965,8 +10383,8 @@ state_tiered_cold_entries 2
         let client = ToriiClient::new(server.url("/")).expect("client");
         let page = client
             .fetch_explorer_accounts_page(ExplorerAccountsQuery {
-                page: Some(2),
-                per_page: Some(25),
+                cursor: Some("Y3Vyc29yLTE".into()),
+                limit: Some(25),
                 domain: Some("sora".into()),
                 with_asset: Some("usd#sora".into()),
             })
@@ -9974,8 +10392,8 @@ state_tiered_cold_entries 2
             .expect("page");
 
         mock.assert();
-        assert_eq!(page.pagination.page, 2);
-        assert_eq!(page.pagination.per_page, 25);
+        assert_eq!(page.pagination.limit, 25);
+        assert_eq!(page.pagination.next_cursor.as_deref(), Some("Y3Vyc29yLTI"));
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].owned_assets, 4);
     }
@@ -9986,14 +10404,13 @@ state_tiered_cold_entries 2
             return;
         };
         let body = norito::json!({
-            "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "pagination":{"limit":10,"next_cursor":null,"has_more":false},
             "items":[{"id":"sora","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","accounts":1,"assets":0,"nfts":0}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/v1/explorer/domains")
-                .query_param("page", "1")
-                .query_param("per_page", "10")
+                .query_param("limit", "10")
                 .query_param(
                     "owned_by",
                     "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
@@ -10005,8 +10422,8 @@ state_tiered_cold_entries 2
         let client = ToriiClient::new(server.url("/")).expect("client");
         let page = client
             .fetch_explorer_domains_page(ExplorerDomainsQuery {
-                page: Some(1),
-                per_page: Some(10),
+                cursor: None,
+                limit: Some(10),
                 owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
             })
             .await
@@ -10023,14 +10440,14 @@ state_tiered_cold_entries 2
             return;
         };
         let body = norito::json!({
-            "pagination":{"page":2,"per_page":5,"total_pages":3,"total_items":12},
+            "pagination":{"limit":5,"next_cursor":"Y3Vyc29yLTI","has_more":true},
             "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","assets":7}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/v1/explorer/asset-definitions")
-                .query_param("page", "2")
-                .query_param("per_page", "5")
+                .query_param("cursor", "Y3Vyc29yLTE")
+                .query_param("limit", "5")
                 .query_param("domain", "sora")
                 .query_param(
                     "owned_by",
@@ -10043,15 +10460,15 @@ state_tiered_cold_entries 2
         let client = ToriiClient::new(server.url("/")).expect("client");
         let page = client
             .fetch_explorer_asset_definitions_page(ExplorerAssetDefinitionsQuery {
-                page: Some(2),
-                per_page: Some(5),
+                cursor: Some("Y3Vyc29yLTE".into()),
+                limit: Some(5),
                 domain: Some("sora".into()),
                 owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
             })
             .await
             .expect("page");
         mock.assert();
-        assert_eq!(page.pagination.page, 2);
+        assert!(page.pagination.has_more);
         assert_eq!(page.items[0].id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     }
 
@@ -10061,14 +10478,13 @@ state_tiered_cold_entries 2
             return;
         };
         let body = norito::json!({
-            "pagination":{"page":1,"per_page":50,"total_pages":1,"total_items":1},
+            "pagination":{"limit":50,"next_cursor":null,"has_more":false},
             "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","value":"10"}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/v1/explorer/assets")
-                .query_param("page", "1")
-                .query_param("per_page", "50")
+                .query_param("limit", "50")
                 .query_param(
                     "owned_by",
                     "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
@@ -10080,8 +10496,8 @@ state_tiered_cold_entries 2
         let client = ToriiClient::new(server.url("/")).expect("client");
         let page = client
             .fetch_explorer_assets_page(ExplorerAssetsQuery {
-                page: Some(1),
-                per_page: Some(50),
+                cursor: None,
+                limit: Some(50),
                 owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
                 definition: Some("usd#sora".into()),
             })
@@ -10101,14 +10517,14 @@ state_tiered_cold_entries 2
             return;
         };
         let body = norito::json!({
-            "pagination":{"page":3,"per_page":5,"total_pages":6,"total_items":25},
+            "pagination":{"limit":5,"next_cursor":"Y3Vyc29yLTI","has_more":true},
             "items":[{"id":"art#gallery","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","metadata":{}}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/v1/explorer/nfts")
-                .query_param("page", "3")
-                .query_param("per_page", "5")
+                .query_param("cursor", "Y3Vyc29yLTE")
+                .query_param("limit", "5")
                 .query_param(
                     "owned_by",
                     "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
@@ -10120,16 +10536,179 @@ state_tiered_cold_entries 2
         let client = ToriiClient::new(server.url("/")).expect("client");
         let page = client
             .fetch_explorer_nfts_page(ExplorerNftsQuery {
-                page: Some(3),
-                per_page: Some(5),
+                cursor: Some("Y3Vyc29yLTE".into()),
+                limit: Some(5),
                 owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
                 domain: Some("gallery".into()),
             })
             .await
             .expect("page");
         mock.assert();
-        assert_eq!(page.pagination.page, 3);
+        assert!(page.pagination.has_more);
         assert_eq!(page.items[0].id, "art#gallery");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_explorer_rwas_page_applies_filters() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let body = norito::json!({
+            "pagination":{"limit":5,"next_cursor":null,"has_more":false},
+            "items":[{
+                "id":"warehouse#commodities",
+                "owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+                "quantity":"10",
+                "held_quantity":"2",
+                "primary_reference":"vault-cert-1",
+                "status":"active",
+                "is_frozen":false,
+                "metadata":{"origin":"AE"},
+                "parents":[{"rwa":"source#commodities","quantity":"10"}]
+            }]
+        });
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/explorer/rwas")
+                .query_param("cursor", "Y3Vyc29yLTE")
+                .query_param("limit", "5")
+                .query_param(
+                    "owned_by",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+                )
+                .query_param("domain", "commodities");
+            then.status(200)
+                .body(norito::json::to_string(&body).expect("serialize"));
+        });
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let page = client
+            .fetch_explorer_rwas_page(ExplorerRwasQuery {
+                cursor: Some("Y3Vyc29yLTE".into()),
+                limit: Some(5),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
+                domain: Some("commodities".into()),
+            })
+            .await
+            .expect("page");
+        mock.assert();
+        assert_eq!(page.items[0].id, "warehouse#commodities");
+        assert_eq!(page.items[0].held_quantity, "2");
+        assert_eq!(page.items[0].parents[0].rwa, "source#commodities");
+    }
+
+    #[test]
+    fn explorer_cursor_metadata_rejects_inconsistent_continuation() {
+        let value = norito::json!({
+            "limit": 25,
+            "next_cursor": null,
+            "has_more": true
+        });
+        let error = ExplorerCursorMeta::from_json(&value, "cursor metadata")
+            .expect_err("inconsistent metadata must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("has_more must match next_cursor")
+        );
+    }
+
+    #[test]
+    fn explorer_cursor_rejects_noncanonical_trailing_bits() {
+        assert_eq!(
+            validate_explorer_cursor("AA", "cursor").expect("canonical cursor"),
+            "AA"
+        );
+        let error = validate_explorer_cursor("AB", "cursor")
+            .expect_err("non-zero unused base64url bits must fail");
+        assert!(error.to_string().contains("canonical base64url"));
+    }
+
+    #[test]
+    fn explorer_world_pages_reject_unknown_fields_and_oversized_items() {
+        macro_rules! assert_all_world_pages_reject {
+            ($value:expr, $needle:literal) => {{
+                let error = ExplorerAccountsPage::from_json(&$value)
+                    .expect_err("accounts page must fail closed");
+                assert!(error.to_string().contains($needle));
+                let error = ExplorerDomainsPage::from_json(&$value)
+                    .expect_err("domains page must fail closed");
+                assert!(error.to_string().contains($needle));
+                let error = ExplorerAssetDefinitionsPage::from_json(&$value)
+                    .expect_err("asset definitions page must fail closed");
+                assert!(error.to_string().contains($needle));
+                let error = ExplorerAssetsPage::from_json(&$value)
+                    .expect_err("assets page must fail closed");
+                assert!(error.to_string().contains($needle));
+                let error =
+                    ExplorerNftsPage::from_json(&$value).expect_err("NFTs page must fail closed");
+                assert!(error.to_string().contains($needle));
+                let error =
+                    ExplorerRwasPage::from_json(&$value).expect_err("RWAs page must fail closed");
+                assert!(error.to_string().contains($needle));
+            }};
+        }
+
+        let unexpected_page_field = norito::json!({
+            "pagination": {"limit": 1, "next_cursor": null, "has_more": false},
+            "items": [],
+            "page": 1
+        });
+        assert_all_world_pages_reject!(unexpected_page_field, "must contain exactly");
+
+        let unexpected_metadata_field = norito::json!({
+            "pagination": {
+                "limit": 1,
+                "next_cursor": null,
+                "has_more": false,
+                "total_items": 0
+            },
+            "items": []
+        });
+        assert_all_world_pages_reject!(unexpected_metadata_field, "must contain exactly");
+
+        let oversized_items = norito::json!({
+            "pagination": {"limit": 1, "next_cursor": null, "has_more": false},
+            "items": [{}, {}]
+        });
+        assert_all_world_pages_reject!(oversized_items, "must contain at most 1 entries");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explorer_cursor_query_rejects_invalid_bounds_before_http() {
+        let client = ToriiClient::new("http://127.0.0.1:9").expect("client");
+        let limit_error = client
+            .fetch_explorer_domains_page(ExplorerDomainsQuery {
+                cursor: None,
+                limit: Some(101),
+                owned_by: None,
+            })
+            .await
+            .expect_err("oversized limit must fail locally");
+        assert!(limit_error.to_string().contains("between 1 and 100"));
+
+        let cursor_error = client
+            .fetch_explorer_domains_page(ExplorerDomainsQuery {
+                cursor: Some("padded==".to_owned()),
+                limit: Some(25),
+                owned_by: None,
+            })
+            .await
+            .expect_err("padded cursor must fail locally");
+        assert!(cursor_error.to_string().contains("canonical base64url"));
+
+        let trailing_bits_error = client
+            .fetch_explorer_domains_page(ExplorerDomainsQuery {
+                cursor: Some("AB".to_owned()),
+                limit: Some(25),
+                owned_by: None,
+            })
+            .await
+            .expect_err("cursor with non-zero unused bits must fail locally");
+        assert!(
+            trailing_bits_error
+                .to_string()
+                .contains("canonical base64url")
+        );
     }
 
     #[test]
@@ -10401,7 +10980,7 @@ state_tiered_cold_entries 2
 
     #[test]
     fn asset_transfer_summaries_cover_direct_and_batch_events() {
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain"),
             "rose".parse().expect("valid asset name"),
         );

@@ -100,6 +100,32 @@ function compileFixture(tempRoot, tsconfig) {
   });
 }
 
+test("UnshieldInstructionInput exposes the exact output-free first-release shape", () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const source = ts.createSourceFile(
+    declarationPath,
+    fs.readFileSync(declarationPath, "utf8"),
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declaration = source.statements.find(
+    (statement) =>
+      ts.isInterfaceDeclaration(statement) &&
+      statement.name.text === "UnshieldInstructionInput",
+  );
+  assert.ok(declaration, "UnshieldInstructionInput declaration is missing");
+  const fields = declaration.members.map((member) => member.name?.getText(source)).sort();
+  assert.deepEqual(fields, [
+    "assetDefinitionId",
+    "destinationAccountId",
+    "inputs",
+    "proof",
+    "publicAmount",
+    "rootHint",
+  ]);
+});
+
 test("every public export has a safe runtime target and an explicit declaration target", () => {
   const packageJson = readPackageJson();
   const legacyTypes = packageJson.typesVersions["*"];

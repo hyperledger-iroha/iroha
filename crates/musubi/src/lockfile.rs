@@ -278,48 +278,7 @@ impl LockfileV1 {
         }
         for node in &lock.nodes {
             writeln!(output, "\n[[node]]").expect("write to string");
-            render_package(&mut output, &node.release.package);
-            writeln!(
-                output,
-                "version = {}",
-                quote(&node.release.version.to_string())
-            )
-            .expect("write to string");
-            writeln!(
-                output,
-                "release-digest = {}",
-                quote(&hex_digest(*node.release_digest.as_bytes()))
-            )
-            .expect("write to string");
-            writeln!(
-                output,
-                "archive-id = {}",
-                quote(&hex_digest(*node.archive_id.as_bytes()))
-            )
-            .expect("write to string");
-            writeln!(
-                output,
-                "source-digest = {}",
-                quote(&hex_digest(*node.source_digest.as_bytes()))
-            )
-            .expect("write to string");
-            writeln!(
-                output,
-                "interface-digest = {}",
-                quote(&hex_digest(*node.interface_digest.as_bytes()))
-            )
-            .expect("write to string");
-            writeln!(output, "abi-version = {}", node.abi.abi_version).expect("write to string");
-            writeln!(
-                output,
-                "abi-hash = {}",
-                quote(&hex_digest(node.abi.abi_hash))
-            )
-            .expect("write to string");
-            for edge in &node.dependencies {
-                writeln!(output, "\n[[node.dependency]]").expect("write to string");
-                render_edge(&mut output, edge);
-            }
+            render_node(&mut output, node, "node.dependency");
         }
         Ok(output)
     }
@@ -394,6 +353,42 @@ impl LockfileV1 {
             .map_err(|error| LockfileError::invalid(error.reason()))?;
         Ok(lock)
     }
+}
+
+/// Render the normalized, publication-only exact graph packaged with a release.
+///
+/// The document intentionally uses the same first-release schema/version marker
+/// as a consumer lock, but omits chain, snapshot, workspace selectors, and
+/// development edges. Its root and every dependency are structural identities.
+/// The typed Norito lock remains authoritative; this deterministic TOML is the
+/// source-tree representation intended for human inspection and clean rebuilds.
+pub fn render_verification_lock(lock: &MusubiVerificationLockV1) -> Result<String, LockfileError> {
+    let mut lock = lock.clone();
+    lock.canonicalize();
+    lock.validate()
+        .map_err(|error| LockfileError::invalid(error.reason()))?;
+
+    let mut output = String::new();
+    writeln!(output, "schema = {}", quote(LOCK_SCHEMA)).expect("write to string");
+    writeln!(output, "version = {LOCK_VERSION}").expect("write to string");
+    writeln!(output, "kind = {}", quote("verification")).expect("write to string");
+    writeln!(output, "\n[root]").expect("write to string");
+    render_package(&mut output, &lock.root.package);
+    writeln!(
+        output,
+        "version = {}",
+        quote(&lock.root.version.to_string())
+    )
+    .expect("write to string");
+    for edge in &lock.root_dependencies {
+        writeln!(output, "\n[[root.dependency]]").expect("write to string");
+        render_edge(&mut output, edge);
+    }
+    for node in &lock.nodes {
+        writeln!(output, "\n[[node]]").expect("write to string");
+        render_node(&mut output, node, "node.dependency");
+    }
+    Ok(output)
 }
 
 /// Stable lockfile failure categories.
@@ -679,6 +674,51 @@ fn render_edge(output: &mut String, edge: &MusubiExactDependencyEdgeV1) {
     .expect("write to string");
 }
 
+fn render_node(output: &mut String, node: &MusubiVerificationNodeV1, edge_table: &str) {
+    render_package(output, &node.release.package);
+    writeln!(
+        output,
+        "version = {}",
+        quote(&node.release.version.to_string())
+    )
+    .expect("write to string");
+    writeln!(
+        output,
+        "release-digest = {}",
+        quote(&hex_digest(*node.release_digest.as_bytes()))
+    )
+    .expect("write to string");
+    writeln!(
+        output,
+        "archive-id = {}",
+        quote(&hex_digest(*node.archive_id.as_bytes()))
+    )
+    .expect("write to string");
+    writeln!(
+        output,
+        "source-digest = {}",
+        quote(&hex_digest(*node.source_digest.as_bytes()))
+    )
+    .expect("write to string");
+    writeln!(
+        output,
+        "interface-digest = {}",
+        quote(&hex_digest(*node.interface_digest.as_bytes()))
+    )
+    .expect("write to string");
+    writeln!(output, "abi-version = {}", node.abi.abi_version).expect("write to string");
+    writeln!(
+        output,
+        "abi-hash = {}",
+        quote(&hex_digest(node.abi.abi_hash))
+    )
+    .expect("write to string");
+    for edge in &node.dependencies {
+        writeln!(output, "\n[[{edge_table}]]").expect("write to string");
+        render_edge(output, edge);
+    }
+}
+
 fn render_package(output: &mut String, package: &MusubiPackageIdV1) {
     writeln!(
         output,
@@ -747,9 +787,16 @@ fn optional_integer(table: &toml::Table, key: &str) -> Result<Option<i64>, Lockf
 }
 
 fn parse_u64_string(table: &toml::Table, key: &str) -> Result<u64, LockfileError> {
-    required_string(table, key)?.parse().map_err(|_| {
+    let raw = required_string(table, key)?;
+    let value = raw.parse::<u64>().map_err(|_| {
         LockfileError::invalid(format!("field `{key}` must be a canonical u64 string"))
-    })
+    })?;
+    if value.to_string() != raw {
+        return Err(LockfileError::invalid(format!(
+            "field `{key}` must be a canonical u64 string"
+        )));
+    }
+    Ok(value)
 }
 
 fn parse_table_array<'a>(
@@ -927,6 +974,24 @@ mod tests {
     }
 
     #[test]
+    fn noncanonical_decimal_identifiers_are_rejected() {
+        let document = lock().render().expect("render");
+        for (canonical, noncanonical) in [
+            ("finalized-height = \"17\"", "finalized-height = \"017\""),
+            ("index-revision = \"3\"", "index-revision = \"+3\""),
+            ("home-dataspace = \"1\"", "home-dataspace = \"01\""),
+        ] {
+            assert!(document.contains(canonical));
+            let malformed = document.replacen(canonical, noncanonical, 1);
+            assert!(matches!(
+                LockfileV1::parse(&malformed),
+                Err(LockfileError::Invalid(reason))
+                    if reason.contains("must be a canonical u64 string")
+            ));
+        }
+    }
+
+    #[test]
     fn development_edges_never_propagate() {
         let mut lock = lock();
         let dependency_package = lock.nodes[1].release.package.clone();
@@ -1019,6 +1084,36 @@ mod tests {
             .verification_lock(&"test/app".parse().expect("root package"), published)
             .expect("verification lock");
         assert!(verification.nodes.is_empty());
+    }
+
+    #[test]
+    fn publication_verification_toml_is_structural_and_snapshot_free() {
+        let mut lock = lock();
+        lock.roots[0].dependencies[0].kind = MusubiDependencyKindV1::Normal;
+        lock.canonicalize();
+        lock.validate().expect("normal publication graph");
+        let published = MusubiReleaseIdV1::new(
+            package(9, "app"),
+            "1.0.0".parse().expect("published version"),
+        );
+        let verification = lock
+            .verification_lock(&"test/app".parse().expect("root package"), published)
+            .expect("verification lock");
+        let rendered = render_verification_lock(&verification).expect("render verification lock");
+
+        assert!(rendered.starts_with(
+            "schema = \"musubi-lock\"\nversion = 1\nkind = \"verification\"\n\n[root]\n"
+        ));
+        assert!(rendered.contains("home-dataspace = \"9\""));
+        assert!(rendered.contains("[[root.dependency]]"));
+        assert!(rendered.contains("[[node]]"));
+        assert!(!rendered.contains("chain ="));
+        assert!(!rendered.contains("finalized-height"));
+        assert!(!rendered.contains("development"));
+        assert_eq!(
+            rendered,
+            render_verification_lock(&verification).expect("repeat render")
+        );
     }
 
     #[test]

@@ -76,10 +76,12 @@ impl SparseMatrix {
         self.columns
     }
 
+    #[cfg(test)]
     pub(super) fn entry_count(&self) -> usize {
         self.coefficients.len()
     }
 
+    #[cfg(test)]
     pub(super) fn canonical_entries(&self) -> impl Iterator<Item = (usize, usize, Scalar)> + '_ {
         self.row_offsets
             .windows(2)
@@ -88,6 +90,23 @@ impl SparseMatrix {
                 (bounds[0]..bounds[1])
                     .map(move |index| (row, self.column_indices[index], self.coefficients[index]))
             })
+    }
+
+    pub(super) fn row_entries(
+        &self,
+        row: usize,
+    ) -> Option<impl Iterator<Item = (usize, Scalar)> + '_> {
+        let bounds = self.row_offsets.get(row..=row + 1)?;
+        Some(
+            (bounds[0]..bounds[1])
+                .map(move |index| (self.column_indices[index], self.coefficients[index])),
+        )
+    }
+
+    pub(super) fn row_is_empty(&self, row: usize) -> bool {
+        self.row_offsets
+            .get(row..=row + 1)
+            .is_none_or(|bounds| bounds[0] == bounds[1])
     }
 
     pub(super) fn multiply(&self, vector: &[Scalar]) -> Result<Vec<Scalar>, R1csError> {

@@ -38,6 +38,10 @@ mod model {
         MaintainerInvited(crate::musubi::MusubiMaintainerInvitationV1),
         /// An invited package member accepted.
         MaintainerAccepted(crate::musubi::MusubiPackageMemberV1),
+        /// A height-expired pending invitation was deterministically closed.
+        MaintainerInvitationExpired(MusubiMaintainerInvitationLifecycleEventV1),
+        /// A package owner revoked a pending invitation.
+        MaintainerInvitationRevoked(MusubiMaintainerInvitationLifecycleEventV1),
         /// An accepted package member's role changed.
         MaintainerRoleChanged(crate::musubi::MusubiPackageMemberV1),
         /// An accepted package member was removed.
@@ -115,6 +119,22 @@ mod model {
         /// Resulting package-governance revision.
         pub governance_revision: u64,
         /// Finalized removal height.
+        pub finalized_height: u64,
+    }
+
+    /// Compact terminal transition for a pending package-member invitation.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct MusubiMaintainerInvitationLifecycleEventV1 {
+        /// Governed package.
+        pub package: crate::musubi::MusubiPackageIdV1,
+        /// Closed invitation identity.
+        pub invite_id: crate::musubi::MusubiInviteIdV1,
+        /// Account named by the invitation.
+        pub invited_account: AccountId,
+        /// Resulting package-governance revision.
+        pub governance_revision: u64,
+        /// Finalized transition height.
         pub finalized_height: u64,
     }
 
@@ -196,7 +216,7 @@ mod model {
         pub action_digest: crate::musubi::MusubiGovernanceActionDigestV1,
         /// Resulting artifact-governance revision.
         pub governance_revision: u64,
-        /// Finalized enactment height.
+        /// Finalized height where the delayed action was applied.
         pub finalized_height: u64,
     }
 
@@ -230,6 +250,9 @@ impl MusubiEvent {
             Self::PackageMetadataChanged(event) => Some(&event.package),
             Self::MaintainerInvited(event) => Some(&event.package),
             Self::MaintainerAccepted(event) | Self::MaintainerRoleChanged(event) => {
+                Some(&event.package)
+            }
+            Self::MaintainerInvitationExpired(event) | Self::MaintainerInvitationRevoked(event) => {
                 Some(&event.package)
             }
             Self::MaintainerRemoved(event) => Some(&event.package),
@@ -273,8 +296,8 @@ pub mod prelude {
     pub use super::{
         MusubiArchiveLocationEventV1, MusubiArchiveLocationTransitionV1,
         MusubiArchiveRegisteredEventV1, MusubiArtifactTakedownEventV1, MusubiEvent, MusubiEventSet,
-        MusubiPackageClaimedEventV1, MusubiPackageMemberRemovedEventV1,
-        MusubiPackageRecoveredEventV1, MusubiRegistryPolicyEventV1, MusubiReleasePublishedEventV1,
-        MusubiReleaseYankEventV1,
+        MusubiMaintainerInvitationLifecycleEventV1, MusubiPackageClaimedEventV1,
+        MusubiPackageMemberRemovedEventV1, MusubiPackageRecoveredEventV1,
+        MusubiRegistryPolicyEventV1, MusubiReleasePublishedEventV1, MusubiReleaseYankEventV1,
     };
 }

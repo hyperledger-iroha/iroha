@@ -2844,7 +2844,6 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             to,
             amount,
             inputs,
-            outputs,
             backend,
             proof,
             vk,
@@ -2854,9 +2853,6 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(to);
             f(amount);
             f(inputs);
-            if let Some(outputs) = outputs {
-                f(outputs);
-            }
             f(backend);
             f(proof);
             f(vk);

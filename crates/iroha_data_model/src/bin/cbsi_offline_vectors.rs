@@ -32,8 +32,8 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
         KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2, KagemushaPastaCycleParityV1,
@@ -43,7 +43,7 @@ use iroha_data_model::{
         KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
         KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendOperationVectorV4,
         KagemushaRecursiveSpendPeerSplitTransitionV4, KagemushaRecursiveSpendProofV4,
-        KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV2,
+        KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV5,
         KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTransitionV4,
         KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
         kagemusha_receiver_key_reference_v2, kagemusha_recursive_spend_lineage_root_v2,
@@ -759,8 +759,8 @@ fn payment_bundle(
         verifier_key_id: verifier_key_id.clone(),
     };
     let public_statement_digest = statement.digest()?;
-    let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-    state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+    let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+    state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
     let proof_envelope = KagemushaPastaCycleProofEnvelopeV4 {
         version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
@@ -775,7 +775,7 @@ fn payment_bundle(
         step_ep_circuit_params_sha256: [0x5c; 32],
         step_eq_verifier_key_sha256: [0x5d; 32],
         step_ep_verifier_key_sha256: [0x5e; 32],
-        state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)?,
+        state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)?,
         proof: ProofBox::new(
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.into(),
             vec![0x5f],

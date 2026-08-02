@@ -1,37 +1,75 @@
 # Roadmap
 
-Last updated: 2026-08-01
+Last updated: 2026-08-02
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 ## Musubi first-release registry and developer ecosystem reset
 
-The pre-release Musubi contract is being replaced rather than migrated. The
-work remains ordered as the following production gates:
+The V1 contract, typed registry/Core storage, Cargo-style developer path,
+authenticated cache and publication client/service core, Torii/MCP surface,
+and Kotlin/Java/Swift package-model and exact eleven-query parity, including
+archive retention, are implemented without a migration or compatibility layer.
+Remaining release gates, in order, are:
 
-- Land bounded V1 identities, structured SemVer and requirement ASTs, complete
-  archive commitments, immutable release manifests, package governance, alias
-  policy, resolver rows, cursor records, and Norito golden/property coverage.
-- Replace legacy ISIs, queries, permissions, generic `smart_contract_state`
-  vectors, scan fallbacks, and namespace-owner reauthorization with typed
-  ordered home/universal stores and atomic Native AMX projections. Add archive
-  quorum/location guards, reversible yank, compare-and-set ownership, recovery,
-  permanent paid aliases, admission policy, and explicit legacy-state startup
-  rejection.
-- Replace the monolithic pre-release CLI with strict manifest/workspace/lock,
-  deterministic backtracking resolution, targeted update, Cargo-style project
-  and build commands, stable JSON/error output, and signer-free local/read-only
-  paths. Delete `install`, `pack`, cache import, short-alias set, and legacy-lock
-  compatibility.
-- Complete positive-set canonical bundles, immutable user cache extraction and
-  quarantine repair, authenticated seed-ingress receipts, secret-free resumable
-  publication journals, three-provider finalized replication, two-provider
-  readback, and exact universal-index verification.
-- Regenerate Norito/OpenAPI/MCP fixtures and Kotlin/Java/Swift surfaces, then
-  pass focused model/core/CLI/SoraFS tests, four-peer Native AMX fault tests,
-  cache/archive fuzzing, SDK parity, strict clippy, workspace serialization
-  guards, scale gates, and the documented devnet/Taira/invite-beta rollout.
+- Finish focused validation of the occurrence-bound targeted resolver,
+  supplied-source test runner, package-invitation rebasing, exact archive
+  projection preflight, and runtime publication authorization, signer-clock,
+  retry, and dead-letter hardening after the concurrent Halo2/data-model
+  dirty-tree work and shared build lane are coherent. Regenerate the checked
+  exact 29-route OpenAPI surface only from a clean dependency graph whose
+  ignored `Cargo.lock` matches the committed exact pin; do not bless the
+  present unrelated uncommitted dependency work by changing that pin in
+  isolation.
+
+- Supply and qualify the deployment-owned private HTTPS/TLS runner, concrete
+  HSM/KMS or threshold implementations of the completed publisher-request and
+  receipt-approval provider boundaries, and assemble the completed bounded
+  durable Unix replay journal with deployment-selected operation,
+  authorization, response, and snapshot limits through the now-supervised
+  custom launcher path. Supply the
+  admitted seed, storage-coordination, and provider-readback adapters. Deploy
+  the journal and durable Unix clock only
+  below a trusted non-replaceable ancestor with rollback-resistant private
+  storage or an external sealed monotonic head. Qualify peak journal memory and
+  latency; the current request path validates and replaces a complete snapshot,
+  so larger deployments need a bounded transition WAL, small atomic head, and
+  off-path checkpoint compaction unless measured selected limits prove that
+  unnecessary. Add crash-at-every-write, coordinated-rollback, and
+  cross-process lock evidence, and retain fail-closed behavior until equivalent
+  non-Unix and descriptor-relative primitives are qualified. Bind configured
+  origins, DNS answers, and token-verification keys to finalized provider
+  adverts.
+- Add a safe workspace-owned Windows handle-relative no-replace directory
+  rename/replacement primitive. Until then Windows cache reads and verification
+  remain supported while cache publication/quarantine/prune and atomic project
+  state mutation fail closed.
+- Wire the remaining metrics only at their authoritative long-lived producers:
+  journal phase age, cache corruption/capacity, and selected-root storage
+  pressure, plus the injected consumer-fetch integrity observer. The fetch
+  adapter now supplies a typed exact-once attempt boundary but the one-shot CLI
+  intentionally has no Prometheus producer. Core governance rejection
+  telemetry is already emitted once at each tracked mutation's authoritative
+  error boundary with bounded typed action/reason labels. Replace the
+  process-local replication-shortfall transition gauge with a restart-safe
+  exact projection that does not add a scale-breaking registry scan, and carry
+  the existing exact cursor-failure enum through Core's query-error boundary so
+  Torii need not collapse every stale cause to `other`.
+- Execute focused model/Core/Torii/CLI/publication/cache tests from the final
+  source, then strict workspace clippy, serialization guards, Kotlin/Java/Swift
+  suites, and the full workspace suite. Add the required archive/cache
+  crash-at-every-write, malformed-plan, race, secret, disk-full, and bounded-
+  memory fuzz campaigns.
+- Build on the deterministic publication-route and snapshot fault-cut
+  regressions by adding and passing four-or-more-peer multi-lane Native AMX
+  failure/crash/replay tests proving home and universal registry projections
+  are never half-visible at live commit/apply boundaries.
+  Qualify the one-million-package/twenty-million-row lookup, search, resolver,
+  and 64-MiB fetch-memory scale targets.
+- Run the four-peer devnet, five-to-ten-namespace Taira allowlist/two-week soak,
+  and 30-day invite beta. Open admission only after zero critical/high findings,
+  recovery drills, load/chaos success, and sustained SLO evidence.
 
 The implementation-coupled contract is [`specs/musubi.md`](./specs/musubi.md).
 
@@ -46,6 +84,21 @@ final report-by-report reconciliation.
 The lane-relay effect-finality repair is implemented; its focused model,
 FastPQ, Core state/ISI, daemon-worker, and adversarial re-proof tests remain in
 the shared build-lane validation queue.
+The UNM-14 guest-stack and default-domain source legs are implemented. Guest
+stack behavior is fixed by the sole ABI V1 policy, and persistent domain state
+uses exact `DomainId` values with no process-local default or selector index.
+Final locked/offline IVM, configuration, Core state/ISI, Torii, daemon, and
+snapshot validation remains queued behind the unrelated live manifest/lock
+mismatch; run it together with the authenticated full-`ChainId` contract
+identity leg before closing UNM-14.
+The H22 confidential-ledger source and SDK hard cut is implemented:
+`Unshield` has no caller-supplied output field, execution inserts only
+proof-authenticated outputs, and each asset persists the sole first-release
+Poseidon tree profile with fail-closed retained-root/checkpoint validation and
+atomic batch append. The checked Android instruction, builder, manifest,
+metadata, and hash-tree artifacts have been regenerated from the current
+113-entry schema. Focused data-model, Core, IVM, bridge, fixture, and SDK parity
+execution remains required before this audit item can close.
 The validator-only, prepared-bundle Compose redesign still needs execution of
 its focused `iroha_swarm` and Kagami positive/mismatch regressions plus
 generated-Compose consistency once the shared serialized Cargo/rustc lane is

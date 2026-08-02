@@ -733,7 +733,7 @@ fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> b
 }
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified(domain)
             .expect("static asset definition domain must remain valid"),
         name.parse()
@@ -3107,9 +3107,14 @@ fn extend_genesis(
         }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
-        let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
-            .with_name(asset.name.clone())
-            .with_metadata(Metadata::default());
+        let definition = AssetDefinition::new(
+            asset_def.clone(),
+            asset.name.clone(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         if let Some(alias_literal) = asset.alias.as_deref() {
             let alias = alias_literal
@@ -3396,9 +3401,11 @@ fn append_localnet_alias_fee_bootstrap(
     if registrations.asset_defs.insert(fee_asset_id.clone()) {
         let definition = AssetDefinition::new(
             fee_asset_id.clone(),
+            "XOR".to_owned(),
             NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
-        .with_name("XOR".to_owned())
         .with_metadata(Metadata::default())
         .confidential_policy(
             iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
@@ -3752,18 +3759,25 @@ fn append_localnet_npos_bootstrap_for_services(
     }
 
     if !registrations.asset_defs.contains(&stake_asset_id) {
-        let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-            .with_name("Localnet Stake".to_owned())
-            .with_metadata(Metadata::default());
+        let definition = AssetDefinition::new(
+            stake_asset_id.clone(),
+            "Localnet Stake".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(stake_asset_id.clone());
     }
     if !registrations.asset_defs.contains(&fee_asset_id) {
         let definition = AssetDefinition::new(
             fee_asset_id.clone(),
+            "XOR".to_owned(),
             NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
-        .with_name("XOR".to_owned())
         .with_metadata(Metadata::default())
         .confidential_policy(
             iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),

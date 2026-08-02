@@ -220,7 +220,7 @@ function sseResponse(chunks, { close = true, onCancel } = {}) {
   );
 }
 
- test("ToriiBrowserClient strips API suffixes and calls current explorer block routes", async () => {
+test("ToriiBrowserClient strips API suffixes and calls current explorer block routes", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(String(url), "https://localhost:8080/v1/explorer/blocks?page=2&per_page=5");
     assert.equal(init.method, "GET");
@@ -236,6 +236,154 @@ function sseResponse(chunks, { close = true, onCancel } = {}) {
   });
   const payload = await client.listExplorerBlocks({ page: 2, perPage: 5 });
   assert.equal(payload.pagination.page, 2);
+});
+
+test("ToriiBrowserClient uses opaque cursors for world Explorer lists", async () => {
+  const cursor = "ZXhwbG9yZXItY3Vyc29y";
+  const nextCursor = "bmV4dA";
+  const expectedPaths = [
+    ["/v1/explorer/accounts", (client) => client.listExplorerAccounts({ cursor, limit: 10 })],
+    ["/v1/explorer/domains", (client) => client.listExplorerDomains({ cursor, limit: 10 })],
+    [
+      "/v1/explorer/asset-definitions",
+      (client) => client.listExplorerAssetDefinitions({ cursor, limit: 10 }),
+    ],
+    ["/v1/explorer/assets", (client) => client.listExplorerAssets({ cursor, limit: 10 })],
+    ["/v1/explorer/nfts", (client) => client.listExplorerNfts({ cursor, limit: 10 })],
+    ["/v1/explorer/rwas", (client) => client.listExplorerRwas({ cursor, limit: 10 })],
+  ];
+  const seen = [];
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      seen.push(parsed.pathname);
+      assert.equal(parsed.searchParams.get("cursor"), cursor);
+      assert.equal(parsed.searchParams.get("limit"), "10");
+      assert.equal(parsed.searchParams.get("page"), null);
+      assert.equal(parsed.searchParams.get("per_page"), null);
+      return jsonResponse({
+        pagination: { limit: 10, next_cursor: nextCursor, has_more: true },
+        items: [],
+      });
+    },
+  });
+
+  for (const [path, invoke] of expectedPaths) {
+    const page = await invoke(client);
+    assert.equal(seen.at(-1), path);
+    assert.deepEqual(page.pagination, {
+      limit: 10,
+      next_cursor: nextCursor,
+      has_more: true,
+    });
+  }
+});
+
+test("ToriiBrowserClient uses explicit asset-definition ownership fields", async () => {
+  const item = {
+    id: "11111111-1111-4111-8111-111111111111",
+    owning_domain: null,
+    mintable: "Infinitely",
+    logo: null,
+    metadata: {},
+    owned_by: FIXTURE_ALICE_ID,
+    assets: 0,
+    total_quantity: "0",
+    locked_quantity: null,
+    circulating_quantity: null,
+  };
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      assert.equal(parsed.searchParams.get("owning_domain"), "treasury.universal");
+      assert.equal(parsed.searchParams.get("domain"), null);
+      return jsonResponse({
+        pagination: { limit: 10, next_cursor: null, has_more: false },
+        items: [item],
+      });
+    },
+  });
+
+  const page = await client.listExplorerAssetDefinitions({
+    limit: 10,
+    owningDomain: "treasury.universal",
+  });
+  assert.equal(page.items[0].owning_domain, null);
+
+  const missingOwnership = { ...item };
+  delete missingOwnership.owning_domain;
+  const invalidClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () =>
+      jsonResponse({
+        pagination: { limit: 10, next_cursor: null, has_more: false },
+        items: [missingOwnership],
+      }),
+  });
+  await assert.rejects(
+    invalidClient.listExplorerAssetDefinitions({ limit: 10 }),
+    /missing or unsupported fields/u,
+  );
+});
+
+test("ToriiBrowserClient rejects invalid world Explorer cursor contracts", async () => {
+  let fetchCalls = 0;
+  const localClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  assert.throws(
+    () => localClient.listExplorerAccounts({ page: 2 }),
+    /page is not supported; use cursor and limit/u,
+  );
+  assert.throws(
+    () => localClient.listExplorerNfts({ cursor: "padded==" }),
+    /canonical base64url without padding/u,
+  );
+  assert.throws(
+    () => localClient.listExplorerAccounts({ cursor: "AB" }),
+    /canonical base64url without padding/u,
+  );
+  assert.throws(
+    () => localClient.listExplorerRwas({ limit: 101 }),
+    /limit must be between 1 and 100/u,
+  );
+  assert.equal(fetchCalls, 0);
+
+  const malformedClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 25, next_cursor: null, has_more: true },
+      items: [],
+    }),
+  });
+  await assert.rejects(
+    () => malformedClient.listExplorerDomains(),
+    /has_more must match next_cursor availability/u,
+  );
+
+  const unknownFieldClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 25, next_cursor: null, has_more: false },
+      items: [],
+      total_items: 0,
+    }),
+  });
+  await assert.rejects(
+    () => unknownFieldClient.listExplorerAccounts(),
+    /contains unknown field total_items/u,
+  );
+
+  const oversizedPageClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 1, next_cursor: null, has_more: false },
+      items: [{}, {}],
+    }),
+  });
+  await assert.rejects(
+    () => oversizedPageClient.listExplorerAssets(),
+    /items must not exceed pagination\.limit/u,
+  );
 });
 
 test("ToriiBrowserClient exposes exact JSON ledger windows, roots, and state proofs", async () => {
@@ -863,12 +1011,15 @@ test("ToriiBrowserClient rejects noncanonical asset and RWA quantity readbacks",
       invoke: (client) => client.listAssetHolders("asset-definition"),
     },
     {
-      payload: { pagination: {}, items: [{ id: "asset", quantity: "01" }] },
+      payload: {
+        pagination: { limit: 25, next_cursor: null, has_more: false },
+        items: [{ id: "asset", value: "01" }],
+      },
       invoke: (client) => client.listExplorerAssets(),
     },
     {
       payload: {
-        pagination: {},
+        pagination: { limit: 25, next_cursor: null, has_more: false },
         items: [{ id: "rwa", quantity: "1", held_quantity: "0.0" }],
       },
       invoke: (client) => client.listExplorerRwas(),
@@ -1052,7 +1203,7 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
   await client.submitMultisigContractCallPropose({
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "execute",
     feePayment: AUTHORITY_FEE_PAYMENT,
   });

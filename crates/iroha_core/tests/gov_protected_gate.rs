@@ -61,7 +61,7 @@ fn sample_contract_address(
     authority: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        0,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         authority,
         0,
         DataSpaceId::UNIVERSAL,
@@ -231,28 +231,27 @@ seiyaku ProtectedGate {
     .expect("propose");
     // Recompute the proposal id like in core and enact it
     let pid = compute_proposal_id(&contract_address, &want_code_hex, &want_abi_hex);
-    let proposal = stx3
-        .world
-        .governance_proposals_mut()
-        .get_mut(&pid)
-        .expect("proposal exists");
-    proposal.status = iroha_core::state::GovernanceProposalStatus::Approved;
-    proposal.finalization_evidence = Some(
-        iroha_data_model::governance::types::GovernanceFinalizationEvidence {
-            proposal_id: pid,
-            referendum_id: pid,
-            finalized_at_height: 2,
-            mode: iroha_data_model::isi::governance::VotingMode::Plain,
-            approve: 1,
-            reject: 0,
-            abstain: 0,
-            min_turnout: 1,
-            approval_threshold_numerator: 1,
-            approval_threshold_denominator: 2,
-            approved: true,
-        },
-    );
-    let preimage_hash = proposal.kind.fingerprint();
+    let preimage_hash = {
+        let mut proposals = stx3.world.governance_proposals_mut();
+        let proposal = proposals.get_mut(&pid).expect("proposal exists");
+        proposal.status = iroha_core::state::GovernanceProposalStatus::Approved;
+        proposal.finalization_evidence = Some(
+            iroha_data_model::governance::types::GovernanceFinalizationEvidence {
+                proposal_id: pid,
+                referendum_id: pid,
+                finalized_at_height: 2,
+                mode: iroha_data_model::isi::governance::VotingMode::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: 1,
+                approval_threshold_numerator: 1,
+                approval_threshold_denominator: 2,
+                approved: true,
+            },
+        );
+        proposal.kind.fingerprint()
+    };
     stx3.world.governance_referenda_mut().insert(
         hex::encode(pid),
         iroha_core::state::GovernanceReferendumRecord {

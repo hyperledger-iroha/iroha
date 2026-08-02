@@ -3,13 +3,14 @@
 use std::collections::BTreeSet;
 
 use iroha_data_model::musubi::{
-    MusubiAliasHistoryPageV1, MusubiAliasQueryV1, MusubiAliasRecordV1, MusubiArchiveLocationPageV1,
-    MusubiArchiveLocationQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
+    MusubiAliasHistoryPageV1, MusubiAliasPricingPolicyV1, MusubiAliasQueryV1, MusubiAliasRecordV1,
+    MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveRetentionPageV1,
+    MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
     MusubiMaintainerPageV1, MusubiNamespaceV1, MusubiOrderedPackagePageV1,
     MusubiOrderedPrefixQueryV1, MusubiPackageIdV1, MusubiPackageNameV1, MusubiPackagePageQueryV1,
     MusubiPackageRecordV1, MusubiPackageSelectorV1, MusubiReleaseRecordV1,
-    MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiVersionPageV1, MusubiVersionReqV1,
-    MusubiVersionV1,
+    MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiSearchPageV1, MusubiSearchQueryV1,
+    MusubiVersionPageV1, MusubiVersionReqV1, MusubiVersionV1,
 };
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
 
@@ -68,6 +69,8 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
             "namespace",
             "package",
             "package_name",
+            "requirement_aliases",
+            "requirement_matches",
             "requirements",
             "selector",
             "version",
@@ -109,6 +112,61 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
         assert_eq!(wire.to_string(), text);
     }
 
+    let aliases = canonical
+        .get("requirement_aliases")
+        .and_then(Value::as_array)
+        .expect("requirement alias vectors");
+    assert_eq!(aliases.len(), 2);
+    for alias in aliases {
+        assert_eq!(keys(alias), BTreeSet::from(["canonical", "input", "wire"]));
+        let input = alias
+            .get("input")
+            .and_then(Value::as_str)
+            .expect("requirement alias input");
+        let canonical_text = alias
+            .get("canonical")
+            .and_then(Value::as_str)
+            .expect("canonical requirement text");
+        let wire: MusubiVersionReqV1 =
+            canonical_roundtrip(alias.get("wire").expect("requirement alias wire"));
+        let parsed = input
+            .parse::<MusubiVersionReqV1>()
+            .expect("parse requirement alias");
+        assert_eq!(parsed, wire);
+        assert_eq!(parsed.to_string(), canonical_text);
+    }
+
+    let match_cases = canonical
+        .get("requirement_matches")
+        .and_then(Value::as_array)
+        .expect("requirement match vectors");
+    assert_eq!(match_cases.len(), 6);
+    for match_case in match_cases {
+        assert_eq!(
+            keys(match_case),
+            BTreeSet::from(["candidate", "matches", "requirement"])
+        );
+        let requirement = match_case
+            .get("requirement")
+            .and_then(Value::as_str)
+            .expect("match requirement")
+            .parse::<MusubiVersionReqV1>()
+            .expect("parse match requirement");
+        let candidate = match_case
+            .get("candidate")
+            .and_then(Value::as_str)
+            .expect("match candidate")
+            .parse::<MusubiVersionV1>()
+            .expect("parse match candidate");
+        assert_eq!(
+            requirement.matches(&candidate),
+            match_case
+                .get("matches")
+                .and_then(Value::as_bool)
+                .expect("match expectation"),
+        );
+    }
+
     let routes = root
         .get("routes")
         .and_then(Value::as_array)
@@ -129,11 +187,13 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
             "alias",
             "alias-history",
             "archive-locations",
+            "archive-retention",
             "exact-package",
             "exact-release",
             "maintainers",
             "ordered-prefix",
             "resolver-index",
+            "search",
             "versions",
         ])
     );
@@ -176,15 +236,46 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
                 page.validate().expect("valid maintainer page fixture");
             }
             "archive-locations" => {
-                let _: MusubiArchiveLocationQueryV1 = canonical_roundtrip(request);
+                let request: MusubiArchiveLocationQueryV1 = canonical_roundtrip(request);
                 let page: MusubiArchiveLocationPageV1 = canonical_roundtrip(response);
                 page.validate()
                     .expect("valid archive-location page fixture");
+                assert_eq!(page.archive.archive_id, request.archive_id);
+                assert_eq!(page.chain_id.as_str(), "musubi-fixture-chain");
+                assert_eq!(page.genesis_hash, [8; 32]);
+            }
+            "archive-retention" => {
+                let request: MusubiArchiveRetentionQueryV1 = canonical_roundtrip(request);
+                request
+                    .validate()
+                    .expect("valid archive-retention request fixture");
+                let page: MusubiArchiveRetentionPageV1 = canonical_roundtrip(response);
+                page.validate()
+                    .expect("valid archive-retention page fixture");
+                assert_eq!(page.chain_id.as_str(), "musubi-fixture-chain");
+                assert_eq!(page.genesis_hash, [8; 32]);
+                assert_eq!(page.items.len(), request.archive_ids.len());
+                assert!(
+                    page.items
+                        .iter()
+                        .map(|decision| decision.archive_id)
+                        .eq(request.archive_ids.iter().copied())
+                );
+                assert_eq!(request.expected_snapshot, Some(page.snapshot));
+                assert_eq!(
+                    page.items
+                        .iter()
+                        .map(|decision| decision.must_retain())
+                        .collect::<Vec<_>>(),
+                    vec![true, true, false, false]
+                );
             }
             "alias" => {
                 let _: MusubiAliasQueryV1 = canonical_roundtrip(request);
                 let record: MusubiAliasRecordV1 = canonical_roundtrip(response);
-                record.validate().expect("valid alias fixture");
+                record
+                    .validate(&MusubiAliasPricingPolicyV1::GENESIS)
+                    .expect("valid alias fixture");
             }
             "alias-history" => {
                 let _: MusubiAliasQueryV1 = canonical_roundtrip(request);
@@ -195,6 +286,14 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
                 let _: MusubiOrderedPrefixQueryV1 = canonical_roundtrip(request);
                 let page: MusubiOrderedPackagePageV1 = canonical_roundtrip(response);
                 page.validate().expect("valid ordered-prefix page fixture");
+                assert_eq!(page.chain_id.as_str(), "musubi-fixture-chain");
+                assert_eq!(page.genesis_hash, [8; 32]);
+            }
+            "search" => {
+                let request: MusubiSearchQueryV1 = canonical_roundtrip(request);
+                request.validate().expect("valid search request fixture");
+                let page: MusubiSearchPageV1 = canonical_roundtrip(response);
+                page.validate().expect("valid search page fixture");
             }
             _ => panic!("unexpected Musubi route fixture `{id}`"),
         }
@@ -253,4 +352,28 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn shared_musubi_search_fixture_is_canonical() {
+    let root: Value = json::from_str(FIXTURE).expect("parse Musubi SDK fixture");
+    let route = root
+        .get("routes")
+        .and_then(Value::as_array)
+        .expect("route fixtures")
+        .iter()
+        .find(|route| route.get("id").and_then(Value::as_str) == Some("search"))
+        .expect("search fixture route");
+    let request: MusubiSearchQueryV1 = canonical_roundtrip(
+        route
+            .get("request")
+            .expect("search fixture request is present"),
+    );
+    request.validate().expect("valid search request fixture");
+    let page: MusubiSearchPageV1 = canonical_roundtrip(
+        route
+            .get("response")
+            .expect("search fixture response is present"),
+    );
+    page.validate().expect("valid search page fixture");
 }

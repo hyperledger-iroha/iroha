@@ -1711,19 +1711,25 @@ impl EventFilter for DataEventFilter {
             (
                 DataEventFilter::Account(filter),
                 DataEvent::Domain(DomainEvent::Account(account_event)),
-            ) => filter.matches(account_event),
+            ) => filter.matches(&account_event.event),
+            (DataEventFilter::Account(filter), DataEvent::Account(account_event)) => {
+                filter.matches(account_event)
+            }
             (
                 DataEventFilter::Asset(filter),
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(asset_event))),
-            ) => filter.matches(asset_event),
+                DataEvent::Domain(DomainEvent::Asset(asset_event)),
+            ) => filter.matches(&asset_event.event),
+            (DataEventFilter::Asset(filter), DataEvent::Asset(asset_event)) => {
+                filter.matches(asset_event)
+            }
             (
                 DataEventFilter::AssetDefinition(filter),
                 DataEvent::Domain(DomainEvent::AssetDefinition(asset_definition_event)),
-            ) => filter.matches(asset_definition_event),
+            ) => filter.matches(&asset_definition_event.event),
             (
                 DataEventFilter::AssetDefinition(filter),
-                DataEvent::AssetDefinitionStandalone(asset_definition_event),
-            ) => filter.matches(&asset_definition_event.event),
+                DataEvent::AssetDefinition(asset_definition_event),
+            ) => filter.matches(asset_definition_event),
             (DataEventFilter::Nft(filter), DataEvent::Domain(DomainEvent::Nft(nft_event))) => {
                 filter.matches(nft_event)
             }
@@ -1872,7 +1878,7 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = checked_random_account_id();
         let definition_id: crate::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
@@ -1888,21 +1894,17 @@ mod tests {
         let account = Account::new(account_id.clone()).into_account();
         let asset = Asset::new(asset_id.clone(), 0_u32);
 
-        // Create three events with three levels of nesting
-        // the first one is just a domain event
-        // the second one is an account event with a domain event inside
-        // the third one is an asset event with an account event with a domain event inside
+        // Explicit domain routing is carried by the scoped wrappers, never inferred from ids.
         let domain_created = DomainEvent::Created(domain).into();
-        let account_created = DomainEvent::Account(AccountEvent::Created(AccountCreated {
-            account,
-            domain: domain_id.clone(),
-        }))
-        .into();
-        let asset_created =
-            DomainEvent::Account(AccountEvent::Asset(AssetEvent::Created(asset))).into();
+        let account_created = DataEvent::account_in_domain(
+            AccountEvent::Created(AccountCreated { account }),
+            domain_id.clone(),
+        );
+        let asset_created = DataEvent::asset(AssetEvent::Created(asset), Some(domain_id.clone()));
 
         // test how the differently nested filters with with the events
-        let domain_filter = DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id));
+        let domain_filter =
+            DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
         let account_filter =
             DataEventFilter::Account(AccountEventFilter::new().for_account(account_id));
         let asset_filter = DataEventFilter::Asset(AssetEventFilter::new().for_asset(asset_id));
@@ -1915,7 +1917,7 @@ mod tests {
         // account event does not match the domain created event, as it is not an account event
         assert!(!account_filter.matches(&domain_created));
         assert!(account_filter.matches(&account_created));
-        assert!(account_filter.matches(&asset_created));
+        assert!(!account_filter.matches(&asset_created));
 
         // asset event matches only the domain->account->asset event
         assert!(!asset_filter.matches(&domain_created));
@@ -1926,11 +1928,11 @@ mod tests {
     #[test]
     fn asset_filter_matches_by_asset_definition_only() {
         let account_id = checked_random_account_id();
-        let matching_definition = crate::asset::AssetDefinitionId::new(
+        let matching_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-        let other_definition = crate::asset::AssetDefinitionId::new(
+        let other_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
@@ -1955,7 +1957,7 @@ mod tests {
     #[test]
     fn asset_filter_matches_by_asset_id_only() {
         let account_id = checked_random_account_id();
-        let definition = crate::asset::AssetDefinitionId::new(
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1980,11 +1982,11 @@ mod tests {
     #[test]
     fn asset_filter_matches_with_asset_and_asset_definition_matchers() {
         let account_id = checked_random_account_id();
-        let matching_definition = crate::asset::AssetDefinitionId::new(
+        let matching_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-        let other_definition = crate::asset::AssetDefinitionId::new(
+        let other_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
@@ -2010,7 +2012,7 @@ mod tests {
     #[test]
     fn asset_filter_behavior_is_unchanged_without_asset_definition_matcher() {
         let account_id = checked_random_account_id();
-        let definition = crate::asset::AssetDefinitionId::new(
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -2034,7 +2036,7 @@ mod tests {
         let source = checked_random_account_id();
         let destination = checked_random_account_id();
         let other = checked_random_account_id();
-        let definition = crate::asset::AssetDefinitionId::new(
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -2070,7 +2072,7 @@ mod tests {
     fn escrow_filter_matches_by_scope_status_and_event_kind() {
         let seller = checked_random_account_id();
         let buyer = checked_random_account_id();
-        let asset_definition = crate::asset::AssetDefinitionId::new(
+        let asset_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
@@ -2238,8 +2240,10 @@ mod tests {
     #[test]
     fn asset_definition_filter_matches_standalone_opaque_event() {
         let domain_id: DomainId = DomainId::try_new("reward", "universal").unwrap();
-        let scoped_definition =
-            AssetDefinitionId::new(domain_id, "fee".parse().expect("asset name"));
+        let scoped_definition = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "fee".parse().expect("asset name"),
+        );
         let opaque_definition: AssetDefinitionId = scoped_definition
             .to_string()
             .parse()
@@ -2250,7 +2254,50 @@ mod tests {
             AssetDefinitionEventFilter::new().for_asset_definition(opaque_definition),
         );
         assert!(filter.matches(&event));
-        assert!(matches!(event, DataEvent::AssetDefinitionStandalone(_)));
+        assert!(matches!(event, DataEvent::AssetDefinition(_)));
+    }
+
+    #[test]
+    fn asset_filter_matches_standalone_opaque_event() {
+        let domain_id: DomainId = DomainId::try_new("reward", "universal").unwrap();
+        let scoped_definition = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "fee".parse().expect("asset name"),
+        );
+        let opaque_definition: AssetDefinitionId = scoped_definition
+            .to_string()
+            .parse()
+            .expect("opaque canonical id");
+        let account_id: AccountId =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("account id");
+        let asset_id = AssetId::of(opaque_definition.clone(), account_id);
+        let event = DataEvent::from(AssetEvent::Added(AssetChanged {
+            asset: asset_id.clone(),
+            amount: 1_u32.into(),
+        }));
+
+        let asset_filter =
+            DataEventFilter::Asset(AssetEventFilter::new().for_asset(asset_id.clone()));
+        assert!(asset_filter.matches(&event));
+        assert!(matches!(&event, DataEvent::Asset(_)));
+
+        let domain_filter =
+            DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
+        assert!(!domain_filter.matches(&event));
+        assert!(event.domain().is_none());
+
+        let scoped_event = DataEvent::asset(
+            AssetEvent::Added(AssetChanged {
+                asset: asset_id,
+                amount: 1_u32.into(),
+            }),
+            Some(domain_id.clone()),
+        );
+        let domain_filter = DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id));
+        assert!(domain_filter.matches(&scoped_event));
+        assert!(asset_filter.matches(&scoped_event));
     }
 
     #[test]

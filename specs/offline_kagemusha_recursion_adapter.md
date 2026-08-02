@@ -237,8 +237,8 @@ Both registry records use backend `halo2/ipa`. They must be selected atomically,
 remain independently keyed, and agree with one authenticated release's
 activation window and proof-pair limit.
 
-`KagemushaRecursiveSpendStateBoundaryV2` still crosses the field boundary as a
-compact V5 layout version followed by all 138 explicit little-endian `u32`
+`KagemushaRecursiveSpendStateBoundaryV5` crosses the field boundary as the
+canonical V5 layout version followed by all 138 explicit little-endian `u32`
 result-state limbs, including the statement's append-only
 `next_zero_leaf_index`. ABI 21 and manifest V4 remain the only lifecycle, but
 keys, bootstrap witnesses, proofs, manifests, and schema hashes from the former
@@ -351,6 +351,15 @@ measured proof bounds, physical-device evidence, independent review, signed
 release attestation, and canonical top-up-finality roster. A generation label
 is not a trust anchor.
 
+Runtime qualification keeps its decoded working set beneath the non-raiseable
+256 MiB catalog budget. It never materializes a processed proving key: each
+multi-gigabyte PK is authenticated with fixed 64 KiB scratch, checked against
+the exact processed-key geometry, and its bounded embedded-VK prefix is hashed
+and matched to the separately parsed VK. Full `ProvingKey` parsing remains
+confined to generation and proving paths that actually consume the polynomial
+vectors. The receipt verifier then parses the other six bounded roles once and
+terminally decides both stored Eq/Ep pairs with that verifier set.
+
 The supported two-stage packager is:
 
 ```text
@@ -383,9 +392,16 @@ python3 scripts/run_kagemusha_v4_generation.py \
   --cryptographic-review <canonical-signed-norito-file>
 ```
 
-Direct unsupervised `generate-candidate` execution is rejected. The launcher
+The source-sealed binary always starts its own fail-closed footprint monitor;
+the launcher adds the host-global lifecycle, publication, and evidence boundary.
+After pinning the executable (and creating the private execution copy on
+Darwin), the launcher invokes its read-only `memory-capacity-v1` operation
+through the same supervisor-death lifeline. That versioned record is the single
+authority for the effective host/container capacity, absolute maximum,
+enforcement profile, and half-cap policy. The launcher may only lower the
+returned ceiling and passes the exact byte result back to generation. It also
 holds the per-user heavy-job lock shared with the strict TLAPS runner and applies
-a bounded polling ceiling at the lower of 64 GiB or half of physical RAM. On
+a bounded polling ceiling at that Rust-derived limit. On
 macOS, the 250 ms runtime loop enumerates only the owned group with
 `proc_listpgrppids`, validates stable BSD identity and ownership around
 `proc_pid_rusage`, and enforces the greater of RSS or physical-footprint high
@@ -394,6 +410,12 @@ failure are terminal. A threshold crossing stops the group before one final
 scoped measurement, then kills and reaps only that group. The direct child's
 kernel `wait4` peak RSS remains an independent final gate. This portable
 userspace polling is not an operating-system hard allocation limit.
+The query, generation, and publisher execute under one exact child-environment
+allowlist: fixed `HOME`, `LANG`, `LC_ALL`, and system-only `PATH`, plus `TMPDIR`
+derived from the admitted output parent for generation/publication. Ambient
+`LD_*`/`DYLD_*` loader hooks, tool-resolution paths, allocator/runtime knobs,
+SDK discovery, and Python/Rust override variables are not forwarded into the
+source-sealed executable.
 Generation also requires at least 16 GiB free on the pinned
 disk-backed output filesystem before it creates the two raw proving-key spools
 and each framed artifact copy.
@@ -403,17 +425,17 @@ The runtime loop never invokes global `ps`, so memory or APFS pressure cannot
 block enforcement. A conflict terminates only the owned generation group with
 status 74, and the final exclusion check prevents a late direct job from
 producing valid evidence.
-The launcher writes owner-private JSONL and summary evidence. A lower
-`--max-memory-gib` is accepted; the ceiling cannot be raised. Its one-shot
-inherited launch capability prevents stale environment markers from bypassing
-the wrapper, but is not a security boundary against a malicious same-UID
-process. The launcher injects an unguessable per-run staging id; after every
+The launcher writes owner-private JSONL and summary evidence, including the
+exact Rust memory-capacity record. A lower `--max-memory-gib` is accepted; the
+ceiling cannot be raised. Executable bytes and path identity are revalidated
+before and after the query and every later bundle operation. The launcher
+injects an unguessable per-run staging id; after every
 normal, failed, signalled, or memory-limited return it securely removes only
 owner-private residue carrying that exact id. Build the binary first: the
 launcher accepts only the prebuilt bundle
 executable followed by `generate-candidate`, so Cargo and rustc are never
-included in the guarded process group. Finalization and candidate validation do
-not require this generation guard. Commit-signature verification is the
+included in the guarded process group. Finalization and candidate validation
+start the same mandatory in-process monitor directly. Commit-signature verification is the
 separate Git step above, and the returned `source_commit` must equal that
 verified commit. The sealed build helper requires the same clean exact source
 identity before, during, and after the locked release build, sanitizes ambient
@@ -523,6 +545,14 @@ immutable directory. Runtime and proof-envelope validation consume the
 canonical Norito bytes; JSON remains an operator view and is never re-encoded
 into a trust anchor. A partial candidate or finalization failure cannot expose
 an active generation.
+
+Kagami publishes both promotion records and prepared activation instruction
+files through the same descriptor-relative, no-replace durable-file primitive.
+It syncs the private file before rename and the pinned parent afterward. A
+failure after the rename is reported as the exact
+`iroha.kagami.kagemusha.durable_file_publication.v1` `commit-uncertain` record
+with exit status 75; it is never collapsed into ordinary success or a safely
+retryable pre-commit error.
 
 The bridge's bounded V4 ingestion authenticates headers, descriptors, framed
 and payload hashes, inline circuit-parameter identities, and the exact

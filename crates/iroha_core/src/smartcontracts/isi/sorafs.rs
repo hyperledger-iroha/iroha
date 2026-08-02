@@ -6683,12 +6683,12 @@ mod sorafs_tests {
 
     fn seed_public_pin_fee_accounts(state: &mut State) {
         let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
-        if let Some(domain_id) = fee_asset_id.try_domain().cloned() {
-            state
-                .world
-                .domains
-                .insert(domain_id.clone(), Domain::new(domain_id).build(&alice()));
-        }
+        let domain_id =
+            DomainId::try_new("universal", "universal").expect("SoraFS fee fixture owning domain");
+        state.world.domains.insert(
+            domain_id.clone(),
+            Domain::new(domain_id.clone()).build(&alice()),
+        );
         let (account_id, account_value) = Account::new(alice()).build(&alice()).into_key_value();
         state.world.accounts.insert(account_id, account_value);
         let (account_id, account_value) = Account::new(bob()).build(&alice()).into_key_value();
@@ -6697,20 +6697,21 @@ mod sorafs_tests {
         let (account_id, account_value) = Account::new(treasury).build(&alice()).into_key_value();
         state.world.accounts.insert(account_id, account_value);
 
-        let definition = AssetDefinition::numeric(fee_asset_id.clone())
-            .with_name(
-                fee_asset_id
-                    .try_name()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "xor".to_owned()),
-            )
-            .build(&alice());
-        if let Some(domain_id) = fee_asset_id.try_domain().cloned() {
-            state
-                .world
-                .domain_asset_definitions
-                .insert(domain_id, BTreeSet::from([fee_asset_id.clone()]));
-        }
+        let definition = AssetDefinition::numeric(
+            fee_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id.clone()),
+        )
+        .build(&alice());
+        state
+            .world
+            .asset_definition_domains
+            .insert(fee_asset_id.clone(), domain_id.clone());
+        state
+            .world
+            .domain_asset_definitions
+            .insert(domain_id, BTreeSet::from([fee_asset_id.clone()]));
         let owner = definition.owned_by().clone();
         state
             .world

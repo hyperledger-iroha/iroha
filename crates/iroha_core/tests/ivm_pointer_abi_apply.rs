@@ -60,10 +60,11 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     // Build a minimal IVM program that performs SCALL TRANSFER_ASSET_SCOPED and HALT
     let from = ALICE_ID.clone();
     let to = BOB_ID.clone();
-    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let asset_def: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
@@ -150,11 +151,12 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
     let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
-    let new_asset_def = AssetDefinition::numeric(asset_def.clone())
-        .with_name(asset_def.name().to_string())
-        .with_balance_scope_policy(
-            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-        );
+    let new_asset_def = AssetDefinition::numeric(
+        asset_def.clone(),
+        "coin".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+        Some(domain_id),
+    );
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_quantity(
         1000u64,
@@ -335,9 +337,12 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
     let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
-    let reg_asset_def = RegisterBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.to_string()),
-    ));
+    let reg_asset_def = RegisterBox::from(Register::asset_definition(AssetDefinition::numeric(
+        asset_def.clone(),
+        asset_def.to_string(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )));
     let mint = MintBox::from(Mint::asset_quantity(
         1000u64,
         AssetId::with_scope(
@@ -445,12 +450,18 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let reg_authority = RegisterBox::from(Register::account(NewAccount::new(authority.clone())));
     let reg_reserve = RegisterBox::from(Register::account(NewAccount::new(reserve.clone())));
     let reg_dst = RegisterBox::from(Register::account(NewAccount::new(dst.clone())));
-    let reg_aed = RegisterBox::from(Register::asset_definition(
-        AssetDefinition::numeric(aed_asset_def.clone()).with_name("aed".to_owned()),
-    ));
-    let reg_cbdc = RegisterBox::from(Register::asset_definition(
-        AssetDefinition::numeric(cbdc_asset_def.clone()).with_name("cbdc".to_owned()),
-    ));
+    let reg_aed = RegisterBox::from(Register::asset_definition(AssetDefinition::numeric(
+        aed_asset_def.clone(),
+        "aed".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )));
+    let reg_cbdc = RegisterBox::from(Register::asset_definition(AssetDefinition::numeric(
+        cbdc_asset_def.clone(),
+        "cbdc".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )));
     let mint_aed = MintBox::from(Mint::asset_quantity(
         1u64,
         AssetId::of(aed_asset_def.clone(), dst.clone()),

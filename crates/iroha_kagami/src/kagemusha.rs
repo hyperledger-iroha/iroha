@@ -4,7 +4,7 @@ mod taira;
 
 use std::{
     collections::BTreeSet,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
 };
@@ -12,8 +12,14 @@ use std::{
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
-use iroha_core::zk::kagemusha_artifact_v4::read_kagemusha_pasta_cycle_artifact_v4;
-use iroha_core::zk::kagemusha_v2::validate_kagemusha_step_bootstrap_payload_v4;
+use iroha_core::zk::kagemusha_artifact_v4::{
+    kagemusha_artifact_descriptor_v4, read_kagemusha_pasta_cycle_artifact_v4,
+};
+use iroha_core::zk::kagemusha_v2::{
+    KagemushaGenerationMemoryGuardV4, KagemushaQualificationMemoryContractV4,
+    start_kagemusha_generation_memory_guard_v4, validate_kagemusha_step_bootstrap_payload_v4,
+    verify_candidate_recursive_step_two_receipt_v4,
+};
 use iroha_crypto::HashOf;
 use iroha_data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4};
 use iroha_data_model::offline::{
@@ -23,18 +29,21 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
     KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2, KagemushaAuthenticatedReleaseV4,
     KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
     KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
-    KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseAttestationV4,
-    KagemushaRecursiveSpendReleasePolicyV1, KagemushaTopUpFinalityRosterArtifactV2,
-    OfflineDeviceAttestationPolicy, kagemusha_recursive_spend_release_sha256,
+    KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendQualificationReceiptV4,
+    KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
+    KagemushaTopUpFinalityRosterArtifactV2, OfflineDeviceAttestationPolicy,
+    kagemusha_recursive_spend_release_sha256,
 };
 
-use crate::{Outcome, RunArgs};
+use crate::{ExplicitExitError, Outcome, RunArgs};
 
 type Result<T> = color_eyre::Result<T>;
 
@@ -51,6 +60,9 @@ const RECURSIVE_STEP_VERIFIER_COMMITMENT_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:recursive-step-verifier-commitment:v4";
 const REPORT_ROSTER_PURPOSE: &str = "topup_finality_roster";
 const REPORT_ARTIFACT_PURPOSES_V4: [&str; 8] = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4;
+const DURABLE_FILE_PUBLICATION_OUTCOME_SCHEMA_V1: &str =
+    "iroha.kagami.kagemusha.durable_file_publication.v1";
+const DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE: u8 = 75;
 const AUTHENTICATED_ARTIFACT_ROLES_V4: [(
     KagemushaPastaCycleParityV1,
     KagemushaPastaCycleArtifactKindV4,
@@ -143,6 +155,9 @@ struct VerifyReleaseV4Args {
     /// Canonical signed, candidate-bound cryptographic review Norito file.
     #[arg(long)]
     cryptographic_review: PathBuf,
+    /// Optional nonzero byte ceiling that may only lower the built-in physical-memory limit.
+    #[arg(long, value_parser = parse_nonzero_canonical_u64)]
+    memory_limit_bytes: Option<u64>,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -162,6 +177,9 @@ struct PromoteReleaseV4Args {
     /// Canonical signed, candidate-bound cryptographic review Norito file.
     #[arg(long)]
     cryptographic_review: PathBuf,
+    /// Optional nonzero byte ceiling that may only lower the built-in physical-memory limit.
+    #[arg(long, value_parser = parse_nonzero_canonical_u64)]
+    memory_limit_bytes: Option<u64>,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -191,29 +209,37 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
             Command::VerifyReleaseV4(args) => {
+                let memory_guard =
+                    start_kagemusha_generation_memory_guard_v4(args.memory_limit_bytes)
+                        .map_err(|error| eyre!("Kagemusha memory guard failed: {error}"))?;
                 let policy_bytes = configured_policy_bytes(&args.release_policy)?;
                 let verified = verify_release_directory_v4(
                     &args.bundle_dir,
                     &policy_bytes,
                     &args.benchmark_evidence,
                     &args.cryptographic_review,
+                    &memory_guard,
                 )?;
                 let report = verified.verification_report()?;
                 writeln!(writer, "{}", report.canonical_json()?)?;
             }
             Command::PromoteReleaseV4(args) => {
+                let memory_guard =
+                    start_kagemusha_generation_memory_guard_v4(args.memory_limit_bytes)
+                        .map_err(|error| eyre!("Kagemusha memory guard failed: {error}"))?;
                 let policy_bytes = configured_policy_bytes(&args.release_policy)?;
                 let verified = verify_release_directory_v4(
                     &args.bundle_dir,
                     &policy_bytes,
                     &args.benchmark_evidence,
                     &args.cryptographic_review,
+                    &memory_guard,
                 )?;
                 let record = verified.promotion_record()?;
                 record.validate().map_err(|error| eyre!(error))?;
                 let record_bytes = norito::to_bytes(&record)
                     .wrap_err("failed to encode Kagemusha V4 promotion record")?;
-                write_new_durable_file(&args.promotion_record, &record_bytes)?;
+                publish_new_durable_file(writer, &args.promotion_record, &record_bytes)?;
                 writeln!(
                     writer,
                     "{}",
@@ -243,7 +269,11 @@ impl<T: Write> RunArgs<T> for Args {
                 let mut instruction_json = norito::json::to_string(&instructions)
                     .wrap_err("failed to encode Kagemusha V4 activation instruction JSON")?;
                 instruction_json.push('\n');
-                write_new_durable_file(&args.output, instruction_json.as_bytes())?;
+                // Activation publication has the same atomicity boundary as a
+                // promotion record. A successful rename followed by failed
+                // directory sync must never be reported as an ordinary success
+                // (or as a safely retryable pre-commit error).
+                publish_new_durable_file(writer, &args.output, instruction_json.as_bytes())?;
                 writeln!(
                     writer,
                     "{{\"status\":\"prepared\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\"}}",
@@ -276,6 +306,23 @@ fn parse_manifest_sha256(value: &str) -> std::result::Result<[u8; 32], String> {
         .map_err(|_| "manifest SHA-256 is malformed".to_owned())?
         .try_into()
         .map_err(|_| "manifest SHA-256 has the wrong length".to_owned())
+}
+
+fn parse_nonzero_canonical_u64(value: &str) -> std::result::Result<u64, String> {
+    if value.is_empty()
+        || value == "0"
+        || value
+            .as_bytes()
+            .first()
+            .is_none_or(|first| !first.is_ascii_digit())
+        || value.starts_with('0')
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err("value must be a canonical nonzero unsigned decimal".to_owned());
+    }
+    value
+        .parse::<u64>()
+        .map_err(|error| format!("value must fit u64: {error}"))
 }
 
 fn configured_policy_bytes(path: &Path) -> Result<Vec<u8>> {
@@ -458,6 +505,11 @@ impl VerifiedReleaseV4 {
             candidate_sha256: candidate
                 .sha256()
                 .map_err(|error| eyre!("failed to identify immutable V4 candidate: {error}"))?,
+            qualification_receipt_sha256: self
+                .authenticated
+                .manifest()
+                .qualification_receipt_sha256,
+            qualified_candidate_sha256: self.authenticated.manifest().qualified_candidate_sha256,
             manifest_sha256: self.authenticated.manifest_sha256(),
             release_attestation_sha256: self.authenticated.release_attestation_sha256(),
             release_policy_sha256: self.authenticated.release_policy_sha256(),
@@ -499,6 +551,7 @@ fn verify_release_directory_v4(
     policy_bytes: &[u8],
     benchmark_evidence_path: &Path,
     cryptographic_review_path: &Path,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
 ) -> Result<VerifiedReleaseV4> {
     let root = canonical_release_root(bundle_dir)?;
     let policy: KagemushaRecursiveSpendReleasePolicyV1 =
@@ -515,6 +568,12 @@ fn verify_release_directory_v4(
     let manifest: KagemushaRecursiveSpendArtifactManifestV4 =
         decode_canonical_norito(&manifest_bytes, "canonical Kagemusha V4 manifest")?;
     manifest.validate().map_err(|error| eyre!(error))?;
+    if manifest.generation_memory_limit_bytes != memory_guard.effective_memory_limit_bytes()
+        || manifest.generation_memory_enforcement_profile
+            != memory_guard.memory_enforcement_profile()
+    {
+        bail!("Kagemusha V4 release memory contract differs from the active in-process guard");
+    }
     let manifest_sha256 = kagemusha_recursive_spend_release_sha256(&manifest_bytes);
 
     let manifest_digest = read_regular_bounded(
@@ -583,6 +642,32 @@ fn verify_release_directory_v4(
         &review,
     )
     .map_err(|error| eyre!("Kagemusha V4 release authentication failed: {error}"))?;
+    let candidate = manifest
+        .immutable_candidate()
+        .map_err(|error| eyre!("failed to reconstruct immutable V4 candidate: {error}"))?;
+    let qualification_receipt_bytes = read_regular_bounded(
+        &root,
+        KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
+        "Kagemusha V4 recursive-step-two qualification receipt",
+    )?;
+    let qualification_receipt =
+        KagemushaRecursiveSpendQualificationReceiptV4::decode_canonical_against_candidate(
+            &qualification_receipt_bytes,
+            &candidate,
+        )
+        .map_err(|error| eyre!("invalid Kagemusha V4 qualification receipt: {error}"))?;
+    let qualification_receipt_sha256 = qualification_receipt
+        .canonical_sha256_against_candidate(&candidate)
+        .map_err(|error| eyre!("invalid Kagemusha V4 qualification receipt: {error}"))?;
+    let qualified_candidate_sha256 = qualification_receipt
+        .qualified_candidate_sha256(&candidate)
+        .map_err(|error| eyre!("invalid Kagemusha V4 qualification receipt: {error}"))?;
+    if qualification_receipt_sha256 != manifest.qualification_receipt_sha256
+        || qualified_candidate_sha256 != manifest.qualified_candidate_sha256
+    {
+        bail!("Kagemusha V4 manifest does not bind the exact qualification receipt");
+    }
 
     let descriptors: Vec<_> = manifest
         .profiles
@@ -649,6 +734,13 @@ fn verify_release_directory_v4(
     if payload_digests.len() != AUTHENTICATED_ARTIFACT_ROLES_V4.len() {
         bail!("Kagemusha V4 authenticated artifact payload inventory changed");
     }
+    verify_qualification_receipt_v4(
+        &root,
+        &authenticated,
+        &candidate,
+        &qualification_receipt,
+        memory_guard,
+    )?;
     if authenticated.manifest_sha256() == [0; 32]
         || authenticated.manifest_sha256() != manifest_sha256
         || authenticated.manifest().max_proof_bytes != manifest.max_proof_bytes
@@ -698,6 +790,101 @@ fn roster_release_generations_match_v4(
     descriptor_matches_roster && descriptor_matches_manifest
 }
 
+fn verify_qualification_receipt_v4(
+    root: &Path,
+    authenticated: &KagemushaAuthenticatedReleaseV4,
+    candidate: &KagemushaRecursiveSpendCandidateV4,
+    receipt: &KagemushaRecursiveSpendQualificationReceiptV4,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
+) -> Outcome {
+    let candidate_sha256 = candidate
+        .sha256()
+        .map_err(|error| eyre!("failed to identify immutable V4 candidate: {error}"))?;
+    let candidate_manifest_bytes = norito::encode_canonical(&candidate.manifest)
+        .wrap_err("failed to encode immutable V4 candidate manifest")?;
+    let candidate_manifest_sha256 =
+        kagemusha_recursive_spend_release_sha256(&candidate_manifest_bytes);
+    let eq_proving_key = kagemusha_artifact_descriptor_v4(
+        &candidate.manifest,
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+    )
+    .map_err(|error| eyre!(error))?;
+    let ep_proving_key = kagemusha_artifact_descriptor_v4(
+        &candidate.manifest,
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+    )
+    .map_err(|error| eyre!(error))?;
+    let eq_maximum = usize::try_from(eq_proving_key.size_bytes)
+        .map_err(|_| eyre!("Kagemusha V4 Eq proving-key size does not fit this host"))?;
+    let ep_maximum = usize::try_from(ep_proving_key.size_bytes)
+        .map_err(|_| eyre!("Kagemusha V4 Ep proving-key size does not fit this host"))?;
+    let eq_opened = open_regular_bounded(
+        root,
+        &eq_proving_key.file_name,
+        eq_maximum,
+        "Kagemusha V4 qualification Eq proving key",
+    )?;
+    let ep_opened = open_regular_bounded(
+        root,
+        &ep_proving_key.file_name,
+        ep_maximum,
+        "Kagemusha V4 qualification Ep proving key",
+    )?;
+    let eq_file = eq_opened
+        .file
+        .try_clone()
+        .wrap_err("failed to duplicate Kagemusha V4 Eq proving-key handle")?;
+    let ep_file = ep_opened
+        .file
+        .try_clone()
+        .wrap_err("failed to duplicate Kagemusha V4 Ep proving-key handle")?;
+    let qualification_memory_contract =
+        KagemushaQualificationMemoryContractV4::for_operator(memory_guard);
+    verify_candidate_recursive_step_two_receipt_v4(
+        candidate,
+        candidate_sha256,
+        candidate_manifest_sha256,
+        receipt,
+        &qualification_memory_contract,
+        eq_file,
+        ep_file,
+        |parity, kind| {
+            if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
+                return Err(
+                    "Kagemusha V4 bounded qualification loader requested a proving key".to_owned(),
+                );
+            }
+            let descriptor =
+                kagemusha_artifact_descriptor_v4(authenticated.manifest(), parity, kind)?;
+            let maximum = usize::try_from(descriptor.size_bytes).map_err(|_| {
+                "Kagemusha V4 qualification artifact size does not fit this host".to_owned()
+            })?;
+            let mut opened = open_regular_bounded(
+                root,
+                &descriptor.file_name,
+                maximum,
+                "Kagemusha V4 qualification artifact",
+            )
+            .map_err(|error| error.to_string())?;
+            let payload = read_kagemusha_pasta_cycle_artifact_v4(
+                &mut opened.file,
+                authenticated,
+                descriptor,
+            )?;
+            opened
+                .verify_unchanged()
+                .map_err(|error| error.to_string())?;
+            Ok(payload)
+        },
+    )
+    .map_err(|error| eyre!("Kagemusha V4 qualification proof verification failed: {error}"))?;
+    eq_opened.verify_unchanged()?;
+    ep_opened.verify_unchanged()?;
+    Ok(())
+}
+
 fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManifestV4) -> Outcome {
     let descriptor = &manifest.topup_finality_roster_artifact;
     let bytes = read_regular_bounded(
@@ -731,26 +918,64 @@ fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManif
     Ok(())
 }
 
+fn insert_expected_release_file_v4(
+    expected: &mut BTreeSet<String>,
+    file_name: String,
+    role: &str,
+) -> Outcome {
+    if !expected.insert(file_name.clone()) {
+        bail!("Kagemusha V4 {role} aliases another release file as `{file_name}`");
+    }
+    Ok(())
+}
+
 fn verify_exact_inventory_v4(
     root: &Path,
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
 ) -> Outcome {
-    let mut expected = std::collections::BTreeSet::from([
-        MANIFEST_JSON_FILE_NAME.to_owned(),
-        MANIFEST_NORITO_FILE_NAME.to_owned(),
-        MANIFEST_NORITO_SHA256_FILE_NAME.to_owned(),
-        RELEASE_ATTESTATION_FILE_NAME_V4.to_owned(),
-        KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1.to_owned(),
-        KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1.to_owned(),
-        PROMOTION_RECORD_FILE_NAME_V4.to_owned(),
+    let mut expected = BTreeSet::new();
+    for (file_name, role) in [
+        (MANIFEST_JSON_FILE_NAME, "manifest JSON"),
+        (MANIFEST_NORITO_FILE_NAME, "manifest Norito"),
+        (MANIFEST_NORITO_SHA256_FILE_NAME, "manifest digest"),
+        (RELEASE_ATTESTATION_FILE_NAME_V4, "release attestation"),
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+            "benchmark evidence",
+        ),
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+            "cryptographic review",
+        ),
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+            "qualification receipt",
+        ),
+        (PROMOTION_RECORD_FILE_NAME_V4, "promotion record"),
+    ] {
+        insert_expected_release_file_v4(&mut expected, file_name.to_owned(), role)?;
+    }
+    insert_expected_release_file_v4(
+        &mut expected,
         manifest.topup_finality_roster_artifact.file_name.clone(),
-    ]);
+        "top-up finality roster",
+    )?;
     for artifact in manifest
         .profiles
         .iter()
         .flat_map(|profile| profile.artifacts.iter())
     {
-        expected.insert(artifact.file_name.clone());
+        insert_expected_release_file_v4(
+            &mut expected,
+            artifact.file_name.clone(),
+            "authenticated artifact",
+        )?;
+    }
+    if expected.len() != 17 {
+        bail!(
+            "Kagemusha V4 release contract must name exactly seventeen unique files, found {}",
+            expected.len()
+        );
     }
     let observed = fs::read_dir(root)
         .wrap_err("failed to enumerate Kagemusha V4 release directory")?
@@ -759,7 +984,7 @@ fn verify_exact_inventory_v4(
                 .map(|entry| entry.file_name().to_string_lossy().into_owned())
                 .wrap_err("failed to inspect Kagemusha V4 release inventory")
         })
-        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+        .collect::<Result<BTreeSet<_>>>()?;
     if observed != expected {
         bail!(
             "Kagemusha V4 release inventory is not exact (missing={:?}, unexpected={:?})",
@@ -968,41 +1193,450 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
-fn write_new_durable_file(path: &Path, bytes: &[u8]) -> Outcome {
-    let parent = path
-        .parent()
-        .ok_or_else(|| eyre!("promotion-record path has no parent"))?;
-    let parent_metadata =
-        fs::symlink_metadata(parent).wrap_err("promotion-record parent is unavailable")?;
-    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
-        bail!("promotion-record parent must be a non-symlink directory");
+#[derive(Debug)]
+#[must_use = "a post-rename commit-uncertain outcome must be handled explicitly"]
+enum DurableFilePublicationOutcomeV1 {
+    Committed { final_path: PathBuf },
+    CommitUncertain { final_path: PathBuf, reason: String },
+}
+
+impl DurableFilePublicationOutcomeV1 {
+    fn operator_record(&self) -> String {
+        let (status, final_path, durable, reason) = match self {
+            Self::Committed { final_path } => ("committed", final_path, true, None),
+            Self::CommitUncertain { final_path, reason } => {
+                ("commit-uncertain", final_path, false, Some(reason.as_str()))
+            }
+        };
+        #[cfg(unix)]
+        let final_path_hex = {
+            use std::os::unix::ffi::OsStrExt as _;
+            hex::encode(final_path.as_os_str().as_bytes())
+        };
+        #[cfg(not(unix))]
+        let final_path_hex = hex::encode(final_path.to_string_lossy().as_bytes());
+        let reason_hex =
+            reason.map_or_else(|| "-".to_owned(), |value| hex::encode(value.as_bytes()));
+        format!(
+            "{DURABLE_FILE_PUBLICATION_OUTCOME_SCHEMA_V1} status={status} final_path_encoding=bytes-hex final_path_hex={final_path_hex} parent_directory_durable={} reason_utf8_hex={reason_hex}",
+            u8::from(durable),
+        )
     }
-    reject_unsafe_mode(&parent_metadata, "promotion-record parent")?;
-    let canonical_parent = parent
-        .canonicalize()
-        .wrap_err("failed to canonicalize promotion-record parent")?;
-    let file_name = path
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PromotionDirectorySnapshotV1 {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    links: u64,
+}
+
+#[cfg(unix)]
+impl PromotionDirectorySnapshotV1 {
+    fn from_metadata(metadata: &fs::Metadata) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        metadata.is_dir().then(|| Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            links: metadata.nlink(),
+        })
+    }
+
+    fn validate_trusted(self, label: &str) -> Result<()> {
+        let effective_uid = rustix::process::geteuid().as_raw();
+        if (self.uid != 0 && self.uid != effective_uid) || self.mode & 0o022 != 0 || self.links == 0
+        {
+            bail!(
+                "{label} must be owned by root or the effective uid, non-writable by group/other, and linked"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PromotionFileSnapshotV1 {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    links: u64,
+    length: u64,
+}
+
+#[cfg(unix)]
+impl PromotionFileSnapshotV1 {
+    fn from_metadata(metadata: &fs::Metadata) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        (metadata.is_file() && metadata.nlink() == 1).then(|| Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            links: metadata.nlink(),
+            length: metadata.len(),
+        })
+    }
+
+    fn validate_private(self) -> Result<()> {
+        if self.uid != rustix::process::geteuid().as_raw()
+            || self.mode & 0o777 != 0o600
+            || self.links != 1
+        {
+            bail!("promotion-record temporary file has unsafe custody");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+struct PinnedPromotionParentV1 {
+    path: PathBuf,
+    file: File,
+    snapshot: PromotionDirectorySnapshotV1,
+    path_chain: Vec<(PathBuf, PromotionDirectorySnapshotV1)>,
+}
+
+#[cfg(unix)]
+impl PinnedPromotionParentV1 {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "descriptor traversal and every before/open/after identity check form one fail-closed parent-pinning operation"
+    )]
+    fn open(path: &Path) -> Result<Self> {
+        use std::path::Component;
+
+        use rustix::fs::{AtFlags, Mode, OFlags, open, openat, statat};
+
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .wrap_err("resolve promotion-record current directory")?
+                .join(path)
+        };
+        let before =
+            fs::symlink_metadata(&absolute).wrap_err("promotion-record parent is unavailable")?;
+        if before.file_type().is_symlink() || !before.is_dir() {
+            bail!("promotion-record parent must be a non-symlink directory");
+        }
+        let before = PromotionDirectorySnapshotV1::from_metadata(&before)
+            .ok_or_else(|| eyre!("promotion-record parent must be a directory"))?;
+        let canonical = fs::canonicalize(&absolute)
+            .wrap_err("failed to canonicalize promotion-record parent")?;
+
+        let root_path = Path::new("/");
+        let root_before = fs::symlink_metadata(root_path)
+            .wrap_err("failed to inspect promotion-record filesystem root")?;
+        let root_snapshot = PromotionDirectorySnapshotV1::from_metadata(&root_before)
+            .ok_or_else(|| eyre!("promotion-record filesystem root is not a directory"))?;
+        root_snapshot.validate_trusted("promotion-record filesystem root")?;
+        let mut file = File::from(
+            open(
+                root_path,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .wrap_err("failed to pin promotion-record filesystem root")?,
+        );
+        let opened_root = PromotionDirectorySnapshotV1::from_metadata(
+            &file
+                .metadata()
+                .wrap_err("failed to inspect pinned promotion-record filesystem root")?,
+        );
+        if opened_root != Some(root_snapshot) {
+            bail!("promotion-record filesystem root changed while it was pinned");
+        }
+        let mut current_path = root_path.to_path_buf();
+        let mut path_chain = vec![(current_path.clone(), root_snapshot)];
+        let mut snapshot = root_snapshot;
+
+        for component in canonical.components().skip(1) {
+            let Component::Normal(name) = component else {
+                bail!("promotion-record parent contains a non-canonical path component");
+            };
+            let stat_before = statat(&file, name, AtFlags::SYMLINK_NOFOLLOW)
+                .wrap_err("failed to inspect promotion-record parent component")?;
+            if rustix::fs::FileType::from_raw_mode(stat_before.st_mode)
+                != rustix::fs::FileType::Directory
+            {
+                bail!("promotion-record parent chain contains a non-directory");
+            }
+            let next = File::from(
+                openat(
+                    &file,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .wrap_err("failed to pin promotion-record parent component")?,
+            );
+            let next_snapshot = PromotionDirectorySnapshotV1::from_metadata(
+                &next
+                    .metadata()
+                    .wrap_err("failed to inspect pinned promotion-record parent component")?,
+            )
+            .ok_or_else(|| eyre!("promotion-record parent component is not a directory"))?;
+            let stat_after = statat(&file, name, AtFlags::SYMLINK_NOFOLLOW)
+                .wrap_err("failed to re-inspect promotion-record parent component")?;
+            let stat_identity_matches = u64::try_from(stat_after.st_dev).ok()
+                == Some(next_snapshot.device)
+                && u64::try_from(stat_after.st_ino).ok() == Some(next_snapshot.inode)
+                && u32::try_from(stat_after.st_mode).ok() == Some(next_snapshot.mode)
+                && u32::try_from(stat_after.st_uid).ok() == Some(next_snapshot.uid)
+                && u32::try_from(stat_after.st_gid).ok() == Some(next_snapshot.gid)
+                && u64::try_from(stat_after.st_nlink).ok() == Some(next_snapshot.links);
+            if !stat_identity_matches {
+                bail!("promotion-record parent component changed while it was pinned");
+            }
+            current_path.push(name);
+            next_snapshot.validate_trusted(&format!(
+                "promotion-record parent component `{}`",
+                current_path.display()
+            ))?;
+            file = next;
+            snapshot = next_snapshot;
+            path_chain.push((current_path.clone(), snapshot));
+        }
+        if snapshot != before {
+            bail!("promotion-record parent changed while its descriptor was pinned");
+        }
+        let parent = Self {
+            path: absolute,
+            file,
+            snapshot,
+            path_chain,
+        };
+        parent.verify_path_identity()?;
+        Ok(parent)
+    }
+
+    fn verify_path_identity(&self) -> Result<()> {
+        let opened = PromotionDirectorySnapshotV1::from_metadata(
+            &self
+                .file
+                .metadata()
+                .wrap_err("failed to re-inspect pinned promotion-record parent")?,
+        );
+        if opened != Some(self.snapshot) {
+            bail!("pinned promotion-record parent changed identity");
+        }
+        for (path, expected) in &self.path_chain {
+            let current = fs::symlink_metadata(path).wrap_err_with(|| {
+                format!(
+                    "failed to re-inspect promotion-record ancestor {}",
+                    path.display()
+                )
+            })?;
+            if current.file_type().is_symlink()
+                || PromotionDirectorySnapshotV1::from_metadata(&current) != Some(*expected)
+            {
+                bail!(
+                    "promotion-record ancestor changed after it was pinned: {}",
+                    path.display()
+                );
+            }
+        }
+        let named = fs::symlink_metadata(&self.path)
+            .wrap_err("failed to re-inspect named promotion-record parent")?;
+        if named.file_type().is_symlink()
+            || PromotionDirectorySnapshotV1::from_metadata(&named) != Some(self.snapshot)
+        {
+            bail!("promotion-record parent pathname changed after it was pinned");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn random_promotion_temporary_name_v1(target: &std::ffi::OsStr) -> Result<std::ffi::OsString> {
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+    use rand::{TryRngCore as _, rngs::OsRng};
+
+    let mut random = [0_u8; 16];
+    OsRng
+        .try_fill_bytes(&mut random)
+        .wrap_err("obtain OS entropy for promotion-record temporary name")?;
+    let mut bytes = Vec::with_capacity(target.as_bytes().len() + 39);
+    bytes.push(b'.');
+    bytes.extend_from_slice(target.as_bytes());
+    bytes.extend_from_slice(b".tmp.");
+    bytes.extend_from_slice(hex::encode(random).as_bytes());
+    Ok(std::ffi::OsString::from_vec(bytes))
+}
+
+#[cfg(unix)]
+fn cleanup_promotion_temporary_v1(
+    parent: &PinnedPromotionParentV1,
+    temporary_name: &std::ffi::OsStr,
+) -> Result<()> {
+    rustix::fs::unlinkat(&parent.file, temporary_name, rustix::fs::AtFlags::empty())
+        .wrap_err("failed to remove unpublished promotion-record temporary file")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "private staging, the atomic publication point, and post-publication durability classification must remain one ordered operation"
+)]
+fn write_new_durable_file_with_hooks_v1<B, S>(
+    path: &Path,
+    bytes: &[u8],
+    before_publish: B,
+    sync_parent: S,
+) -> Result<DurableFilePublicationOutcomeV1>
+where
+    B: FnOnce() -> Result<()>,
+    S: FnOnce(&File) -> std::io::Result<()>,
+{
+    use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags, openat, renameat_with, statat};
+
+    let parent_path = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| eyre!("promotion-record path has no parent"))?;
+    let target_name = path
         .file_name()
         .ok_or_else(|| eyre!("promotion-record path has no file name"))?;
-    let target = canonical_parent.join(file_name);
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
+    let mut components = Path::new(target_name).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(name)) if name == target_name)
+        || components.next().is_some()
     {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
+        bail!("promotion-record file name must be one normal path component");
     }
-    let mut file = options
-        .open(&target)
-        .wrap_err("refusing to overwrite or alias an existing promotion record")?;
-    file.write_all(bytes)
-        .wrap_err("failed to write Kagemusha promotion record")?;
-    file.sync_all()
-        .wrap_err("failed to durably sync Kagemusha promotion record")?;
-    File::open(&canonical_parent)
-        .and_then(|directory| directory.sync_all())
-        .wrap_err("failed to durably sync promotion-record directory")?;
-    Ok(())
+    let parent = PinnedPromotionParentV1::open(parent_path)?;
+    match statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => bail!("refusing to overwrite or alias an existing promotion record"),
+        Err(error) if error == rustix::io::Errno::NOENT => {}
+        Err(error) => return Err(error).wrap_err("failed to inspect promotion-record destination"),
+    }
+
+    let temporary_name = random_promotion_temporary_name_v1(target_name)?;
+    let mut temporary = File::from(
+        openat(
+            &parent.file,
+            &temporary_name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )
+        .wrap_err("failed to create private promotion-record temporary file")?,
+    );
+    let write_result = (|| -> Result<PromotionFileSnapshotV1> {
+        PromotionFileSnapshotV1::from_metadata(
+            &temporary
+                .metadata()
+                .wrap_err("failed to inspect promotion-record temporary file")?,
+        )
+        .ok_or_else(|| eyre!("promotion-record temporary is not a single-link regular file"))?
+        .validate_private()?;
+        temporary
+            .write_all(bytes)
+            .wrap_err("failed to write Kagemusha promotion record")?;
+        temporary
+            .sync_all()
+            .wrap_err("failed to durably sync Kagemusha promotion record")?;
+        let snapshot = PromotionFileSnapshotV1::from_metadata(
+            &temporary
+                .metadata()
+                .wrap_err("failed to re-inspect promotion-record temporary file")?,
+        )
+        .ok_or_else(|| eyre!("promotion-record temporary lost its regular-file identity"))?;
+        snapshot.validate_private()?;
+        let expected_length = u64::try_from(bytes.len())
+            .map_err(|_| eyre!("promotion-record length does not fit u64"))?;
+        if snapshot.length != expected_length {
+            bail!("promotion-record temporary file has the wrong final length");
+        }
+        Ok(snapshot)
+    })();
+    let snapshot = match write_result {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = before_publish().and_then(|()| parent.verify_path_identity()) {
+        cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
+        return Err(error);
+    }
+    if let Err(error) = renameat_with(
+        &parent.file,
+        &temporary_name,
+        &parent.file,
+        target_name,
+        RenameFlags::NOREPLACE,
+    ) {
+        cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
+        return Err(error).wrap_err("failed to atomically publish new promotion record");
+    }
+
+    let final_path = parent.path.join(target_name);
+    let after_publication = (|| -> Result<()> {
+        let target = statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW)
+            .wrap_err("failed to inspect published promotion record")?;
+        if u64::try_from(target.st_dev).ok() != Some(snapshot.device)
+            || u64::try_from(target.st_ino).ok() != Some(snapshot.inode)
+            || u32::try_from(target.st_mode).ok() != Some(snapshot.mode)
+            || u32::try_from(target.st_uid).ok() != Some(snapshot.uid)
+            || u32::try_from(target.st_gid).ok() != Some(snapshot.gid)
+            || u64::try_from(target.st_nlink).ok() != Some(snapshot.links)
+            || u64::try_from(target.st_size).ok() != Some(snapshot.length)
+        {
+            bail!("published promotion record changed identity or custody");
+        }
+        sync_parent(&parent.file).wrap_err("failed to durably sync promotion-record parent")?;
+        parent.verify_path_identity()?;
+        Ok(())
+    })();
+    Ok(match after_publication {
+        Ok(()) => DurableFilePublicationOutcomeV1::Committed { final_path },
+        Err(error) => DurableFilePublicationOutcomeV1::CommitUncertain {
+            final_path,
+            reason: error.to_string(),
+        },
+    })
+}
+
+#[cfg(unix)]
+fn write_new_durable_file(path: &Path, bytes: &[u8]) -> Result<DurableFilePublicationOutcomeV1> {
+    write_new_durable_file_with_hooks_v1(path, bytes, || Ok(()), File::sync_all)
+}
+
+#[cfg(not(unix))]
+fn write_new_durable_file(_path: &Path, _bytes: &[u8]) -> Result<DurableFilePublicationOutcomeV1> {
+    bail!("safe Kagemusha promotion-record publication requires Unix descriptor-relative APIs")
+}
+
+fn publish_new_durable_file<W: Write>(writer: &mut W, path: &Path, bytes: &[u8]) -> Result<()> {
+    match write_new_durable_file(path, bytes)? {
+        committed @ DurableFilePublicationOutcomeV1::Committed { .. } => {
+            writeln!(writer, "{}", committed.operator_record())?;
+            Ok(())
+        }
+        uncertain @ DurableFilePublicationOutcomeV1::CommitUncertain { .. } => {
+            Err(ExplicitExitError::new(
+                DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE,
+                uncertain.operator_record(),
+            )
+            .into())
+        }
+    }
 }
 
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
@@ -1020,8 +1654,12 @@ struct VerificationReport {
     status: String,
     envelope_sha256: String,
     manifest_body_sha256: String,
+    qualification_receipt_sha256: String,
+    qualified_candidate_sha256: String,
     release_policy_sha256: String,
     generation: String,
+    generation_memory_limit_bytes: u64,
+    generation_memory_enforcement_profile: String,
     chain_id: String,
     asset_definition_id: String,
     asset_scale: u32,
@@ -1065,8 +1703,14 @@ impl VerificationReport {
             status: "verified".to_owned(),
             envelope_sha256: hex::encode(envelope_sha256),
             manifest_body_sha256: hex::encode(manifest_body_sha256),
+            qualification_receipt_sha256: hex::encode(manifest.qualification_receipt_sha256),
+            qualified_candidate_sha256: hex::encode(manifest.qualified_candidate_sha256),
             release_policy_sha256: hex::encode(release_policy_sha256),
             generation: manifest.generation.clone(),
+            generation_memory_limit_bytes: manifest.generation_memory_limit_bytes,
+            generation_memory_enforcement_profile: manifest
+                .generation_memory_enforcement_profile
+                .clone(),
             chain_id: manifest.chain_id.to_string(),
             asset_definition_id: manifest.asset.to_string(),
             asset_scale: manifest.asset_scale,
@@ -1083,9 +1727,13 @@ struct VerificationReportV4 {
     envelope_sha256: String,
     manifest_body_sha256: String,
     candidate_sha256: String,
+    qualification_receipt_sha256: String,
+    qualified_candidate_sha256: String,
     promotion_record_sha256: String,
     release_policy_sha256: String,
     generation: String,
+    generation_memory_limit_bytes: u64,
+    generation_memory_enforcement_profile: String,
     chain_id: String,
     asset_definition_id: String,
     asset_scale: u32,
@@ -1105,9 +1753,15 @@ impl VerificationReportV4 {
             envelope_sha256: report.envelope_sha256.clone(),
             manifest_body_sha256: report.manifest_body_sha256.clone(),
             candidate_sha256: hex::encode(candidate_sha256),
+            qualification_receipt_sha256: report.qualification_receipt_sha256.clone(),
+            qualified_candidate_sha256: report.qualified_candidate_sha256.clone(),
             promotion_record_sha256: hex::encode(promotion_record_sha256),
             release_policy_sha256: report.release_policy_sha256.clone(),
             generation: report.generation.clone(),
+            generation_memory_limit_bytes: report.generation_memory_limit_bytes,
+            generation_memory_enforcement_profile: report
+                .generation_memory_enforcement_profile
+                .clone(),
             chain_id: report.chain_id.clone(),
             asset_definition_id: report.asset_definition_id.clone(),
             asset_scale: report.asset_scale,
@@ -1124,7 +1778,7 @@ impl VerificationReportV4 {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, collections::BTreeSet, rc::Rc};
 
     use iroha_data_model::offline::{
         OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
@@ -1133,8 +1787,15 @@ mod tests {
 
     use super::{
         AUTHENTICATED_ARTIFACT_ROLES_V4, REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE,
-        parse_manifest_sha256, roster_release_generations_match_v4,
-        validate_artifacts_sequentially, validate_device_attestation_policy_for_atomic_activation,
+        insert_expected_release_file_v4, parse_manifest_sha256, parse_nonzero_canonical_u64,
+        roster_release_generations_match_v4, validate_artifacts_sequentially,
+        validate_device_attestation_policy_for_atomic_activation,
+    };
+
+    #[cfg(unix)]
+    use super::{
+        DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE, DurableFilePublicationOutcomeV1,
+        write_new_durable_file_with_hooks_v1,
     };
 
     struct LivePayload {
@@ -1191,6 +1852,117 @@ mod tests {
     }
 
     #[test]
+    fn operator_memory_lowering_parser_is_nonzero_and_canonical() {
+        assert_eq!(parse_nonzero_canonical_u64("1"), Ok(1));
+        assert_eq!(
+            parse_nonzero_canonical_u64("68719476736"),
+            Ok(68_719_476_736)
+        );
+        for invalid in ["", "0", "01", "+1", "-1", "1 ", "18446744073709551616"] {
+            assert!(parse_nonzero_canonical_u64(invalid).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn promotion_publication_rejects_a_parent_swap_before_visibility() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+
+        let root = tempfile::tempdir().expect("temporary publication root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure temporary root");
+        let parent = root.path().join("promotion");
+        let displaced = root.path().join("displaced-promotion");
+        fs::create_dir(&parent).expect("create promotion parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure promotion parent");
+        let target = parent.join("promotion-record-v4.norito");
+
+        let error = write_new_durable_file_with_hooks_v1(
+            &target,
+            b"authenticated promotion record",
+            || {
+                fs::rename(&parent, &displaced).expect("move pinned parent");
+                fs::create_dir(&parent).expect("create same-name impostor parent");
+                fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+                    .expect("secure impostor parent");
+                fs::write(parent.join("attacker-sentinel"), b"must survive")
+                    .expect("write attacker sentinel");
+                Ok(())
+            },
+            std::fs::File::sync_all,
+        )
+        .expect_err("a swapped parent must fail before publication");
+
+        assert!(error.to_string().contains("parent"));
+        assert!(!target.exists(), "the impostor path must receive no record");
+        assert!(
+            !displaced.join("promotion-record-v4.norito").exists(),
+            "the pinned directory must receive no final record after path continuity fails"
+        );
+        assert_eq!(
+            fs::read(parent.join("attacker-sentinel")).expect("read attacker sentinel"),
+            b"must survive"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn promotion_parent_sync_failure_is_explicitly_commit_uncertain() {
+        use std::{fs, io, os::unix::fs::PermissionsExt as _};
+
+        let root = tempfile::tempdir().expect("temporary publication root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure temporary root");
+        let parent = root.path().join("promotion");
+        fs::create_dir(&parent).expect("create promotion parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure promotion parent");
+        let target = parent.join("promotion-record-v4.norito");
+        let bytes = b"authenticated promotion record";
+
+        let outcome = write_new_durable_file_with_hooks_v1(
+            &target,
+            bytes,
+            || Ok(()),
+            |_| Err(io::Error::other("injected parent sync failure")),
+        )
+        .expect("rename success is represented as an explicit outcome");
+        match &outcome {
+            DurableFilePublicationOutcomeV1::CommitUncertain { final_path, reason } => {
+                assert_eq!(final_path, &target);
+                assert!(reason.contains("injected parent sync failure"));
+            }
+            DurableFilePublicationOutcomeV1::Committed { .. } => {
+                panic!("a failed post-rename parent sync cannot be committed")
+            }
+        }
+        assert_eq!(fs::read(&target).expect("read visible final record"), bytes);
+        assert_eq!(DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE, 75);
+        assert!(
+            outcome
+                .operator_record()
+                .contains("status=commit-uncertain")
+        );
+    }
+
+    #[test]
+    fn every_command_publication_handles_commit_uncertainty() {
+        let source = include_str!("kagemusha.rs");
+        assert_eq!(
+            source
+                .matches("publish_new_durable_file(writer, &args.")
+                .count(),
+            2,
+            "promotion and activation must share the explicit outcome boundary"
+        );
+        assert!(
+            !source.contains("write_new_durable_file(&args."),
+            "command dispatch must not discard a low-level publication outcome"
+        );
+    }
+
+    #[test]
     fn roster_generation_binding_uses_the_authenticated_descriptor() {
         assert!(roster_release_generations_match_v4(
             "release-a",
@@ -1227,6 +1999,25 @@ mod tests {
         assert_eq!(REPORT_ARTIFACT_PURPOSES_V4.len(), 8);
         assert_eq!(AUTHENTICATED_ARTIFACT_ROLES_V4.len(), 8);
         assert_eq!(REPORT_ROSTER_PURPOSE, "topup_finality_roster");
+    }
+
+    #[test]
+    fn release_inventory_rejects_role_name_collision_instead_of_collapsing_it() {
+        let mut expected = BTreeSet::new();
+        insert_expected_release_file_v4(
+            &mut expected,
+            "recursive-step-two-qualification-v4.norito".to_owned(),
+            "qualification receipt",
+        )
+        .expect("first role owns its file name");
+        let error = insert_expected_release_file_v4(
+            &mut expected,
+            "recursive-step-two-qualification-v4.norito".to_owned(),
+            "substituted artifact",
+        )
+        .expect_err("a descriptor cannot alias the fixed qualification receipt");
+        assert!(error.to_string().contains("aliases another release file"));
+        assert_eq!(expected.len(), 1);
     }
 
     #[test]

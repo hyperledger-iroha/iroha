@@ -66,7 +66,7 @@ fn bench_account(label: &str) -> AccountId {
 }
 
 fn bench_asset_def_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("bench", "universal").expect("bench domain"),
         "coin".parse().expect("bench asset definition name"),
     )
@@ -293,10 +293,19 @@ fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
             accounts.push(Account::new(account_id.clone()).build(&authority));
         }
 
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "coin".parse().expect("asset name"));
-        asset_definitions
-            .push(AssetDefinition::numeric(asset_definition_id.clone()).build(&authority));
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "coin".parse().expect("asset name"),
+        );
+        asset_definitions.push(
+            AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&authority),
+        );
         assets.push(Asset::new(
             AssetId::of(asset_definition_id, authority.clone()),
             Quantity::from(u64::try_from(i).expect("fixture index fits u64") + 1),
@@ -647,10 +656,11 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
     let domain_id: DomainId = DomainId::try_new("bench", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("bench", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("bench", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
     let mut accounts = Vec::with_capacity(1_000);
     let mut assets: Vec<iroha_data_model::asset::Asset> = Vec::with_capacity(1_000);
     for i in 0..1_000 {
@@ -667,7 +677,13 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     let world = World::with_assets(
         [domain],
         accounts.clone(),
-        [AssetDefinition::numeric(asset_def_id.clone()).build(&accounts[0].id().clone())],
+        [AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&accounts[0].id().clone())],
         assets,
         [],
     );
@@ -765,11 +781,17 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     let domain = Domain::new(DomainId::try_new("bench", "universal").unwrap()).build(&auth);
     let mut defs = Vec::with_capacity(10_000);
     for i in 0..10_000 {
-        let id = AssetDefinitionId::new(
+        let id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("bench", "universal").unwrap(),
             format!("ad{i}").parse().unwrap(),
         );
-        let mut ad = AssetDefinition::numeric(id).build(&auth);
+        let mut ad = AssetDefinition::numeric(
+            id,
+            format!("ad{i}"),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&auth);
         let _ = ad.metadata_mut().insert(
             "rank".parse().unwrap(),
             iroha_primitives::json::Json::from(norito::json!(i % 100)),
@@ -911,7 +933,7 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     let mut definition_ids = Vec::with_capacity(assets_per_account.max(1));
     definition_ids.push(base_def_id.clone());
     for j in 1..assets_per_account {
-        definition_ids.push(AssetDefinitionId::new(
+        definition_ids.push(AssetDefinitionId::derive_from_components(
             DomainId::try_new("bench", "universal").unwrap(),
             format!("coin{j}").parse().unwrap(),
         ));
@@ -919,7 +941,21 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     let definitions: Vec<_> = definition_ids
         .iter()
         .cloned()
-        .map(|id| AssetDefinition::numeric(id).build(&authority_id))
+        .enumerate()
+        .map(|(index, id)| {
+            let name = if index == 0 {
+                "coin".to_owned()
+            } else {
+                format!("coin{index}")
+            };
+            AssetDefinition::numeric(
+                id,
+                name,
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&authority_id)
+        })
         .collect();
 
     let mut accounts = Vec::with_capacity(n_accounts);
@@ -1095,11 +1131,19 @@ fn build_state_with_asset_definitions(n: usize) -> State {
 
     let mut defs = Vec::with_capacity(n);
     for i in 0..n {
-        let def_id = AssetDefinitionId::new(
+        let def_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("bench", "universal").expect("domain"),
             format!("coin{i}").parse().expect("ad id"),
         );
-        defs.push(AssetDefinition::numeric(def_id).build(&authority_id));
+        defs.push(
+            AssetDefinition::numeric(
+                def_id,
+                format!("coin{i}"),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&authority_id),
+        );
     }
 
     State::try_new(

@@ -9,7 +9,8 @@ use std::{collections::BTreeSet, sync::LazyLock};
 use iroha_torii_shared::{
     route_catalog::{
         ApiSurface, CATALOGED_ROUTES, CatalogProjection, EnabledFeatures,
-        HttpMethod as CatalogHttpMethod, RouteCatalog, sorafs as sorafs_routes,
+        HttpMethod as CatalogHttpMethod, RouteCatalog, musubi as musubi_routes,
+        runtime_governance as runtime_routes, sorafs as sorafs_routes,
     },
     sorafs_hedging_billing_api::{
         BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1,
@@ -29,6 +30,13 @@ const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deplo
 const SORACLOUD_HF_DEPLOY_CONTRACT_V1: &str = "cap-bound-local-signing-v1";
 const OPENAPI_GENERATOR_STACK_BYTES: usize = 8 * 1024 * 1024;
 const OPENAPI_GENERATOR_THREAD_NAME: &str = "iroha-openapi-generator";
+const BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_REQUEST_BYTES_V1: u64 = 0;
+const BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_BYTES_V1: u64 = 320;
+const BOOTLE_LANTERN_ISSUANCE_HOLDER_REQUEST_BYTES_V1: u64 = 71_576;
+const BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1: u64 =
+    BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_BYTES_V1
+        + BOOTLE_LANTERN_ISSUANCE_HOLDER_REQUEST_BYTES_V1;
+const BOOTLE_LANTERN_ISSUANCE_RESPONSE_BYTES_V1: u64 = 3_176;
 
 fn license_section() -> Value {
     let mut license = Map::new();
@@ -1145,67 +1153,81 @@ fn musubi_paths() -> Map {
     let mut paths = Map::new();
     for (path, summary, description, request_type, response_type) in [
         (
-            "/v1/musubi/queries/exact-package",
+            musubi_routes::EXACT_PACKAGE.path(),
             "Fetch an exact Musubi V1 package.",
             "Execute a bounded exact structural package query without namespace or alias normalization.",
             "MusubiExactPackageQueryV1",
             "MusubiPackageRecordV1",
         ),
         (
-            "/v1/musubi/queries/exact-release",
+            musubi_routes::EXACT_RELEASE.path(),
             "Fetch an exact Musubi V1 release.",
             "Execute a bounded exact structural release query.",
             "MusubiExactReleaseQueryV1",
             "MusubiReleaseRecordV1",
         ),
         (
-            "/v1/musubi/queries/resolver-index",
+            musubi_routes::RESOLVER_INDEX.path(),
             "Read the Musubi V1 resolver index.",
             "Return a finalized cursor-bound page from the universal sparse resolver index.",
             "MusubiResolverIndexQueryV1",
             "MusubiResolverIndexPageV1",
         ),
         (
-            "/v1/musubi/queries/versions",
+            musubi_routes::VERSIONS.path(),
             "List structured Musubi V1 versions.",
             "Return a finalized cursor-bound package version page.",
             "MusubiPackagePageQueryV1",
             "MusubiVersionPageV1",
         ),
         (
-            "/v1/musubi/queries/maintainers",
-            "List Musubi V1 package members.",
-            "Return a finalized cursor-bound accepted owner and maintainer page.",
+            musubi_routes::MAINTAINERS.path(),
+            "List Musubi V1 package governance entries.",
+            "Return a finalized cursor-bound page of accepted owners and maintainers plus pending invitations.",
             "MusubiPackagePageQueryV1",
             "MusubiMaintainerPageV1",
         ),
         (
-            "/v1/musubi/queries/archive-locations",
+            musubi_routes::ARCHIVE_LOCATIONS.path(),
             "List Musubi V1 archive locations.",
             "Return a finalized cursor-bound renewable archive-location page.",
             "MusubiArchiveLocationQueryV1",
             "MusubiArchiveLocationPageV1",
         ),
         (
-            "/v1/musubi/queries/alias",
+            musubi_routes::ARCHIVE_RETENTION.path(),
+            "Classify Musubi V1 archive cache retention.",
+            "Return bounded exact point-lookup decisions from finalized universal archive reverse references, release governance, and storage state. Unknown archives retain fail-closed.",
+            "MusubiArchiveRetentionQueryV1",
+            "MusubiArchiveRetentionPageV1",
+        ),
+        (
+            musubi_routes::ALIAS.path(),
             "Fetch a permanent Musubi V1 alias.",
             "Return one exact permanent global alias record.",
             "MusubiAliasQueryV1",
             "MusubiAliasRecordV1",
         ),
         (
-            "/v1/musubi/queries/alias-history",
+            musubi_routes::ALIAS_HISTORY.path(),
             "List permanent Musubi V1 alias history.",
             "Return a finalized cursor-bound alias-history page.",
             "MusubiAliasQueryV1",
             "MusubiAliasHistoryPageV1",
         ),
         (
-            "/v1/musubi/queries/ordered-prefix",
+            musubi_routes::ORDERED_PREFIX.path(),
             "Read the ordered Musubi V1 directory.",
             "Return a finalized cursor-bound byte-ordered package-prefix page; fuzzy search is not a resolver input.",
             "MusubiOrderedPrefixQueryV1",
             "MusubiOrderedPackagePageV1",
+        ),
+        (
+            musubi_routes::SEARCH.path(),
+            "Search Musubi V1 packages.",
+            "Return a bounded cursor-bound exact-token page from the rebuildable finalized-event description and keyword projection. Dependency resolution never reads this projection.",
+            "MusubiSearchQueryV1",
+            "MusubiSearchPageV1",
         ),
     ] {
         let mut methods = json_post_operation(
@@ -1274,6 +1296,11 @@ fn musubi_paths() -> Map {
             "/v1/musubi/instructions/package-member-accept",
             "Build a Musubi V1 package-member invitation acceptance.",
             "AcceptMusubiPackageMaintainerV1",
+        ),
+        (
+            "/v1/musubi/instructions/package-member-invitation-revoke",
+            "Build a Musubi V1 pending package-member invitation revocation.",
+            "RevokeMusubiPackageMaintainerInvitationV1",
         ),
         (
             "/v1/musubi/instructions/package-member-set-role",
@@ -1955,8 +1982,41 @@ fn explorer_pagination_query_parameters() -> Vec<Value> {
     ]
 }
 
+fn explorer_cursor_query_parameters() -> Vec<Value> {
+    let Value::Object(mut cursor) = string_query_param(
+        "cursor",
+        "Opaque canonical base64url cursor returned by the preceding request with the exact same collection and filters.",
+    ) else {
+        unreachable!("string query parameter helper always returns an object");
+    };
+    let Some(Value::Object(cursor_schema)) = cursor.get_mut("schema") else {
+        unreachable!("string query parameter helper always contains a schema object");
+    };
+    cursor_schema.insert("minLength".into(), Value::from(1_u64));
+    cursor_schema.insert("maxLength".into(), Value::from(1_424_u64));
+    cursor_schema.insert(
+        "pattern".into(),
+        Value::String("^[A-Za-z0-9_-]+$".to_owned()),
+    );
+
+    let Value::Object(mut limit) = bounded_integer_query_param(
+        "limit",
+        "Maximum matching records to return (default 25, hard maximum 100). At most 512 indexed candidate keys are inspected per request; sparse filters may return fewer records with a continuation cursor.",
+        Some("uint32"),
+        1,
+        Some(100),
+    ) else {
+        unreachable!("integer query parameter helper always returns an object");
+    };
+    let Some(Value::Object(limit_schema)) = limit.get_mut("schema") else {
+        unreachable!("integer query parameter helper always contains a schema object");
+    };
+    limit_schema.insert("default".into(), Value::from(25_u64));
+    vec![Value::Object(cursor), Value::Object(limit)]
+}
+
 fn explorer_assets_query_parameters() -> Vec<Value> {
-    let mut params = explorer_pagination_query_parameters();
+    let mut params = explorer_cursor_query_parameters();
     params.push(string_query_param(
         "owned_by",
         "Filter assets by account owner (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
@@ -3605,9 +3665,9 @@ fn zk_paths() -> Map {
         Value::Object(json_post_operation(
             "ZK",
             "Verify a batch of ZK proofs.",
-            "Verify a bounded batch of zero-knowledge proof envelopes.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "Verify a bounded batch of zero-knowledge proof envelopes. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof.",
+            "#/components/schemas/ZkVerifyBatchRequest",
+            "#/components/schemas/ZkVerifyBatchResponse",
             Vec::new(),
         )),
     );
@@ -3759,10 +3819,10 @@ fn zk_paths() -> Map {
         "/v1/zk/vote/tally".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
-            "Compute ZK vote tally.",
-            "Compute a ZK ballot tally from the provided payload.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "Read a ZK vote tally.",
+            "Read an existing ballot tally from one committed state snapshot. Unknown elections return 404; successful responses carry the exact block height and hash used for lookup.",
+            "#/components/schemas/ZkVoteGetTallyRequest",
+            "#/components/schemas/ZkVoteGetTallyResponse",
             Vec::new(),
         )),
     );
@@ -3909,9 +3969,21 @@ fn governance_paths() -> Map {
         Value::Object(json_get_operation(
             "Validation fee",
             "List validation-fee Parliament proposals.",
-            "Return every native validation-fee policy and payout-lifecycle proposal in canonical creation order.",
+            "Return one bounded cursor page of native validation-fee policy and payout-lifecycle proposals in canonical creation order.",
             "#/components/schemas/ValidationFeeProposalListV1",
-            Vec::new(),
+            vec![
+                string_query_param(
+                    "cursor",
+                    "Opaque collection-bound continuation cursor returned by the preceding page.",
+                ),
+                bounded_integer_query_param(
+                    "limit",
+                    "Page size (default 50; maximum 100).",
+                    Some("uint32"),
+                    1,
+                    Some(100),
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -4145,6 +4217,152 @@ fn governance_paths() -> Map {
     paths
 }
 
+fn bootle_lantern_issuance_request_body(schema_name: &str, description: &str) -> Value {
+    norito::json!({
+        "required": true,
+        "description": description,
+        "content": {
+            "application/x-norito": {
+                "schema": { "$ref": (format!("#/components/schemas/{schema_name}")) }
+            }
+        }
+    })
+}
+
+fn bootle_lantern_issuance_success_response(schema_name: &str, description: &str) -> Value {
+    norito::json!({
+        "description": description,
+        "content": {
+            "application/x-norito": {
+                "schema": { "$ref": (format!("#/components/schemas/{schema_name}")) }
+            }
+        }
+    })
+}
+
+fn bootle_lantern_issuance_error_response(status: &str, description: &str) -> Value {
+    let media_type = if status == "406" {
+        "application/json"
+    } else {
+        "application/x-norito"
+    };
+    let mut content = Map::new();
+    content.insert(
+        media_type.to_owned(),
+        norito::json!({
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+        }),
+    );
+    norito::json!({
+        "description": description,
+        "content": (Value::Object(content))
+    })
+}
+
+fn bootle_lantern_issuance_post_operation(
+    operation_id: &str,
+    summary: &str,
+    description: &str,
+    request_schema_name: &str,
+    request_description: &str,
+    response_schema_name: &str,
+    response_description: &str,
+) -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        bootle_lantern_issuance_success_response(response_schema_name, response_description),
+    );
+    for (status, error_description) in [
+        (
+            "400",
+            "Content-Length is missing, duplicated, noncanonical, or numerically smaller than the exact body size; Transfer-Encoding is present, with or without Content-Length; or the body wire, binding, or committed-height input is invalid.",
+        ),
+        (
+            "401",
+            "The single required Bearer issuer credential is missing, duplicated, malformed, noncanonical, or invalid.",
+        ),
+        (
+            "406",
+            "Accept is missing, duplicated, or not exactly application/x-norito with no parameters.",
+        ),
+        (
+            "409",
+            "The governed issuer policy or authorization lifecycle does not permit this operation, or the same authorization is already being validated.",
+        ),
+        (
+            "413",
+            "The canonical declared length or streamed body exceeds this endpoint's exact first-release request size.",
+        ),
+        (
+            "415",
+            "Content-Type must occur exactly once as application/x-norito with no parameters, and Content-Encoding must be absent.",
+        ),
+        (
+            "429",
+            "The required configured max_inflight native-issuance budget is exhausted; retry after the exact Retry-After delay.",
+        ),
+        (
+            "503",
+            "The governed Bootle/Lantern issuer is unavailable or cannot safely complete the operation.",
+        ),
+    ] {
+        responses.insert(
+            status.into(),
+            bootle_lantern_issuance_error_response(status, error_description),
+        );
+    }
+    for status in ["429"] {
+        if let Some(response) = responses.get_mut(status).and_then(Value::as_object_mut) {
+            response.insert(
+                "headers".to_owned(),
+                norito::json!({
+                    "Retry-After": {
+                        "description": "Fixed whole-second retry delay for native issuance capacity exhaustion.",
+                        "schema": { "type": "integer", "minimum": 1, "maximum": 1 }
+                    }
+                }),
+            );
+        }
+    }
+    if let Some(response) = responses.get_mut("401").and_then(Value::as_object_mut) {
+        response.insert(
+            "headers".to_owned(),
+            norito::json!({
+                "WWW-Authenticate": {
+                    "description": "Exact canonical Bootle/Lantern issuance Bearer challenge.",
+                    "schema": {
+                        "type": "string",
+                        "enum": ["Bearer realm=\"iroha-bootle-lantern-issuance\""]
+                    }
+                }
+            }),
+        );
+    }
+
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Runtime".to_owned())]),
+    );
+    operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "security".into(),
+        norito::json!([{ "BootleLanternIssuanceBearer": [] }]),
+    );
+    operation.insert(
+        "requestBody".into(),
+        bootle_lantern_issuance_request_body(request_schema_name, request_description),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
 fn runtime_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -4165,6 +4383,34 @@ fn runtime_paths() -> Map {
             "Return the exact closed privacy protocol registry, locally compiled profiles, governed activations, and singleton consensus policy from one authoritative committed state view.",
             "#/components/schemas/PrivacyCapabilitySnapshotV1",
             Vec::new(),
+        )),
+    );
+    paths.insert(
+        runtime_routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE
+            .path()
+            .to_owned(),
+        Value::Object(bootle_lantern_issuance_post_operation(
+            runtime_routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE.stable_route_id(),
+            "Authorize one Bootle/Lantern blind issuance.",
+            "Authenticate exactly one canonical Bearer issuer credential, bind the current governed issuer policy and committed height, durably register a fresh authorization, and return exactly one 320-byte ILA1 wire. Accept and Content-Type are each exactly application/x-norito; Content-Length is exactly 0; Content-Encoding and Transfer-Encoding are absent. This first-release route has no aliases or compatibility representations.",
+            "BootleLanternIssuanceAuthorizeRequestV1",
+            "The request body is exactly zero octets; Accept and Content-Type are each exactly application/x-norito with no parameters; Content-Length is the single canonical decimal value 0; Content-Encoding and Transfer-Encoding are absent.",
+            "BootleLanternIssuanceAuthorizationWireV1",
+            "Exactly 320 canonical ILA1 bytes with Content-Type application/x-norito.",
+        )),
+    );
+    paths.insert(
+        runtime_routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE
+            .path()
+            .to_owned(),
+        Value::Object(bootle_lantern_issuance_post_operation(
+            runtime_routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE.stable_route_id(),
+            "Issue one Bootle/Lantern blind credential.",
+            "Authenticate exactly one canonical Bearer issuer credential, consume or deterministically replay one authorization-bound complete blind request, and return exactly one 3,176-byte ILR1 wire. Accept and Content-Type are each exactly application/x-norito; Content-Length is exactly 71896; Content-Encoding and Transfer-Encoding are absent. This first-release route has no aliases, envelopes, or compatibility representations.",
+            "BootleLanternIssuanceIssueRequestV1",
+            "Exactly 71,896 octets; Accept and Content-Type are each exactly application/x-norito with no parameters; Content-Length is the single canonical decimal value 71896; Content-Encoding and Transfer-Encoding are absent. The body is one 320-byte canonical ILA1 authorization immediately followed by one 71,576-byte canonical ILQ1 complete holder request, with no framing, padding, or trailing bytes.",
+            "BootleLanternIssuanceResponseWireV1",
+            "Exactly 3,176 canonical ILR1 bytes with Content-Type application/x-norito.",
         )),
     );
     paths.insert(
@@ -5284,33 +5530,62 @@ fn explorer_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
         "/v1/explorer/accounts".to_owned(),
-        Value::Object(json_get_operation(
-            "Explorer",
-            "List accounts (explorer).",
-            "List accounts for explorer usage.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut params = explorer_cursor_query_parameters();
+            params.push(string_query_param(
+                "domain",
+                "Filter accounts by bound alias domain.",
+            ));
+            params.push(string_query_param(
+                "with_asset",
+                "Filter accounts by a held asset definition selector.",
+            ));
+            json_get_operation(
+                "Explorer",
+                "List accounts (explorer).",
+                "Seek through the canonical account index. Cursors are collection-, version-, and filter-bound; one request inspects at most 512 candidate keys.",
+                "#/components/schemas/ExplorerAccountsCursorPage",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/explorer/domains".to_owned(),
-        Value::Object(json_get_operation(
-            "Explorer",
-            "List domains (explorer).",
-            "List domains for explorer usage.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut params = explorer_cursor_query_parameters();
+            params.push(string_query_param(
+                "owned_by",
+                "Filter domains by canonical owner account or on-chain account alias.",
+            ));
+            json_get_operation(
+                "Explorer",
+                "List domains (explorer).",
+                "Seek through the canonical domain or owner index without materializing the full selection.",
+                "#/components/schemas/ExplorerDomainsCursorPage",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/explorer/asset-definitions".to_owned(),
-        Value::Object(json_get_operation(
-            "Explorer",
-            "List asset definitions (explorer).",
-            "List asset definitions for explorer usage.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut params = explorer_cursor_query_parameters();
+            params.push(string_query_param(
+                "owning_domain",
+                "Filter asset definitions by immutable owning domain.",
+            ));
+            params.push(string_query_param(
+                "owned_by",
+                "Filter asset definitions by canonical owner account or on-chain account alias.",
+            ));
+            json_get_operation(
+                "Explorer",
+                "List asset definitions (explorer).",
+                "Seek through maintained asset-definition indexes and enrich only the bounded result page.",
+                "#/components/schemas/ExplorerAssetDefinitionsCursorPage",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/explorer/assets".to_owned(),
@@ -5319,31 +5594,47 @@ fn explorer_paths() -> Map {
             json_get_operation(
                 "Explorer",
                 "List assets (explorer).",
-                "List assets for explorer usage (supports pagination and optional owned_by/definition/asset_id filtering).",
-                "#/components/schemas/JsonValue",
+                "Seek through maintained asset indexes with optional owned_by/definition/asset_id filters. The cursor is bound to the exact normalized filter set.",
+                "#/components/schemas/ExplorerAssetsCursorPage",
                 params,
             )
         }),
     );
     paths.insert(
         "/v1/explorer/nfts".to_owned(),
-        Value::Object(json_get_operation(
-            "Explorer",
-            "List NFTs (explorer).",
-            "List NFTs for explorer usage.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut params = explorer_cursor_query_parameters();
+            params.push(string_query_param(
+                "owned_by",
+                "Filter NFTs by canonical owner account or on-chain account alias.",
+            ));
+            params.push(string_query_param("domain", "Filter NFTs by domain."));
+            json_get_operation(
+                "Explorer",
+                "List NFTs (explorer).",
+                "Seek through maintained NFT owner/domain indexes without full-selection sorting.",
+                "#/components/schemas/ExplorerNftsCursorPage",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/explorer/rwas".to_owned(),
-        Value::Object(json_get_operation(
-            "Explorer",
-            "List RWAs (explorer).",
-            "List RWA lots for explorer usage.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut params = explorer_cursor_query_parameters();
+            params.push(string_query_param(
+                "owned_by",
+                "Filter RWA lots by canonical owner account or on-chain account alias.",
+            ));
+            params.push(string_query_param("domain", "Filter RWA lots by domain."));
+            json_get_operation(
+                "Explorer",
+                "List RWAs (explorer).",
+                "Seek through maintained RWA owner/domain indexes without full-selection sorting.",
+                "#/components/schemas/ExplorerRwasCursorPage",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/explorer/blocks".to_owned(),
@@ -5352,7 +5643,7 @@ fn explorer_paths() -> Map {
             "List blocks (explorer).",
             "List blocks for explorer usage.",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            explorer_pagination_query_parameters(),
         )),
     );
     paths.insert(
@@ -6353,19 +6644,71 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch PoR status.",
-            "Fetch proof-of-replication status.",
+            "Fetch one indexed PoR status page. `limit` and `max_bytes` are mandatory. Continue with the returned opaque `next_cursor`, which binds the exact normalized filters, coordinator generation, and last record; mutation or filter substitution is rejected.",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![
+                string_query_param("manifest", "Optional exact manifest digest (hex)."),
+                string_query_param("provider", "Optional exact provider identifier (hex)."),
+                integer_query_param("epoch", "Optional exact epoch identifier.", Some("uint64")),
+                string_query_param("status", "Optional exact lifecycle outcome."),
+                required_query_parameter(bounded_integer_query_param(
+                    "limit",
+                    "Required record ceiling for this page.",
+                    Some("uint32"),
+                    1,
+                    Some(1_000),
+                )),
+                required_query_parameter(bounded_integer_query_param(
+                    "max_bytes",
+                    "Required ceiling for the sum of canonical status-record bytes.",
+                    Some("uint64"),
+                    1,
+                    Some(4_194_304),
+                )),
+                string_query_param(
+                    "cursor",
+                    "Optional opaque continuation returned by the preceding page; valid only with the exact same filters.",
+                ),
+            ],
         )),
     );
     paths.insert(
         "/v1/sorafs/por/export".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "Export PoR report.",
-            "Export the PoR report bundle.",
+            "Page PoR history export.",
+            "Return a record-and-canonical-byte-bounded PoR history page. The retired synchronous full-history response no longer exists. Epoch bounds must be omitted together or supplied together. Continue with the opaque `next_cursor`, which binds the exact range, coordinator generation, and last record.",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![
+                integer_query_param(
+                    "start_epoch",
+                    "Optional inclusive epoch lower bound; requires end_epoch.",
+                    Some("uint64"),
+                ),
+                integer_query_param(
+                    "end_epoch",
+                    "Optional inclusive epoch upper bound; requires start_epoch.",
+                    Some("uint64"),
+                ),
+                required_query_parameter(bounded_integer_query_param(
+                    "limit",
+                    "Required record ceiling for this export page.",
+                    Some("uint32"),
+                    1,
+                    Some(1_000),
+                )),
+                required_query_parameter(bounded_integer_query_param(
+                    "max_bytes",
+                    "Required ceiling for the sum of canonical status-record bytes.",
+                    Some("uint64"),
+                    1,
+                    Some(4_194_304),
+                )),
+                string_query_param(
+                    "cursor",
+                    "Optional opaque continuation returned by the preceding page; valid only with the exact same epoch range.",
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -13825,13 +14168,13 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 "properties": {
                     "layout_version": {
                         "type": "integer", "format": "uint16",
-                        "minimum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2),
-                        "maximum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2)
+                        "minimum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5),
+                        "maximum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5)
                     },
                     "state_limbs": {
                         "type": "array",
-                        "minItems": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2),
-                        "maxItems": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2),
+                        "minItems": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5),
+                        "maxItems": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5),
                         "items": { "type": "integer", "format": "uint32", "minimum": 0 }
                     }
                 },
@@ -15164,13 +15507,29 @@ fn validation_fee_schemas(schemas: &mut Map) {
         "ValidationFeeProposalListV1".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["version", "proposals"],
+            "required": ["version", "limit", "proposals", "next_cursor"],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "limit": {
+                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 100
+                },
                 "proposals": {
                     "type": "array",
+                    "maxItems": 100,
                     "items": { "$ref": "#/components/schemas/ValidationFeeProposalRecordV1" }
+                },
+                "next_cursor": {
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "minLength": 96,
+                            "maxLength": 96,
+                            "pattern": "^[0-9a-f]{96}$"
+                        },
+                        { "type": "null" }
+                    ],
+                    "description": "Opaque cursor bound to the last returned proposal, or null after the final page."
                 }
             }
         }),
@@ -21044,6 +21403,244 @@ fn openapi_schemas() -> Map {
                     "type": "array",
                     "maxItems": 100,
                     "items": { "$ref": "#/components/schemas/DelegatedRoutingPeer" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkVerifyBatchRequest".to_owned(),
+        norito::json!({
+            "type": "array",
+            "description": "For application/json, standard-base64 canonical Norito OpenVerifyEnvelope values. application/x-norito carries the canonical Norito vector directly.",
+            "items": {
+                "type": "string",
+                "contentEncoding": "base64"
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkVerifyBatchOutcome".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["status"],
+                    "additionalProperties": false,
+                    "properties": { "status": { "const": "verified" } }
+                },
+                {
+                    "type": "object",
+                    "required": ["status"],
+                    "additionalProperties": false,
+                    "properties": { "status": { "const": "invalid" } }
+                },
+                {
+                    "type": "object",
+                    "required": ["status", "code"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "status": { "const": "error" },
+                        "code": {
+                            "type": "string",
+                            "enum": [
+                                "invalid_entry_type",
+                                "invalid_base64",
+                                "invalid_envelope",
+                                "envelope_too_large",
+                                "non_ascii_transcript_label",
+                                "verification_limit_exceeded",
+                                "unsupported_backend",
+                                "unsupported_version",
+                                "verification_error"
+                            ]
+                        }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "ZkVerifyBatchResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "statuses"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": {
+                    "type": "boolean",
+                    "description": "True only when the outer batch decoded and each input received an outcome."
+                },
+                "statuses": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/ZkVerifyBatchOutcome" }
+                },
+                "error": {
+                    "type": "string",
+                    "enum": ["body_too_large", "batch_too_large"]
+                },
+                "max": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "actual": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkVoteGetTallyRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["election_id"],
+            "additionalProperties": false,
+            "properties": {
+                "election_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": "Exact on-chain election identifier."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkVoteGetTallyResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "evaluated_block_height",
+                "evaluated_block_hash",
+                "finalized",
+                "tally"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "evaluated_block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                },
+                "evaluated_block_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "finalized": { "type": "boolean" },
+                "tally": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "items": {
+                        "type": "integer",
+                        "format": "uint64",
+                        "minimum": 0
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ExplorerCursorMeta".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["limit", "next_cursor", "has_more"],
+            "additionalProperties": false,
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 100
+                },
+                "next_cursor": {
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1_424,
+                            "pattern": "^[A-Za-z0-9_-]+$"
+                        },
+                        { "type": "null" }
+                    ]
+                },
+                "has_more": { "type": "boolean" }
+            }
+        }),
+    );
+    for schema_name in [
+        "ExplorerAccountsCursorPage",
+        "ExplorerDomainsCursorPage",
+        "ExplorerAssetDefinitionsCursorPage",
+        "ExplorerAssetsCursorPage",
+        "ExplorerNftsCursorPage",
+        "ExplorerRwasCursorPage",
+    ] {
+        schemas.insert(
+            schema_name.to_owned(),
+            norito::json!({
+                "type": "object",
+                "required": ["pagination", "items"],
+                "additionalProperties": false,
+                "properties": {
+                    "pagination": { "$ref": "#/components/schemas/ExplorerCursorMeta" },
+                    "items": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": { "$ref": "#/components/schemas/JsonValue" }
+                    }
+                }
+            }),
+        );
+    }
+    schemas.insert(
+        "ExplorerAssetDefinition".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "id",
+                "owning_domain",
+                "mintable",
+                "logo",
+                "metadata",
+                "owned_by",
+                "assets",
+                "total_quantity",
+                "locked_quantity",
+                "circulating_quantity"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "owning_domain": {
+                    "description": "Immutable owning domain. Null denotes an intentionally unowned global definition.",
+                    "oneOf": [
+                        { "type": "string", "minLength": 1 },
+                        { "type": "null" }
+                    ]
+                },
+                "mintable": { "type": "string", "minLength": 1 },
+                "logo": {
+                    "oneOf": [
+                        { "type": "string" },
+                        { "type": "null" }
+                    ]
+                },
+                "metadata": { "$ref": "#/components/schemas/JsonValue" },
+                "owned_by": { "type": "string", "minLength": 1 },
+                "assets": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "total_quantity": { "$ref": "#/components/schemas/JsonValue" },
+                "locked_quantity": { "$ref": "#/components/schemas/JsonValue" },
+                "circulating_quantity": { "$ref": "#/components/schemas/JsonValue" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ExplorerAssetDefinitionsCursorPage".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["pagination", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "pagination": { "$ref": "#/components/schemas/ExplorerCursorMeta" },
+                "items": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": { "$ref": "#/components/schemas/ExplorerAssetDefinition" }
                 }
             }
         }),
@@ -29190,6 +29787,58 @@ fn privacy_protocol_id_const_schema(label: &str) -> Value {
     )
 }
 
+fn bootle_lantern_fixed_binary_schema(
+    description: &str,
+    byte_length: u64,
+    wire_layout: &str,
+) -> Value {
+    norito::json!({
+        "type": "string",
+        "format": "binary",
+        "contentMediaType": "application/x-norito",
+        "description": description,
+        "minLength": byte_length,
+        "maxLength": byte_length,
+        "x-iroha-exact-byte-length": byte_length,
+        "x-iroha-wire-layout": wire_layout
+    })
+}
+
+fn privacy_issuance_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "BootleLanternIssuanceAuthorizeRequestV1".to_owned(),
+        bootle_lantern_fixed_binary_schema(
+            "The unique first-release authorization request representation: an empty zero-octet body. Content-Type is still required to be exactly application/x-norito.",
+            BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_REQUEST_BYTES_V1,
+            "empty",
+        ),
+    );
+    schemas.insert(
+        "BootleLanternIssuanceAuthorizationWireV1".to_owned(),
+        bootle_lantern_fixed_binary_schema(
+            "One exact canonical 320-byte ILA1 Bootle/Lantern issuance authorization.",
+            BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_BYTES_V1,
+            "ILA1[320]",
+        ),
+    );
+    schemas.insert(
+        "BootleLanternIssuanceIssueRequestV1".to_owned(),
+        bootle_lantern_fixed_binary_schema(
+            "The unique first-release issue request: canonical ILA1[320] immediately concatenated with canonical ILQ1[71576], without an outer envelope, padding, or trailing bytes.",
+            BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1,
+            "ILA1[320] || ILQ1[71576]",
+        ),
+    );
+    schemas.insert(
+        "BootleLanternIssuanceResponseWireV1".to_owned(),
+        bootle_lantern_fixed_binary_schema(
+            "One exact canonical 3,176-byte ILR1 Bootle/Lantern blind-issuance response.",
+            BOOTLE_LANTERN_ISSUANCE_RESPONSE_BYTES_V1,
+            "ILR1[3176]",
+        ),
+    );
+}
+
 fn privacy_capability_schemas(schemas: &mut Map) {
     const PROTOCOL_LABELS: [&str; 12] = [
         "zk-ace-pq-authorization-v0",
@@ -29753,6 +30402,17 @@ fn canonical_request_security_schemes() -> Map {
             }),
         );
     }
+    schemes.insert(
+        "BootleLanternIssuanceBearer".to_owned(),
+        norito::json!({
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "canonical-base64url-no-pad",
+            "description": "Exactly one Authorization header is required, with value `Bearer <token>`. The token must be the unique canonical base64url-without-padding encoding of the configured issuer credential; missing, duplicated, padded, noncanonical, or invalid credentials are rejected before issuance work.",
+            "x-iroha-authorization-header-count": 1,
+            "x-iroha-bearer-token-pattern": "^[A-Za-z0-9_-]+$"
+        }),
+    );
     schemes
 }
 
@@ -29760,6 +30420,7 @@ fn components_section() -> Value {
     let mut components = Map::new();
     let mut schemas = openapi_schemas();
     privacy_capability_schemas(&mut schemas);
+    privacy_issuance_schemas(&mut schemas);
     schemas.insert("AxtErrorDetails".to_owned(), axt_error_details_schema());
     schemas.insert("FeeErrorDetails".to_owned(), fee_error_details_schema());
     schemas.insert(
@@ -32371,6 +33032,296 @@ mod tests {
     }
 
     #[test]
+    fn bootle_lantern_issuance_openapi_is_canonical_and_exact() {
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        let privacy_paths = paths
+            .keys()
+            .map(String::as_str)
+            .filter(|path| path.starts_with("/v1/privacy/"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            privacy_paths,
+            BTreeSet::from([
+                runtime_routes::PRIVACY_CAPABILITIES.path(),
+                runtime_routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE.path(),
+                runtime_routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE.path(),
+            ]),
+            "first-release privacy OpenAPI must not publish compatibility aliases",
+        );
+        assert_eq!(BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1, 71_896,);
+
+        let cases = [
+            (
+                runtime_routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
+                "BootleLanternIssuanceAuthorizeRequestV1",
+                BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_REQUEST_BYTES_V1,
+                "empty",
+                "BootleLanternIssuanceAuthorizationWireV1",
+                BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_BYTES_V1,
+                "ILA1[320]",
+            ),
+            (
+                runtime_routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
+                "BootleLanternIssuanceIssueRequestV1",
+                BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1,
+                "ILA1[320] || ILQ1[71576]",
+                "BootleLanternIssuanceResponseWireV1",
+                BOOTLE_LANTERN_ISSUANCE_RESPONSE_BYTES_V1,
+                "ILR1[3176]",
+            ),
+        ];
+        let schemas = component_schemas(&document);
+        let issuance_security = document
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("securitySchemes"))
+            .and_then(Value::as_object)
+            .and_then(|schemes| schemes.get("BootleLanternIssuanceBearer"))
+            .and_then(Value::as_object)
+            .expect("Bootle/Lantern issuance Bearer security scheme");
+        assert_eq!(
+            issuance_security.get("type").and_then(Value::as_str),
+            Some("http"),
+        );
+        assert_eq!(
+            issuance_security.get("scheme").and_then(Value::as_str),
+            Some("bearer"),
+        );
+        assert_eq!(
+            issuance_security
+                .get("bearerFormat")
+                .and_then(Value::as_str),
+            Some("canonical-base64url-no-pad"),
+        );
+        assert_eq!(
+            issuance_security
+                .get("x-iroha-authorization-header-count")
+                .and_then(Value::as_u64),
+            Some(1),
+        );
+        assert_eq!(
+            issuance_security
+                .get("x-iroha-bearer-token-pattern")
+                .and_then(Value::as_str),
+            Some("^[A-Za-z0-9_-]+$"),
+        );
+        assert!(
+            issuance_security
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| description.contains("Exactly one Authorization")),
+        );
+
+        for (
+            descriptor,
+            request_schema_name,
+            request_bytes,
+            request_layout,
+            response_schema_name,
+            response_bytes,
+            response_layout,
+        ) in cases
+        {
+            let operation = openapi_operation(&document, descriptor.path(), "post");
+            assert_eq!(
+                operation.get("operationId").and_then(Value::as_str),
+                Some(descriptor.stable_route_id()),
+            );
+            assert_eq!(
+                operation.get("security"),
+                Some(&norito::json!([{ "BootleLanternIssuanceBearer": [] }])),
+                "POST {} must require exactly the one standard Bearer scheme",
+                descriptor.path(),
+            );
+            assert!(
+                operation.get("parameters").is_none(),
+                "Authorization must not be duplicated as an ignored OpenAPI header parameter",
+            );
+            let operation_description = operation
+                .get("description")
+                .and_then(Value::as_str)
+                .expect("issuance operation description");
+            for exact_transport_term in [
+                "Accept",
+                "Content-Type",
+                "Content-Length",
+                "Content-Encoding",
+                "Transfer-Encoding",
+            ] {
+                assert!(
+                    operation_description.contains(exact_transport_term),
+                    "POST {} must document exact {exact_transport_term} handling",
+                    descriptor.path(),
+                );
+            }
+
+            let request_body = operation
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .expect("issuance request body");
+            assert_eq!(
+                request_body.get("required").and_then(Value::as_bool),
+                Some(true),
+            );
+            let request_content = request_body
+                .get("content")
+                .and_then(Value::as_object)
+                .expect("issuance request content");
+            assert_eq!(request_content.len(), 1);
+            let request_ref = request_content
+                .get("application/x-norito")
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str);
+            assert_eq!(
+                request_ref,
+                Some(format!("#/components/schemas/{request_schema_name}").as_str()),
+            );
+
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("issuance responses");
+            for status in [
+                "200", "400", "401", "406", "409", "413", "415", "429", "503",
+            ] {
+                assert!(
+                    responses.contains_key(status),
+                    "POST {} must document {status}",
+                    descriptor.path(),
+                );
+            }
+            for status in ["400", "401", "406", "409", "413", "415", "429", "503"] {
+                let content = responses
+                    .get(status)
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("content"))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("missing issuance {status} content"));
+                let expected_media = if status == "406" {
+                    "application/json"
+                } else {
+                    "application/x-norito"
+                };
+                assert_eq!(
+                    content.keys().map(String::as_str).collect::<Vec<_>>(),
+                    vec![expected_media],
+                    "POST {} {status} must use the exact negotiated error representation",
+                    descriptor.path(),
+                );
+                assert_eq!(
+                    content
+                        .get(expected_media)
+                        .and_then(Value::as_object)
+                        .and_then(|media| media.get("schema"))
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("$ref"))
+                        .and_then(Value::as_str),
+                    Some("#/components/schemas/ErrorEnvelope"),
+                );
+            }
+            for status in ["429"] {
+                let retry_after = responses
+                    .get(status)
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("headers"))
+                    .and_then(Value::as_object)
+                    .and_then(|headers| headers.get("Retry-After"))
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("{status} Retry-After schema"));
+                assert_eq!(retry_after.get("minimum").and_then(Value::as_u64), Some(1));
+                assert_eq!(retry_after.get("maximum").and_then(Value::as_u64), Some(1));
+            }
+            assert!(
+                responses
+                    .get("503")
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("headers"))
+                    .and_then(Value::as_object)
+                    .is_none_or(|headers| !headers.contains_key("Retry-After")),
+                "503 is not a capacity response and must not advertise Retry-After",
+            );
+            let expected_www_authenticate = vec![Value::String(
+                "Bearer realm=\"iroha-bootle-lantern-issuance\"".to_owned(),
+            )];
+            assert_eq!(
+                responses
+                    .get("401")
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("headers"))
+                    .and_then(Value::as_object)
+                    .and_then(|headers| headers.get("WWW-Authenticate"))
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("enum"))
+                    .and_then(Value::as_array),
+                Some(&expected_www_authenticate),
+            );
+            let success_content = responses
+                .get("200")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .expect("issuance success content");
+            assert_eq!(success_content.len(), 1);
+            let response_ref = success_content
+                .get("application/x-norito")
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str);
+            assert_eq!(
+                response_ref,
+                Some(format!("#/components/schemas/{response_schema_name}").as_str()),
+            );
+
+            for (schema_name, exact_bytes, layout) in [
+                (request_schema_name, request_bytes, request_layout),
+                (response_schema_name, response_bytes, response_layout),
+            ] {
+                let schema = schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("missing {schema_name}"));
+                assert_eq!(schema.get("type").and_then(Value::as_str), Some("string"));
+                assert_eq!(schema.get("format").and_then(Value::as_str), Some("binary"));
+                assert_eq!(
+                    schema.get("contentMediaType").and_then(Value::as_str),
+                    Some("application/x-norito"),
+                );
+                assert_eq!(
+                    schema.get("minLength").and_then(Value::as_u64),
+                    Some(exact_bytes)
+                );
+                assert_eq!(
+                    schema.get("maxLength").and_then(Value::as_u64),
+                    Some(exact_bytes)
+                );
+                assert_eq!(
+                    schema
+                        .get("x-iroha-exact-byte-length")
+                        .and_then(Value::as_u64),
+                    Some(exact_bytes),
+                );
+                assert_eq!(
+                    schema.get("x-iroha-wire-layout").and_then(Value::as_str),
+                    Some(layout),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn openapi_operations_equal_the_enabled_catalog_projection() {
         use iroha_torii_shared::route_catalog::{
             CATALOGED_ROUTES, CatalogProjection, HttpMethod, RouteCatalog,
@@ -32421,8 +33372,8 @@ mod tests {
         ))]
         assert_eq!(
             expected.len(),
-            440,
-            "the supported full Torii documentation profile must remain exactly 440 cataloged operations"
+            442,
+            "the supported full Torii documentation profile must remain exactly 442 cataloged operations"
         );
 
         let spec = generate_spec();
@@ -36622,16 +37573,16 @@ mod tests {
         assert_eq!(
             property_array_bounds(schemas, "OfflineRecursiveStateBoundary", "state_limbs"),
             (
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2 as u64,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2 as u64,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5 as u64,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5 as u64,
             )
         );
         assert_eq!(
             property_integer_bounds(schemas, "OfflineRecursiveStateBoundary", "layout_version",),
             (
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5
                     as u64,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5
                     as u64,
             )
         );
@@ -37876,11 +38827,67 @@ mod tests {
 
         let doc = generate_spec();
         let explorer_assets = params_for(&doc, "/v1/explorer/assets");
-        assert!(explorer_assets.contains(&"page".to_owned()));
-        assert!(explorer_assets.contains(&"per_page".to_owned()));
+        assert!(explorer_assets.contains(&"cursor".to_owned()));
+        assert!(explorer_assets.contains(&"limit".to_owned()));
+        assert!(!explorer_assets.contains(&"page".to_owned()));
+        assert!(!explorer_assets.contains(&"per_page".to_owned()));
         assert!(explorer_assets.contains(&"asset_id".to_owned()));
         assert!(explorer_assets.contains(&"owned_by".to_owned()));
         assert!(explorer_assets.contains(&"definition".to_owned()));
+    }
+
+    #[test]
+    fn world_explorer_lists_use_only_bounded_cursor_pagination() {
+        fn params_for(doc: &Value, path: &str) -> BTreeSet<String> {
+            doc.get("paths")
+                .and_then(Value::as_object)
+                .and_then(|paths| paths.get(path))
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .and_then(|get| get.get("parameters"))
+                .and_then(Value::as_array)
+                .expect("Explorer list parameters")
+                .iter()
+                .filter_map(|parameter| {
+                    parameter
+                        .as_object()
+                        .and_then(|parameter| parameter.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        }
+
+        let document = generate_spec();
+        for path in [
+            "/v1/explorer/accounts",
+            "/v1/explorer/domains",
+            "/v1/explorer/asset-definitions",
+            "/v1/explorer/assets",
+            "/v1/explorer/nfts",
+            "/v1/explorer/rwas",
+        ] {
+            let parameters = params_for(&document, path);
+            assert!(parameters.contains("cursor"), "{path} cursor");
+            assert!(parameters.contains("limit"), "{path} limit");
+            assert!(!parameters.contains("page"), "{path} retired page");
+            assert!(!parameters.contains("per_page"), "{path} retired per_page");
+        }
+
+        let asset_definitions = params_for(&document, "/v1/explorer/asset-definitions");
+        assert!(asset_definitions.contains("owning_domain"));
+        assert!(
+            !asset_definitions.contains("domain"),
+            "the legacy ambiguous asset-definition domain filter must stay removed"
+        );
+
+        let blocks = params_for(&document, "/v1/explorer/blocks");
+        assert!(blocks.contains("page"));
+        assert!(blocks.contains("per_page"));
+        let transactions = params_for(&document, "/v1/explorer/transactions");
+        assert!(transactions.contains("page"));
+        assert!(transactions.contains("per_page"));
     }
 
     #[test]

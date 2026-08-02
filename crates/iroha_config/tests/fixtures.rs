@@ -87,7 +87,6 @@ fn strip_ansi_codes(input: &str) -> String {
 }
 
 struct AddressRuntimeGuard {
-    default_domain_label: std::sync::Arc<str>,
     chain_discriminant: u16,
     _lock: MutexGuard<'static, ()>,
 }
@@ -99,7 +98,6 @@ impl AddressRuntimeGuard {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self {
-            default_domain_label: iroha_data_model::account::address::default_domain_name(),
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             _lock: lock,
         }
@@ -108,9 +106,6 @@ impl AddressRuntimeGuard {
 
 impl Drop for AddressRuntimeGuard {
     fn drop(&mut self) {
-        let _ = iroha_data_model::account::address::set_default_domain_name(
-            self.default_domain_label.to_string(),
-        );
         iroha_data_model::account::address::set_chain_discriminant(self.chain_discriminant);
     }
 }
@@ -310,12 +305,6 @@ fn minimal_config_snapshot() {
                     origin: File {
                         id: ParameterId(trusted_peers),
                         path: "tests/fixtures/base_trusted_peers.toml",
-                    },
-                },
-                default_account_domain_label: WithOrigin {
-                    value: "default.universal",
-                    origin: Default {
-                        id: ParameterId(default_account_domain_label),
                     },
                 },
                 chain_discriminant: WithOrigin {
@@ -1151,7 +1140,6 @@ fn minimal_config_snapshot() {
                         ),
                         max_sites: 1024,
                     },
-                    cdn_policy_path: None,
                     rate_limit: SorafsGatewayRateLimit {
                         max_requests: Some(
                             300,
@@ -2553,9 +2541,6 @@ fn minimal_config_snapshot() {
                 },
             },
             ivm: Ivm {
-                memory_budget_profile: Name(
-                    "cpu-small",
-                ),
                 banner: Banner {
                     show: true,
                     beep: true,
@@ -2643,10 +2628,7 @@ fn minimal_config_snapshot() {
                     max_bn254_pairing_checks_per_transaction: 1,
                     max_bn254_pairing_checks_per_block: 4,
                 },
-                root_history_cap: 2048,
                 ballot_history_cap: 1024,
-                empty_root_on_empty: false,
-                merkle_depth: 0,
                 preverify_max_bytes: 1048576,
                 preverify_budget_bytes: 0,
                 proof_history_cap: 4096,
@@ -3047,8 +3029,6 @@ fn minimal_config_snapshot() {
                 scheduler_stack_bytes: 33554432,
                 prover_stack_bytes: 33554432,
                 sumeragi_stack_bytes: 67108864,
-                guest_stack_bytes: 4194304,
-                gas_to_stack_multiplier: 4,
             },
             confidential: Confidential {
                 enabled: false,
@@ -3249,26 +3229,6 @@ fn ivm_banner_override_applies() {
     assert!(
         !config.ivm.banner.beep,
         "override should disable beep rendering"
-    );
-}
-
-#[test]
-fn ivm_memory_budget_profile_defaults_to_compute_profile() {
-    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
-        .expect("config should be valid");
-    assert_eq!(
-        config.ivm.memory_budget_profile,
-        config.compute.default_resource_profile
-    );
-}
-
-#[test]
-fn ivm_memory_budget_profile_override_applies() {
-    let config = load_config_from_fixtures("ivm_memory_budget_profile_override.toml")
-        .expect("config should be valid");
-    assert_eq!(
-        config.ivm.memory_budget_profile,
-        Name::from_str("cpu-balanced").expect("valid profile name")
     );
 }
 
@@ -4392,20 +4352,14 @@ fn config_with_genesis() {
 }
 
 #[test]
-fn parse_applies_default_account_domain_override_during_config_parse() {
+fn parse_does_not_apply_chain_discriminant_runtime_setting() {
     let _runtime_guard = AddressRuntimeGuard::capture();
 
-    iroha_data_model::account::address::set_default_domain_name("sora")
-        .expect("set baseline default domain");
     iroha_data_model::account::address::set_chain_discriminant(0x02F1);
 
-    let config = load_config_from_fixtures("minimal_default_account_domain.toml")
-        .expect("config with domain override should parse");
+    let config = load_config_from_fixtures("minimal_chain_discriminant.toml")
+        .expect("config with chain discriminant should parse");
 
-    assert_eq!(
-        config.common.default_account_domain_label.value(),
-        "wonderland"
-    );
     assert_eq!(*config.common.chain_discriminant.value(), 777);
     assert_eq!(
         config.gov.bond_escrow_account,
@@ -4418,10 +4372,6 @@ fn parse_applies_default_account_domain_override_during_config_parse() {
     assert_eq!(
         config.gov.slash_receiver_account,
         defaults::governance::slash_receiver_account_id()
-    );
-    assert_eq!(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "sora"
     );
     assert_eq!(
         iroha_data_model::account::address::chain_discriminant(),
@@ -4467,15 +4417,6 @@ fn extra_fields() {
     assert_contains!(msg, "Found unrecognised parameters");
     assert_contains!(msg, "unknown parameter: `bar`");
     assert_contains!(msg, "unknown parameter: `foo`");
-}
-
-#[test]
-fn ivm_memory_budget_profile_must_exist() {
-    let error = load_config_from_fixtures("bad.ivm_memory_budget_profile.toml")
-        .expect_err("should fail with unknown memory budget profile");
-    let msg = strip_ansi_codes(&format!("{error:?}"));
-    assert_contains!(msg, "ivm.memory_budget_profile");
-    assert_contains!(msg, "compute.resource_profiles");
 }
 
 #[test]

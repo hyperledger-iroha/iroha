@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_data_model::{
     HasMetadata,
-    account::{AccountAddress, AccountDomainSelector, AccountId},
+    account::{AccountAddress, AccountId},
     alias_setup::{
         AccountAliasRoleV1, AccountProvisionV1, AliasAutoRenewConfigV1, AliasIntentV1,
         AliasLifecyclePlanDispositionV1, AliasPlanDispositionV1, AliasQuoteGuardV1, AliasTargetV1,
@@ -657,26 +657,7 @@ fn validate_parent_resource(
                         ),
                     ));
                 }
-                let selector = AccountDomainSelector::from_domain(&parent.canonical_name).map_err(
-                    |error| AliasSetupError::new("alias.name.invalid", error.to_string()),
-                )?;
-                match world.domain_selectors().get(&selector) {
-                    Some(bound) if bound == &parent.canonical_name => Ok(()),
-                    Some(bound) => Err(AliasSetupError::new(
-                        "alias.parent.conflict",
-                        format!(
-                            "required parent domain selector is bound to `{bound}`, not `{}`",
-                            parent.canonical_name
-                        ),
-                    )),
-                    None => Err(AliasSetupError::new(
-                        "alias.parent.missing",
-                        format!(
-                            "required parent domain `{}` is missing its selector binding",
-                            parent.canonical_name
-                        ),
-                    )),
-                }
+                Ok(())
             } else {
                 let parent = iroha_data_model::alias_setup::ResolvedDataSpaceV1::new(
                     value.alias.canonical_name.dataspace.clone(),
@@ -780,18 +761,6 @@ fn classify_domain_state(
     world: &impl WorldReadOnly,
     intent: &iroha_data_model::alias_setup::AliasDomainIntentV1,
 ) -> Result<bool, AliasSetupError> {
-    let selector = AccountDomainSelector::from_domain(&intent.domain.canonical_name)
-        .map_err(|error| AliasSetupError::new("alias.name.invalid", error.to_string()))?;
-    let selector_missing = match world.domain_selectors().get(&selector) {
-        Some(existing) if existing != &intent.domain.canonical_name => {
-            return Err(AliasSetupError::new(
-                "alias.binding.conflict",
-                format!("domain selector is already bound to `{existing}`"),
-            ));
-        }
-        Some(_) => false,
-        None => true,
-    };
     for (indexed_owner, domains) in world.domains_by_owner().iter() {
         if domains.contains(&intent.domain.canonical_name) && indexed_owner != &intent.owner {
             return Err(AliasSetupError::new(
@@ -831,7 +800,7 @@ fn classify_domain_state(
             ),
         ));
     }
-    Ok(selector_missing || owner_index_missing)
+    Ok(owner_index_missing)
 }
 
 fn classify_account_state(
@@ -1358,9 +1327,13 @@ mod tests {
         let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("default payment asset id");
-        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
-            .with_name("xor".to_owned())
-            .build(&owner);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner);
         let owner_account = Account::new(owner.clone()).build(&owner);
         let mut world = World::with([], [owner_account], [payment_definition]);
         crate::sns::seed_default_namespace_policies(&mut world);
@@ -1651,7 +1624,7 @@ mod tests {
     }
 
     #[test]
-    fn domain_dangling_derived_state_repairs_but_selector_drift_conflicts() {
+    fn missing_domain_state_is_repairable() {
         let owner = account(12);
         let mut world = world_with_accounts(core::slice::from_ref(&owner));
         let parent = dynamic_dataspace_intent(owner.clone());
@@ -1669,26 +1642,11 @@ mod tests {
             owner: owner.clone(),
         });
         insert_record(&mut world, &intent, owner);
-        let selector = AccountDomainSelector::from_domain(&domain_id).expect("domain selector");
-        world
-            .domain_selectors
-            .insert(selector.clone(), domain_id.clone());
-
         assert_eq!(
             classify_alias_intent(&world.view(), &DataSpaceCatalog::default(), &intent, 1)
-                .expect("exact dangling selector is repairable"),
+                .expect("missing canonical domain state is repairable"),
             AliasPlanDispositionV1::Repair
         );
-
-        let different = iroha_data_model::domain::DomainId::try_new(
-            "other",
-            &parent_value.dataspace.canonical_name,
-        )
-        .expect("different domain");
-        world.domain_selectors.insert(selector, different);
-        let error = classify_alias_intent(&world.view(), &DataSpaceCatalog::default(), &intent, 1)
-            .expect_err("selector drift must never be overwritten");
-        assert_eq!(error.code(), "alias.binding.conflict");
     }
 
     #[test]

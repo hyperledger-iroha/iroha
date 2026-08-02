@@ -89,6 +89,7 @@ fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_musubi_versions_v1(FindMusubiVersionsV1),
         visit_find_musubi_maintainers_v1(FindMusubiMaintainersV1),
         visit_find_musubi_archive_locations_v1(FindMusubiArchiveLocationsV1),
+        visit_find_musubi_archive_retention_v1(FindMusubiArchiveRetentionV1),
         visit_find_musubi_alias_v1(FindMusubiAliasV1),
         visit_find_musubi_alias_history_v1(FindMusubiAliasHistoryV1),
         visit_find_musubi_ordered_prefix_v1(FindMusubiOrderedPrefixV1),
@@ -604,6 +605,9 @@ macro_rules! query_visitors {
             visit_find_musubi_archive_locations_v1(
                 &$crate::query::musubi::prelude::FindMusubiArchiveLocationsV1
             ),
+            visit_find_musubi_archive_retention_v1(
+                &$crate::query::musubi::prelude::FindMusubiArchiveRetentionV1
+            ),
             visit_find_musubi_alias_v1(
                 &$crate::query::musubi::prelude::FindMusubiAliasV1
             ),
@@ -767,6 +771,7 @@ mod tests {
             SingularQueryBox::FindMusubiVersionsV1(_) => {}
             SingularQueryBox::FindMusubiMaintainersV1(_) => {}
             SingularQueryBox::FindMusubiArchiveLocationsV1(_) => {}
+            SingularQueryBox::FindMusubiArchiveRetentionV1(_) => {}
             SingularQueryBox::FindMusubiAliasV1(_) => {}
             SingularQueryBox::FindMusubiAliasHistoryV1(_) => {}
             SingularQueryBox::FindMusubiOrderedPrefixV1(_) => {}
@@ -819,7 +824,7 @@ mod tests {
 
     #[derive(Default)]
     struct MusubiVisitor {
-        seen: [bool; 9],
+        seen: [bool; 10],
     }
 
     impl Visit for MusubiVisitor {
@@ -862,32 +867,39 @@ mod tests {
             self.seen[5] = true;
         }
 
-        fn visit_find_musubi_alias_v1(&mut self, _: &query_mod::musubi::FindMusubiAliasV1) {
+        fn visit_find_musubi_archive_retention_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiArchiveRetentionV1,
+        ) {
             self.seen[6] = true;
+        }
+
+        fn visit_find_musubi_alias_v1(&mut self, _: &query_mod::musubi::FindMusubiAliasV1) {
+            self.seen[7] = true;
         }
 
         fn visit_find_musubi_alias_history_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiAliasHistoryV1,
         ) {
-            self.seen[7] = true;
+            self.seen[8] = true;
         }
 
         fn visit_find_musubi_ordered_prefix_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiOrderedPrefixV1,
         ) {
-            self.seen[8] = true;
+            self.seen[9] = true;
         }
     }
 
     fn musubi_v1_singular_queries() -> Vec<SingularQueryBox> {
         use crate::musubi::{
             ArchiveId, MusubiAliasNameV1, MusubiAliasQueryV1, MusubiArchiveLocationQueryV1,
-            MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1, MusubiOrderedPrefixQueryV1,
-            MusubiOrderedPrefixV1, MusubiPackageIdV1, MusubiPackageNameV1,
-            MusubiPackagePageQueryV1, MusubiPackageScopeV1, MusubiPageRequestV1, MusubiReleaseIdV1,
-            MusubiResolverIndexQueryV1, MusubiVersionV1,
+            MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
+            MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1, MusubiPackageIdV1,
+            MusubiPackageNameV1, MusubiPackagePageQueryV1, MusubiPackageScopeV1,
+            MusubiPageRequestV1, MusubiReleaseIdV1, MusubiResolverIndexQueryV1, MusubiVersionV1,
         };
 
         let package = MusubiPackageIdV1::new(
@@ -931,6 +943,11 @@ mod tests {
             query_mod::musubi::FindMusubiArchiveLocationsV1::new(MusubiArchiveLocationQueryV1 {
                 archive_id: ArchiveId::new([0xA5; 32]),
                 page: page(),
+            })
+            .into(),
+            query_mod::musubi::FindMusubiArchiveRetentionV1::new(MusubiArchiveRetentionQueryV1 {
+                archive_ids: vec![ArchiveId::new([0xA5; 32])],
+                expected_snapshot: None,
             })
             .into(),
             query_mod::musubi::FindMusubiAliasV1::new(MusubiAliasQueryV1 {
@@ -982,7 +999,7 @@ mod tests {
     #[test]
     fn musubi_v1_singular_query_inventory_dispatches_every_typed_hook() {
         let queries = musubi_v1_singular_queries();
-        assert_eq!(queries.len(), 9);
+        assert_eq!(queries.len(), 10);
 
         let mut visitor = MusubiVisitor::default();
         for query in &queries {
@@ -990,7 +1007,7 @@ mod tests {
             visit_singular_query(&mut visitor, query);
         }
 
-        assert_eq!(visitor.seen, [true; 9]);
+        assert_eq!(visitor.seen, [true; 10]);
     }
 
     #[test]
@@ -1017,7 +1034,7 @@ mod tests {
         let account_id = AccountId::parse_encoded(ALICE_ACCOUNT_ID_STR)
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid account id");
-        let asset_definition = crate::asset::AssetDefinitionId::new(
+        let asset_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             "rose".parse().expect("valid asset name"),
         );
@@ -1096,7 +1113,7 @@ mod tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid account id");
         let asset_definition: crate::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );

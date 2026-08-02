@@ -295,6 +295,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiPackageMetadataV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::InviteMusubiPackageMaintainerV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::AcceptMusubiPackageMaintainerV1>,
+    dispatch_instruction::<
+        iroha_data_model::isi::musubi::RevokeMusubiPackageMaintainerInvitationV1,
+    >,
     dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiPackageMaintainerRoleV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RemoveMusubiPackageMaintainerV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiAliasV1>,
@@ -311,7 +314,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
-    dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>,
     dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>,
     dispatch_instruction::<iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4>,
@@ -354,6 +356,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudServiceSecret>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::DeleteSoracloudServiceSecret>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::MutateSoracloudState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudFhePolicy>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RotateSoracloudFhePolicy>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RevokeSoracloudFhePolicy>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudFheJob>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudDecryptionRequest>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease>,
@@ -1260,10 +1265,11 @@ mod tests {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura.clone(), query_handle);
-        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal")?,
-            "rose".parse()?,
-        );
+        let asset_definition_id =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal")?,
+                "rose".parse()?,
+            );
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
@@ -1280,10 +1286,12 @@ mod tests {
         .into();
         Grant::account_permission(trigger_perm, ALICE_ID.clone())
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         state_transaction.apply();
         state_block.commit().unwrap();
@@ -3543,7 +3551,7 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let definition_id = AssetDefinitionId::new(
+        let definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );
@@ -3578,7 +3586,7 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );

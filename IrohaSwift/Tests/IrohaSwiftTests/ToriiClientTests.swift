@@ -321,7 +321,7 @@ final class ToriiContractAPITests: XCTestCase {
     }
     private let merchantAccount = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     private let contractAlias = "bisp::hbl.sbp"
-    private let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+    private let contractAddress = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
     private let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let codeHash = String(repeating: "a", count: 64)
     private let abiHash = String(repeating: "b", count: 64)
@@ -9466,15 +9466,183 @@ final class ToriiClientTests: XCTestCase {
         waitForExpectations(timeout: 2.0)
     }
 
-    func testExplorerRwasParamsQueryItemsEncodePaginationAndDomain() throws {
-        let params = ToriiExplorerRwasParams(page: 2,
-                                             perPage: 25,
+    func testExplorerRwasParamsQueryItemsEncodeCursorAndDomain() throws {
+        let params = ToriiExplorerRwasParams(cursor: "Y3Vyc29y",
+                                             limit: 25,
                                              domain: "commodities.sora")
         let queryItems = try XCTUnwrap(params.queryItems())
         let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-        XCTAssertEqual(query["page"], "2")
-        XCTAssertEqual(query["per_page"], "25")
+        XCTAssertEqual(query["cursor"], "Y3Vyc29y")
+        XCTAssertEqual(query["limit"], "25")
         XCTAssertEqual(query["domain"], "commodities.sora")
+        XCTAssertNil(query["page"])
+        XCTAssertNil(query["per_page"])
+    }
+
+    func testExplorerRwasParamsRejectInvalidCursorAndLimit() {
+        for cursor in ["", "padded=", "a", "contains space"] {
+            XCTAssertThrowsError(try ToriiExplorerRwasParams(cursor: cursor).queryItems())
+        }
+        for limit: UInt32 in [0, 101] {
+            XCTAssertThrowsError(try ToriiExplorerRwasParams(limit: limit).queryItems())
+        }
+    }
+
+    func testExplorerRwaCursorPageDecodesExactContract() throws {
+        let json = """
+        {
+          "pagination":{"limit":2,"next_cursor":"Y3Vyc29y","has_more":true},
+          "items":[]
+        }
+        """
+        let page = try JSONDecoder().decode(ToriiExplorerRwasPage.self, from: Data(json.utf8))
+        XCTAssertEqual(page.pagination.limit, 2)
+        XCTAssertEqual(page.pagination.nextCursor, "Y3Vyc29y")
+        XCTAssertTrue(page.pagination.hasMore)
+    }
+
+    func testExplorerRwaCursorPageRejectsRetiredUnknownAndInconsistentFields() {
+        let retired = """
+        {"page":1,"per_page":25,"total_pages":1,"total_items":0}
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerCursorMeta.self, from: Data(retired.utf8))
+        )
+
+        let inconsistent = """
+        {"limit":25,"next_cursor":null,"has_more":true}
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerCursorMeta.self, from: Data(inconsistent.utf8))
+        )
+
+        let unknownOuter = """
+        {
+          "pagination":{"limit":25,"next_cursor":null,"has_more":false},
+          "items":[],
+          "total_items":0
+        }
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerRwasPage.self, from: Data(unknownOuter.utf8))
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateExplorerRwasFollowsCursorAcrossEmptyScanPage() async throws {
+        var observedCursors: [String?] = []
+        var observedLimits: [String?] = []
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(
+                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+            )
+            observedCursors.append(query["cursor"])
+            observedLimits.append(query["limit"])
+            XCTAssertEqual(query["domain"], "commodities")
+
+            let body: String
+            switch query["cursor"] {
+            case nil:
+                body = """
+                {
+                  "pagination":{"limit":2,"next_cursor":"Y3Vyc29yLTE","has_more":true},
+                  "items":[]
+                }
+                """
+            case "Y3Vyc29yLTE":
+                body = """
+                {
+                  "pagination":{"limit":2,"next_cursor":"Y3Vyc29yLTI","has_more":true},
+                  "items":[{
+                    "id":"lot-001$commodities.sora",
+                    "owned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    "quantity":"1",
+                    "held_quantity":"0",
+                    "primary_reference":"vault://receipts/1",
+                    "status":null,
+                    "is_frozen":false,
+                    "metadata":{}
+                  }]
+                }
+                """
+            case "Y3Vyc29yLTI":
+                body = """
+                {
+                  "pagination":{"limit":2,"next_cursor":null,"has_more":false},
+                  "items":[{
+                    "id":"lot-002$commodities.sora",
+                    "owned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    "quantity":"2",
+                    "held_quantity":"0",
+                    "primary_reference":"vault://receipts/2",
+                    "status":null,
+                    "is_frozen":false,
+                    "metadata":{}
+                  }]
+                }
+                """
+            default:
+                XCTFail("Unexpected cursor")
+                body = """
+                {"pagination":{"limit":2,"next_cursor":null,"has_more":false},"items":[]}
+                """
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+
+        let stream = makeClient().iterateExplorerRwas(
+            params: ToriiExplorerRwasParams(domain: "commodities")
+        )
+        var identifiers: [String] = []
+        for try await item in stream {
+            identifiers.append(item.id)
+        }
+
+        XCTAssertEqual(identifiers, ["lot-001$commodities.sora", "lot-002$commodities.sora"])
+        XCTAssertEqual(observedCursors, [nil, "Y3Vyc29yLTE", "Y3Vyc29yLTI"])
+        XCTAssertEqual(observedLimits, [nil, "2", "2"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateExplorerRwasRejectsRepeatedCursor() async throws {
+        StubURLProtocol.handler = { request in
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(
+                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+            )
+            let cursor = query["cursor"]
+            let body = """
+            {
+              "pagination":{"limit":1,"next_cursor":"Y3Vyc29yLTE","has_more":true},
+              "items":[]
+            }
+            """
+            if cursor != nil {
+                XCTAssertEqual(cursor, "Y3Vyc29yLTE")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+
+        do {
+            for try await _ in makeClient().iterateExplorerRwas() {}
+            XCTFail("Expected a repeated-cursor error")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("repeated a cursor"))
+        }
     }
 
     func testExplorerRwaRecordDecodesNullStatusAndMetadataDefaults() throws {
@@ -18477,7 +18645,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18498,7 +18666,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertTrue(response.ok)
                 XCTAssertTrue(response.submitted)
                 XCTAssertEqual(response.dataspace, "universal")
-                XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
+                XCTAssertEqual(response.contractAddress, "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh")
                 XCTAssertEqual(response.codeHashHex, codeHash)
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
@@ -18542,7 +18710,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testCallContractRejectsAmbiguousContractTarget() {
         let request = ToriiContractCallRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "mint::universal",
             entrypoint: "create",
             feePayment: testFeePayment(gasLimit: 7)
@@ -19574,7 +19742,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
     func testGovernanceDeployContractProposalRejectsAmbiguousTarget() throws {
         let request = ToriiGovernanceDeployContractProposalRequest(
-            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "demo::universal",
             codeHashHex: String(repeating: "4", count: 64),
             abiHashHex: String(repeating: "5", count: 64)
@@ -19830,7 +19998,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let proposalId = String(repeating: "6", count: 64)
         let codeHash = String(repeating: "7", count: 64)
         let abiHash = String(repeating: "8", count: 64)
-        let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+        let contractAddress = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/\(proposalId)")
             let response = HTTPURLResponse(url: request.url!,

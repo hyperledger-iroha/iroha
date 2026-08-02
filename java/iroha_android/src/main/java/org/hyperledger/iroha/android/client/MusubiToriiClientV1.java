@@ -14,26 +14,28 @@ import java.util.function.Function;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasHistoryEntry;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasRecord;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocation;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocationPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocationQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionPage;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactPackageQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactReleaseQuery;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPackageEntry;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.MaintainerDirectoryEntry;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixPage;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageMember;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackagePageQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Page;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexPage;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverReleaseRow;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchPage;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Version;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
-/** Read-only Torii client for the nine typed first-release Musubi queries. */
+/** Read-only Torii client for the eleven typed first-release Musubi queries. */
 public final class MusubiToriiClientV1 {
   public static final String EXACT_PACKAGE_PATH = "/v1/musubi/queries/exact-package";
   public static final String EXACT_RELEASE_PATH = "/v1/musubi/queries/exact-release";
@@ -41,9 +43,11 @@ public final class MusubiToriiClientV1 {
   public static final String VERSIONS_PATH = "/v1/musubi/queries/versions";
   public static final String MAINTAINERS_PATH = "/v1/musubi/queries/maintainers";
   public static final String ARCHIVE_LOCATIONS_PATH = "/v1/musubi/queries/archive-locations";
+  public static final String ARCHIVE_RETENTION_PATH = "/v1/musubi/queries/archive-retention";
   public static final String ALIAS_PATH = "/v1/musubi/queries/alias";
   public static final String ALIAS_HISTORY_PATH = "/v1/musubi/queries/alias-history";
   public static final String ORDERED_PREFIX_PATH = "/v1/musubi/queries/ordered-prefix";
+  public static final String SEARCH_PATH = "/v1/musubi/queries/search";
 
   private static final int REQUEST_MAX_BYTES = 64 * 1024;
   private static final int RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
@@ -86,18 +90,33 @@ public final class MusubiToriiClientV1 {
     return executePost(VERSIONS_PATH, required(request).toJsonBytes(), MusubiJsonV1::parseVersionPage);
   }
 
-  /** Lists accepted owners and maintainers for a package. */
-  public CompletableFuture<Page<PackageMember>> findMaintainers(final PackagePageQuery request) {
+  /** Lists accepted owners/maintainers and pending invitations for a package. */
+  public CompletableFuture<Page<MaintainerDirectoryEntry>> findMaintainers(
+      final PackagePageQuery request) {
     return executePost(MAINTAINERS_PATH, required(request).toJsonBytes(), MusubiJsonV1::parseMaintainerPage);
   }
 
   /** Lists renewable SoraFS locations for an archive. */
-  public CompletableFuture<Page<ArchiveLocation>> findArchiveLocations(
+  public CompletableFuture<ArchiveLocationPage> findArchiveLocations(
       final ArchiveLocationQuery request) {
     return executePost(
         ARCHIVE_LOCATIONS_PATH,
         required(request).toJsonBytes(),
         MusubiJsonV1::parseArchiveLocationPage);
+  }
+
+  /** Classifies a bounded exact archive batch for fail-closed cache retention. */
+  public CompletableFuture<ArchiveRetentionPage> findArchiveRetention(
+      final ArchiveRetentionQuery request) {
+    final ArchiveRetentionQuery checked = required(request);
+    return executePost(
+        ARCHIVE_RETENTION_PATH,
+        checked.toJsonBytes(),
+        payload -> {
+          final ArchiveRetentionPage page = MusubiJsonV1.parseArchiveRetentionPage(payload);
+          page.requireMatches(checked);
+          return page;
+        });
   }
 
   /** Resolves one paid permanent global alias. */
@@ -120,6 +139,14 @@ public final class MusubiToriiClientV1 {
         ORDERED_PREFIX_PATH,
         required(request).toJsonBytes(),
         MusubiJsonV1::parseOrderedPackagePage);
+  }
+
+  /** Searches the rebuildable finalized-event package metadata projection. */
+  public CompletableFuture<SearchPage> search(final SearchQuery request) {
+    return executePost(
+        SEARCH_PATH,
+        required(request).toJsonBytes(),
+        MusubiJsonV1::parseSearchPage);
   }
 
   public HttpTransportExecutor executor() { return executor; }

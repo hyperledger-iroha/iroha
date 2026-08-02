@@ -7,6 +7,11 @@
 //! the validated SoraFS file plan materializes the source tree. Publication is
 //! an absent-destination atomic rename, so readers observe either no entry or a
 //! complete immutable `src` directory.
+//!
+//! Windows supports safe root discovery and exact read/verification through retained
+//! non-delete-sharing handles. Cache publication, quarantine, and prune isolation remain
+//! fail-closed there because Rust's safe standard library does not yet expose handle-relative
+//! directory rename; dropping a retained handle around a path rename would admit substitution.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -15,8 +20,12 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
+    str::FromStr,
     sync::atomic::{AtomicU64, Ordering},
 };
+
+#[cfg(windows)]
+use std::sync::Arc;
 
 use iroha_data_model::musubi::{
     ArchiveId, MUSUBI_ARTIFACT_DESCRIPTOR_VERSION_V1, MUSUBI_MAX_FILES_V1,
@@ -24,6 +33,7 @@ use iroha_data_model::musubi::{
     MusubiDependencyKindV1, MusubiDependencyReqV1, MusubiReleaseManifestV1,
     MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1, MusubiVerificationNodeV1,
 };
+use iroha_data_model::name::Name;
 use norito::codec::{Decode, Encode};
 use sorafs_car::{
     CarBuildPlan, CarStreamingWriter, ChunkSink, ChunkStore, ChunkStoreError, DirectoryPayload,
@@ -36,6 +46,8 @@ use sorafs_manifest::{DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy, 
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 
 const REGISTRY_DIRECTORY: &str = "registry-v1";
 const SOURCE_DIRECTORY: &str = "src";
@@ -62,16 +74,95 @@ const BUNDLE_METADATA_FILE_COUNT: usize = 3;
 const MAX_CACHE_FILE_COUNT: usize = MUSUBI_MAX_FILES_V1 as usize + BUNDLE_METADATA_FILE_COUNT;
 const MAX_CACHE_PATH_COMPONENTS: usize = 64;
 const MAX_CACHE_ENTRY_COUNT: usize = MAX_CACHE_FILE_COUNT * (MAX_CACHE_PATH_COMPONENTS + 1);
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const FILE_SHARE_READ: u32 = 0x1;
+#[cfg(windows)]
+const FILE_SHARE_WRITE: u32 = 0x2;
+#[cfg(windows)]
+const FILE_SHARE_DELETE: u32 = 0x4;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Return the one platform-derived user cache root shared by fetch and compiler workflows.
+///
+/// The returned root is `~/Library/Caches/Iroha/musubi` on macOS,
+/// `$XDG_CACHE_HOME/iroha/musubi` (or `~/.cache/iroha/musubi`) on other Unix systems,
+/// and `%LOCALAPPDATA%/Iroha/musubi/cache` on Windows. The path must be absolute;
+/// no project, lockfile, or current-directory input participates in its derivation.
+///
+/// # Errors
+/// Returns [`CacheError::UnsafeRoot`] when the required platform directory variable is absent,
+/// empty, or relative.
+pub fn platform_cache_root_v1() -> Result<PathBuf, CacheError> {
+    #[cfg(target_os = "macos")]
+    {
+        return derive_platform_cache_root(
+            std::env::var_os("HOME").map(PathBuf::from),
+            &["Library", "Caches", "Iroha", "musubi"],
+        );
+    }
+    #[cfg(windows)]
+    {
+        return derive_platform_cache_root(
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            &["Iroha", "musubi", "cache"],
+        );
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(root) = std::env::var_os("XDG_CACHE_HOME") {
+            return derive_platform_cache_root(Some(PathBuf::from(root)), &["iroha", "musubi"]);
+        }
+        return derive_platform_cache_root(
+            std::env::var_os("HOME").map(PathBuf::from),
+            &[".cache", "iroha", "musubi"],
+        );
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(CacheError::UnsafeRoot(
+            "the platform has no Musubi V1 cache-root convention".to_owned(),
+        ))
+    }
+}
+
+fn derive_platform_cache_root(
+    base: Option<PathBuf>,
+    components: &[&str],
+) -> Result<PathBuf, CacheError> {
+    let mut root = base.ok_or_else(|| {
+        CacheError::UnsafeRoot("the platform user cache directory is unavailable".to_owned())
+    })?;
+    if root.as_os_str().is_empty() || !root.is_absolute() {
+        return Err(CacheError::UnsafeRoot(
+            "the platform user cache directory must be absolute".to_owned(),
+        ));
+    }
+    for component in components {
+        root.push(component);
+    }
+    Ok(root)
+}
 
 /// A cache rooted below an explicit user-owned directory.
 #[derive(Debug, Clone)]
 pub struct MusubiCache {
     root: PathBuf,
     root_identity: DirectoryIdentity,
+    /// Retains a non-delete-sharing handle so the trusted anchor cannot be renamed.
+    #[cfg(windows)]
+    root_handle: Arc<File>,
     registry_root: PathBuf,
     registry_identity: DirectoryIdentity,
+    /// Retains a non-delete-sharing handle so the registry anchor cannot be renamed.
+    #[cfg(windows)]
+    registry_handle: Arc<File>,
 }
 
 /// A verified immutable cache entry.
@@ -132,7 +223,7 @@ pub enum RepairOutcome {
 
 /// Summary of a cache prune operation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PruneReport {
+pub(crate) struct PruneReport {
     /// Archive identities removed from the cache.
     pub removed: Vec<ArchiveId>,
 }
@@ -140,7 +231,7 @@ pub struct PruneReport {
 /// Errors raised by the immutable cache.
 #[derive(Debug)]
 pub enum CacheError {
-    /// The platform cannot provide the required no-follow filesystem guarantees.
+    /// The platform cannot provide the required stable-identity and rename guarantees.
     UnsupportedPlatform,
     /// A filesystem operation failed.
     Io {
@@ -168,7 +259,7 @@ impl fmt::Display for CacheError {
         match self {
             Self::UnsupportedPlatform => write!(
                 formatter,
-                "secure Musubi cache publication requires Unix no-follow file identities"
+                "secure Musubi cache access requires stable no-follow identities, and cache mutation requires a safe handle-relative no-replace directory rename"
             ),
             Self::Io {
                 operation,
@@ -214,12 +305,10 @@ impl MusubiCache {
     ///
     /// # Errors
     ///
-    /// Returns an error when secure Unix semantics are unavailable, directory
+    /// Returns an error when secure Unix/Windows semantics are unavailable, directory
     /// creation fails, or either root is unsafe.
     pub fn open(user_root: impl AsRef<Path>) -> Result<Self, CacheError> {
-        if !cfg!(unix) {
-            // TODO: Add equivalent Windows handle-relative, reparse-point-safe
-            // creation and ReplaceFile-free publication before enabling V1 cache writes there.
+        if !cfg!(any(unix, windows)) {
             return Err(CacheError::UnsupportedPlatform);
         }
 
@@ -254,11 +343,26 @@ impl MusubiCache {
         let registry_metadata = fs::symlink_metadata(&registry_root)
             .map_err(|source| io_error("inspect registry cache root", &registry_root, source))?;
 
+        #[cfg(windows)]
+        let root_handle = Arc::new(
+            open_pinned_directory(&root)
+                .map_err(|source| io_error("pin user cache root", &root, source))?,
+        );
+        #[cfg(windows)]
+        let registry_handle = Arc::new(
+            open_pinned_directory(&registry_root)
+                .map_err(|source| io_error("pin registry cache root", &registry_root, source))?,
+        );
+
         Ok(Self {
             root,
             root_identity: DirectoryIdentity::capture(&canonical_metadata),
+            #[cfg(windows)]
+            root_handle,
             registry_root,
             registry_identity: DirectoryIdentity::capture(&registry_metadata),
+            #[cfg(windows)]
+            registry_handle,
         })
     }
 
@@ -272,6 +376,54 @@ impl MusubiCache {
     #[must_use]
     pub fn source_path(&self, archive_id: &ArchiveId) -> PathBuf {
         self.archive_directory(archive_id).join(SOURCE_DIRECTORY)
+    }
+
+    /// Enumerate canonical archive identities currently owned by this cache.
+    ///
+    /// Fixed non-archive files, temporary siblings, resolver-index snapshots,
+    /// and every noncanonical name are ignored. A canonical archive name must
+    /// identify a real private directory; a symlink or other substituted object
+    /// fails the inventory instead of being treated as a verification or prune
+    /// target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a cache anchor changed, the registry directory
+    /// cannot be read, or a canonical archive descendant is unsafe.
+    pub fn archive_ids(&self) -> Result<Vec<ArchiveId>, CacheError> {
+        self.validate_anchors()?;
+        let mut archive_ids = Vec::new();
+        let mut archive_pins = Vec::new();
+        for entry in fs::read_dir(&self.registry_root)
+            .map_err(|source| io_error("read registry cache root", &self.registry_root, source))?
+        {
+            let entry = entry.map_err(|source| {
+                io_error("read registry cache entry", &self.registry_root, source)
+            })?;
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Some(archive_id) = decode_archive_directory_name(&name) else {
+                continue;
+            };
+            if archive_id.is_zero() {
+                return Err(CacheError::CorruptEntry(
+                    "cache contains a zero archive identity".to_owned(),
+                ));
+            }
+            let path = self.registry_root.join(&name);
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|source| io_error("inspect archive cache directory", &path, source))?;
+            validate_private_directory(&path, &metadata)?;
+            archive_pins.push(DirectoryPin::capture_expected(&path, &metadata)?);
+            archive_ids.push(archive_id);
+        }
+        for pin in &archive_pins {
+            pin.validate()?;
+        }
+        archive_ids.sort_unstable();
+        archive_ids.dedup();
+        Ok(archive_ids)
     }
 
     /// Re-authenticate one immutable cached bundle for compiler consumption.
@@ -297,11 +449,13 @@ impl MusubiCache {
             .map_err(|error| CacheError::CorruptEntry(error.to_string()))?;
         self.validate_anchors()?;
         let archive_dir = self.validate_existing_archive_directory(&node.archive_id)?;
+        let archive_pin = DirectoryPin::capture(&archive_dir)?;
         let source_path = archive_dir.join(SOURCE_DIRECTORY);
-        let files = inventory_tree(&source_path)?;
+        let inventory = inventory_tree(&source_path)?;
         let (semantic_release, publication_lock) =
-            verify_compiler_bundle(&source_path, node, &files)?;
-        let (manifest, kotodama_sources) = load_compiler_sources(&source_path, &files)?;
+            verify_compiler_bundle(&source_path, node, &inventory.files)?;
+        let (manifest, kotodama_sources) = load_compiler_sources(&source_path, &inventory.files)?;
+        archive_pin.validate()?;
         Ok(CachedCompilerPackageV1 {
             source_path,
             manifest,
@@ -332,6 +486,7 @@ impl MusubiCache {
         validate_plan_commitment(commitment, plan)?;
         let archive_id = commitment.archive_id();
         let archive_dir = self.ensure_archive_directory(&archive_id)?;
+        let archive_pin = DirectoryPin::capture(&archive_dir)?;
         let source_path = archive_dir.join(SOURCE_DIRECTORY);
         if source_path
             .try_exists()
@@ -342,7 +497,7 @@ impl MusubiCache {
                 .map(InstallOutcome::AlreadyPresent);
         }
 
-        let (staging_path, staging_metadata) = create_staging_directory(&archive_dir)?;
+        let (staging_path, staging_metadata, staging_pin) = create_staging_directory(&archive_dir)?;
         let (payload_path, mut payload_file, payload_metadata) =
             create_temporary_file(&archive_dir, ".payload")?;
         let mut guard = InstallGuard::new(
@@ -356,13 +511,11 @@ impl MusubiCache {
         payload_file
             .sync_all()
             .map_err(|source| io_error("sync verified CAR payload", &payload_path, source))?;
-        drop(payload_file);
-
-        let mut payload = FilePayload::open(&payload_path)
-            .map_err(|source| io_error("open verified CAR payload", &payload_path, source))?;
+        let mut payload = FilePayload::from_open_file(&payload_path, payload_file)
+            .map_err(|source| io_error("retain verified CAR payload", &payload_path, source))?;
         let mut store = ChunkStore::with_profile(plan.chunk_profile);
-        let sink = SourceTreeSink::new(staging_path.clone());
-        store
+        let sink = SourceTreeSink::new(staging_path.clone(), staging_pin);
+        let staging_pins = store
             .ingest_plan_source_with_sink(plan, &mut payload, sink)
             .map_err(|error| CacheError::CorruptEntry(error.to_string()))?;
         drop(payload);
@@ -372,9 +525,16 @@ impl MusubiCache {
 
         verify_tree(&staging_path, commitment, plan)?;
         make_tree_immutable_and_sync(&staging_path)?;
+        for pin in &staging_pins {
+            pin.validate()?;
+        }
+        archive_pin.validate()?;
         let staging_before = fs::symlink_metadata(&staging_path)
             .map_err(|source| io_error("inspect completed staging tree", &staging_path, source))?;
-        match rename_no_replace(&staging_path, &source_path) {
+        let staging_root_pin = staging_pins.first().ok_or_else(|| {
+            CacheError::CorruptEntry("source staging tree has no retained root pin".to_owned())
+        })?;
+        match rename_no_replace(&staging_path, &source_path, staging_root_pin) {
             Ok(()) => {}
             Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
                 guard.cleanup_staging();
@@ -418,10 +578,20 @@ impl MusubiCache {
     ) -> Result<CacheEntry, CacheError> {
         self.validate_anchors()?;
         validate_plan_commitment(commitment, plan)?;
+        self.verify_validated(commitment, plan)
+    }
+
+    fn verify_validated(
+        &self,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &CarBuildPlan,
+    ) -> Result<CacheEntry, CacheError> {
         let archive_id = commitment.archive_id();
         let archive_dir = self.validate_existing_archive_directory(&archive_id)?;
+        let archive_pin = DirectoryPin::capture(&archive_dir)?;
         let source_path = archive_dir.join(SOURCE_DIRECTORY);
         verify_tree(&source_path, commitment, plan)?;
+        archive_pin.validate()?;
         Ok(CacheEntry {
             archive_id,
             source_path,
@@ -430,28 +600,37 @@ impl MusubiCache {
 
     /// Verify an entry and quarantine it only when every descendant is safe.
     ///
+    /// The finalized commitment and file plan are validated before local cache
+    /// state is interpreted. Only an integrity failure reported while verifying
+    /// the local tree is eligible for quarantine.
+    ///
     /// Content-corrupt regular trees are renamed to a private sibling. Trees
     /// containing symlinks, hardlinks, special files, or unstable identities
     /// are left untouched for manual inspection.
     ///
     /// # Errors
     ///
-    /// Returns an error for unsafe filesystem state or a failed quarantine.
+    /// Returns an error for invalid registry inputs, unsafe filesystem state,
+    /// or a failed quarantine.
     pub fn repair(
         &self,
         commitment: &MusubiArchiveCommitmentV1,
         plan: &CarBuildPlan,
     ) -> Result<RepairOutcome, CacheError> {
-        match self.verify(commitment, plan) {
+        self.validate_anchors()?;
+        validate_plan_commitment(commitment, plan)?;
+        match self.verify_validated(commitment, plan) {
             Ok(entry) => return Ok(RepairOutcome::Healthy(entry)),
             Err(CacheError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
                 return Ok(RepairOutcome::Missing);
             }
-            Err(_) => {}
+            Err(CacheError::CorruptEntry(_)) => {}
+            Err(error) => return Err(error),
         }
         self.validate_anchors()?;
         let archive_id = commitment.archive_id();
         let archive_dir = self.ensure_archive_directory(&archive_id)?;
+        let archive_pin = DirectoryPin::capture(&archive_dir)?;
         let source_path = archive_dir.join(SOURCE_DIRECTORY);
         if !source_path
             .try_exists()
@@ -459,56 +638,76 @@ impl MusubiCache {
         {
             return Ok(RepairOutcome::Missing);
         }
-        validate_mutable_tree(&source_path)?;
+        let tree = validate_mutable_tree(&source_path)?;
         let quarantine = allocate_absent_path(&archive_dir, ".quarantine")?;
-        rename_no_replace(&source_path, &quarantine)
+        archive_pin.validate()?;
+        rename_no_replace(&source_path, &quarantine, tree.root_pin()?)
             .map_err(|source| io_error("quarantine corrupt cache entry", &quarantine, source))?;
         sync_directory(&archive_dir)
             .map_err(|source| io_error("sync archive cache directory", &archive_dir, source))?;
         Ok(RepairOutcome::Quarantined { path: quarantine })
     }
 
-    /// Remove complete archive directories not present in `retained`.
+    /// Remove only the exact archive identities authorized by a finalized retention query.
     ///
-    /// Only canonical 64-character ArchiveId directories are considered. Each
-    /// complete descendant tree is validated before it is renamed aside and
-    /// deleted without following links. Unknown names remain untouched.
+    /// This method never interprets absence from a retained set as authority to delete. A cache
+    /// entry installed concurrently after the caller's inventory therefore remains untouched
+    /// unless its exact identity was queried and supplied here. Missing candidates are harmless;
+    /// unsafe or substituted descendants fail before mutation.
     ///
     /// # Errors
     ///
-    /// Returns an error before mutating a candidate that contains unsafe or
-    /// unstable descendants, or when publication/durability operations fail.
-    pub fn prune(&self, retained: &BTreeSet<ArchiveId>) -> Result<PruneReport, CacheError> {
+    /// Returns an error for a zero identity, unsafe cache state, failed isolation, or failed
+    /// durable removal.
+    pub(crate) fn prune_exact(
+        &self,
+        candidates: &BTreeSet<ArchiveId>,
+    ) -> Result<PruneReport, CacheError> {
         self.validate_anchors()?;
-        let mut candidates = Vec::new();
-        for entry in fs::read_dir(&self.registry_root)
-            .map_err(|source| io_error("read registry cache root", &self.registry_root, source))?
-        {
-            let entry = entry.map_err(|source| {
-                io_error("read registry cache entry", &self.registry_root, source)
-            })?;
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            let Some(archive_id) = decode_archive_directory_name(&name) else {
-                continue;
-            };
-            if !retained.contains(&archive_id) {
-                candidates.push((archive_id, entry.path()));
+        let mut existing = Vec::with_capacity(candidates.len());
+        for archive_id in candidates {
+            if archive_id.is_zero() {
+                return Err(CacheError::CorruptEntry(
+                    "cache prune candidate uses the zero archive identity".to_owned(),
+                ));
+            }
+            let path = self.archive_directory(archive_id);
+            match fs::symlink_metadata(&path) {
+                Ok(_) => existing.push((*archive_id, path)),
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(io_error(
+                        "inspect exact cache prune candidate",
+                        &path,
+                        source,
+                    ));
+                }
             }
         }
+        self.prune_candidates(existing)
+    }
+
+    fn prune_candidates(
+        &self,
+        mut candidates: Vec<(ArchiveId, PathBuf)>,
+    ) -> Result<PruneReport, CacheError> {
         candidates.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut validated = Vec::with_capacity(candidates.len());
+        for (archive_id, path) in candidates {
+            let tree = validate_mutable_tree(&path)?;
+            validated.push((archive_id, path, tree));
+        }
 
         let mut report = PruneReport::default();
-        for (archive_id, path) in candidates {
-            validate_mutable_tree(&path)?;
+        for (archive_id, path, tree) in validated {
             let tombstone = allocate_absent_path(&self.registry_root, ".prune")?;
-            rename_no_replace(&path, &tombstone)
+            tree.validate()?;
+            rename_no_replace(&path, &tombstone, tree.root_pin()?)
                 .map_err(|source| io_error("isolate pruned cache entry", &tombstone, source))?;
+            drop(tree);
             sync_directory(&self.registry_root).map_err(|source| {
                 io_error("sync registry cache root", &self.registry_root, source)
             })?;
-            validate_mutable_tree(&tombstone)?;
             remove_validated_tree(&tombstone)?;
             sync_directory(&self.registry_root).map_err(|source| {
                 io_error("sync registry cache root", &self.registry_root, source)
@@ -544,7 +743,17 @@ impl MusubiCache {
 
     fn validate_anchors(&self) -> Result<(), CacheError> {
         validate_directory_identity(&self.root, &self.root_identity)?;
-        validate_directory_identity(&self.registry_root, &self.registry_identity)
+        validate_directory_identity(&self.registry_root, &self.registry_identity)?;
+        #[cfg(windows)]
+        {
+            validate_pinned_directory(&self.root, &self.root_handle, &self.root_identity)?;
+            validate_pinned_directory(
+                &self.registry_root,
+                &self.registry_handle,
+                &self.registry_identity,
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -554,6 +763,10 @@ struct DirectoryIdentity {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    volume_serial_number: Option<u32>,
+    #[cfg(windows)]
+    file_index: Option<u64>,
 }
 
 impl DirectoryIdentity {
@@ -563,6 +776,10 @@ impl DirectoryIdentity {
             device: metadata.dev(),
             #[cfg(unix)]
             inode: metadata.ino(),
+            #[cfg(windows)]
+            volume_serial_number: metadata.volume_serial_number(),
+            #[cfg(windows)]
+            file_index: metadata.file_index(),
         }
     }
 
@@ -571,11 +788,64 @@ impl DirectoryIdentity {
         {
             self.device == metadata.dev() && self.inode == metadata.ino()
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            self.volume_serial_number.is_some()
+                && self.file_index.is_some()
+                && self.volume_serial_number == metadata.volume_serial_number()
+                && self.file_index == metadata.file_index()
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = metadata;
             false
         }
+    }
+}
+
+#[derive(Debug)]
+struct DirectoryPin {
+    path: PathBuf,
+    identity: DirectoryIdentity,
+    #[cfg(windows)]
+    handle: File,
+}
+
+impl DirectoryPin {
+    fn capture(path: &Path) -> Result<Self, CacheError> {
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|source| io_error("inspect cache directory for pinning", path, source))?;
+        validate_private_directory(path, &metadata)?;
+        #[cfg(windows)]
+        let handle = open_pinned_directory(path)
+            .map_err(|source| io_error("pin cache directory", path, source))?;
+        let pin = Self {
+            path: path.to_path_buf(),
+            identity: DirectoryIdentity::capture(&metadata),
+            #[cfg(windows)]
+            handle,
+        };
+        pin.validate()?;
+        Ok(pin)
+    }
+
+    fn capture_expected(path: &Path, expected: &fs::Metadata) -> Result<Self, CacheError> {
+        let pin = Self::capture(path)?;
+        if !pin.identity.matches(expected) {
+            return Err(CacheError::UnsafeDescendant(path.to_path_buf()));
+        }
+        Ok(pin)
+    }
+
+    fn validate(&self) -> Result<(), CacheError> {
+        self.validate_at(&self.path)
+    }
+
+    fn validate_at(&self, path: &Path) -> Result<(), CacheError> {
+        validate_directory_identity(path, &self.identity)?;
+        #[cfg(windows)]
+        validate_pinned_directory(path, &self.handle, &self.identity)?;
+        Ok(())
     }
 }
 
@@ -594,8 +864,44 @@ fn absolute_path(path: &Path) -> Result<PathBuf, CacheError> {
     }
 }
 
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || metadata_is_windows_reparse_point(metadata)
+}
+
+#[cfg(windows)]
+fn metadata_is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn metadata_is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        metadata.nlink() == 1
+    }
+    #[cfg(windows)]
+    {
+        metadata.number_of_links() == Some(1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+fn metadata_is_safe_regular_file(metadata: &fs::Metadata) -> bool {
+    metadata.is_file()
+        && !metadata_is_link_or_reparse(metadata)
+        && metadata_has_one_hard_link(metadata)
+}
+
 fn validate_private_directory(path: &Path, metadata: &fs::Metadata) -> Result<(), CacheError> {
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata_is_link_or_reparse(metadata) || !metadata.is_dir() {
         return Err(CacheError::UnsafeRoot(format!(
             "`{}` must be a real directory",
             path.display()
@@ -608,7 +914,48 @@ fn validate_private_directory(path: &Path, metadata: &fs::Metadata) -> Result<()
             path.display()
         )));
     }
+    #[cfg(windows)]
+    if metadata.volume_serial_number().is_none() || metadata.file_index().is_none() {
+        return Err(CacheError::UnsafeRoot(format!(
+            "`{}` has no stable Windows file identity",
+            path.display()
+        )));
+    }
     Ok(())
+}
+
+#[cfg(windows)]
+fn open_pinned_directory(path: &Path) -> io::Result<File> {
+    let linked = fs::symlink_metadata(path)?;
+    if metadata_is_link_or_reparse(&linked)
+        || !linked.is_dir()
+        || linked.volume_serial_number().is_none()
+        || linked.file_index().is_none()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache anchor is not a stable non-reparse directory",
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+    let directory = options.open(path)?;
+    let opened = directory.metadata()?;
+    let after = fs::symlink_metadata(path)?;
+    if metadata_is_link_or_reparse(&opened)
+        || !opened.is_dir()
+        || !same_file(&linked, &opened)
+        || !same_file(&opened, &after)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache anchor changed while its directory handle was opened",
+        ));
+    }
+    Ok(directory)
 }
 
 fn create_or_validate_private_directory(path: &Path) -> Result<(), CacheError> {
@@ -635,6 +982,25 @@ fn validate_directory_identity(
     if !identity.matches(&metadata) {
         return Err(CacheError::UnsafeRoot(format!(
             "`{}` changed after cache initialization",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_pinned_directory(
+    path: &Path,
+    handle: &File,
+    identity: &DirectoryIdentity,
+) -> Result<(), CacheError> {
+    let metadata = handle
+        .metadata()
+        .map_err(|source| io_error("inspect pinned cache directory", path, source))?;
+    validate_private_directory(path, &metadata)?;
+    if !identity.matches(&metadata) {
+        return Err(CacheError::UnsafeRoot(format!(
+            "the pinned handle for `{}` changed identity",
             path.display()
         )));
     }
@@ -988,6 +1354,7 @@ struct SourceTreeSink {
     chunk_files: Vec<usize>,
     next_chunk: usize,
     current: Option<OpenTarget>,
+    directory_pins: Vec<DirectoryPin>,
 }
 
 #[derive(Debug)]
@@ -999,17 +1366,19 @@ struct OpenTarget {
 }
 
 impl SourceTreeSink {
-    fn new(root: PathBuf) -> Self {
+    fn new(root: PathBuf, root_pin: DirectoryPin) -> Self {
         Self {
             root,
             files: Vec::new(),
             chunk_files: Vec::new(),
             next_chunk: 0,
             current: None,
+            directory_pins: vec![root_pin],
         }
     }
 
     fn create_target(&self, file_index: usize) -> Result<OpenTarget, ChunkStoreError> {
+        validate_directory_pins_io(&self.directory_pins)?;
         let plan = self.files.get(file_index).ok_or_else(|| {
             ChunkStoreError::Io(io::Error::other("source-tree file index is out of range"))
         })?;
@@ -1050,17 +1419,18 @@ impl SourceTreeSink {
 }
 
 impl ChunkSink for SourceTreeSink {
-    type Output = ();
+    type Output = Vec<DirectoryPin>;
 
     fn prepare(&mut self, plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
         plan.validate().map_err(ChunkStoreError::InvalidPlan)?;
         let root_metadata = fs::symlink_metadata(&self.root).map_err(ChunkStoreError::Io)?;
-        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        if metadata_is_link_or_reparse(&root_metadata) || !root_metadata.is_dir() {
             return Err(ChunkStoreError::Io(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "source-tree staging root is not a real directory",
             )));
         }
+        validate_directory_pins_io(&self.directory_pins)?;
         if fs::read_dir(&self.root)
             .map_err(ChunkStoreError::Io)?
             .next()
@@ -1109,23 +1479,30 @@ impl ChunkSink for SourceTreeSink {
         }
 
         for components in directories {
+            validate_directory_pins_io(&self.directory_pins)?;
             let path = join_components(&self.root, &components);
             let mut builder = fs::DirBuilder::new();
             #[cfg(unix)]
             builder.mode(0o700);
-            match builder.create(&path) {
-                Ok(()) => {}
+            let directory_metadata = match builder.create(&path) {
+                Ok(()) => fs::symlink_metadata(&path).map_err(ChunkStoreError::Io)?,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     let metadata = fs::symlink_metadata(&path).map_err(ChunkStoreError::Io)?;
-                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
                         return Err(ChunkStoreError::Io(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "source-tree parent is not a real directory",
                         )));
                     }
+                    metadata
                 }
                 Err(error) => return Err(ChunkStoreError::Io(error)),
-            }
+            };
+            self.directory_pins.push(
+                DirectoryPin::capture_expected(&path, &directory_metadata)
+                    .map_err(|error| ChunkStoreError::Io(io::Error::other(error.to_string())))?,
+            );
+            validate_directory_pins_io(&self.directory_pins)?;
         }
         for index in 0..self.files.len() {
             if self.files[index].size == 0 {
@@ -1190,8 +1567,18 @@ impl ChunkSink for SourceTreeSink {
                 "source-tree plan was not fully materialized",
             )));
         }
-        sync_tree_directories(&self.root).map_err(ChunkStoreError::Io)
+        sync_tree_directories(&self.root).map_err(ChunkStoreError::Io)?;
+        validate_directory_pins_io(&self.directory_pins)?;
+        Ok(self.directory_pins)
     }
+}
+
+fn validate_directory_pins_io(pins: &[DirectoryPin]) -> Result<(), ChunkStoreError> {
+    for pin in pins {
+        pin.validate()
+            .map_err(|error| ChunkStoreError::Io(io::Error::other(error.to_string())))?;
+    }
+    Ok(())
 }
 
 fn verify_tree(
@@ -1199,8 +1586,8 @@ fn verify_tree(
     commitment: &MusubiArchiveCommitmentV1,
     plan: &CarBuildPlan,
 ) -> Result<(), CacheError> {
-    let files = inventory_tree(source_path)?;
-    compare_inventory(plan, &files)?;
+    let inventory = inventory_tree(source_path)?;
+    compare_inventory(plan, &inventory.files)?;
 
     let mut payload = DirectoryPayload::new(source_path, &plan.files)
         .map_err(|source| io_error("open cached source payload", source_path, source))?;
@@ -1233,7 +1620,7 @@ fn verify_tree(
             "canonical CAR reconstructed from cache differs from commitment".to_owned(),
         ));
     }
-    verify_bundle_commitments(source_path, commitment, &files)
+    verify_bundle_commitments(source_path, commitment, &inventory.files)
 }
 
 struct SequentialPayloadReader<'a> {
@@ -1276,19 +1663,116 @@ struct FileInventory {
     digest: [u8; 32],
 }
 
-fn inventory_tree(root: &Path) -> Result<Vec<FileInventory>, CacheError> {
+struct TreeInventory {
+    files: Vec<FileInventory>,
+    // Retained until all commitment consumers have finished, preventing directory substitution
+    // between inventory, hashing, and compiler/archive verification on Windows.
+    _directory_pins: Vec<DirectoryPin>,
+}
+
+fn validate_portable_cache_component(component: &str) -> Result<(), CacheError> {
+    if component.is_empty()
+        || component == "."
+        || component == ".."
+        || component.contains(['/', '\\', ':'])
+        || component.ends_with(['.', ' '])
+        || component.chars().any(|character| {
+            character.is_control()
+                || is_bidi_control(character)
+                || matches!(character, '<' | '>' | '"' | '|' | '?' | '*')
+        })
+        || is_reserved_windows_component(component)
+        || normalize_nfc_cache_component(component).as_deref() != Ok(component)
+    {
+        return Err(CacheError::CorruptEntry(format!(
+            "cache path component `{component}` is not portable"
+        )));
+    }
+    Ok(())
+}
+
+fn normalize_nfc_cache_component(component: &str) -> Result<String, ()> {
+    let mut output = String::with_capacity(component.len());
+    let mut segment = String::new();
+    let flush = |segment: &mut String, output: &mut String| -> Result<(), ()> {
+        if segment.is_empty() {
+            return Ok(());
+        }
+        let normalized = Name::from_str(segment).map_err(|_| ())?;
+        output.push_str(normalized.as_ref());
+        segment.clear();
+        Ok(())
+    };
+    for character in component.chars() {
+        if matches!(character, '@' | '#' | '$') || character.is_whitespace() {
+            flush(&mut segment, &mut output)?;
+            output.push(character);
+        } else {
+            segment.push(character);
+        }
+    }
+    flush(&mut segment, &mut output)?;
+    Ok(output)
+}
+
+fn portable_cache_component_key(component: &str) -> String {
+    component.chars().flat_map(char::to_lowercase).collect()
+}
+
+fn is_reserved_windows_component(component: &str) -> bool {
+    let basename = component.split('.').next().unwrap_or(component);
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
+        .iter()
+        .any(|reserved| basename.eq_ignore_ascii_case(reserved))
+    {
+        return true;
+    }
+    if let (Some(prefix), Some(suffix)) = (basename.get(..3), basename.get(3..)) {
+        let numbered = prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT");
+        let digit = suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9');
+        return numbered && (digit || matches!(suffix, "¹" | "²" | "³"));
+    }
+    false
+}
+
+fn is_bidi_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
+fn inventory_tree(root: &Path) -> Result<TreeInventory, CacheError> {
     let metadata = fs::symlink_metadata(root)
         .map_err(|source| io_error("inspect cached source root", root, source))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
         return Err(CacheError::CorruptEntry(
             "cached source root is not a real directory".to_owned(),
         ));
     }
     let mut output = Vec::new();
+    let mut directory_pins = Vec::new();
     let mut entry_count = 0usize;
-    inventory_directory(root, root, 0, &mut entry_count, &mut output)?;
+    inventory_directory(
+        root,
+        root,
+        0,
+        &mut entry_count,
+        &mut output,
+        &mut directory_pins,
+    )?;
     output.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
-    Ok(output)
+    for pin in &directory_pins {
+        pin.validate()?;
+    }
+    Ok(TreeInventory {
+        files: output,
+        _directory_pins: directory_pins,
+    })
 }
 
 fn inventory_directory(
@@ -1297,13 +1781,16 @@ fn inventory_directory(
     depth: usize,
     entry_count: &mut usize,
     output: &mut Vec<FileInventory>,
+    directory_pins: &mut Vec<DirectoryPin>,
 ) -> Result<(), CacheError> {
     if depth > MAX_CACHE_PATH_COMPONENTS {
         return Err(CacheError::CorruptEntry(
             "cache tree exceeds the portable path-depth bound".to_owned(),
         ));
     }
+    directory_pins.push(DirectoryPin::capture(directory)?);
     let mut entries = Vec::new();
+    let mut portable_names = BTreeMap::<String, String>::new();
     for entry in fs::read_dir(directory)
         .map_err(|source| io_error("read cached source directory", directory, source))?
     {
@@ -1317,6 +1804,19 @@ fn inventory_directory(
                 "cache tree exceeds the bounded descendant count".to_owned(),
             ));
         }
+        let file_name = entry.file_name();
+        let file_name = file_name.to_str().ok_or_else(|| {
+            CacheError::CorruptEntry("cache path component is not UTF-8".to_owned())
+        })?;
+        validate_portable_cache_component(file_name)?;
+        let collision_key = portable_cache_component_key(file_name);
+        if let Some(previous) = portable_names.insert(collision_key, file_name.to_owned())
+            && previous != file_name
+        {
+            return Err(CacheError::CorruptEntry(format!(
+                "cache path components `{previous}` and `{file_name}` have a portable name collision"
+            )));
+        }
         entries.push(entry);
     }
     entries.sort_by_key(fs::DirEntry::file_name);
@@ -1324,17 +1824,16 @@ fn inventory_directory(
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)
             .map_err(|source| io_error("inspect cached source entry", &path, source))?;
-        if metadata.file_type().is_symlink() {
+        if metadata_is_link_or_reparse(&metadata) {
             return Err(CacheError::CorruptEntry(format!(
-                "symlink `{}` is forbidden",
+                "symlink or reparse point `{}` is forbidden",
                 path.display()
             )));
         }
         if metadata.is_dir() {
-            inventory_directory(root, &path, depth + 1, entry_count, output)?;
+            inventory_directory(root, &path, depth + 1, entry_count, output, directory_pins)?;
         } else if metadata.is_file() {
-            #[cfg(unix)]
-            if metadata.nlink() != 1 {
+            if !metadata_has_one_hard_link(&metadata) {
                 return Err(CacheError::CorruptEntry(format!(
                     "hard-linked cache file `{}` is forbidden",
                     path.display()
@@ -1884,14 +2383,13 @@ fn read_regular_file_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, Cache
 fn open_regular_file_no_follow(path: &Path) -> Result<(File, fs::Metadata), CacheError> {
     let linked = fs::symlink_metadata(path)
         .map_err(|source| io_error("inspect cached source file", path, source))?;
-    if linked.file_type().is_symlink() || !linked.is_file() {
+    if metadata_is_link_or_reparse(&linked) || !linked.is_file() {
         return Err(CacheError::CorruptEntry(format!(
             "cache entry `{}` is not a regular file",
             path.display()
         )));
     }
-    #[cfg(unix)]
-    if linked.nlink() != 1 {
+    if !metadata_has_one_hard_link(&linked) {
         return Err(CacheError::CorruptEntry(format!(
             "cache file `{}` has more than one hard link",
             path.display()
@@ -1900,6 +2398,8 @@ fn open_regular_file_no_follow(path: &Path) -> Result<(File, fs::Metadata), Cach
     let mut options = OpenOptions::new();
     options.read(true);
     set_no_follow(&mut options);
+    #[cfg(windows)]
+    options.share_mode(FILE_SHARE_READ);
     let file = options
         .open(path)
         .map_err(|source| io_error("open cached source file", path, source))?;
@@ -1917,10 +2417,12 @@ fn open_regular_file_no_follow(path: &Path) -> Result<(File, fs::Metadata), Cach
 
 fn open_new_regular_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
+    options.read(true).write(true).create_new(true);
     set_no_follow(&mut options);
     #[cfg(unix)]
     options.mode(0o600);
+    #[cfg(windows)]
+    options.share_mode(FILE_SHARE_READ);
     let file = options.open(path)?;
     validate_open_regular_file(path, &file)?;
     Ok(file)
@@ -1929,9 +2431,8 @@ fn open_new_regular_file(path: &Path) -> io::Result<File> {
 fn validate_open_regular_file(path: &Path, file: &File) -> io::Result<()> {
     let linked = fs::symlink_metadata(path)?;
     let opened = file.metadata()?;
-    if linked.file_type().is_symlink()
-        || !linked.is_file()
-        || !opened.is_file()
+    if !metadata_is_safe_regular_file(&linked)
+        || !metadata_is_safe_regular_file(&opened)
         || !same_file(&linked, &opened)
     {
         return Err(io::Error::new(
@@ -1939,17 +2440,12 @@ fn validate_open_regular_file(path: &Path, file: &File) -> io::Result<()> {
             "cache file identity is not a stable regular file",
         ));
     }
-    #[cfg(unix)]
-    if linked.nlink() != 1 || opened.nlink() != 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "cache file must have exactly one hard link",
-        ));
-    }
     Ok(())
 }
 
-fn create_staging_directory(parent: &Path) -> Result<(PathBuf, fs::Metadata), CacheError> {
+fn create_staging_directory(
+    parent: &Path,
+) -> Result<(PathBuf, fs::Metadata, DirectoryPin), CacheError> {
     for _ in 0..TEMP_RETRIES {
         let path = allocate_candidate(parent, ".src", "partial");
         let mut builder = fs::DirBuilder::new();
@@ -1959,12 +2455,13 @@ fn create_staging_directory(parent: &Path) -> Result<(PathBuf, fs::Metadata), Ca
             Ok(()) => {
                 let metadata = fs::symlink_metadata(&path)
                     .map_err(|source| io_error("inspect source staging tree", &path, source))?;
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
                     return Err(CacheError::UnsafeDescendant(path));
                 }
+                let pin = DirectoryPin::capture_expected(&path, &metadata)?;
                 sync_directory(parent)
                     .map_err(|source| io_error("sync archive cache directory", parent, source))?;
-                return Ok((path, metadata));
+                return Ok((path, metadata, pin));
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(source) => return Err(io_error("create source staging tree", &path, source)),
@@ -2074,7 +2571,7 @@ impl Drop for InstallGuard {
     fn drop(&mut self) {
         if !self.payload_removed
             && fs::symlink_metadata(&self.payload_path).is_ok_and(|metadata| {
-                metadata.is_file() && self.payload_identity.matches(&metadata)
+                metadata_is_safe_regular_file(&metadata) && self.payload_identity.matches(&metadata)
             })
         {
             let _ = fs::remove_file(&self.payload_path);
@@ -2086,7 +2583,7 @@ impl Drop for InstallGuard {
 fn remove_verified_file(path: &Path, identity: &DirectoryIdentity) -> Result<(), CacheError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|source| io_error("inspect cache temporary", path, source))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || !identity.matches(&metadata) {
+    if !metadata_is_safe_regular_file(&metadata) || !identity.matches(&metadata) {
         return Err(CacheError::UnsafeDescendant(path.to_path_buf()));
     }
     fs::remove_file(path).map_err(|source| io_error("remove cache temporary", path, source))?;
@@ -2096,16 +2593,79 @@ fn remove_verified_file(path: &Path, identity: &DirectoryIdentity) -> Result<(),
     sync_directory(parent).map_err(|source| io_error("sync cache temporary parent", parent, source))
 }
 
-fn validate_mutable_tree(root: &Path) -> Result<(), CacheError> {
-    let metadata = fs::symlink_metadata(root)
-        .map_err(|source| io_error("inspect cache mutation root", root, source))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(CacheError::UnsafeDescendant(root.to_path_buf()));
-    }
-    validate_mutable_directory(root)
+struct ValidatedMutableTree {
+    root: PathBuf,
+    directories: Vec<DirectoryPin>,
+    files: BTreeMap<PathBuf, DirectoryIdentity>,
 }
 
-fn validate_mutable_directory(directory: &Path) -> Result<(), CacheError> {
+impl ValidatedMutableTree {
+    fn root_pin(&self) -> Result<&DirectoryPin, CacheError> {
+        self.directories
+            .iter()
+            .find(|pin| pin.path == self.root)
+            .ok_or_else(|| CacheError::UnsafeDescendant(self.root.clone()))
+    }
+
+    fn validate(&self) -> Result<(), CacheError> {
+        for pin in &self.directories {
+            pin.validate()?;
+        }
+        for (path, identity) in &self.files {
+            let metadata = fs::symlink_metadata(path)
+                .map_err(|source| io_error("revalidate cache mutation file", path, source))?;
+            if !metadata_is_safe_regular_file(&metadata) || !identity.matches(&metadata) {
+                return Err(CacheError::UnsafeDescendant(path.clone()));
+            }
+        }
+        self.validate_exact_inventory()
+    }
+
+    fn validate_exact_inventory(&self) -> Result<(), CacheError> {
+        let directory_paths = self
+            .directories
+            .iter()
+            .map(|pin| pin.path.as_path())
+            .collect::<BTreeSet<_>>();
+        for pin in &self.directories {
+            for entry in fs::read_dir(&pin.path).map_err(|source| {
+                io_error("revalidate cache mutation directory", &pin.path, source)
+            })? {
+                let path = entry
+                    .map_err(|source| {
+                        io_error("revalidate cache mutation descendant", &pin.path, source)
+                    })?
+                    .path();
+                if !directory_paths.contains(path.as_path()) && !self.files.contains_key(&path) {
+                    return Err(CacheError::UnsafeDescendant(path));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_mutable_tree(root: &Path) -> Result<ValidatedMutableTree, CacheError> {
+    let metadata = fs::symlink_metadata(root)
+        .map_err(|source| io_error("inspect cache mutation root", root, source))?;
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+        return Err(CacheError::UnsafeDescendant(root.to_path_buf()));
+    }
+    let mut tree = ValidatedMutableTree {
+        root: root.to_path_buf(),
+        directories: Vec::new(),
+        files: BTreeMap::new(),
+    };
+    validate_mutable_directory(root, &mut tree)?;
+    tree.validate()?;
+    Ok(tree)
+}
+
+fn validate_mutable_directory(
+    directory: &Path,
+    tree: &mut ValidatedMutableTree,
+) -> Result<(), CacheError> {
+    tree.directories.push(DirectoryPin::capture(directory)?);
     for entry in fs::read_dir(directory)
         .map_err(|source| io_error("read cache mutation candidate", directory, source))?
     {
@@ -2114,16 +2674,17 @@ fn validate_mutable_directory(directory: &Path) -> Result<(), CacheError> {
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)
             .map_err(|source| io_error("inspect cache mutation descendant", &path, source))?;
-        if metadata.file_type().is_symlink() {
+        if metadata_is_link_or_reparse(&metadata) {
             return Err(CacheError::UnsafeDescendant(path));
         }
         if metadata.is_dir() {
-            validate_mutable_directory(&path)?;
+            validate_mutable_directory(&path, tree)?;
         } else if metadata.is_file() {
-            #[cfg(unix)]
-            if metadata.nlink() != 1 {
+            if !metadata_has_one_hard_link(&metadata) {
                 return Err(CacheError::UnsafeDescendant(path));
             }
+            tree.files
+                .insert(path, DirectoryIdentity::capture(&metadata));
         } else {
             return Err(CacheError::UnsafeDescendant(path));
         }
@@ -2132,13 +2693,58 @@ fn validate_mutable_directory(directory: &Path) -> Result<(), CacheError> {
 }
 
 fn remove_validated_tree(root: &Path) -> Result<(), CacheError> {
-    validate_mutable_tree(root)?;
-    remove_directory_contents(root)?;
-    fs::remove_dir(root).map_err(|source| io_error("remove cache directory", root, source))
+    let tree = validate_mutable_tree(root)?;
+    remove_prevalidated_tree(tree)
 }
 
+#[cfg(windows)]
+fn remove_prevalidated_tree(mut tree: ValidatedMutableTree) -> Result<(), CacheError> {
+    tree.validate()?;
+    let files = std::mem::take(&mut tree.files);
+    for (path, identity) in files {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|source| io_error("revalidate cache removal file", &path, source))?;
+        if !metadata_is_safe_regular_file(&metadata) || !identity.matches(&metadata) {
+            return Err(CacheError::UnsafeDescendant(path));
+        }
+        fs::remove_file(&path)
+            .map_err(|source| io_error("remove cache descendant file", &path, source))?;
+    }
+    tree.directories
+        .sort_by_key(|pin| std::cmp::Reverse(pin.path.components().count()));
+    for pin in tree.directories {
+        pin.validate()?;
+        if fs::read_dir(&pin.path)
+            .map_err(|source| io_error("check emptied cache directory", &pin.path, source))?
+            .next()
+            .is_some()
+        {
+            return Err(CacheError::UnsafeDescendant(pin.path));
+        }
+        let path = pin.path.clone();
+        drop(pin);
+        fs::remove_dir(&path)
+            .map_err(|source| io_error("remove cache descendant directory", &path, source))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_prevalidated_tree(tree: ValidatedMutableTree) -> Result<(), CacheError> {
+    tree.validate()?;
+    let root = tree.root.clone();
+    drop(tree);
+    remove_directory_contents(&root)?;
+    fs::remove_dir(&root).map_err(|source| io_error("remove cache directory", &root, source))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn remove_prevalidated_tree(tree: ValidatedMutableTree) -> Result<(), CacheError> {
+    Err(CacheError::UnsafeDescendant(tree.root))
+}
+
+#[cfg(unix)]
 fn remove_directory_contents(directory: &Path) -> Result<(), CacheError> {
-    #[cfg(unix)]
     fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
         .map_err(|source| io_error("unlock cache directory for removal", directory, source))?;
     let entries = fs::read_dir(directory)
@@ -2149,7 +2755,7 @@ fn remove_directory_contents(directory: &Path) -> Result<(), CacheError> {
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)
             .map_err(|source| io_error("revalidate cache removal descendant", &path, source))?;
-        if metadata.file_type().is_symlink() {
+        if metadata_is_link_or_reparse(&metadata) {
             return Err(CacheError::UnsafeDescendant(path));
         }
         if metadata.is_dir() {
@@ -2157,8 +2763,7 @@ fn remove_directory_contents(directory: &Path) -> Result<(), CacheError> {
             fs::remove_dir(&path)
                 .map_err(|source| io_error("remove cache descendant directory", &path, source))?;
         } else if metadata.is_file() {
-            #[cfg(unix)]
-            if metadata.nlink() != 1 {
+            if !metadata_has_one_hard_link(&metadata) {
                 return Err(CacheError::UnsafeDescendant(path));
             }
             fs::remove_file(&path)
@@ -2203,7 +2808,7 @@ fn collect_directories(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), Cac
 
 fn collect_directories_io(root: &Path, output: &mut Vec<PathBuf>) -> io::Result<()> {
     let metadata = fs::symlink_metadata(root)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "source directory is not a real directory",
@@ -2213,7 +2818,7 @@ fn collect_directories_io(root: &Path, output: &mut Vec<PathBuf>) -> io::Result<
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
         let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() {
+        if metadata_is_link_or_reparse(&metadata) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "source tree contains a symlink",
@@ -2253,7 +2858,56 @@ fn decode_archive_directory_name(name: &str) -> Option<ArchiveId> {
 }
 
 fn sync_directory(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
+    #[cfg(unix)]
+    {
+        return File::open(path)?.sync_all();
+    }
+    #[cfg(windows)]
+    {
+        let linked = fs::symlink_metadata(path)?;
+        if metadata_is_link_or_reparse(&linked)
+            || !linked.is_dir()
+            || linked.volume_serial_number().is_none()
+            || linked.file_index().is_none()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cache directory is not a stable non-reparse directory",
+            ));
+        }
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+        let directory = options.open(path)?;
+        let opened = directory.metadata()?;
+        if metadata_is_link_or_reparse(&opened) || !opened.is_dir() || !same_file(&linked, &opened)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cache directory changed while its durability handle was opened",
+            ));
+        }
+        directory.sync_all()?;
+        let after = fs::symlink_metadata(path)?;
+        if metadata_is_link_or_reparse(&after) || !after.is_dir() || !same_file(&opened, &after) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cache directory changed while it was synchronized",
+            ));
+        }
+        return Ok(());
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "cache directory synchronization is unsupported on this platform",
+        ))
+    }
 }
 
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
@@ -2261,7 +2915,14 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     {
         left.dev() == right.dev() && left.ino() == right.ino()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        left.volume_serial_number().is_some()
+            && left.file_index().is_some()
+            && left.volume_serial_number() == right.volume_serial_number()
+            && left.file_index() == right.file_index()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (left, right);
         false
@@ -2280,7 +2941,18 @@ fn same_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
             && left.ctime_nsec() == right.ctime_nsec()
             && left.nlink() == right.nlink()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        same_file(left, right)
+            && left.file_type() == right.file_type()
+            && left.file_attributes() == right.file_attributes()
+            && left.file_size() == right.file_size()
+            && left.creation_time() == right.creation_time()
+            && left.last_write_time() == right.last_write_time()
+            && left.number_of_links() == Some(1)
+            && right.number_of_links() == Some(1)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (left, right);
         false
@@ -2290,6 +2962,10 @@ fn same_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 fn set_no_follow(options: &mut OpenOptions) {
     #[cfg(unix)]
     options.custom_flags(platform_no_follow_flag());
+    #[cfg(windows)]
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    #[cfg(not(any(unix, windows)))]
+    let _ = options;
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -2330,13 +3006,20 @@ const fn platform_no_follow_flag() -> i32 {
     0
 }
 
-fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
-    // The parent is private and all Musubi writers serialize through this
-    // retained advisory lock, so the following rename has an absent target and
-    // publishes the directory atomically. `create(true)` is safe here because
-    // O_NOFOLLOW is applied and the lock never carries package-controlled data.
-    // TODO: Replace the locked check with a safe standard-library
-    // rename-no-replace primitive once Rust exposes one for directories.
+fn rename_no_replace(
+    source: &Path,
+    destination: &Path,
+    source_pin: &DirectoryPin,
+) -> io::Result<()> {
+    if source_pin.path != source {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cache rename pin does not identify its source path",
+        ));
+    }
+    source_pin
+        .validate()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
     let parent = source
         .parent()
         .filter(|parent| destination.parent() == Some(*parent))
@@ -2346,25 +3029,118 @@ fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
                 "cache rename must remain within one trusted parent",
             )
         })?;
+    let parent_before = fs::symlink_metadata(parent)?;
+    if metadata_is_link_or_reparse(&parent_before) || !parent_before.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache rename parent is not a real directory",
+        ));
+    }
+    let source_before = fs::symlink_metadata(source)?;
+    if metadata_is_link_or_reparse(&source_before) || !source_before.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache rename source is not a real directory",
+        ));
+    }
     let lock_path = parent.join(".publication.lock");
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true);
     set_no_follow(&mut options);
     #[cfg(unix)]
     options.mode(0o600);
+    #[cfg(windows)]
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     let lock = options.open(&lock_path)?;
     validate_open_regular_file(&lock_path, &lock)?;
     lock.lock()?;
-    let result = match fs::symlink_metadata(destination) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::rename(source, destination),
+    let result = match fs::symlink_metadata(parent) {
+        Ok(parent_now) if same_file(&parent_before, &parent_now) => {
+            match fs::symlink_metadata(destination) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    match platform_rename_no_replace(source, destination, source_pin) {
+                        Ok(()) => match fs::symlink_metadata(destination) {
+                            Ok(published)
+                                if !metadata_is_link_or_reparse(&published)
+                                    && published.is_dir()
+                                    && same_file(&source_before, &published)
+                                    && source_pin.validate_at(destination).is_ok() =>
+                            {
+                                Ok(())
+                            }
+                            Ok(_) => Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "published cache directory changed identity",
+                            )),
+                            Err(error) => Err(error),
+                        },
+                        Err(_error) if fs::symlink_metadata(destination).is_ok() => {
+                            Err(io::Error::new(
+                                io::ErrorKind::AlreadyExists,
+                                "immutable cache destination already exists",
+                            ))
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+                Ok(_) => Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "immutable cache destination already exists",
+                )),
+                Err(error) => Err(error),
+            }
+        }
         Ok(_) => Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "immutable cache destination already exists",
+            io::ErrorKind::InvalidData,
+            "cache rename parent changed identity",
         )),
         Err(error) => Err(error),
     };
     let unlock = File::unlock(&lock);
     result.and(unlock)
+}
+
+#[cfg(unix)]
+fn platform_rename_no_replace(
+    source: &Path,
+    destination: &Path,
+    _source_pin: &DirectoryPin,
+) -> io::Result<()> {
+    // The private parent and advisory lock serialize every supported Musubi writer. The source
+    // identity is checked immediately before and after this same-filesystem rename.
+    // TODO: Replace the locked Unix check with a native rename-no-replace operation once the Rust
+    // standard library exposes one for directories on every supported Unix target.
+    fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn platform_rename_no_replace(
+    _source: &Path,
+    _destination: &Path,
+    _source_pin: &DirectoryPin,
+) -> io::Result<()> {
+    // Windows `std::fs::rename` cannot rename through the retained non-delete-sharing source
+    // handle. Dropping that handle would reopen a same-user substitution window, while the safe
+    // standard library does not expose handle-relative directory rename. Keep publication,
+    // quarantine, and prune isolation fail-closed until that primitive is available through an
+    // existing safe workspace abstraction.
+    // TODO: Wire a safe workspace-owned handle-relative, no-replace directory rename primitive.
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure Windows cache directory rename requires a safe handle-relative primitive",
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn platform_rename_no_replace(
+    _source: &Path,
+    _destination: &Path,
+    _source_pin: &DirectoryPin,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic cache directory publication is unsupported on this platform",
+    ))
 }
 
 fn io_error(operation: &'static str, path: &Path, source: io::Error) -> CacheError {
@@ -2400,6 +3176,31 @@ mod tests {
         semantic: MusubiSemanticReleaseManifestV1,
     }
 
+    #[test]
+    fn platform_cache_root_derivation_requires_an_absolute_base() {
+        assert_eq!(
+            derive_platform_cache_root(
+                Some(PathBuf::from("/users/alice")),
+                &["cache", "iroha", "musubi"],
+            )
+            .expect("absolute platform cache base"),
+            PathBuf::from("/users/alice/cache/iroha/musubi")
+        );
+        assert!(matches!(
+            derive_platform_cache_root(Some(PathBuf::from("relative")), &["iroha", "musubi"]),
+            Err(CacheError::UnsafeRoot(_))
+        ));
+    }
+
+    #[test]
+    fn platform_cache_root_never_falls_back_to_the_project_directory() {
+        match platform_cache_root_v1() {
+            Ok(root) => assert!(root.is_absolute()),
+            Err(CacheError::UnsafeRoot(_)) => {}
+            Err(error) => panic!("unexpected platform cache-root error: {error}"),
+        }
+    }
+
     fn fixture(temp: &TempDir, name: &str) -> Fixture {
         let package_root = temp.path().join(name);
         fs::create_dir_all(package_root.join("src")).expect("create fixture source tree");
@@ -2412,7 +3213,6 @@ mod tests {
         layout.set_library("src");
         let manifest =
             format!("manifest-version = 1\n\n[package]\nname = \"{name}\"\nversion = \"1.0.0\"\n");
-        let lock = "schema = \"musubi-lock\"\nversion = 1\n";
         let package = MusubiPackageIdV1::new(
             DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
@@ -2436,7 +3236,7 @@ mod tests {
             metadata: MusubiReleaseMetadataV1::default(),
             verification_lock_digest: verification_lock.digest(),
         };
-        let car = plan_package(&layout, &manifest, lock)
+        let car = plan_package(&layout, &manifest, &verification_lock)
             .expect("plan fixture")
             .into_car(&semantic, &verification_lock)
             .expect("encode fixture CAR");
@@ -2479,6 +3279,7 @@ mod tests {
         MusubiCache::open(temp.path().join("user-cache")).expect("open fixture cache")
     }
 
+    #[cfg(unix)]
     #[test]
     fn installs_under_archive_id_and_is_idempotent() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2524,6 +3325,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn compiler_load_reauthenticates_consumer_node_and_rejects_tampering() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2607,6 +3409,7 @@ mod tests {
         assert!(!cache.root().join("escape").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn repair_quarantines_only_structurally_safe_corruption() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2632,6 +3435,34 @@ mod tests {
         };
         assert!(!source.exists());
         assert!(path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_rejects_an_invalid_plan_without_quarantining_a_healthy_entry() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fixture = fixture(&temp, "repair-invalid-plan");
+        let cache = cache(&temp);
+        cache
+            .install(
+                &fixture.commitment,
+                fixture.car.plan(),
+                Cursor::new(fixture.car.bytes()),
+            )
+            .expect("install fixture");
+        let source = cache.source_path(&fixture.commitment.archive_id());
+        let mut invalid_plan = fixture.car.plan().clone();
+        invalid_plan.files[0].path = vec!["..".to_owned(), "substitute".to_owned()];
+
+        let error = cache
+            .repair(&fixture.commitment, &invalid_plan)
+            .expect_err("invalid plan must fail before cache mutation");
+
+        assert!(matches!(error, CacheError::InvalidPlan(_)));
+        assert!(source.exists(), "healthy cache entry must remain published");
+        cache
+            .verify(&fixture.commitment, fixture.car.plan())
+            .expect("healthy cache entry remains verifiable");
     }
 
     #[cfg(unix)]
@@ -2663,8 +3494,9 @@ mod tests {
         assert!(source.exists());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn prune_accepts_only_typed_retention_and_ignores_unknown_names() {
+    fn prune_exact_ignores_unknown_names() {
         let temp = tempfile::tempdir().expect("tempdir");
         let first = fixture(&temp, "foxtrot");
         let second = fixture(&temp, "golf");
@@ -2680,10 +3512,26 @@ mod tests {
         }
         let unknown = cache.registry_root.join("not-from-a-lock-path");
         fs::create_dir(&unknown).expect("create unknown cache entry");
-        let retained = BTreeSet::from([first.commitment.archive_id()]);
+        let candidates = BTreeSet::from([second.commitment.archive_id()]);
 
-        let report = cache.prune(&retained).expect("prune cache");
+        let mut expected_archives = vec![
+            first.commitment.archive_id(),
+            second.commitment.archive_id(),
+        ];
+        expected_archives.sort_unstable();
+        assert_eq!(
+            cache.archive_ids().expect("inventory canonical archives"),
+            expected_archives
+        );
+
+        let report = cache
+            .prune_exact(&candidates)
+            .expect("prune exact cache entry");
         assert_eq!(report.removed, vec![second.commitment.archive_id()]);
+        assert_eq!(
+            cache.archive_ids().expect("inventory retained archives"),
+            vec![first.commitment.archive_id()]
+        );
         assert!(cache.source_path(&first.commitment.archive_id()).exists());
         assert!(!cache.source_path(&second.commitment.archive_id()).exists());
         assert!(
@@ -2692,9 +3540,184 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn prune_exact_never_removes_an_unqueried_archive() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let retained = fixture(&temp, "hotel");
+        let authorized = fixture(&temp, "india");
+        let concurrent = fixture(&temp, "juliet");
+        let cache = cache(&temp);
+        for fixture in [&retained, &authorized, &concurrent] {
+            cache
+                .install(
+                    &fixture.commitment,
+                    fixture.car.plan(),
+                    Cursor::new(fixture.car.bytes()),
+                )
+                .expect("install fixture");
+        }
+
+        let candidates = BTreeSet::from([authorized.commitment.archive_id()]);
+        let report = cache
+            .prune_exact(&candidates)
+            .expect("prune exact cache entry");
+        assert_eq!(report.removed, vec![authorized.commitment.archive_id()]);
+        assert!(
+            cache
+                .source_path(&retained.commitment.archive_id())
+                .exists()
+        );
+        assert!(
+            cache
+                .source_path(&concurrent.commitment.archive_id())
+                .exists()
+        );
+        assert!(
+            !cache
+                .source_path(&authorized.commitment.archive_id())
+                .exists()
+        );
+    }
+
     fn make_writable(path: &Path) {
         #[cfg(unix)]
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
             .expect("make fixture writable");
+    }
+
+    #[test]
+    fn portable_cache_component_policy_rejects_windows_aliases_and_collisions() {
+        for rejected in ["CON", "con.txt", "LPT9.log", "name.", "name ", "a:b"] {
+            assert!(
+                validate_portable_cache_component(rejected).is_err(),
+                "`{rejected}` must be rejected"
+            );
+        }
+        assert_eq!(
+            portable_cache_component_key("Source.KO"),
+            portable_cache_component_key("source.ko")
+        );
+        assert!(validate_portable_cache_component("e\u{301}.ko").is_err());
+        assert!(validate_portable_cache_component("\u{202e}source.ko").is_err());
+        assert!(validate_portable_cache_component("source.ko").is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cache_open_rejects_reparse_and_hardlink_descendants() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache = cache(&temp);
+        let archive = cache.registry_root.join("11".repeat(32));
+        fs::create_dir(&archive).expect("archive directory");
+        let source = archive.join(SOURCE_DIRECTORY);
+        fs::create_dir(&source).expect("source directory");
+        let file = source.join("source.ko");
+        fs::write(&file, b"fn source() {}\n").expect("source file");
+        let hardlink = source.join("source-hard.ko");
+        fs::hard_link(&file, &hardlink).expect("hard link");
+        assert!(matches!(
+            inventory_tree(&source),
+            Err(CacheError::CorruptEntry(_))
+        ));
+        fs::remove_file(&hardlink).expect("remove hard link");
+
+        let file_link = source.join("source-link.ko");
+        if symlink_file(&file, &file_link).is_ok() {
+            assert!(matches!(
+                inventory_tree(&source),
+                Err(CacheError::CorruptEntry(_))
+            ));
+            fs::remove_file(&file_link).expect("remove file symlink");
+        }
+
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("outside directory");
+        let directory_link = source.join("linked-directory");
+        if symlink_dir(&outside, &directory_link).is_ok() {
+            assert!(matches!(
+                inventory_tree(&source),
+                Err(CacheError::CorruptEntry(_))
+            ));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_install_and_exact_prune_fail_closed_at_pinned_directory_rename() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fixture = fixture(&temp, "windows-boundary");
+        let cache = cache(&temp);
+        let error = cache
+            .install(
+                &fixture.commitment,
+                fixture.car.plan(),
+                Cursor::new(fixture.car.bytes()),
+            )
+            .expect_err("Windows publication must fail closed");
+        assert!(matches!(
+            error,
+            CacheError::Io { source, .. } if source.kind() == io::ErrorKind::Unsupported
+        ));
+        assert!(!cache.source_path(&fixture.commitment.archive_id()).exists());
+
+        let archive_id = ArchiveId::new([0x22; 32]);
+        let archive = cache.archive_directory(&archive_id);
+        fs::create_dir(&archive).expect("manual archive");
+        let source = archive.join(SOURCE_DIRECTORY);
+        fs::create_dir(&source).expect("manual source");
+        fs::write(source.join("source.ko"), b"fn source() {}\n").expect("manual source file");
+        let error = cache
+            .prune_exact(&BTreeSet::from([archive_id]))
+            .expect_err("Windows exact prune must fail closed");
+        assert!(matches!(
+            error,
+            CacheError::Io { source, .. } if source.kind() == io::ErrorKind::Unsupported
+        ));
+        assert!(
+            archive.exists(),
+            "failed prune must leave the exact tree intact"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_concurrent_installers_never_publish_a_partial_destination() {
+        use std::sync::{Arc, Barrier};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fixture = fixture(&temp, "windows-concurrent");
+        let cache = cache(&temp);
+        let barrier = Arc::new(Barrier::new(2));
+        std::thread::scope(|scope| {
+            let mut joins = Vec::new();
+            for _ in 0..2 {
+                let barrier = Arc::clone(&barrier);
+                let cache = &cache;
+                let fixture = &fixture;
+                joins.push(scope.spawn(move || {
+                    barrier.wait();
+                    cache.install(
+                        &fixture.commitment,
+                        fixture.car.plan(),
+                        Cursor::new(fixture.car.bytes()),
+                    )
+                }));
+            }
+            for join in joins {
+                let error = join
+                    .join()
+                    .expect("installer thread")
+                    .expect_err("Windows publication must fail closed");
+                assert!(matches!(
+                    error,
+                    CacheError::Io { source, .. }
+                        if source.kind() == io::ErrorKind::Unsupported
+                ));
+            }
+        });
+        assert!(!cache.source_path(&fixture.commitment.archive_id()).exists());
     }
 }

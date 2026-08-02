@@ -148,7 +148,8 @@ const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment whenever any NativeSignerBridge JNI method descriptor changes.
 // The bridge-wide ABI number alone cannot distinguish two ABI-21 artifacts
 // whose JVM calling conventions differ.
-const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 1;
+// Revision 2 removes the caller-supplied Unshield outputs parameter.
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 2;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
@@ -9160,70 +9161,13 @@ fn kagemusha_recursive_spend_append_statement_v4(
     final_root: [u8; 32],
     next_zero_leaf_index: u32,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendPublicStatementV4> {
-    use iroha_data_model::offline::{
-        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPeerSplitTransitionV4,
-        KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendTransitionV4,
-    };
-
-    split
-        .validate_public_binding()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    let current_note = match branch {
-        KagemushaRecursiveSpendBranchV2::Recipient => split.recipient_output.clone(),
-        KagemushaRecursiveSpendBranchV2::Change => split
-            .change_output
-            .clone()
-            .ok_or(BridgeError::KagemushaProve)?,
-    };
-    let parent_max_proof_step_count = split
-        .inputs
-        .iter()
-        .map(|input| input.proof_step_count)
-        .max()
-        .ok_or(BridgeError::KagemushaProve)?;
-    let parent_max_peer_hop_count = split
-        .inputs
-        .iter()
-        .map(|input| input.peer_hop_count)
-        .max()
-        .ok_or(BridgeError::KagemushaProve)?;
-    let transition = KagemushaRecursiveSpendPeerSplitTransitionV4 {
-        binding_digest: split
-            .binding_digest()
-            .map_err(|_| BridgeError::KagemushaProve)?,
+    iroha_core::zk::kagemusha_v2::kagemusha_recursive_spend_append_statement_v4(
+        split,
         branch,
-        recipient_request_digest: split.recipient_request_digest,
-        operation_id: split.operation_id,
-        parent_max_proof_step_count,
-        parent_max_peer_hop_count,
-    };
-    let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        chain_id: split.chain_id.clone(),
-        asset: split.asset.clone(),
-        asset_scale: split.asset_scale,
         final_root,
         next_zero_leaf_index,
-        topup_anchor_refs: split.topup_anchor_refs.clone(),
-        proof_step_count: parent_max_proof_step_count
-            .checked_add(1)
-            .ok_or(BridgeError::KagemushaProve)?,
-        peer_hop_count: parent_max_peer_hop_count
-            .checked_add(1)
-            .ok_or(BridgeError::KagemushaProve)?,
-        current_note,
-        branch_claims: split
-            .output_branch_claims(branch)
-            .map_err(|_| BridgeError::KagemushaProve)?,
-        transition: Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition)),
-        artifact_binding: split.output_artifact_binding.clone(),
-        verifier_key_id: kagemusha_recursive_spend_step_eq_verifier_id_v4(
-            split.output_artifact_binding.manifest_sha256,
-        ),
-    };
-    statement
-        .validate_public_binding()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    Ok(statement)
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
 }
 
 fn kagemusha_recursive_spend_redemption_change_statement_v4(
@@ -9301,13 +9245,13 @@ fn build_kagemusha_recursive_spend_bundle_v4(
     operation: &iroha_core::zk::kagemusha_v2::KagemushaStepOperationVectorV4,
     pair_bytes: Vec<u8>,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV4> {
-    use iroha_core::zk::kagemusha_v2::KagemushaRecursiveSpendStateVectorV2;
+    use iroha_core::zk::kagemusha_v2::KagemushaRecursiveSpendStateVectorV5;
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2, KagemushaPastaCycleArtifactKindV4,
+        KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5, KagemushaPastaCycleArtifactKindV4,
         KagemushaPastaCycleParityV1, KagemushaPastaCycleProofEnvelopeV4,
         KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendProofV4,
-        KagemushaRecursiveSpendStateBoundaryV2,
+        KagemushaRecursiveSpendStateBoundaryV5,
     };
 
     installed.validate_live_inventory()?;
@@ -9334,7 +9278,7 @@ fn build_kagemusha_recursive_spend_bundle_v4(
                 .map(|artifact| artifact.payload_sha256)
                 .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)
         };
-    let state = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(&statement)
+    let state = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&statement)
         .map_err(|_| BridgeError::KagemushaProve)?;
     let proof_backend = manifest
         .proof_backend
@@ -9358,8 +9302,8 @@ fn build_kagemusha_recursive_spend_bundle_v4(
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?,
         step_eq_verifier_key_sha256: verifier_key_sha256(step_eq)?,
         step_ep_verifier_key_sha256: verifier_key_sha256(step_ep)?,
-        state_boundary: KagemushaRecursiveSpendStateBoundaryV2 {
-            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
+        state_boundary: KagemushaRecursiveSpendStateBoundaryV5 {
+            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5,
             state_limbs: state.limbs.to_vec(),
         },
         proof: ProofBox::new(proof_backend, pair_bytes),
@@ -14764,9 +14708,13 @@ mod detached_transaction_scaffold_tests {
 
     fn contract_scaffold(authority_keypair: &KeyPair) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
-        let contract_address =
-            ContractAddress::derive(0x1234, &authority, 7, DataSpaceId::UNIVERSAL)
-                .expect("contract address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let invocation = ContractInvocation {
             contract_address,
             expected_code_hash: iroha_crypto::Hash::new(b"detached-contract-code"),
@@ -14786,7 +14734,7 @@ mod detached_transaction_scaffold_tests {
     fn transfer_scaffold(authority_keypair: &KeyPair, scoped: bool) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let destination = AccountId::new(fixture_keypair(0xB2).public_key().clone());
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wallet", "universal").expect("domain"),
             "coin".parse().expect("asset name"),
         );
@@ -15702,7 +15650,7 @@ mod kagemusha_bridge_tests {
         let (step_ep, step_ep_frames) = profile_and_frames(generation, Parity::StepEp, 0x61);
         framed_artifacts.extend(step_ep_frames);
         let benchmark_evidence = b"SBD streaming installer benchmark evidence".to_vec();
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("offline domain"),
             "sbd".parse().expect("SBD asset name"),
         );
@@ -15728,6 +15676,10 @@ mod kagemusha_bridge_tests {
             activation_height: 1,
             withdrawal_height: 100,
             max_proof_bytes: 512,
+            generation_memory_limit_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
+            qualification_receipt_sha256: digest(b"SBD streaming installer qualification receipt"),
+            qualified_candidate_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -15743,9 +15695,23 @@ mod kagemusha_bridge_tests {
             cryptographic_review_sha256: digest(b"SBD review placeholder"),
             release_attestation_sha256: digest(b"SBD attestation placeholder"),
         };
-        let candidate = manifest
-            .immutable_candidate()
-            .expect("derive lightweight immutable candidate");
+        let mut candidate_manifest = manifest.clone();
+        candidate_manifest.qualification_receipt_sha256 = [0; 32];
+        candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.benchmark_evidence_sha256 = [0; 32];
+        candidate_manifest.cryptographic_review_sha256 = [0; 32];
+        candidate_manifest.release_attestation_sha256 = [0; 32];
+        let candidate = iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 {
+            schema: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4
+                .to_owned(),
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: candidate_manifest,
+        };
+        manifest.qualified_candidate_sha256 =
+            iroha_data_model::offline::kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("lightweight candidate identity"),
+                manifest.qualification_receipt_sha256,
+            );
         let roles = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
             KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
@@ -15774,6 +15740,8 @@ mod kagemusha_bridge_tests {
         };
         let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
             &candidate,
+            manifest.qualification_receipt_sha256,
+            manifest.qualified_candidate_sha256,
             digest(b"SBD streaming installer review report"),
             [
                 digest(b"SBD streaming constraint review"),
@@ -16026,7 +15994,7 @@ mod kagemusha_bridge_tests {
             version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V2,
             authority: AccountId::new(fixture_key_pair(0x41).public_key().clone()),
             device_id: "pk3-hardware-device".to_owned(),
-            asset_definition_id: AssetDefinitionId::new(
+            asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("pk3", "universal").expect("domain"),
                 "cash".parse().expect("asset name"),
             ),
@@ -16793,7 +16761,7 @@ mod kagemusha_bridge_tests {
             .push_str("-wrong");
         assert!(selector_mismatch.validate_structure().is_err());
         let mut asset_mismatch = offer.clone();
-        asset_mismatch.lineage.selector.asset = AssetDefinitionId::new(
+        asset_mismatch.lineage.selector.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("alternate domain"),
             "other".parse().expect("alternate asset name"),
         );
@@ -18874,6 +18842,12 @@ mod kagemusha_bridge_tests {
             activation_height,
             withdrawal_height,
             max_proof_bytes: max_recursive_pair_bytes,
+            generation_memory_limit_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
+            qualification_receipt_sha256: digest(
+                b"production gate actual recursion qualification receipt",
+            ),
+            qualified_candidate_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -18890,9 +18864,23 @@ mod kagemusha_bridge_tests {
             cryptographic_review_sha256: digest(b"initial cryptographic review digest slot"),
             release_attestation_sha256: digest(b"initial release attestation digest slot"),
         };
-        let candidate = manifest
-            .immutable_candidate()
-            .expect("derive exact immutable release candidate");
+        let mut candidate_manifest = manifest.clone();
+        candidate_manifest.qualification_receipt_sha256 = [0; 32];
+        candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.benchmark_evidence_sha256 = [0; 32];
+        candidate_manifest.cryptographic_review_sha256 = [0; 32];
+        candidate_manifest.release_attestation_sha256 = [0; 32];
+        let candidate = iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 {
+            schema: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4
+                .to_owned(),
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: candidate_manifest,
+        };
+        manifest.qualified_candidate_sha256 =
+            iroha_data_model::offline::kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("production candidate identity"),
+                manifest.qualification_receipt_sha256,
+            );
 
         let roles = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
@@ -18922,6 +18910,8 @@ mod kagemusha_bridge_tests {
         };
         let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
             &candidate,
+            manifest.qualification_receipt_sha256,
+            manifest.qualified_candidate_sha256,
             digest(b"complete production gate cryptographic review report"),
             [
                 digest(b"production gate constraint coverage evidence"),
@@ -18985,6 +18975,8 @@ mod kagemusha_bridge_tests {
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: generation.to_owned(),
             candidate_sha256: candidate.sha256().expect("candidate digest"),
+            qualification_receipt_sha256: manifest.qualification_receipt_sha256,
+            qualified_candidate_sha256: manifest.qualified_candidate_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),
@@ -22651,7 +22643,7 @@ mod kagemusha_bridge_tests {
     }
 
     fn sample_asset(account: AccountId) -> AssetId {
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("domain id"),
             "xor".parse().expect("asset definition name"),
         );
@@ -22665,15 +22657,15 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaPastaCycleParityV1,
             KagemushaPastaCycleProofEnvelopeV4, KagemushaRecursiveSpendArtifactBindingV4,
             KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV4,
             KagemushaRecursiveSpendOperationVectorV4, KagemushaRecursiveSpendProofV4,
-            KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV2,
+            KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV5,
             KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
             kagemusha_recursive_spend_lineage_root_v2,
             kagemusha_recursive_spend_verifier_key_id_v4,
@@ -22733,8 +22725,8 @@ mod kagemusha_bridge_tests {
         let operation = KagemushaRecursiveSpendOperationVectorV4 {
             limbs: operation_limbs,
         };
-        let mut state_limbs = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let mut state_limbs = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
         let proof_envelope = KagemushaPastaCycleProofEnvelopeV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
@@ -22749,7 +22741,7 @@ mod kagemusha_bridge_tests {
             step_ep_circuit_params_sha256: [0x98; 32],
             step_eq_verifier_key_sha256: [0x99; 32],
             step_ep_verifier_key_sha256: [0x9a; 32],
-            state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)
                 .expect("state boundary"),
             proof: ProofBox::new(
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.into(),
@@ -27915,7 +27907,7 @@ mod accel_tests {
     }
 
     fn asset_definition_literal(domain: &str, name: &str) -> String {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("domain"),
             Name::from_str(name).expect("name"),
         )
@@ -28159,7 +28151,7 @@ mod accel_tests {
         let account_id = AccountId::parse_encoded(account_literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse account");
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("bank", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
         );
@@ -29467,7 +29459,7 @@ mod accel_tests {
     }
 
     #[test]
-    fn unshield_encoder_path_preserves_private_change_outputs() {
+    fn unshield_encoder_path_has_output_free_shape() {
         let _guard = chain_guard();
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let (authority, private) = sample_account("bank", 1);
@@ -29478,7 +29470,6 @@ mod accel_tests {
             parse_asset_definition(asset_definition_literal("bank", "usd")).expect("asset");
         let destination = authority.clone();
         let input = [0x11_u8; 32];
-        let output = [0x22_u8; 32];
         let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
         let proof = parse_proof_attachment_from_json_slice(proof_json.as_bytes()).expect("proof");
 
@@ -29490,12 +29481,11 @@ mod accel_tests {
             FeePaymentIntent::authority(Vec::new(), None),
             private_key,
             || {
-                let instruction = zk::Unshield::new_with_outputs(
+                let instruction = zk::Unshield::new(
                     asset_definition,
                     destination,
                     7_u128,
                     vec![input],
-                    vec![output],
                     proof,
                     Some([0x33_u8; 32]),
                 );
@@ -29513,7 +29503,6 @@ mod accel_tests {
                     .downcast_ref::<zk::Unshield>()
                     .expect("unshield instruction");
                 assert_eq!(unshield.inputs, vec![input]);
-                assert_eq!(unshield.outputs, vec![output]);
                 assert_eq!(unshield.root_hint, Some([0x33_u8; 32]));
             }
             other => panic!("unexpected executable: {other:?}"),
@@ -33491,7 +33480,6 @@ fn java_native_encode_unshield_signed_transaction(
     destination: jni::objects::JByteArray<'_>,
     public_amount: jni::objects::JByteArray<'_>,
     inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
@@ -33523,10 +33511,7 @@ fn java_native_encode_unshield_signed_transaction(
                 .map_err(|_| "invalid publicAmount".to_owned())?;
         let inputs_bytes = read_java_byte_array(env, &inputs, "inputs")
             .ok_or_else(|| "invalid inputs".to_owned())?;
-        let outputs_bytes = read_java_byte_array(env, &outputs, "outputs")
-            .ok_or_else(|| "invalid outputs".to_owned())?;
         let inputs = java_fixed_32_chunks(&inputs_bytes, true, "inputs")?;
-        let outputs = java_fixed_32_chunks(&outputs_bytes, false, "outputs")?;
         let proof_bytes = read_java_byte_array_bounded(
             env,
             &proof_json,
@@ -33554,12 +33539,11 @@ fn java_native_encode_unshield_signed_transaction(
                 Metadata::default(),
                 private_key,
                 || {
-                    let instruction = zk::Unshield::new_with_outputs(
+                    let instruction = zk::Unshield::new(
                         asset_definition,
                         destination,
                         public_amount,
                         inputs,
-                        outputs,
                         proof,
                         root_hint,
                     );
@@ -39519,7 +39503,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     destination: jni::objects::JByteArray<'_>,
     public_amount: jni::objects::JByteArray<'_>,
     inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
@@ -39538,7 +39521,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         destination,
         public_amount,
         inputs,
-        outputs,
         proof_json,
         root_hint,
         private_key,
@@ -39773,7 +39755,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     destination: jni::objects::JByteArray<'_>,
     public_amount: jni::objects::JByteArray<'_>,
     inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
@@ -39792,7 +39773,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         destination,
         public_amount,
         inputs,
-        outputs,
         proof_json,
         root_hint,
         private_key,
@@ -46705,8 +46685,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_signer_jni_contract_revision_is_the_v1_hard_cut() {
-        assert_eq!(native_signer_jni_contract_revision(), 1);
+    fn native_signer_jni_contract_revision_is_the_v2_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 2);
+    }
+
+    #[test]
+    fn native_signer_unshield_jni_descriptor_is_exact_and_output_free() {
+        fn parameter_declarations<'a>(source: &'a str, marker: &str) -> Vec<&'a str> {
+            source
+                .split_once(marker)
+                .unwrap_or_else(|| panic!("missing JNI function marker {marker}"))
+                .1
+                .split_once("\n) -> jni::sys::jobjectArray")
+                .unwrap_or_else(|| panic!("unterminated JNI function signature {marker}"))
+                .0
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(|line| line.strip_suffix(',').unwrap_or(line))
+                .collect()
+        }
+
+        let source = include_str!("lib.rs");
+        let descriptor = [
+            "algorithm_code: jni::sys::jint",
+            "chain_id: jni::objects::JByteArray<'_>",
+            "chain_discriminant: jni::sys::jint",
+            "authority: jni::objects::JByteArray<'_>",
+            "creation_time_ms: jni::sys::jlong",
+            "ttl_ms: jni::sys::jlong",
+            "ttl_present: jni::sys::jboolean",
+            "asset: jni::objects::JByteArray<'_>",
+            "destination: jni::objects::JByteArray<'_>",
+            "public_amount: jni::objects::JByteArray<'_>",
+            "inputs: jni::objects::JByteArray<'_>",
+            "proof_json: jni::objects::JByteArray<'_>",
+            "root_hint: jni::objects::JByteArray<'_>",
+            "private_key: jni::objects::JByteArray<'_>",
+            "fee_payment_json: jni::objects::JByteArray<'_>",
+        ];
+        assert_eq!(descriptor.len(), 15);
+
+        let helper = parameter_declarations(
+            source,
+            "fn java_native_encode_unshield_signed_transaction(\n",
+        );
+        assert_eq!(
+            helper,
+            std::iter::once("env: &mut jni::JNIEnv<'_>")
+                .chain(descriptor.iter().copied())
+                .collect::<Vec<_>>(),
+        );
+
+        for marker in [
+            "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(\n",
+            "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(\n",
+        ] {
+            let export = parameter_declarations(source, marker);
+            assert_eq!(
+                export,
+                [
+                    "mut env: jni::JNIEnv<'_>",
+                    "_class: jni::objects::JClass<'_>",
+                ]
+                .into_iter()
+                .chain(descriptor.iter().copied())
+                .collect::<Vec<_>>(),
+            );
+        }
     }
 
     #[test]

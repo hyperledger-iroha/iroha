@@ -51,9 +51,16 @@ identifiers. It does not store a version string. Parsing rejects:
 `MusubiVersionReqV1` is a canonical comparator AST. V1 accepts Cargo-style
 bare/caret, tilde, wildcard, explicit exact, and comma-separated comparator
 requirements. Bare versions have caret semantics; exact versions require
-`=`. Equivalent accepted input produces identical Norito bytes. A prerelease
-candidate is eligible only when a comparator in the requirement names a
-prerelease with the same major, minor, and patch tuple.
+`=`. Equivalent accepted input produces identical Norito bytes: sorting and
+deduplication happen before encoding, and a deduplicated singleton equality
+uses `Exact` rather than a second comparator-list representation. Caret and
+tilde matching compares compatible core prefixes directly, so a `u64`
+component at its maximum retains Cargo's conceptual upper bound instead of
+becoming unbounded. Requirement strings reject surrounding whitespace across
+all SDKs; ASCII space around comma-separated comparator items is discarded
+before the canonical AST is built, while alternate Unicode whitespace is
+rejected. A prerelease candidate is eligible only when a comparator in the
+requirement names a prerelease with the same major, minor, and patch tuple.
 
 Published normal dependencies retain version requirements. Exact selections
 belong to consumer locks and to the bounded verification proof supplied for a
@@ -133,12 +140,23 @@ and archive-location management.
 Invitations are explicit and must be accepted by the invited account. Invite,
 accept, role, removal, metadata, and ownership operations use compare-and-set
 governance or metadata revisions. Stale revisions fail without mutation.
+Every package-governance revision advance deterministically rebases all other
+still-pending, unexpired invitations to the successor revision; the invitation
+being accepted or revoked becomes terminal in the same mutation. A client that
+races another governance mutation must therefore retry acceptance with the new
+package revision, while concurrent invitations remain independently usable.
 
 Sora Parliament recovery consumes an enacted decision bound to the exact
 action digest. Core verifies the existing enactment delay and records the
-decision as consumed so it cannot be replayed. Recovery actions cover package
-ownership, alias retargeting, and artifact takedown only; ordinary owners
-cannot invoke those exceptional paths.
+decision as consumed so it cannot be replayed. The three exceptional recovery
+actions cover package ownership, alias retargeting, and artifact takedown. A
+separate Parliament action may prospectively replace the registry admission
+and alias-pricing policy. Ordinary owners cannot invoke any Parliament-only
+action. For an artifact takedown, the authoritative height relation is
+`decision.enacted_at_height < decision.execute_after_height <=
+consumption.consumed_at_height == takedown.applied_at_height ==
+event.finalized_height`; the persisted takedown never relabels the earlier
+Parliament enactment height as the later application height.
 
 ## Permanent global aliases
 
@@ -170,6 +188,18 @@ state is encoded into `smart_contract_state`, stored in a global vector, or
 recovered by scanning unrelated state. Exact resolution reads only the
 universal sparse index.
 
+A source-level routing regression pins release publication to the universal
+coordinator with the package home dataspace as its exact participant. Snapshot
+validation fault-cut regressions reject one-sided release, reverse-reference,
+resolver-row, and public-directory projections while accepting exact replay.
+These deterministic checks complement, but do not replace, the required live
+four-or-more-peer Native AMX crash/replay qualification.
+
+Snapshot loading reserves the complete generic `musubi` state-path namespace:
+the bare name and `_`, `/`, `.`, or `:` descendants are rejected as legacy
+pre-release state. This prevents an unenumerated retired record shape from
+bypassing the reset check.
+
 V1 exposes typed exact package, release, resolver-index, version, member,
 archive-location, alias/history, and ordered-prefix queries. Resolver pages
 default to 50 entries. A continuation cursor binds finalized height and hash,
@@ -177,8 +207,57 @@ the canonical query hash, the last returned key, index revision, and caller
 when authorization affects output. A changed anchor, query, revision, caller,
 or boundary is an explicit stale-cursor error.
 
+Cache pruning uses a separate exact archive-retention query, bounded to 100
+sorted, distinct `ArchiveId` values. The first response establishes the chain,
+genesis hash, and finalized registry snapshot; every later request carries that
+snapshot as `expected_snapshot`, and the client rejects any deployment, anchor,
+or response-identity mismatch before changing the cache. The query performs
+only direct archive, reverse-reference, release, and availability lookups. An
+unknown archive is retained fail-closed because the cache is not chain-scoped.
+A governance-available active or yanked release retains its archive regardless
+of replication health. Only a registered archive with no release references,
+or one whose every reference has an enacted Parliament takedown, receives an
+explicit prune disposition.
+
 Description and keyword search is a rebuildable projection of finalized
-events. Fuzzy or partial search never affects resolution.
+package claims and metadata-change events. Startup and lag recovery rebuild it
+from one finalized state view; steady state applies only finalized events. The
+bounded query is normalized into sorted exact Unicode-lowercase tokens, with
+ASCII hyphenated terms also contributing their component words. Results are
+ordered by structural package ID and use a search-specific cursor bound to the
+finalized height/hash, canonical query hash, last package, and process-local
+projection revision. Rebuilds therefore make old search cursors explicitly
+stale. Projection anchors never regress; multiple search events in one block
+must carry the same finalized hash and each distinct change advances the local
+revision. Prefix, edit-distance, fuzzy, or partial matches are not performed, and
+neither search results nor projection revisions ever affect resolution.
+
+## SDK mutation framing
+
+Typed SDK mutation builders encode the concrete Rust instruction payload with
+the default `COMPACT_LEN` layout and frame it under the exact registered Rust
+type-name schema. A transaction embeds that concrete frame in the dynamic
+`InstructionBox` pair `(wire_id: String, payload: Vec<u8>)`; it does not add an
+outer `InstructionBox` header inside the executable. APIs that return a
+standalone `InstructionBox` frame use the exact tuple schema name
+`(alloc::string::String, alloc::vec::Vec<u8>)`.
+
+The Rust-owned fixture at `fixtures/musubi/instructions_v1.json` locks the
+semantic value, wire id, schema name/hash, bare concrete payload, concrete
+frame, inline pair, and standalone frame. Its eighteen cases cover namespace
+registration; maintainer invitation, acceptance, revocation, role replacement,
+and removal; global-alias registration; exact release-digest assertion;
+archive registration and location addition or renewal; archive-location
+retirement; release publication and reversible yank state; package metadata
+replacement; and Parliament-enacted package ownership recovery,
+permanent-alias retargeting, artifact takedown, and registry-policy replacement
+across Rust, Kotlin, Java, and Swift. An already-framed generic instruction
+wrapper is not typed field-to-Norito support.
+
+Swift additionally embeds all eighteen fixture cases in one real signed batch
+and extracts each inline pair at the executable boundary. That regression locks
+the compact `ChainId` and `TransactionSignature` tuple wrappers while retaining
+fixed-width sequence and byte-vector counts required by Norito V1.
 
 ## `Musubi.toml` and workspaces
 
@@ -187,6 +266,15 @@ are errors at every nesting level. A package manifest supports package
 metadata, a configurable library directory, explicit exports, optional local
 contract targets, tests, readme, license, repository, keywords, and positive
 include additions.
+
+A declared test target may name one `.ko` file or a directory. Directory
+targets expand to a bytewise-sorted, portable set of direct `.ko` roots under
+the package, bounded by the V1 file/source limits. The runner reads each stable
+regular source once and passes its text through the structured compiler API;
+it never reopens the diagnostic path or discovers ambient siblings. Symlinks,
+reparse points, hardlinks, special files, portable-name collisions, sensitive
+paths, and generated/VCS/config roots follow the same fail-closed positive-set
+policy as packaging.
 
 A workspace root may be virtual or also contain a package. It supports
 portable member, default-member, and exclude paths plus
@@ -223,6 +311,10 @@ interface digests, and ABI binding. Parent-local edges contain the import
 alias, child node, and dependency kind. Multiple versions of one package are
 valid.
 
+Unsigned integer identity and snapshot fields are decimal strings encoded as
+`"0"` or an ASCII digit sequence whose first digit is non-zero; signs and
+alternate spellings are rejected rather than normalized while parsing.
+
 The lock contains no cache paths, source plans, timestamps, credentials,
 provider URLs, bearer tokens, or process-local data. Parsing any pre-release
 lock format returns a regenerate instruction. `--locked` never rewrites an
@@ -249,8 +341,17 @@ conflict chain.
 Every still-valid locked selection remains fixed unless explicitly targeted,
 including a yanked locked release. `update -p PACKAGE[@VERSION]` unlocks the
 target and only nodes forced to change; `--precise VERSION` adds the exact
-target constraint. Fresh candidates exclude yanked, takedown, and below-quorum
-rows.
+target constraint to every prior parent-local occurrence of that locked node.
+The constraint remains binding when satisfying it forces backtracking to a
+different parent release; an unrelated parallel occurrence cannot satisfy it,
+and it never degrades into a candidate preference. Terminal enforcement replays
+the prior target-bearing structure over the completed graph, including exact
+old parents reached through renamed incoming edges and descendants of an
+already-selected replacement. A prior occurrence unreachable from every
+selected workspace root makes the targeted request invalid. Precise conflicts
+name the minimal selected/current root-to-terminal branch rather than an
+unselected prior parent. Fresh candidates exclude yanked, takedown, and
+below-quorum rows.
 
 ## Command contract
 
@@ -271,6 +372,16 @@ when permitted, then fetch missing archives. `--locked` forbids graph changes,
 `--offline` uses only cached index and archives, and `--frozen` combines both.
 Workspace selection follows default members, `--workspace`, `--exclude`, and
 `-p`.
+
+Offline resolver snapshots are canonical, bounded, and committed under a
+domain-separated digest after all captured pages agree on one chain, genesis,
+finalized block, and index revision. Within one deployment, cached index
+revisions must be nondecreasing as finalized height advances; a higher block
+with a lower revision is rejected and can never satisfy a lock freshness check.
+At the same finalized height and block hash, lock compatibility requires the
+exact same index revision. Until finalized query responses carry portable
+consensus inclusion proofs, the cache remains rooted in the validated online
+read and private cache identity.
 
 Local and read-only commands do not load a signer. Mutation credentials come
 only from explicit or platform Iroha configuration. Secrets and stream tokens
@@ -304,9 +415,28 @@ registry-v1/<archive-id>/src
 
 Extraction streams into a private sibling with no-follow/create-new file
 creation, verifies every commitment, fsyncs files and directories, then
-renames into an absent immutable destination. Repair quarantines only validated
-descendants. Lock-controlled deletion, arbitrary replacement, and cache import
-do not exist.
+renames into an absent immutable destination. Repair validates the finalized
+commitment and file plan before classifying any local entry as corrupt, and
+quarantines only structurally validated descendants; invalid registry inputs
+leave the cache untouched. Lock-controlled deletion, arbitrary replacement,
+and cache import do not exist.
+
+On Windows, cache roots, archive directories, source-tree ancestors, and
+regular files are protected by stable file identities and retained
+non-delete-sharing handles, so existing entries can be read and verified
+without admitting path substitution. Publication, quarantine, and prune remain
+fail-closed on Windows: safe Rust currently exposes no handle-relative,
+no-replace directory rename, and dropping the pin to use a path rename would
+reopen the substitution race. Those mutation paths may be enabled only after a
+safe workspace-owned primitive preserves the retained-handle invariant.
+
+`musubi cache prune` inventories canonical cache identities, obtains the
+bounded finalized decisions above, and passes only explicit prune identities to
+the point-targeted cache deletion primitive. It never treats absence from a
+workspace lock or retained set as deletion authority, so an archive installed
+concurrently after inventory cannot be removed accidentally. All batches are
+validated before the first deletion. `--dry-run` reports the same decisions and
+candidates without renaming or deleting any cache path.
 
 ## Publication state machine
 
@@ -322,14 +452,114 @@ Production publication is resumable and idempotent:
 6. Submit the package claim and immutable release through Native AMX.
 7. Wait for finality and verify the exact universal resolver row.
 
+The publication proof resolver may retain an existing lock edge only while its
+row remains fresh-selectable; yanked, below-quorum, unavailable, or governed
+takedown rows require a new proof graph (and make `--locked` fail). The proof's
+snapshot must be a canonical finalized ancestor on the current chain, and its
+index revision cannot be from the future. This permits replication and readback
+blocks to finalize without invalidating the operation. Core still revalidates
+every exact proof row and fresh-selection state against current authoritative
+registry state when it executes the release claim.
+
 The operation journal contains no secrets and is safe to resume. `publish
 --detach` may return the operation id; ordinary `publish` succeeds only after
 step seven. Retrying identical commitments is idempotent. Reusing a package
 version with different commitments is permanently rejected.
+Archive-registration evidence must retain the exact staged receipt from that
+operation, including its nonce; another independently valid broker receipt
+cannot cross the registration boundary.
+
+Core plans and validates the successor package-governance revision, pending
+invitation rebases or expirations, resolver-index revision, exact archive
+reverse references, resolver row, and public-directory entry before the first
+publication write. The final apply phase is infallible, so any stale, malformed,
+bounded-capacity, or revision-overflow failure leaves the package and its
+pending invitations at the same compare-and-set revision.
+
+The private publication control plane is selected only by the platform Iroha
+`client.toml`; project manifests, lockfiles, journals, and argv never contain
+its endpoints or credentials. The optional strict `[musubi.publication]`
+table contains `seed_ingress_url`, `storage_coordinator_url`,
+`ingress_broker`, `seed_provider`, `expected_policy_revision`, an optional
+bounded `request_timeout_ms`, at least two distinct `provider_gateways`, and
+an optional `namespace_delegation_file`. Unknown fields fail configuration
+loading. Service and provider URLs are credential-free HTTPS bases with
+redirects and ambient proxies disabled. The delegation file is a bounded,
+canonical Norito `MusubiNamespaceDelegationV1` whose delegate must be the
+configured publisher; it is public authorization material, not a signing key.
+
+Every private request uses a fixed route and a short-lived, domain-separated,
+bounded controller-approval set over the chain, publisher, operation id,
+operation kind, typed request digest, and validity window. Approvals are
+strictly key-ordered and distinct; a single controller requires its one exact
+key, while a multisig controller requires valid member signatures meeting its
+weighted threshold. A decoded multisig policy is reconstructed through its V1
+validator before quorum calculation, so malformed versions, members, weights,
+ordering, or thresholds cannot become publication authority. The verifier
+rejects a zero trusted time or any requested future-clock allowance above the
+fixed 30-second V1 maximum; a caller cannot widen that protocol bound. The
+client constructs every payload field and an injected HSM/KMS or threshold
+provider returns only approvals, which the client verifies before building a
+request. The platform `KeyPair` adapter remains single-key only. Seed ingress
+carries the canonical bounded request metadata separately from the raw CAR body,
+and the approvals bind that exact metadata.
+The retired public Torii SoraFS upload route is not a fallback. Fresh `publish
+--detach` persists the CAR and journal only after the clean package has passed
+compiler validation, so a normal resume never needs to reconstruct unpublished
+workspace state.
+
+The server counterpart is a transport-independent, closed three-route core.
+It accepts only exact `POST` routes and canonical bounded Norito authorization
+and request encodings,
+checks chain/genesis/publisher/operation identity and bounded clock skew,
+authenticates before hashing a CAR, verifies its exact length and digest, and
+returns only canonical typed success or redacted error bodies. Its injected
+crash-safe journal atomically consumes authorizations, binds each operation ID
+to one chain/genesis incarnation, publisher, and immutable archive/CAR
+commitment, rejects equivocation, and reuses an exact completed result. When
+only a completed seed receipt has expired, a fresh exact
+authorization may atomically reopen that same request: ingress idempotently
+confirms the same CAR and the broker replaces only the expired receipt, while a
+failure restores the prior completed record. This refresh cannot alter the
+operation binding or typed request digest. Seed ingress, permanent
+pin/replication coordination, and provider readback are separate injected
+backend traits. The service, rather than the signer, constructs the exact
+bounded receipt payload and expiry after staging. An injected signing-provider
+trait returns only controller approvals; the service assembles and verifies the
+receipt against the exact binding and trusted time before journal commit. This
+boundary admits HSM, KMS, or threshold collection implementations without
+giving them authority to substitute receipt fields. The in-process `KeyPair`
+implementation is explicitly a software adapter for focused tests and
+controlled development deployments. Private request objects carry no
+caller-supplied time. The service samples its injected fail-closed,
+non-regressing trusted clock at authorization admission, again after CAR
+staging to set receipt issuance and expiry, and after approvals return before
+commit. An authorization that was live when atomically admitted need not remain
+live during backend or HSM work, but a receipt whose lifetime is consumed by
+signing is aborted and never cached. The injected production clock must retain
+a rollback-resistant time floor across service restarts; the core also rejects
+regression within one process. Service construction also requires the
+signing provider's broker and seed backend's provider identity to equal the
+public deployment configuration, and rejects a multisig broker when its
+highest-weight subset within the 64-approval receipt bound cannot meet the
+controller threshold.
+
+Stock `irohad` opens no listener for these routes. A deployment-owned runner
+must assemble the service core, crash-safe journal, concrete HSM/KMS signing
+provider, SoraFS
+backends, and qualified private HTTPS/TLS ingress, then hand that runner to the
+dedicated supervisor adapter. TLS material and backend credentials never enter
+argv, project files, publication journals, Torii, or the daemon-private runtime
+provider broker. Hostname binding to deployment-signed provider adverts and
+the concrete HSM/storage adapters remain deployment qualification gates.
 
 Active and yanked releases cannot lose their last healthy archive location.
 Replica degradation removes a row from fresh selection and emits an alert but
-does not rewrite release content.
+does not rewrite release content. Before either updating availability or taking
+an unchanged-state fast path, Core validates the archive record and embedded
+identity, every active location's structure and exact storage key, the reverse
+references, authoritative releases, resolver rows, and referenced packages.
+Any divergence fails without advancing the resolver revision or projection.
 
 ## Policy, limits, and operations
 
@@ -354,10 +584,16 @@ First-release defaults are:
 Consensus maxima are fixed and may be larger than local CLI defaults. Every
 hash, ordering, resolver choice, and state transition is hardware-independent.
 
-Bounded events, low-cardinality metrics, and operator alerts cover publication
-phase age, replication shortfall, ingest deadletters, integrity failures,
-cache corruption, stale cursors, unauthorized governance attempts, and storage
-pressure. Rollout proceeds through a four-peer devnet, a five-to-ten namespace
-Taira allowlist with a two-week soak, and a 30-day invite beta. Open admission
-requires zero critical/high findings, completed recovery drills, load and chaos
-success, and sustained SLO evidence.
+Bounded events plus low-cardinality metric, dashboard, alert, and runbook
+contracts cover publication phase age, replication shortfall, ingest
+deadletters, integrity failures, cache corruption, stale cursors, unauthorized
+governance attempts, and storage pressure. Only an authoritative long-lived
+producer may materialize a series. Core, Torii, and the injected private
+publication service produce their owned transition/rejection signals; journal
+phase age, cache/capacity, selected-root storage, consumer fetch, restart-safe
+shortfall hydration, and exact cursor-reason propagation remain operational
+release gates. An absent series is unknown, not healthy. Rollout proceeds
+through a four-peer devnet, a five-to-ten namespace Taira allowlist with a
+two-week soak, and a 30-day invite beta. Open admission requires zero
+critical/high findings, completed recovery drills, load and chaos success, and
+sustained SLO evidence.

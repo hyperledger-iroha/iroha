@@ -3311,9 +3311,13 @@ mod tests {
         AccountId::new(public_key)
     }
 
+    fn fixture_asset_definition_domain() -> DomainId {
+        DomainId::try_new("aitai", "universal").expect("domain id")
+    }
+
     fn fixture_asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
-            DomainId::try_new("aitai", "universal").expect("domain id"),
+        AssetDefinitionId::derive_from_components(
+            fixture_asset_definition_domain(),
             "xor".parse().expect("asset name"),
         )
     }
@@ -3344,9 +3348,13 @@ mod tests {
         asset_definition: &AssetDefinitionId,
         seller_balance: Quantity,
     ) -> State {
-        let asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .build(seller);
+        let asset_definition_entry = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(seller);
         state_with_parties_and_definition(
             seller,
             buyer,
@@ -3365,7 +3373,7 @@ mod tests {
         asset_definition_entry: AssetDefinition,
         seller_balance: Quantity,
     ) -> State {
-        let domain = Domain::new(asset_definition.domain().clone()).build(seller);
+        let domain = Domain::new(fixture_asset_definition_domain()).build(seller);
         let seller_asset_id = AssetId::of(asset_definition.clone(), seller.clone());
         let seller_asset = Asset::new(seller_asset_id, seller_balance);
         let world = crate::state::World::with_assets(
@@ -3407,12 +3415,12 @@ mod tests {
                 let EventBox::Data(data_event) = event else {
                     return None;
                 };
-                let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::Asset(asset_event),
-                )) = data_event.as_ref()
+                let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(scoped)) =
+                    data_event.as_ref()
                 else {
                     return None;
                 };
+                let asset_event = &scoped.event;
                 match asset_event {
                     data_pre::AssetEvent::Removed(changed) => {
                         Some(("removed", changed.asset().clone(), changed.amount().clone()))
@@ -4172,10 +4180,14 @@ mod tests {
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("shielded-open");
-        let asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .confidential_policy(AssetConfidentialPolicy::shielded_only())
-            .build(&seller);
+        let asset_definition_entry = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(AssetConfidentialPolicy::shielded_only())
+        .build(&seller);
         let state = state_with_parties_and_definition(
             &seller,
             &buyer,
@@ -4218,9 +4230,13 @@ mod tests {
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("issuer-policy-open");
-        let mut asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .build(&seller);
+        let mut asset_definition_entry = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&seller);
         let issuer_policy = AssetIssuerUsagePolicyV1 {
             require_subject_binding: true,
             subject_bindings: BTreeMap::from([(seller.clone(), AssetSubjectBindingV1::default())]),
@@ -4461,12 +4477,13 @@ mod tests {
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("lock-definition-home");
         let home_dataspace = iroha_data_model::nexus::DataSpaceId::new(7);
-        let asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .with_balance_scope_policy(
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            )
-            .build(&source);
+        let asset_definition_entry = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(fixture_asset_definition_domain()),
+        )
+        .build(&source);
         let source_asset_id = AssetId::with_scope(
             asset_definition.clone(),
             source.clone(),
@@ -4474,7 +4491,7 @@ mod tests {
         );
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(100_u32));
         let mut world = crate::state::World::with_assets(
-            [Domain::new(asset_definition.domain().clone()).build(&source)],
+            [Domain::new(fixture_asset_definition_domain()).build(&source)],
             [
                 Account::new(source.clone()).build(&source),
                 Account::new(destination.clone()).build(&destination),

@@ -2489,7 +2489,7 @@ mod tests {
         let other = make_other_account_id();
         let permission = CanExecuteSettlement {
             debited_asset: AssetId::new(
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("asset domain"),
                     "rose".parse().expect("asset name"),
                 ),
@@ -2687,12 +2687,12 @@ mod tests {
         let authority = make_account_id();
         let adjacent_owner = make_other_account_id();
         let context = make_context(&authority, 2);
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("grant_policy", "universal").expect("asset domain"),
             "root_asset".parse().expect("asset name"),
         );
         let contract = ContractAddress::derive(
-            crate::data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &adjacent_owner,
             77,
             DataSpaceId::UNIVERSAL,
@@ -2753,7 +2753,7 @@ mod tests {
         let context = make_context(&authority, 2);
         let raw = PermissionObject::from(CanInvokeContractEntrypoint {
             contract: ContractAddress::derive(
-                crate::data_model::account::address::chain_discriminant(),
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &make_other_account_id(),
                 88,
                 DataSpaceId::UNIVERSAL,

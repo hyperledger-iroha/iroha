@@ -919,7 +919,7 @@ mod tests {
     fn pin_fee_payment_rejects_forged_negative_amount() {
         let forged = ForgedPinFeePayment {
             paid_by: fixture_account(),
-            fee_asset_id: AssetDefinitionId::new(
+            fee_asset_id: AssetDefinitionId::derive_from_components(
                 crate::domain::DomainId::try_new("sora", "universal").expect("domain id"),
                 "xor".parse().expect("asset name"),
             ),

@@ -27,12 +27,16 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
         move || {
             let _ = client.submit_blocking(
                 Register::asset_definition({
-                    let __asset_definition_id = AssetDefinitionId::new(
+                    let __asset_definition_id = AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "txfilter".parse().unwrap(),
                     );
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "txfilter".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             );

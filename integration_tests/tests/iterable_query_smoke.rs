@@ -31,7 +31,7 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
 
     // Verify the well-known genesis asset exists with expected quantity.
     let asset_id = AssetId::new(
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         ),

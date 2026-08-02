@@ -24,15 +24,17 @@ use crate::{
             MutateSoracloudState, PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
             RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
-            RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
-            RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
-            RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
-            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
-            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
-            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
-            RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
-            SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudTrainingJob,
-            UpgradeSoracloudService, WithdrawSoracloudInrouHost, WithdrawSoracloudModelHost,
+            RecordSoracloudRuntimeReceipt, RegisterSoracloudFhePolicy,
+            RegisterSoracloudModelArtifact, RegisterSoracloudModelWeight,
+            RegisterSoracloudUploadedModelBundle, RenewSoracloudAgentLease,
+            RenewSoracloudHfSharedLease, ReportSoracloudServiceLeaseUsage,
+            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
+            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RevokeSoracloudFhePolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RotateSoracloudFhePolicy,
+            RunSoracloudAgentAutonomy, RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState,
+            SetSoracloudRuntimeState, SetSoracloudServiceConfig, SetSoracloudServiceSecret,
+            StartSoracloudTrainingJob, UpgradeSoracloudService, WithdrawSoracloudInrouHost,
+            WithdrawSoracloudModelHost,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
@@ -407,6 +409,12 @@ fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
         visitor.visit_delete_soracloud_service_secret(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<MutateSoracloudState>() {
         visitor.visit_mutate_soracloud_state(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterSoracloudFhePolicy>() {
+        visitor.visit_register_soracloud_fhe_policy(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RotateSoracloudFhePolicy>() {
+        visitor.visit_rotate_soracloud_fhe_policy(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RevokeSoracloudFhePolicy>() {
+        visitor.visit_revoke_soracloud_fhe_policy(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RunSoracloudFheJob>() {
         visitor.visit_run_soracloud_fhe_job(v);
     } else if let Some(v) = isi
@@ -838,6 +846,9 @@ macro_rules! instruction_visitors {
             visit_set_soracloud_service_secret(&SetSoracloudServiceSecret),
             visit_delete_soracloud_service_secret(&DeleteSoracloudServiceSecret),
             visit_mutate_soracloud_state(&MutateSoracloudState),
+            visit_register_soracloud_fhe_policy(&RegisterSoracloudFhePolicy),
+            visit_rotate_soracloud_fhe_policy(&RotateSoracloudFhePolicy),
+            visit_revoke_soracloud_fhe_policy(&RevokeSoracloudFhePolicy),
             visit_run_soracloud_fhe_job(&RunSoracloudFheJob),
             visit_record_soracloud_decryption_request(&RecordSoracloudDecryptionRequest),
             visit_join_soracloud_hf_shared_lease(&JoinSoracloudHfSharedLease),

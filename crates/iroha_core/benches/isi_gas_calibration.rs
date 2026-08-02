@@ -143,7 +143,7 @@ fn setup_trigger_registered(state: &mut BenchState) {
 }
 
 fn bench_asset_definition_id() -> AssetDefinitionId {
-    iroha_data_model::asset::AssetDefinitionId::new(
+    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new(BENCH_DOMAIN_NAME, BENCH_DATASPACE_NAME).expect("valid domain id"),
         BENCH_ASSET_NAME
             .parse()
@@ -153,7 +153,12 @@ fn bench_asset_definition_id() -> AssetDefinitionId {
 
 /// Construct a valid asset definition fixture for registration benchmarks.
 fn bench_asset_definition() -> iroha_data_model::asset::NewAssetDefinition {
-    AssetDefinition::numeric(bench_asset_definition_id()).with_name(BENCH_ASSET_NAME.to_owned())
+    AssetDefinition::numeric(
+        bench_asset_definition_id(),
+        BENCH_ASSET_NAME.to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
 }
 
 /// Benchmark a single ISI by executing it in a fresh transaction for each iteration.

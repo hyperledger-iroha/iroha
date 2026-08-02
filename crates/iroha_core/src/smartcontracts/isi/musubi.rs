@@ -27,7 +27,11 @@ use super::prelude::*;
 use crate::{
     prelude::ValidSingularQuery,
     smartcontracts::Execute,
-    state::{GovernanceProposalStatus, StateReadOnly, StateTransaction, WorldReadOnly},
+    state::{
+        GovernanceProposalStatus, MusubiResolverIndexRevisionV1, StateReadOnly, StateTransaction,
+        WorldReadOnly,
+    },
+    telemetry::{MusubiGovernanceActionV1, MusubiGovernanceRejectionReasonV1},
 };
 
 impl Execute for RegisterMusubiNamespaceBindingV1 {
@@ -36,39 +40,60 @@ impl Execute for RegisterMusubiNamespaceBindingV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        self.binding
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        if let Some(existing) = state_transaction
-            .world
-            .musubi_namespace_bindings
-            .get(&self.binding.namespace)
-        {
-            return if existing == &self.binding {
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::NamespaceBinding,
+            |state_transaction, rejection_reason| {
+                self.binding
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                if let Some(existing) = state_transaction
+                    .world
+                    .musubi_namespace_bindings
+                    .get(&self.binding.namespace)
+                {
+                    if existing != &self.binding {
+                        return Err(invariant(format!(
+                            "Musubi namespace '{}' is already bound",
+                            self.binding.namespace
+                        )));
+                    }
+                    ensure_namespace_current_owner(
+                        existing,
+                        authority,
+                        state_transaction,
+                        rejection_reason,
+                    )?;
+                    return Ok(());
+                }
+                let policy = state_transaction.world.musubi_registry_policy.get().clone();
+                classify_governance_rejection(
+                    ensure_policy_revision(&policy, self.expected_policy_revision),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                ensure_admitted(
+                    &policy,
+                    Some(self.binding.home_dataspace),
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                ensure_namespace_registration_owner(
+                    &self.binding,
+                    authority,
+                    state_transaction,
+                    rejection_reason,
+                )?;
+                let event = MusubiEvent::NamespaceBound(self.binding.clone());
+                state_transaction
+                    .world
+                    .musubi_namespace_bindings
+                    .insert(self.binding.namespace.clone(), self.binding);
+                emit_musubi_event(event, state_transaction);
                 Ok(())
-            } else {
-                Err(invariant(format!(
-                    "Musubi namespace '{}' is already bound",
-                    self.binding.namespace
-                )))
-            };
-        }
-        let policy = state_transaction.world.musubi_registry_policy.get().clone();
-        ensure_policy_revision(&policy, self.expected_policy_revision)?;
-        ensure_admitted(
-            &policy,
-            Some(self.binding.home_dataspace),
-            authority,
-            state_transaction.world(),
-        )?;
-        ensure_namespace_owner(&self.binding, authority, state_transaction)?;
-        let event = MusubiEvent::NamespaceBound(self.binding.clone());
-        state_transaction
-            .world
-            .musubi_namespace_bindings
-            .insert(self.binding.namespace.clone(), self.binding);
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+            },
+        )
     }
 }
 
@@ -78,89 +103,113 @@ impl Execute for RegisterMusubiArchiveV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        self.commitment
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        self.staging_receipt
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        let archive_id = self.commitment.archive_id();
-        if let Some(existing) = state_transaction.world.musubi_archives.get(&archive_id) {
-            return if existing.commitment == self.commitment
-                && existing.staging_receipt == self.staging_receipt
-            {
-                Ok(())
-            } else {
-                Err(invariant(format!(
-                    "Musubi archive '{}' is already registered with different commitments",
-                    digest_label(archive_id.as_bytes())
-                )))
-            };
-        }
-        let policy = state_transaction.world.musubi_registry_policy.get().clone();
-        ensure_policy_revision(&policy, self.expected_policy_revision)?;
-        ensure_admitted(&policy, None, authority, state_transaction.world())?;
-        validate_seed_ingress_receipt(
-            &self.commitment,
-            &self.staging_receipt,
-            authority,
+        execute_governance_mutation(
             state_transaction,
-        )?;
-        let height = execution_height(state_transaction);
-        let index_revision = state_transaction
-            .world
-            .musubi_resolver_index_revision
-            .get()
-            .get();
-        state_transaction.world.musubi_archives.insert(
-            archive_id,
-            MusubiArchiveRecordV1 {
-                archive_id,
-                commitment: self.commitment,
-                staging_receipt: self.staging_receipt,
-                registered_by: authority.clone(),
-                registered_at_height: height,
-                location_revision: 1,
-                location_ids: Vec::new(),
-            },
-        );
-        let availability = MusubiArchiveAvailabilityV1 {
-            archive_id,
-            availability: MusubiStorageAvailabilityV1::Unavailable,
-            healthy_replicas: 0,
-            active_locations: 0,
-            finalized_height: height,
-            finalized_block_hash: execution_hash(state_transaction),
-            index_revision,
-        };
-        state_transaction
-            .world
-            .musubi_archive_availability
-            .insert(archive_id, availability);
-        state_transaction
-            .world
-            .musubi_archive_reverse_references
-            .insert(
-                archive_id,
-                MusubiArchiveReverseReferencesV1 {
+            MusubiGovernanceActionV1::ArchiveRegistration,
+            |state_transaction, rejection_reason| {
+                self.commitment
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                self.staging_receipt
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let archive_id = self.commitment.archive_id();
+                if let Some(existing) = state_transaction.world.musubi_archives.get(&archive_id) {
+                    if existing.commitment != self.commitment
+                        || existing.staging_receipt != self.staging_receipt
+                    {
+                        return Err(invariant(format!(
+                            "Musubi archive '{}' is already registered with different commitments",
+                            digest_label(archive_id.as_bytes())
+                        )));
+                    }
+                    if existing.registered_by != *authority {
+                        return reject_governance_mutation(
+                            rejection_reason,
+                            MusubiGovernanceRejectionReasonV1::Unauthorized,
+                            invariant(
+                                "only the original Musubi archive registrant may replay registration",
+                            ),
+                        );
+                    }
+                    return Ok(());
+                }
+                let policy = state_transaction.world.musubi_registry_policy.get().clone();
+                classify_governance_rejection(
+                    ensure_policy_revision(&policy, self.expected_policy_revision),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                ensure_admitted(
+                    &policy,
+                    None,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                validate_seed_ingress_receipt(
+                    &self.commitment,
+                    &self.staging_receipt,
+                    authority,
+                    state_transaction,
+                )?;
+                let height = execution_height(state_transaction);
+                let index_revision = state_transaction
+                    .world
+                    .musubi_resolver_index_revision
+                    .get()
+                    .get();
+                state_transaction.world.musubi_archives.insert(
                     archive_id,
-                    releases: Vec::new(),
-                },
-            );
-        emit_musubi_event(
-            MusubiEvent::ArchiveRegistered(MusubiArchiveRegisteredEventV1 {
-                archive_id,
-                registered_by: authority.clone(),
-                location_revision: 1,
-                finalized_height: height,
-            }),
-            state_transaction,
-        );
-        emit_musubi_event(
-            MusubiEvent::ArchiveAvailabilityChanged(availability),
-            state_transaction,
-        );
-        Ok(())
+                    MusubiArchiveRecordV1 {
+                        archive_id,
+                        commitment: self.commitment,
+                        staging_receipt: self.staging_receipt,
+                        registered_by: authority.clone(),
+                        registered_at_height: height,
+                        location_revision: 1,
+                        location_ids: Vec::new(),
+                    },
+                );
+                let availability = MusubiArchiveAvailabilityV1 {
+                    archive_id,
+                    availability: MusubiStorageAvailabilityV1::Unavailable,
+                    healthy_replicas: 0,
+                    active_locations: 0,
+                    finalized_height: height,
+                    finalized_block_hash: execution_hash(state_transaction),
+                    index_revision,
+                };
+                state_transaction
+                    .world
+                    .musubi_archive_availability
+                    .insert(archive_id, availability);
+                state_transaction
+                    .world
+                    .musubi_archive_reverse_references
+                    .insert(
+                        archive_id,
+                        MusubiArchiveReverseReferencesV1 {
+                            archive_id,
+                            releases: Vec::new(),
+                        },
+                    );
+                emit_musubi_event(
+                    MusubiEvent::ArchiveRegistered(MusubiArchiveRegisteredEventV1 {
+                        archive_id,
+                        registered_by: authority.clone(),
+                        location_revision: 1,
+                        finalized_height: height,
+                    }),
+                    state_transaction,
+                );
+                emit_musubi_event(
+                    MusubiEvent::ArchiveAvailabilityChanged(availability),
+                    state_transaction,
+                );
+                Ok(())
+            },
+        )
     }
 }
 
@@ -170,120 +219,139 @@ impl Execute for AddMusubiArchiveLocationV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if self.renew_after_epoch >= self.expires_at_epoch {
-            return Err(invalid_parameter(
-                "Musubi archive location renewal must precede expiry",
-            ));
-        }
-        let mut archive = state_transaction
-            .world
-            .musubi_archives
-            .get(&self.archive_id)
-            .cloned()
-            .ok_or_else(|| archive_not_found(self.archive_id))?;
-        ensure_archive_manager(&archive, authority, state_transaction.world())?;
-        ensure_revision(
-            "archive location",
-            archive.location_revision,
-            self.expected_location_revision,
-        )?;
-        let key = MusubiArchiveLocationKeyV1::new(self.archive_id, self.location_id);
-        let existing_location = state_transaction
-            .world
-            .musubi_archive_locations
-            .get(&key)
-            .cloned();
-        match existing_location.as_ref() {
-            Some(existing) if existing.state == MusubiArchiveLocationStateV1::Retired => {
-                return Err(invariant(
-                    "Musubi retired archive location identities cannot be reused",
-                ));
-            }
-            Some(_) => {
-                if archive
-                    .location_ids
-                    .binary_search(&self.location_id)
-                    .is_err()
-                {
-                    return Err(invariant(
-                        "Musubi archive location directory is inconsistent",
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::ArchiveLocation,
+            |state_transaction, rejection_reason| {
+                if self.renew_after_epoch >= self.expires_at_epoch {
+                    return Err(invalid_parameter(
+                        "Musubi archive location renewal must precede expiry",
                     ));
                 }
-            }
-            None => {
-                if archive.location_ids.len() >= MUSUBI_MAX_ARCHIVE_LOCATIONS_V1 {
+                let mut archive = state_transaction
+                    .world
+                    .musubi_archives
+                    .get(&self.archive_id)
+                    .cloned()
+                    .ok_or_else(|| archive_not_found(self.archive_id))?;
+                ensure_archive_manager(
+                    &archive,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "archive location",
+                        archive.location_revision,
+                        self.expected_location_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                let key = MusubiArchiveLocationKeyV1::new(self.archive_id, self.location_id);
+                let existing_location = state_transaction
+                    .world
+                    .musubi_archive_locations
+                    .get(&key)
+                    .cloned();
+                match existing_location.as_ref() {
+                    Some(existing) if existing.state == MusubiArchiveLocationStateV1::Retired => {
+                        return Err(invariant(
+                            "Musubi retired archive location identities cannot be reused",
+                        ));
+                    }
+                    Some(_) => {
+                        if archive
+                            .location_ids
+                            .binary_search(&self.location_id)
+                            .is_err()
+                        {
+                            return Err(invariant(
+                                "Musubi archive location directory is inconsistent",
+                            ));
+                        }
+                    }
+                    None => {
+                        if archive.location_ids.len() >= MUSUBI_MAX_ARCHIVE_LOCATIONS_V1 {
+                            return Err(invariant("Musubi archive location bound is exhausted"));
+                        }
+                        archive.location_ids.push(self.location_id);
+                        archive.location_ids.sort();
+                        archive.location_ids.dedup();
+                    }
+                }
+                if archive.location_ids.len() > MUSUBI_MAX_ARCHIVE_LOCATIONS_V1 {
                     return Err(invariant("Musubi archive location bound is exhausted"));
                 }
-                archive.location_ids.push(self.location_id);
-                archive.location_ids.sort();
-                archive.location_ids.dedup();
-            }
-        }
-        if archive.location_ids.len() > MUSUBI_MAX_ARCHIVE_LOCATIONS_V1 {
-            return Err(invariant("Musubi archive location bound is exhausted"));
-        }
-        let providers = validate_sorafs_location(
-            &archive,
-            &self.pin_manifest,
-            &self.replication_order,
-            &self.provider_attestations,
-            self.expires_at_epoch,
-            state_transaction,
-        )?;
-        let next_revision = next_revision(archive.location_revision, "archive location")?;
-        let state = if providers.len() >= usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1) {
-            MusubiArchiveLocationStateV1::Healthy
-        } else {
-            MusubiArchiveLocationStateV1::Degraded
-        };
-        let location = MusubiArchiveLocationV1 {
-            location_id: self.location_id,
-            archive_id: self.archive_id,
-            pin_manifest: self.pin_manifest,
-            replication_order: self.replication_order,
-            providers,
-            provider_attestations: self.provider_attestations,
-            renew_after_epoch: self.renew_after_epoch,
-            expires_at_epoch: self.expires_at_epoch,
-            finalized_height: execution_height(state_transaction),
-            revision: next_revision,
-            state,
-        };
-        location
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        let location_event = MusubiArchiveLocationEventV1 {
-            location: key,
-            pin_manifest: location.pin_manifest,
-            replication_order: location.replication_order,
-            transition: if existing_location.is_some() {
-                MusubiArchiveLocationTransitionV1::Renewed
-            } else {
-                MusubiArchiveLocationTransitionV1::Added
+                let providers = validate_sorafs_location(
+                    &archive,
+                    &self.pin_manifest,
+                    &self.replication_order,
+                    &self.provider_attestations,
+                    self.expires_at_epoch,
+                    state_transaction,
+                )?;
+                let next_revision = next_revision(archive.location_revision, "archive location")?;
+                let state = if providers.len() >= usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1) {
+                    MusubiArchiveLocationStateV1::Healthy
+                } else {
+                    MusubiArchiveLocationStateV1::Degraded
+                };
+                let location = MusubiArchiveLocationV1 {
+                    location_id: self.location_id,
+                    archive_id: self.archive_id,
+                    pin_manifest: self.pin_manifest,
+                    replication_order: self.replication_order,
+                    providers,
+                    provider_attestations: self.provider_attestations,
+                    renew_after_epoch: self.renew_after_epoch,
+                    expires_at_epoch: self.expires_at_epoch,
+                    finalized_height: execution_height(state_transaction),
+                    revision: next_revision,
+                    state,
+                };
+                location
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let location_event = MusubiArchiveLocationEventV1 {
+                    location: key,
+                    pin_manifest: location.pin_manifest,
+                    replication_order: location.replication_order,
+                    transition: if existing_location.is_some() {
+                        MusubiArchiveLocationTransitionV1::Renewed
+                    } else {
+                        MusubiArchiveLocationTransitionV1::Added
+                    },
+                    state: location.state,
+                    revision: location.revision,
+                    finalized_height: location.finalized_height,
+                };
+                bind_location_reverse_indices(
+                    existing_location.as_ref(),
+                    &location,
+                    state_transaction,
+                )?;
+                archive.location_revision = next_revision;
+                archive
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                state_transaction
+                    .world
+                    .musubi_archive_locations
+                    .insert(key, location);
+                state_transaction
+                    .world
+                    .musubi_archives
+                    .insert(self.archive_id, archive);
+                emit_musubi_event(
+                    MusubiEvent::ArchiveLocationChanged(location_event),
+                    state_transaction,
+                );
+                refresh_musubi_locations(&[key], state_transaction)?;
+                Ok(())
             },
-            state: location.state,
-            revision: location.revision,
-            finalized_height: location.finalized_height,
-        };
-        bind_location_reverse_indices(existing_location.as_ref(), &location, state_transaction)?;
-        archive.location_revision = next_revision;
-        archive
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
-        state_transaction
-            .world
-            .musubi_archive_locations
-            .insert(key, location);
-        state_transaction
-            .world
-            .musubi_archives
-            .insert(self.archive_id, archive);
-        emit_musubi_event(
-            MusubiEvent::ArchiveLocationChanged(location_event),
-            state_transaction,
-        );
-        refresh_musubi_locations(&[key], state_transaction)?;
-        Ok(())
+        )
     }
 }
 
@@ -293,67 +361,82 @@ impl Execute for RetireMusubiArchiveLocationV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let mut archive = state_transaction
-            .world
-            .musubi_archives
-            .get(&self.archive_id)
-            .cloned()
-            .ok_or_else(|| archive_not_found(self.archive_id))?;
-        ensure_archive_manager(&archive, authority, state_transaction.world())?;
-        ensure_revision(
-            "archive location",
-            archive.location_revision,
-            self.expected_location_revision,
-        )?;
-        let key = MusubiArchiveLocationKeyV1::new(self.archive_id, self.location_id);
-        let mut location = state_transaction
-            .world
-            .musubi_archive_locations
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| invariant("Musubi archive location was not found"))?;
-        if location.state == MusubiArchiveLocationStateV1::Retired {
-            return Err(invariant("Musubi archive location is already retired"));
-        }
-        ensure_locations_may_be_invalidated(&[key], state_transaction.world())?;
-        self.reason
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        let next_revision = next_revision(archive.location_revision, "archive location")?;
-        location.state = MusubiArchiveLocationStateV1::Retired;
-        location.finalized_height = execution_height(state_transaction);
-        location.revision = next_revision;
-        retire_location_reverse_indices(&location, state_transaction)?;
-        let location_event = MusubiArchiveLocationEventV1 {
-            location: key,
-            pin_manifest: location.pin_manifest,
-            replication_order: location.replication_order,
-            transition: MusubiArchiveLocationTransitionV1::Retired,
-            state: location.state,
-            revision: location.revision,
-            finalized_height: location.finalized_height,
-        };
-        archive.location_revision = next_revision;
-        archive
-            .location_ids
-            .retain(|location_id| *location_id != self.location_id);
-        archive
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
-        state_transaction
-            .world
-            .musubi_archive_locations
-            .insert(key, location);
-        state_transaction
-            .world
-            .musubi_archives
-            .insert(self.archive_id, archive);
-        emit_musubi_event(
-            MusubiEvent::ArchiveLocationChanged(location_event),
+        execute_governance_mutation(
             state_transaction,
-        );
-        refresh_archive_availability(self.archive_id, state_transaction)?;
-        Ok(())
+            MusubiGovernanceActionV1::ArchiveLocation,
+            |state_transaction, rejection_reason| {
+                let mut archive = state_transaction
+                    .world
+                    .musubi_archives
+                    .get(&self.archive_id)
+                    .cloned()
+                    .ok_or_else(|| archive_not_found(self.archive_id))?;
+                ensure_archive_manager(
+                    &archive,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "archive location",
+                        archive.location_revision,
+                        self.expected_location_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                let key = MusubiArchiveLocationKeyV1::new(self.archive_id, self.location_id);
+                let mut location = state_transaction
+                    .world
+                    .musubi_archive_locations
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi archive location was not found"))?;
+                if location.state == MusubiArchiveLocationStateV1::Retired {
+                    return Err(invariant("Musubi archive location is already retired"));
+                }
+                ensure_locations_may_be_invalidated(&[key], state_transaction.world())?;
+                self.reason
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let next_revision = next_revision(archive.location_revision, "archive location")?;
+                location.state = MusubiArchiveLocationStateV1::Retired;
+                location.finalized_height = execution_height(state_transaction);
+                location.revision = next_revision;
+                retire_location_reverse_indices(&location, state_transaction)?;
+                let location_event = MusubiArchiveLocationEventV1 {
+                    location: key,
+                    pin_manifest: location.pin_manifest,
+                    replication_order: location.replication_order,
+                    transition: MusubiArchiveLocationTransitionV1::Retired,
+                    state: location.state,
+                    revision: location.revision,
+                    finalized_height: location.finalized_height,
+                };
+                archive.location_revision = next_revision;
+                archive
+                    .location_ids
+                    .retain(|location_id| *location_id != self.location_id);
+                archive
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                state_transaction
+                    .world
+                    .musubi_archive_locations
+                    .insert(key, location);
+                state_transaction
+                    .world
+                    .musubi_archives
+                    .insert(self.archive_id, archive);
+                emit_musubi_event(
+                    MusubiEvent::ArchiveLocationChanged(location_event),
+                    state_transaction,
+                );
+                refresh_archive_availability(self.archive_id, state_transaction)?;
+                Ok(())
+            },
+        )
     }
 }
 
@@ -363,241 +446,322 @@ impl Execute for PublishMusubiReleaseV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        self.namespace
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        self.publication
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        let release_id = self.publication.manifest.release.clone();
-        let release_digest = self.publication.manifest.release_digest();
-        if let Some(existing) = state_transaction.world.musubi_releases.get(&release_id) {
-            return if existing.release_digest == release_digest
-                && existing.manifest == self.publication.manifest
-                && state_transaction
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Publish,
+            |state_transaction, rejection_reason| {
+                self.namespace
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                self.publication
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let release_id = self.publication.manifest.release.clone();
+                let release_digest = self.publication.manifest.release_digest();
+                if let Some(existing) = state_transaction.world.musubi_releases.get(&release_id) {
+                    if existing.release_digest != release_digest
+                        || existing.manifest != self.publication.manifest
+                        || !state_transaction
+                            .world
+                            .musubi_packages
+                            .get(&release_id.package)
+                            .is_some_and(|package| package.claimed_namespace == self.namespace)
+                    {
+                        return Err(invariant(format!(
+                            "Musubi release '{release_id}' is permanently bound to different commitments"
+                        )));
+                    }
+                    if existing.published_by != *authority {
+                        return reject_governance_mutation(
+                            rejection_reason,
+                            MusubiGovernanceRejectionReasonV1::Unauthorized,
+                            invariant(
+                                "only the original Musubi release publisher may replay publication",
+                            ),
+                        );
+                    }
+                    return Ok(());
+                }
+                let policy = state_transaction.world.musubi_registry_policy.get().clone();
+                classify_governance_rejection(
+                    ensure_policy_revision(&policy, self.expected_policy_revision),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                ensure_admitted(
+                    &policy,
+                    Some(release_id.package.home_dataspace),
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                validate_publication_snapshot(&self.publication, state_transaction)?;
+                validate_resolution_proof(&self.publication, state_transaction.world())?;
+                let archive = state_transaction
+                    .world
+                    .musubi_archives
+                    .get(&self.publication.manifest.archive_id)
+                    .cloned()
+                    .ok_or_else(|| archive_not_found(self.publication.manifest.archive_id))?;
+                let availability = state_transaction
+                    .world
+                    .musubi_archive_availability
+                    .get(&archive.archive_id)
+                    .copied()
+                    .ok_or_else(|| invariant("Musubi archive has no availability projection"))?;
+                if availability.availability != MusubiStorageAvailabilityV1::Selectable {
+                    return Err(invariant(
+                        "Musubi release archive has not reached finalized replication quorum",
+                    ));
+                }
+                validate_publication_archive_evidence(
+                    &self.publication,
+                    &archive,
+                    authority,
+                    state_transaction.world(),
+                )?;
+
+                let height = execution_height(state_transaction);
+                let existing_package = state_transaction
                     .world
                     .musubi_packages
                     .get(&release_id.package)
-                    .is_some_and(|package| package.claimed_namespace == self.namespace)
-            {
-                Ok(())
-            } else {
-                Err(invariant(format!(
-                    "Musubi release '{release_id}' is permanently bound to different commitments"
-                )))
-            };
-        }
-        let policy = state_transaction.world.musubi_registry_policy.get().clone();
-        ensure_policy_revision(&policy, self.expected_policy_revision)?;
-        ensure_admitted(
-            &policy,
-            Some(release_id.package.home_dataspace),
-            authority,
-            state_transaction.world(),
-        )?;
-        validate_publication_snapshot(&self.publication, state_transaction)?;
-        validate_resolution_proof(&self.publication, state_transaction.world())?;
-        let archive = state_transaction
-            .world
-            .musubi_archives
-            .get(&self.publication.manifest.archive_id)
-            .cloned()
-            .ok_or_else(|| archive_not_found(self.publication.manifest.archive_id))?;
-        let availability = state_transaction
-            .world
-            .musubi_archive_availability
-            .get(&archive.archive_id)
-            .copied()
-            .ok_or_else(|| invariant("Musubi archive has no availability projection"))?;
-        if availability.availability != MusubiStorageAvailabilityV1::Selectable {
-            return Err(invariant(
-                "Musubi release archive has not reached finalized replication quorum",
-            ));
-        }
-        validate_publication_archive_evidence(
-            &self.publication,
-            &archive,
-            authority,
-            state_transaction.world(),
-        )?;
+                    .cloned();
+                let first_claim = existing_package.is_none();
+                let (package, governance_advance, first_member, first_metadata) =
+                    match existing_package {
+                        Some(mut package) => {
+                            if package.claimed_namespace != self.namespace {
+                                return Err(invariant(
+                                    "Musubi publication namespace does not match the package claim",
+                                ));
+                            }
+                            let expected = self.expected_governance_revision.ok_or_else(|| {
+                        invalid_parameter(
+                            "existing Musubi package publication requires a governance revision",
+                        )
+                    })?;
+                            classify_governance_rejection(
+                                ensure_revision(
+                                    "package governance",
+                                    package.revisions.governance,
+                                    expected,
+                                ),
+                                rejection_reason,
+                                MusubiGovernanceRejectionReasonV1::StaleRevision,
+                            )?;
+                            ensure_package_capability(
+                                &release_id.package,
+                                authority,
+                                PackageCapability::Publish,
+                                state_transaction.world(),
+                                rejection_reason,
+                            )?;
+                            let advance = plan_package_governance_advance(
+                                &mut package,
+                                height,
+                                None,
+                                state_transaction.world(),
+                            )?;
+                            (package, Some(advance), None, None)
+                        }
+                        None => {
+                            if self.expected_governance_revision.is_some() {
+                                return Err(invalid_parameter(
+                                    "first Musubi package claim must not supply a governance revision",
+                                ));
+                            }
+                            let binding = namespace_binding_for_package(
+                                &self.namespace,
+                                &release_id.package,
+                                state_transaction.world(),
+                            )?;
+                            ensure_namespace_claim_authority(
+                                &binding,
+                                self.namespace_delegation.as_ref(),
+                                authority,
+                                state_transaction,
+                                rejection_reason,
+                            )?;
+                            let package = MusubiPackageRecordV1 {
+                                package: release_id.package.clone(),
+                                claimed_namespace: self.namespace,
+                                claimed_namespace_binding: binding.digest(),
+                                owners: vec![authority.clone()],
+                                member_accounts: vec![authority.clone()],
+                                claimed_at_height: height,
+                                revisions: MusubiPackageRevisionsV1 {
+                                    governance: 1,
+                                    metadata: 1,
+                                    archive_locations: 1,
+                                },
+                            };
+                            let member = MusubiPackageMemberV1 {
+                                package: release_id.package.clone(),
+                                account: authority.clone(),
+                                role: MusubiPackageRoleV1::Owner,
+                                accepted_at_height: height,
+                                governance_revision: 1,
+                            };
+                            member
+                                .validate()
+                                .map_err(|error| invariant(error.reason()))?;
+                            let metadata = MusubiPackageMetadataRecordV1 {
+                                package: release_id.package.clone(),
+                                metadata: self.publication.manifest.metadata.clone(),
+                                revision: 1,
+                                changed_by: authority.clone(),
+                                changed_at_height: height,
+                            };
+                            metadata
+                                .validate()
+                                .map_err(|error| invariant(error.reason()))?;
+                            (package, None, Some(member), Some(metadata))
+                        }
+                    };
+                package
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
 
-        let height = execution_height(state_transaction);
-        let existing_package = state_transaction
-            .world
-            .musubi_packages
-            .get(&release_id.package)
-            .cloned();
-        let first_claim = existing_package.is_none();
-        let package = if let Some(mut package) = existing_package {
-            if package.claimed_namespace != self.namespace {
-                return Err(invariant(
-                    "Musubi publication namespace does not match the package claim",
-                ));
-            }
-            let expected = self.expected_governance_revision.ok_or_else(|| {
-                invalid_parameter(
-                    "existing Musubi package publication requires a governance revision",
-                )
-            })?;
-            ensure_revision("package governance", package.revisions.governance, expected)?;
-            ensure_package_capability(
-                &release_id.package,
-                authority,
-                PackageCapability::Publish,
-                state_transaction.world(),
-            )?;
-            package.revisions.governance =
-                next_revision(package.revisions.governance, "package governance")?;
-            package
-        } else {
-            if self.expected_governance_revision.is_some() {
-                return Err(invalid_parameter(
-                    "first Musubi package claim must not supply a governance revision",
-                ));
-            }
-            let binding = namespace_binding_for_package(
-                &self.namespace,
-                &release_id.package,
-                state_transaction.world(),
-            )?;
-            ensure_namespace_claim_authority(
-                &binding,
-                self.namespace_delegation.as_ref(),
-                authority,
-                state_transaction,
-            )?;
-            let package = MusubiPackageRecordV1 {
-                package: release_id.package.clone(),
-                claimed_namespace: self.namespace,
-                claimed_namespace_binding: binding.digest(),
-                owners: vec![authority.clone()],
-                member_accounts: vec![authority.clone()],
-                claimed_at_height: height,
-                revisions: MusubiPackageRevisionsV1 {
-                    governance: 1,
-                    metadata: 1,
-                    archive_locations: 1,
-                },
-            };
-            state_transaction.world.musubi_package_members.insert(
-                MusubiPackageMemberKeyV1::new(release_id.package.clone(), authority.clone()),
-                MusubiPackageMemberV1 {
-                    package: release_id.package.clone(),
-                    account: authority.clone(),
-                    role: MusubiPackageRoleV1::Owner,
-                    accepted_at_height: height,
-                    governance_revision: 1,
-                },
-            );
-            state_transaction.world.musubi_package_metadata.insert(
-                release_id.package.clone(),
-                MusubiPackageMetadataRecordV1 {
-                    package: release_id.package.clone(),
-                    metadata: self.publication.manifest.metadata.clone(),
-                    revision: 1,
+                let initial_reason = MusubiReasonV1::new("initial publication")
+                    .expect("static Musubi reason is valid");
+                let yank = MusubiReleaseYankV1 {
+                    release: release_id.clone(),
+                    yanked: false,
+                    reason: initial_reason,
                     changed_by: authority.clone(),
                     changed_at_height: height,
-                },
-            );
-            package
-        };
-        package
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
+                    revision: 1,
+                };
+                let record = MusubiReleaseRecordV1 {
+                    manifest: self.publication.manifest.clone(),
+                    release_digest,
+                    published_by: authority.clone(),
+                    published_at_height: height,
+                    yank: yank.clone(),
+                    artifact_governance: MusubiArtifactGovernanceStateV1::Available,
+                    revisions: MusubiReleaseRevisionsV1 {
+                        yank: 1,
+                        artifact_governance: 1,
+                    },
+                };
+                record
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
 
-        let initial_reason =
-            MusubiReasonV1::new("initial publication").expect("static Musubi reason is valid");
-        let yank = MusubiReleaseYankV1 {
-            release: release_id.clone(),
-            yanked: false,
-            reason: initial_reason,
-            changed_by: authority.clone(),
-            changed_at_height: height,
-            revision: 1,
-        };
-        let record = MusubiReleaseRecordV1 {
-            manifest: self.publication.manifest.clone(),
-            release_digest,
-            published_by: authority.clone(),
-            published_at_height: height,
-            yank: yank.clone(),
-            artifact_governance: MusubiArtifactGovernanceStateV1::Available,
-            revisions: MusubiReleaseRevisionsV1 {
-                yank: 1,
-                artifact_governance: 1,
-            },
-        };
-        record
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
+                let planned_index_revision = plan_resolver_index_revision(state_transaction)?;
+                let index_revision = planned_index_revision.get();
+                let reverse_references = plan_archive_reverse_reference(
+                    archive.archive_id,
+                    release_id.clone(),
+                    state_transaction.world(),
+                )?;
+                let latest_selectable = state_transaction
+                    .world
+                    .musubi_resolver_index
+                    .range(package_release_start(&release_id.package)..)
+                    .take_while(|(release, _)| release.package == release_id.package)
+                    .filter(|(_, row)| row.selection.fresh_selectable())
+                    .map(|(release, _)| release.version.clone())
+                    .chain(std::iter::once(release_id.version.clone()))
+                    .max();
+                let directory =
+                    plan_package_directory_entry(&package, latest_selectable, index_revision)?;
+                let row = MusubiResolverReleaseRowV1 {
+                    release: release_id.clone(),
+                    release_digest,
+                    archive_id: archive.archive_id,
+                    source_digest: archive.commitment.source_tree_digest,
+                    interface_digest: self.publication.manifest.interface_digest,
+                    abi: self.publication.manifest.abi,
+                    dependencies: self.publication.manifest.dependencies,
+                    selection: MusubiReleaseSelectionStateV1 {
+                        yank,
+                        storage: availability,
+                        governance: MusubiArtifactGovernanceStateV1::Available,
+                    },
+                    index_revision,
+                };
+                row.validate().map_err(|error| invariant(error.reason()))?;
+                let package_claimed_event = first_claim.then(|| {
+                    MusubiEvent::PackageClaimed(MusubiPackageClaimedEventV1 {
+                        package: release_id.package.clone(),
+                        namespace: package.claimed_namespace.clone(),
+                        claimed_by: authority.clone(),
+                        governance_revision: package.revisions.governance,
+                        finalized_height: height,
+                    })
+                });
+                let metadata_event = first_metadata
+                    .as_ref()
+                    .cloned()
+                    .map(MusubiEvent::PackageMetadataChanged);
 
-        let index_revision = bump_resolver_index_revision(state_transaction)?;
-        state_transaction
-            .world
-            .musubi_packages
-            .insert(release_id.package.clone(), package);
-        state_transaction
-            .world
-            .musubi_releases
-            .insert(release_id.clone(), record);
-        add_archive_reverse_reference(archive.archive_id, release_id.clone(), state_transaction)?;
-        state_transaction.world.musubi_resolver_index.insert(
-            release_id.clone(),
-            MusubiResolverReleaseRowV1 {
-                release: release_id.clone(),
-                release_digest,
-                archive_id: archive.archive_id,
-                source_digest: archive.commitment.source_tree_digest,
-                interface_digest: self.publication.manifest.interface_digest,
-                abi: self.publication.manifest.abi,
-                dependencies: self.publication.manifest.dependencies,
-                selection: MusubiReleaseSelectionStateV1 {
-                    yank,
-                    storage: availability,
-                    governance: MusubiArtifactGovernanceStateV1::Available,
-                },
-                index_revision,
+                *state_transaction
+                    .world
+                    .musubi_resolver_index_revision
+                    .get_mut() = planned_index_revision;
+                if let Some(member) = first_member {
+                    state_transaction
+                        .world
+                        .musubi_package_members
+                        .insert(member.key(), member.clone());
+                    upsert_maintainer_directory(
+                        MusubiMaintainerDirectoryEntryV1::Accepted(member),
+                        state_transaction,
+                    );
+                }
+                if let Some(metadata) = first_metadata {
+                    state_transaction
+                        .world
+                        .musubi_package_metadata
+                        .insert(metadata.package.clone(), metadata);
+                }
+                state_transaction
+                    .world
+                    .musubi_packages
+                    .insert(release_id.package.clone(), package);
+                state_transaction
+                    .world
+                    .musubi_releases
+                    .insert(release_id.clone(), record);
+                state_transaction
+                    .world
+                    .musubi_archive_reverse_references
+                    .insert(archive.archive_id, reverse_references);
+                state_transaction
+                    .world
+                    .musubi_resolver_index
+                    .insert(release_id.clone(), row);
+                state_transaction
+                    .world
+                    .musubi_public_directory
+                    .insert(directory.selector.clone(), directory);
+                if let Some(event) = package_claimed_event {
+                    emit_musubi_event(event, state_transaction);
+                }
+                if let Some(event) = metadata_event {
+                    emit_musubi_event(event, state_transaction);
+                }
+                if let Some(advance) = governance_advance {
+                    advance.apply_invitation_updates(state_transaction);
+                    for event in advance.invitation_events {
+                        emit_musubi_event(event, state_transaction);
+                    }
+                }
+                emit_musubi_event(
+                    MusubiEvent::ReleasePublished(MusubiReleasePublishedEventV1 {
+                        release: release_id,
+                        release_digest,
+                        archive_id: archive.archive_id,
+                        published_by: authority.clone(),
+                        finalized_height: height,
+                    }),
+                    state_transaction,
+                );
+                Ok(())
             },
-        );
-        refresh_directory_for_package(&release_id.package, index_revision, state_transaction)?;
-        if first_claim {
-            let package = state_transaction
-                .world
-                .musubi_packages
-                .get(&release_id.package)
-                .ok_or_else(|| invariant("new Musubi package claim disappeared"))?;
-            emit_musubi_event(
-                MusubiEvent::PackageClaimed(MusubiPackageClaimedEventV1 {
-                    package: release_id.package.clone(),
-                    namespace: package.claimed_namespace.clone(),
-                    claimed_by: authority.clone(),
-                    governance_revision: package.revisions.governance,
-                    finalized_height: height,
-                }),
-                state_transaction,
-            );
-            let metadata = state_transaction
-                .world
-                .musubi_package_metadata
-                .get(&release_id.package)
-                .cloned()
-                .ok_or_else(|| invariant("new Musubi package metadata disappeared"))?;
-            emit_musubi_event(
-                MusubiEvent::PackageMetadataChanged(metadata),
-                state_transaction,
-            );
-        }
-        emit_musubi_event(
-            MusubiEvent::ReleasePublished(MusubiReleasePublishedEventV1 {
-                release: release_id,
-                release_digest,
-                archive_id: archive.archive_id,
-                published_by: authority.clone(),
-                finalized_height: height,
-            }),
-            state_transaction,
-        );
-        Ok(())
+        )
     }
 }
 
@@ -607,60 +771,85 @@ impl Execute for SetMusubiReleaseYankV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let mut release = state_transaction
-            .world
-            .musubi_releases
-            .get(&self.release)
-            .cloned()
-            .ok_or_else(|| release_not_found(&self.release))?;
-        ensure_package_capability(
-            &self.release.package,
-            authority,
-            PackageCapability::Yank,
-            state_transaction.world(),
-        )?;
-        ensure_revision(
-            "release yank",
-            release.revisions.yank,
-            self.expected_yank_revision,
-        )?;
-        if release.yank.yanked == self.yanked {
-            return Err(invariant("Musubi release yank state is unchanged"));
-        }
-        let next = next_revision(release.revisions.yank, "release yank")?;
-        release.yank = MusubiReleaseYankV1 {
-            release: self.release.clone(),
-            yanked: self.yanked,
-            reason: self.reason,
-            changed_by: authority.clone(),
-            changed_at_height: execution_height(state_transaction),
-            revision: next,
-        };
-        release.revisions.yank = next;
-        let index_revision = bump_resolver_index_revision(state_transaction)?;
-        let mut row = state_transaction
-            .world
-            .musubi_resolver_index
-            .get(&self.release)
-            .cloned()
-            .ok_or_else(|| invariant("Musubi release is absent from the resolver index"))?;
-        row.selection.yank = release.yank.clone();
-        row.index_revision = index_revision;
-        let event = MusubiEvent::ReleaseYankChanged(MusubiReleaseYankEventV1 {
-            yank: release.yank.clone(),
-            archive_id: release.manifest.archive_id,
-        });
-        state_transaction
-            .world
-            .musubi_releases
-            .insert(self.release.clone(), release);
-        state_transaction
-            .world
-            .musubi_resolver_index
-            .insert(self.release.clone(), row);
-        refresh_directory_for_package(&self.release.package, index_revision, state_transaction)?;
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Yank,
+            |state_transaction, rejection_reason| {
+                self.release
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                self.reason
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let mut release = state_transaction
+                    .world
+                    .musubi_releases
+                    .get(&self.release)
+                    .cloned()
+                    .ok_or_else(|| release_not_found(&self.release))?;
+                ensure_package_capability(
+                    &self.release.package,
+                    authority,
+                    PackageCapability::Yank,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "release yank",
+                        release.revisions.yank,
+                        self.expected_yank_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                if release.yank.yanked == self.yanked {
+                    return Err(invariant("Musubi release yank state is unchanged"));
+                }
+                let next = next_revision(release.revisions.yank, "release yank")?;
+                release.yank = MusubiReleaseYankV1 {
+                    release: self.release.clone(),
+                    yanked: self.yanked,
+                    reason: self.reason,
+                    changed_by: authority.clone(),
+                    changed_at_height: execution_height(state_transaction),
+                    revision: next,
+                };
+                release.revisions.yank = next;
+                let index_revision = bump_resolver_index_revision(state_transaction)?;
+                let mut row = state_transaction
+                    .world
+                    .musubi_resolver_index
+                    .get(&self.release)
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi release is absent from the resolver index"))?;
+                row.selection.yank = release.yank.clone();
+                row.index_revision = index_revision;
+                release
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                row.validate().map_err(|error| invariant(error.reason()))?;
+                let event = MusubiEvent::ReleaseYankChanged(MusubiReleaseYankEventV1 {
+                    yank: release.yank.clone(),
+                    archive_id: release.manifest.archive_id,
+                });
+                state_transaction
+                    .world
+                    .musubi_releases
+                    .insert(self.release.clone(), release);
+                state_transaction
+                    .world
+                    .musubi_resolver_index
+                    .insert(self.release.clone(), row);
+                refresh_directory_for_package(
+                    &self.release.package,
+                    index_revision,
+                    state_transaction,
+                )?;
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -670,50 +859,61 @@ impl Execute for SetMusubiPackageMetadataV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        self.metadata
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        let mut package = state_transaction
-            .world
-            .musubi_packages
-            .get(&self.package)
-            .cloned()
-            .ok_or_else(|| package_not_found(&self.package))?;
-        ensure_package_capability(
-            &self.package,
-            authority,
-            PackageCapability::Metadata,
-            state_transaction.world(),
-        )?;
-        ensure_revision(
-            "package metadata",
-            package.revisions.metadata,
-            self.expected_metadata_revision,
-        )?;
-        let next = next_revision(package.revisions.metadata, "package metadata")?;
-        package.revisions.metadata = next;
-        state_transaction
-            .world
-            .musubi_packages
-            .insert(self.package.clone(), package);
-        let metadata = MusubiPackageMetadataRecordV1 {
-            package: self.package.clone(),
-            metadata: self.metadata,
-            revision: next,
-            changed_by: authority.clone(),
-            changed_at_height: execution_height(state_transaction),
-        };
-        state_transaction
-            .world
-            .musubi_package_metadata
-            .insert(self.package.clone(), metadata.clone());
-        let index_revision = bump_resolver_index_revision(state_transaction)?;
-        refresh_directory_for_package(&self.package, index_revision, state_transaction)?;
-        emit_musubi_event(
-            MusubiEvent::PackageMetadataChanged(metadata),
+        execute_governance_mutation(
             state_transaction,
-        );
-        Ok(())
+            MusubiGovernanceActionV1::Metadata,
+            |state_transaction, rejection_reason| {
+                self.metadata
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let mut package = state_transaction
+                    .world
+                    .musubi_packages
+                    .get(&self.package)
+                    .cloned()
+                    .ok_or_else(|| package_not_found(&self.package))?;
+                ensure_package_capability(
+                    &self.package,
+                    authority,
+                    PackageCapability::Metadata,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "package metadata",
+                        package.revisions.metadata,
+                        self.expected_metadata_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                let next = next_revision(package.revisions.metadata, "package metadata")?;
+                package.revisions.metadata = next;
+                state_transaction
+                    .world
+                    .musubi_packages
+                    .insert(self.package.clone(), package);
+                let metadata = MusubiPackageMetadataRecordV1 {
+                    package: self.package.clone(),
+                    metadata: self.metadata,
+                    revision: next,
+                    changed_by: authority.clone(),
+                    changed_at_height: execution_height(state_transaction),
+                };
+                state_transaction
+                    .world
+                    .musubi_package_metadata
+                    .insert(self.package.clone(), metadata.clone());
+                let index_revision = bump_resolver_index_revision(state_transaction)?;
+                refresh_directory_for_package(&self.package, index_revision, state_transaction)?;
+                emit_musubi_event(
+                    MusubiEvent::PackageMetadataChanged(metadata),
+                    state_transaction,
+                );
+                Ok(())
+            },
+        )
     }
 }
 
@@ -723,67 +923,106 @@ impl Execute for InviteMusubiPackageMaintainerV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        validate_role(self.role)?;
-        ensure_package_owner(&self.package, authority, state_transaction.world())?;
-        let mut package = state_transaction
-            .world
-            .musubi_packages
-            .get(&self.package)
-            .cloned()
-            .ok_or_else(|| package_not_found(&self.package))?;
-        ensure_revision(
-            "package governance",
-            package.revisions.governance,
-            self.expected_governance_revision,
-        )?;
-        if self.expires_at_height <= execution_height(state_transaction) {
-            return Err(invalid_parameter(
-                "Musubi package invitation expiry must be in the future",
-            ));
-        }
-        if package
-            .member_accounts
-            .binary_search(&self.invited_account)
-            .is_ok()
-        {
-            return Err(invariant(
-                "Musubi package invitation targets an existing member",
-            ));
-        }
-        if state_transaction
-            .world
-            .musubi_package_invitations
-            .get(&self.invite_id)
-            .is_some()
-        {
-            return Err(invariant("Musubi package invitation id is already used"));
-        }
-        let next = next_revision(package.revisions.governance, "package governance")?;
-        package.revisions.governance = next;
-        let invitation = MusubiMaintainerInvitationV1 {
-            invite_id: self.invite_id,
-            package: self.package.clone(),
-            invited_by: authority.clone(),
-            invited_account: self.invited_account,
-            role: self.role,
-            expected_governance_revision: next,
-            expires_at_height: self.expires_at_height,
-            state: MusubiInvitationStateV1::Pending,
-        };
-        invitation
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        let event = MusubiEvent::MaintainerInvited(invitation.clone());
-        state_transaction
-            .world
-            .musubi_packages
-            .insert(self.package, package);
-        state_transaction
-            .world
-            .musubi_package_invitations
-            .insert(self.invite_id, invitation);
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Invite,
+            |state_transaction, rejection_reason| {
+                validate_role(self.role)?;
+                ensure_package_owner(
+                    &self.package,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                let mut package = state_transaction
+                    .world
+                    .musubi_packages
+                    .get(&self.package)
+                    .cloned()
+                    .ok_or_else(|| package_not_found(&self.package))?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "package governance",
+                        package.revisions.governance,
+                        self.expected_governance_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                let height = execution_height(state_transaction);
+                if self.expires_at_height <= height {
+                    return Err(invalid_parameter(
+                        "Musubi package invitation expiry must be in the future",
+                    ));
+                }
+                if package
+                    .member_accounts
+                    .binary_search(&self.invited_account)
+                    .is_ok()
+                {
+                    return Err(invariant(
+                        "Musubi package invitation targets an existing member",
+                    ));
+                }
+                if state_transaction
+                    .world
+                    .musubi_package_invitations
+                    .get(&self.invite_id)
+                    .is_some()
+                {
+                    return Err(invariant("Musubi package invitation id is already used"));
+                }
+                let active_pending = active_pending_invitation_count(
+                    &self.package,
+                    height,
+                    state_transaction.world(),
+                );
+                if active_pending >= MUSUBI_MAX_PENDING_INVITATIONS_V1 {
+                    return Err(invariant(
+                        "Musubi package pending-invitation bound is exhausted",
+                    ));
+                }
+                let next = next_revision(package.revisions.governance, "package governance")?;
+                let invitation = MusubiMaintainerInvitationV1 {
+                    invite_id: self.invite_id,
+                    package: self.package.clone(),
+                    invited_by: authority.clone(),
+                    invited_account: self.invited_account,
+                    role: self.role,
+                    expected_governance_revision: next,
+                    expires_at_height: self.expires_at_height,
+                    state: MusubiInvitationStateV1::Pending,
+                };
+                invitation
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let advance = plan_package_governance_advance(
+                    &mut package,
+                    height,
+                    None,
+                    state_transaction.world(),
+                )?;
+                let event = MusubiEvent::MaintainerInvited(invitation.clone());
+                state_transaction
+                    .world
+                    .musubi_packages
+                    .insert(self.package, package);
+                advance.apply_invitation_updates(state_transaction);
+                state_transaction
+                    .world
+                    .musubi_package_invitations
+                    .insert(self.invite_id, invitation.clone());
+                upsert_maintainer_directory(
+                    MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation),
+                    state_transaction,
+                );
+                for event in advance.invitation_events {
+                    emit_musubi_event(event, state_transaction);
+                }
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -793,102 +1032,215 @@ impl Execute for AcceptMusubiPackageMaintainerV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let mut invitation = state_transaction
-            .world
-            .musubi_package_invitations
-            .get(&self.invite_id)
-            .cloned()
-            .ok_or_else(|| invariant("Musubi package invitation was not found"))?;
-        if invitation.package != self.package
-            || invitation.invited_account != *authority
-            || invitation.state != MusubiInvitationStateV1::Pending
-        {
-            return Err(invariant(
-                "Musubi package invitation is not pending for this authority",
-            ));
-        }
-        if execution_height(state_transaction) > invitation.expires_at_height {
-            invitation.state = MusubiInvitationStateV1::Expired;
-            state_transaction
-                .world
-                .musubi_package_invitations
-                .insert(self.invite_id, invitation);
-            return Err(invariant("Musubi package invitation has expired"));
-        }
-        let mut package = state_transaction
-            .world
-            .musubi_packages
-            .get(&self.package)
-            .cloned()
-            .ok_or_else(|| package_not_found(&self.package))?;
-        ensure_revision(
-            "package governance",
-            package.revisions.governance,
-            self.expected_governance_revision,
-        )?;
-        ensure_revision(
-            "package invitation",
-            invitation.expected_governance_revision,
-            self.expected_governance_revision,
-        )?;
-        if package.member_accounts.binary_search(authority).is_ok() {
-            return Err(invariant(
-                "Musubi package invitation targets an existing member",
-            ));
-        }
-        if package.member_accounts.len() >= MUSUBI_MAX_PACKAGE_MEMBERS_V1 {
-            return Err(invariant("Musubi package member bound is exhausted"));
-        }
-        let maintainer_count = package
-            .member_accounts
-            .len()
-            .saturating_sub(package.owners.len());
-        if matches!(invitation.role, MusubiPackageRoleV1::Maintainer(_))
-            && maintainer_count >= MUSUBI_MAX_PACKAGE_MAINTAINERS_V1
-        {
-            return Err(invariant("Musubi package maintainer bound is exhausted"));
-        }
-        if invitation.role == MusubiPackageRoleV1::Owner
-            && package.owners.len() >= MUSUBI_MAX_PACKAGE_OWNERS_V1
-        {
-            return Err(invariant("Musubi package owner bound is exhausted"));
-        }
-        let next = next_revision(package.revisions.governance, "package governance")?;
-        package.revisions.governance = next;
-        if invitation.role == MusubiPackageRoleV1::Owner {
-            package.owners.push(authority.clone());
-            package.owners.sort();
-            package.owners.dedup();
-        }
-        package.member_accounts.push(authority.clone());
-        package.member_accounts.sort();
-        package.member_accounts.dedup();
-        package
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
-        invitation.state = MusubiInvitationStateV1::Accepted;
-        invitation.expected_governance_revision = next;
-        let member = MusubiPackageMemberV1 {
-            package: self.package.clone(),
-            account: authority.clone(),
-            role: invitation.role,
-            accepted_at_height: execution_height(state_transaction),
-            governance_revision: next,
-        };
-        state_transaction.world.musubi_package_members.insert(
-            MusubiPackageMemberKeyV1::new(self.package.clone(), authority.clone()),
-            member.clone(),
-        );
-        state_transaction
-            .world
-            .musubi_packages
-            .insert(self.package, package);
-        state_transaction
-            .world
-            .musubi_package_invitations
-            .insert(self.invite_id, invitation);
-        emit_musubi_event(MusubiEvent::MaintainerAccepted(member), state_transaction);
-        Ok(())
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Accept,
+            |state_transaction, rejection_reason| {
+                let invitation = state_transaction
+                    .world
+                    .musubi_package_invitations
+                    .get(&self.invite_id)
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi package invitation was not found"))?;
+                if invitation.package != self.package
+                    || invitation.invited_account != *authority
+                    || invitation.state != MusubiInvitationStateV1::Pending
+                {
+                    if invitation.invited_account != *authority {
+                        *rejection_reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
+                    }
+                    return Err(invariant(
+                        "Musubi package invitation is not pending for this authority",
+                    ));
+                }
+                if execution_height(state_transaction) > invitation.expires_at_height {
+                    return Err(invariant(
+                        "Musubi package invitation has expired; the next successful package governance mutation commits bounded expiry cleanup",
+                    ));
+                }
+                let mut package = state_transaction
+                    .world
+                    .musubi_packages
+                    .get(&self.package)
+                    .cloned()
+                    .ok_or_else(|| package_not_found(&self.package))?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "package governance",
+                        package.revisions.governance,
+                        self.expected_governance_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "package invitation",
+                        invitation.expected_governance_revision,
+                        self.expected_governance_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                if package.member_accounts.binary_search(authority).is_ok() {
+                    return Err(invariant(
+                        "Musubi package invitation targets an existing member",
+                    ));
+                }
+                if package.member_accounts.len() >= MUSUBI_MAX_PACKAGE_MEMBERS_V1 {
+                    return Err(invariant("Musubi package member bound is exhausted"));
+                }
+                let maintainer_count = package
+                    .member_accounts
+                    .len()
+                    .saturating_sub(package.owners.len());
+                if matches!(invitation.role, MusubiPackageRoleV1::Maintainer(_))
+                    && maintainer_count >= MUSUBI_MAX_PACKAGE_MAINTAINERS_V1
+                {
+                    return Err(invariant("Musubi package maintainer bound is exhausted"));
+                }
+                if invitation.role == MusubiPackageRoleV1::Owner
+                    && package.owners.len() >= MUSUBI_MAX_PACKAGE_OWNERS_V1
+                {
+                    return Err(invariant("Musubi package owner bound is exhausted"));
+                }
+                let height = execution_height(state_transaction);
+                if invitation.role == MusubiPackageRoleV1::Owner {
+                    package.owners.push(authority.clone());
+                    package.owners.sort();
+                    package.owners.dedup();
+                }
+                package.member_accounts.push(authority.clone());
+                package.member_accounts.sort();
+                package.member_accounts.dedup();
+                package
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                let advance = plan_package_governance_advance(
+                    &mut package,
+                    height,
+                    Some((self.invite_id, MusubiInvitationStateV1::Accepted)),
+                    state_transaction.world(),
+                )?;
+                let next = advance.revision;
+                let invitation = advance
+                    .terminal_invitation
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi accepted invitation was not terminalized"))?;
+                let member = MusubiPackageMemberV1 {
+                    package: self.package.clone(),
+                    account: authority.clone(),
+                    role: invitation.role,
+                    accepted_at_height: height,
+                    governance_revision: next,
+                };
+                state_transaction.world.musubi_package_members.insert(
+                    MusubiPackageMemberKeyV1::new(self.package.clone(), authority.clone()),
+                    member.clone(),
+                );
+                state_transaction
+                    .world
+                    .musubi_packages
+                    .insert(self.package, package);
+                advance.apply_invitation_updates(state_transaction);
+                upsert_maintainer_directory(
+                    MusubiMaintainerDirectoryEntryV1::Accepted(member.clone()),
+                    state_transaction,
+                );
+                for event in advance.invitation_events {
+                    emit_musubi_event(event, state_transaction);
+                }
+                emit_musubi_event(MusubiEvent::MaintainerAccepted(member), state_transaction);
+                Ok(())
+            },
+        )
+    }
+}
+
+impl Execute for RevokeMusubiPackageMaintainerInvitationV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Invite,
+            |state_transaction, rejection_reason| {
+                ensure_package_owner(
+                    &self.package,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                let mut package = state_transaction
+                    .world
+                    .musubi_packages
+                    .get(&self.package)
+                    .cloned()
+                    .ok_or_else(|| package_not_found(&self.package))?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "package governance",
+                        package.revisions.governance,
+                        self.expected_governance_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                let invitation = state_transaction
+                    .world
+                    .musubi_package_invitations
+                    .get(&self.invite_id)
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi package invitation was not found"))?;
+                if invitation.package != self.package
+                    || invitation.state != MusubiInvitationStateV1::Pending
+                {
+                    return Err(invariant(
+                        "Musubi package invitation is not pending for this package",
+                    ));
+                }
+                let height = execution_height(state_transaction);
+                if height > invitation.expires_at_height {
+                    return Err(invariant(
+                        "Musubi package invitation has expired; the next successful package governance mutation commits bounded expiry cleanup",
+                    ));
+                }
+                let advance = plan_package_governance_advance(
+                    &mut package,
+                    height,
+                    Some((self.invite_id, MusubiInvitationStateV1::Revoked)),
+                    state_transaction.world(),
+                )?;
+                let next = advance.revision;
+                let invitation = advance
+                    .terminal_invitation
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi revoked invitation was not terminalized"))?;
+                let event = MusubiEvent::MaintainerInvitationRevoked(
+                    MusubiMaintainerInvitationLifecycleEventV1 {
+                        package: self.package.clone(),
+                        invite_id: self.invite_id,
+                        invited_account: invitation.invited_account.clone(),
+                        governance_revision: next,
+                        finalized_height: height,
+                    },
+                );
+                state_transaction
+                    .world
+                    .musubi_packages
+                    .insert(self.package, package);
+                advance.apply_invitation_updates(state_transaction);
+                for event in advance.invitation_events {
+                    emit_musubi_event(event, state_transaction);
+                }
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -898,75 +1250,108 @@ impl Execute for SetMusubiPackageMaintainerRoleV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        validate_role(self.role)?;
-        ensure_package_owner(&self.package, authority, state_transaction.world())?;
-        let mut package = state_transaction
-            .world
-            .musubi_packages
-            .get(&self.package)
-            .cloned()
-            .ok_or_else(|| package_not_found(&self.package))?;
-        ensure_revision(
-            "package governance",
-            package.revisions.governance,
-            self.expected_governance_revision,
-        )?;
-        let key = MusubiPackageMemberKeyV1::new(self.package.clone(), self.account.clone());
-        let mut member = state_transaction
-            .world
-            .musubi_package_members
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| invariant("Musubi package member was not found"))?;
-        if member.role == self.role {
-            return Err(invariant("Musubi package member role is unchanged"));
-        }
-        if member.role == MusubiPackageRoleV1::Owner
-            && self.role != MusubiPackageRoleV1::Owner
-            && package.owners.len() == 1
-        {
-            return Err(invariant("Musubi package must retain its last owner"));
-        }
-        if member.role != MusubiPackageRoleV1::Owner
-            && self.role == MusubiPackageRoleV1::Owner
-            && package.owners.len() >= MUSUBI_MAX_PACKAGE_OWNERS_V1
-        {
-            return Err(invariant("Musubi package owner bound is exhausted"));
-        }
-        if member.role == MusubiPackageRoleV1::Owner
-            && matches!(self.role, MusubiPackageRoleV1::Maintainer(_))
-            && package
-                .member_accounts
-                .len()
-                .saturating_sub(package.owners.len())
-                >= MUSUBI_MAX_PACKAGE_MAINTAINERS_V1
-        {
-            return Err(invariant("Musubi package maintainer bound is exhausted"));
-        }
-        let next = next_revision(package.revisions.governance, "package governance")?;
-        package.revisions.governance = next;
-        package.owners.retain(|owner| owner != &self.account);
-        if self.role == MusubiPackageRoleV1::Owner {
-            package.owners.push(self.account.clone());
-            package.owners.sort();
-            package.owners.dedup();
-        }
-        package
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
-        member.role = self.role;
-        member.governance_revision = next;
-        let event = MusubiEvent::MaintainerRoleChanged(member.clone());
-        state_transaction
-            .world
-            .musubi_packages
-            .insert(self.package, package);
-        state_transaction
-            .world
-            .musubi_package_members
-            .insert(key, member);
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::SetRole,
+            |state_transaction, rejection_reason| {
+                validate_role(self.role)?;
+                ensure_package_owner(
+                    &self.package,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                let mut package = state_transaction
+                    .world
+                    .musubi_packages
+                    .get(&self.package)
+                    .cloned()
+                    .ok_or_else(|| package_not_found(&self.package))?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "package governance",
+                        package.revisions.governance,
+                        self.expected_governance_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                let key = MusubiPackageMemberKeyV1::new(self.package.clone(), self.account.clone());
+                let mut member = state_transaction
+                    .world
+                    .musubi_package_members
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi package member was not found"))?;
+                if member.role == self.role {
+                    return Err(invariant("Musubi package member role is unchanged"));
+                }
+                if member.role == MusubiPackageRoleV1::Owner
+                    && self.role != MusubiPackageRoleV1::Owner
+                    && package.owners.len() == 1
+                {
+                    return reject_governance_mutation(
+                        rejection_reason,
+                        MusubiGovernanceRejectionReasonV1::LastOwner,
+                        invariant("Musubi package must retain its last owner"),
+                    );
+                }
+                if member.role != MusubiPackageRoleV1::Owner
+                    && self.role == MusubiPackageRoleV1::Owner
+                    && package.owners.len() >= MUSUBI_MAX_PACKAGE_OWNERS_V1
+                {
+                    return Err(invariant("Musubi package owner bound is exhausted"));
+                }
+                if member.role == MusubiPackageRoleV1::Owner
+                    && matches!(self.role, MusubiPackageRoleV1::Maintainer(_))
+                    && package
+                        .member_accounts
+                        .len()
+                        .saturating_sub(package.owners.len())
+                        >= MUSUBI_MAX_PACKAGE_MAINTAINERS_V1
+                {
+                    return Err(invariant("Musubi package maintainer bound is exhausted"));
+                }
+                let height = execution_height(state_transaction);
+                package.owners.retain(|owner| owner != &self.account);
+                if self.role == MusubiPackageRoleV1::Owner {
+                    package.owners.push(self.account.clone());
+                    package.owners.sort();
+                    package.owners.dedup();
+                }
+                package
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                let advance = plan_package_governance_advance(
+                    &mut package,
+                    height,
+                    None,
+                    state_transaction.world(),
+                )?;
+                let next = advance.revision;
+                member.role = self.role;
+                member.governance_revision = next;
+                let event = MusubiEvent::MaintainerRoleChanged(member.clone());
+                state_transaction
+                    .world
+                    .musubi_packages
+                    .insert(self.package, package);
+                state_transaction
+                    .world
+                    .musubi_package_members
+                    .insert(key, member.clone());
+                upsert_maintainer_directory(
+                    MusubiMaintainerDirectoryEntryV1::Accepted(member),
+                    state_transaction,
+                );
+                advance.apply_invitation_updates(state_transaction);
+                for event in advance.invitation_events {
+                    emit_musubi_event(event, state_transaction);
+                }
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -976,51 +1361,88 @@ impl Execute for RemoveMusubiPackageMaintainerV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_package_owner(&self.package, authority, state_transaction.world())?;
-        let mut package = state_transaction
-            .world
-            .musubi_packages
-            .get(&self.package)
-            .cloned()
-            .ok_or_else(|| package_not_found(&self.package))?;
-        ensure_revision(
-            "package governance",
-            package.revisions.governance,
-            self.expected_governance_revision,
-        )?;
-        let key = MusubiPackageMemberKeyV1::new(self.package.clone(), self.account.clone());
-        let member = state_transaction
-            .world
-            .musubi_package_members
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| invariant("Musubi package member was not found"))?;
-        if member.role == MusubiPackageRoleV1::Owner && package.owners.len() == 1 {
-            return Err(invariant("Musubi package must retain its last owner"));
-        }
-        package.owners.retain(|owner| owner != &self.account);
-        package
-            .member_accounts
-            .retain(|account| account != &self.account);
-        package.revisions.governance =
-            next_revision(package.revisions.governance, "package governance")?;
-        package
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
-        let event = MusubiEvent::MaintainerRemoved(MusubiPackageMemberRemovedEventV1 {
-            package: self.package.clone(),
-            account: self.account.clone(),
-            previous_role: member.role,
-            governance_revision: package.revisions.governance,
-            finalized_height: execution_height(state_transaction),
-        });
-        state_transaction
-            .world
-            .musubi_packages
-            .insert(self.package, package);
-        state_transaction.world.musubi_package_members.remove(key);
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Remove,
+            |state_transaction, rejection_reason| {
+                ensure_package_owner(
+                    &self.package,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                let mut package = state_transaction
+                    .world
+                    .musubi_packages
+                    .get(&self.package)
+                    .cloned()
+                    .ok_or_else(|| package_not_found(&self.package))?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "package governance",
+                        package.revisions.governance,
+                        self.expected_governance_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                let key = MusubiPackageMemberKeyV1::new(self.package.clone(), self.account.clone());
+                let member = state_transaction
+                    .world
+                    .musubi_package_members
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi package member was not found"))?;
+                let directory_key = MusubiMaintainerDirectoryKeyV1::accepted(
+                    member.package.clone(),
+                    member.account.clone(),
+                );
+                if member.role == MusubiPackageRoleV1::Owner && package.owners.len() == 1 {
+                    return reject_governance_mutation(
+                        rejection_reason,
+                        MusubiGovernanceRejectionReasonV1::LastOwner,
+                        invariant("Musubi package must retain its last owner"),
+                    );
+                }
+                package.owners.retain(|owner| owner != &self.account);
+                package
+                    .member_accounts
+                    .retain(|account| account != &self.account);
+                let height = execution_height(state_transaction);
+                package
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                let advance = plan_package_governance_advance(
+                    &mut package,
+                    height,
+                    None,
+                    state_transaction.world(),
+                )?;
+                let next = advance.revision;
+                let event = MusubiEvent::MaintainerRemoved(MusubiPackageMemberRemovedEventV1 {
+                    package: self.package.clone(),
+                    account: self.account.clone(),
+                    previous_role: member.role,
+                    governance_revision: next,
+                    finalized_height: height,
+                });
+                state_transaction
+                    .world
+                    .musubi_packages
+                    .insert(self.package, package);
+                state_transaction.world.musubi_package_members.remove(key);
+                state_transaction
+                    .world
+                    .musubi_maintainer_directory
+                    .remove(directory_key);
+                advance.apply_invitation_updates(state_transaction);
+                for event in advance.invitation_events {
+                    emit_musubi_event(event, state_transaction);
+                }
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -1030,89 +1452,122 @@ impl Execute for RegisterMusubiAliasV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        self.alias
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        if let Some(existing) = state_transaction.world.musubi_aliases.get(&self.alias) {
-            return if existing.target == self.target {
-                Ok(())
-            } else {
-                Err(invariant(format!(
-                    "Musubi alias '{}' is permanent and already registered",
-                    self.alias
-                )))
-            };
-        }
-        let policy = state_transaction.world.musubi_registry_policy.get().clone();
-        ensure_admitted(
-            &policy,
-            Some(self.target.home_dataspace),
-            authority,
-            state_transaction.world(),
-        )?;
-        if policy.alias_pricing.revision != self.expected_pricing_revision {
-            return Err(stale_revision(
-                "alias pricing",
-                policy.alias_pricing.revision,
-                self.expected_pricing_revision,
-            ));
-        }
-        ensure_package_owner(&self.target, authority, state_transaction.world())?;
-        if !package_has_active_release(&self.target, state_transaction.world()) {
-            return Err(invariant(
-                "Musubi alias target must have at least one active release",
-            ));
-        }
-        let price = policy.alias_pricing.price_for(&self.alias);
-        let source = AssetId::new(
-            state_transaction.gov.sorafs_pin_fee_asset_id.clone(),
-            authority.clone(),
-        );
-        let treasury = state_transaction
-            .gov
-            .sorafs_pin_fee_treasury_account
-            .clone();
-        crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+        execute_governance_mutation(
             state_transaction,
-            authority,
-            source,
-            treasury,
-            Quantity::from(price),
-        )?;
-        let height = execution_height(state_transaction);
-        let record = MusubiAliasRecordV1 {
-            alias: self.alias.clone(),
-            target: self.target.clone(),
-            registered_by: authority.clone(),
-            pricing_revision: policy.alias_pricing.revision,
-            paid_xor: price,
-            registered_at_height: height,
-            history_revision: 1,
-        };
-        record
-            .validate(&policy.alias_pricing)
-            .map_err(|error| invariant(error.reason()))?;
-        state_transaction
-            .world
-            .musubi_aliases
-            .insert(self.alias.clone(), record);
-        let history = MusubiAliasHistoryEntryV1 {
-            alias: self.alias,
-            revision: 1,
-            action: MusubiAliasHistoryActionV1::Registered,
-            previous_target: None,
-            target: self.target,
-            governance_action: None,
-            finalized_height: height,
-        };
-        let event = MusubiEvent::AliasRegistered(history.clone());
-        state_transaction
-            .world
-            .musubi_alias_history
-            .insert(history.key(), history);
-        let _ = bump_resolver_index_revision(state_transaction)?;
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+            MusubiGovernanceActionV1::Alias,
+            |state_transaction, rejection_reason| {
+                self.alias
+                    .validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let existing = state_transaction
+                    .world
+                    .musubi_aliases
+                    .get(&self.alias)
+                    .cloned();
+                if existing
+                    .as_ref()
+                    .is_some_and(|record| record.target != self.target)
+                {
+                    return Err(invariant(format!(
+                        "Musubi alias '{}' is permanent and already registered",
+                        self.alias
+                    )));
+                }
+                if existing.is_some() {
+                    ensure_package_owner(
+                        &self.target,
+                        authority,
+                        state_transaction.world(),
+                        rejection_reason,
+                    )?;
+                    return Ok(());
+                }
+                let policy = state_transaction.world.musubi_registry_policy.get().clone();
+                ensure_admitted(
+                    &policy,
+                    Some(self.target.home_dataspace),
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                if policy.alias_pricing.revision != self.expected_pricing_revision {
+                    return reject_governance_mutation(
+                        rejection_reason,
+                        MusubiGovernanceRejectionReasonV1::Payment,
+                        stale_revision(
+                            "alias pricing",
+                            policy.alias_pricing.revision,
+                            self.expected_pricing_revision,
+                        ),
+                    );
+                }
+                ensure_package_owner(
+                    &self.target,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                if !package_has_active_release(&self.target, state_transaction.world()) {
+                    return Err(invariant(
+                        "Musubi alias target must have at least one active release",
+                    ));
+                }
+                let price = policy.alias_pricing.price_for(&self.alias);
+                let source = AssetId::new(
+                    state_transaction.gov.sorafs_pin_fee_asset_id.clone(),
+                    authority.clone(),
+                );
+                let treasury = state_transaction
+                    .gov
+                    .sorafs_pin_fee_treasury_account
+                    .clone();
+                classify_governance_rejection(
+                    crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+                        state_transaction,
+                        authority,
+                        source,
+                        treasury,
+                        Quantity::from(price),
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::Payment,
+                )?;
+                let height = execution_height(state_transaction);
+                let record = MusubiAliasRecordV1 {
+                    alias: self.alias.clone(),
+                    target: self.target.clone(),
+                    registered_by: authority.clone(),
+                    pricing_revision: policy.alias_pricing.revision,
+                    paid_xor: price,
+                    registered_at_height: height,
+                    history_revision: 1,
+                };
+                record
+                    .validate(&policy.alias_pricing)
+                    .map_err(|error| invariant(error.reason()))?;
+                state_transaction
+                    .world
+                    .musubi_aliases
+                    .insert(self.alias.clone(), record);
+                let history = MusubiAliasHistoryEntryV1 {
+                    alias: self.alias,
+                    revision: 1,
+                    action: MusubiAliasHistoryActionV1::Registered,
+                    previous_target: None,
+                    target: self.target,
+                    governance_action: None,
+                    finalized_height: height,
+                };
+                let event = MusubiEvent::AliasRegistered(history.clone());
+                state_transaction
+                    .world
+                    .musubi_alias_history
+                    .insert(history.key(), history);
+                let _ = bump_resolver_index_revision(state_transaction)?;
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -1122,84 +1577,134 @@ impl Execute for RecoverMusubiPackageV1 {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let action = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
-            package: self.package.clone(),
-            owners: self.owners.clone(),
-            expected_revision: self.expected_governance_revision,
-        });
-        verify_parliament_decision(&self.decision, &action, state_transaction)?;
-        let mut package = state_transaction
-            .world
-            .musubi_packages
-            .get(&self.package)
-            .cloned()
-            .ok_or_else(|| package_not_found(&self.package))?;
-        ensure_revision(
-            "package governance",
-            package.revisions.governance,
-            self.expected_governance_revision,
-        )?;
-        let next = next_revision(package.revisions.governance, "package governance")?;
-        let existing_members = package
-            .member_accounts
-            .iter()
-            .map(|account| {
-                let key = MusubiPackageMemberKeyV1::new(self.package.clone(), account.clone());
-                let member = state_transaction
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Recovery,
+            |state_transaction, rejection_reason| {
+                let action =
+                    MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
+                        package: self.package.clone(),
+                        owners: self.owners.clone(),
+                        expected_revision: self.expected_governance_revision,
+                    });
+                verify_parliament_decision(
+                    &self.decision,
+                    &action,
+                    state_transaction,
+                    rejection_reason,
+                )?;
+                let mut package = state_transaction
                     .world
-                    .musubi_package_members
-                    .get(&key)
+                    .musubi_packages
+                    .get(&self.package)
                     .cloned()
-                    .ok_or_else(|| invariant("Musubi package member directory is inconsistent"))?;
-                Ok((key, member))
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        for (key, member) in existing_members {
-            if member.role == MusubiPackageRoleV1::Owner && !self.owners.contains(&member.account) {
-                package
+                    .ok_or_else(|| package_not_found(&self.package))?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "package governance",
+                        package.revisions.governance,
+                        self.expected_governance_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                let height = execution_height(state_transaction);
+                let existing_members = package
                     .member_accounts
-                    .retain(|account| account != &member.account);
-                state_transaction.world.musubi_package_members.remove(key);
-            }
-        }
-        for owner in &self.owners {
-            if package.member_accounts.binary_search(owner).is_err() {
-                package.member_accounts.push(owner.clone());
-                package.member_accounts.sort();
-                package.member_accounts.dedup();
-            }
-            state_transaction.world.musubi_package_members.insert(
-                MusubiPackageMemberKeyV1::new(self.package.clone(), owner.clone()),
-                MusubiPackageMemberV1 {
+                    .iter()
+                    .map(|account| {
+                        let key =
+                            MusubiPackageMemberKeyV1::new(self.package.clone(), account.clone());
+                        let member = state_transaction
+                            .world
+                            .musubi_package_members
+                            .get(&key)
+                            .cloned()
+                            .ok_or_else(|| {
+                                invariant("Musubi package member directory is inconsistent")
+                            })?;
+                        Ok((key, member))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                for (_, member) in &existing_members {
+                    if member.role == MusubiPackageRoleV1::Owner
+                        && !self.owners.contains(&member.account)
+                    {
+                        package
+                            .member_accounts
+                            .retain(|account| account != &member.account);
+                    }
+                }
+                for owner in &self.owners {
+                    if package.member_accounts.binary_search(owner).is_err() {
+                        package.member_accounts.push(owner.clone());
+                        package.member_accounts.sort();
+                        package.member_accounts.dedup();
+                    }
+                }
+                package.owners = self.owners;
+                package
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                let advance = plan_package_governance_advance(
+                    &mut package,
+                    height,
+                    None,
+                    state_transaction.world(),
+                )?;
+                let next = advance.revision;
+                let owner_count = u8::try_from(package.owners.len())
+                    .map_err(|_| invariant("Musubi package owner count overflows u8"))?;
+                let event = MusubiEvent::PackageRecovered(MusubiPackageRecoveredEventV1 {
                     package: self.package.clone(),
-                    account: owner.clone(),
-                    role: MusubiPackageRoleV1::Owner,
-                    accepted_at_height: execution_height(state_transaction),
+                    action_digest: self.decision.action_digest,
+                    owner_count,
                     governance_revision: next,
-                },
-            );
-        }
-        package.owners = self.owners;
-        package.revisions.governance = next;
-        package
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
-        let owner_count = u8::try_from(package.owners.len())
-            .map_err(|_| invariant("Musubi package owner count overflows u8"))?;
-        let event = MusubiEvent::PackageRecovered(MusubiPackageRecoveredEventV1 {
-            package: self.package.clone(),
-            action_digest: self.decision.action_digest,
-            owner_count,
-            governance_revision: next,
-            finalized_height: execution_height(state_transaction),
-        });
-        state_transaction
-            .world
-            .musubi_packages
-            .insert(self.package, package);
-        consume_parliament_decision(self.decision, state_transaction);
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+                    finalized_height: height,
+                });
+                consume_parliament_decision(self.decision, state_transaction)?;
+                for (key, member) in existing_members {
+                    if member.role == MusubiPackageRoleV1::Owner
+                        && !package.owners.contains(&member.account)
+                    {
+                        state_transaction.world.musubi_package_members.remove(key);
+                        state_transaction.world.musubi_maintainer_directory.remove(
+                            MusubiMaintainerDirectoryKeyV1::accepted(
+                                member.package,
+                                member.account,
+                            ),
+                        );
+                    }
+                }
+                for owner in &package.owners {
+                    let member = MusubiPackageMemberV1 {
+                        package: self.package.clone(),
+                        account: owner.clone(),
+                        role: MusubiPackageRoleV1::Owner,
+                        accepted_at_height: height,
+                        governance_revision: next,
+                    };
+                    state_transaction.world.musubi_package_members.insert(
+                        MusubiPackageMemberKeyV1::new(self.package.clone(), owner.clone()),
+                        member.clone(),
+                    );
+                    upsert_maintainer_directory(
+                        MusubiMaintainerDirectoryEntryV1::Accepted(member),
+                        state_transaction,
+                    );
+                }
+                state_transaction
+                    .world
+                    .musubi_packages
+                    .insert(self.package, package);
+                advance.apply_invitation_updates(state_transaction);
+                for event in advance.invitation_events {
+                    emit_musubi_event(event, state_transaction);
+                }
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -1209,60 +1714,75 @@ impl Execute for RetargetMusubiAliasV1 {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let action = MusubiParliamentActionV1::RetargetAlias(MusubiRetargetAliasV1 {
-            alias: self.alias.clone(),
-            target: self.target.clone(),
-            expected_revision: self.expected_history_revision,
-        });
-        verify_parliament_decision(&self.decision, &action, state_transaction)?;
-        if state_transaction
-            .world
-            .musubi_packages
-            .get(&self.target)
-            .is_none()
-        {
-            return Err(package_not_found(&self.target));
-        }
-        let mut alias = state_transaction
-            .world
-            .musubi_aliases
-            .get(&self.alias)
-            .cloned()
-            .ok_or_else(|| invariant("Musubi alias was not found"))?;
-        ensure_revision(
-            "alias history",
-            alias.history_revision,
-            self.expected_history_revision,
-        )?;
-        if alias.target == self.target {
-            return Err(invariant("Musubi alias retarget is unchanged"));
-        }
-        let next = next_revision(alias.history_revision, "alias history")?;
-        let previous_target = alias.target.clone();
-        alias.target = self.target.clone();
-        alias.history_revision = next;
-        state_transaction
-            .world
-            .musubi_aliases
-            .insert(self.alias.clone(), alias);
-        let history = MusubiAliasHistoryEntryV1 {
-            alias: self.alias,
-            revision: next,
-            action: MusubiAliasHistoryActionV1::ParliamentRetarget,
-            previous_target: Some(previous_target),
-            target: self.target,
-            governance_action: Some(self.decision.action_digest),
-            finalized_height: execution_height(state_transaction),
-        };
-        let event = MusubiEvent::AliasRetargeted(history.clone());
-        state_transaction
-            .world
-            .musubi_alias_history
-            .insert(history.key(), history);
-        consume_parliament_decision(self.decision, state_transaction);
-        let _ = bump_resolver_index_revision(state_transaction)?;
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Alias,
+            |state_transaction, rejection_reason| {
+                let action = MusubiParliamentActionV1::RetargetAlias(MusubiRetargetAliasV1 {
+                    alias: self.alias.clone(),
+                    target: self.target.clone(),
+                    expected_revision: self.expected_history_revision,
+                });
+                verify_parliament_decision(
+                    &self.decision,
+                    &action,
+                    state_transaction,
+                    rejection_reason,
+                )?;
+                if state_transaction
+                    .world
+                    .musubi_packages
+                    .get(&self.target)
+                    .is_none()
+                {
+                    return Err(package_not_found(&self.target));
+                }
+                let mut alias = state_transaction
+                    .world
+                    .musubi_aliases
+                    .get(&self.alias)
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi alias was not found"))?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "alias history",
+                        alias.history_revision,
+                        self.expected_history_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                if alias.target == self.target {
+                    return Err(invariant("Musubi alias retarget is unchanged"));
+                }
+                let next = next_revision(alias.history_revision, "alias history")?;
+                let previous_target = alias.target.clone();
+                alias.target = self.target.clone();
+                alias.history_revision = next;
+                state_transaction
+                    .world
+                    .musubi_aliases
+                    .insert(self.alias.clone(), alias);
+                let history = MusubiAliasHistoryEntryV1 {
+                    alias: self.alias,
+                    revision: next,
+                    action: MusubiAliasHistoryActionV1::ParliamentRetarget,
+                    previous_target: Some(previous_target),
+                    target: self.target,
+                    governance_action: Some(self.decision.action_digest),
+                    finalized_height: execution_height(state_transaction),
+                };
+                let event = MusubiEvent::AliasRetargeted(history.clone());
+                state_transaction
+                    .world
+                    .musubi_alias_history
+                    .insert(history.key(), history);
+                consume_parliament_decision(self.decision, state_transaction)?;
+                let _ = bump_resolver_index_revision(state_transaction)?;
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -1272,65 +1792,88 @@ impl Execute for SetMusubiArtifactTakedownV1 {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let action = MusubiParliamentActionV1::TakedownArtifact(MusubiTakedownArtifactActionV1 {
-            release: self.release.clone(),
-            reason: self.reason.clone(),
-            expected_artifact_governance_revision: self.expected_artifact_governance_revision,
-        });
-        verify_parliament_decision(&self.decision, &action, state_transaction)?;
-        let mut release = state_transaction
-            .world
-            .musubi_releases
-            .get(&self.release)
-            .cloned()
-            .ok_or_else(|| release_not_found(&self.release))?;
-        ensure_revision(
-            "artifact governance",
-            release.revisions.artifact_governance,
-            self.expected_artifact_governance_revision,
-        )?;
-        if !matches!(
-            release.artifact_governance,
-            MusubiArtifactGovernanceStateV1::Available
-        ) {
-            return Err(invariant("Musubi artifact is already taken down"));
-        }
-        let next = next_revision(release.revisions.artifact_governance, "artifact governance")?;
-        let governance = MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
-            action_digest: self.decision.action_digest,
-            reason: self.reason,
-            enacted_at_height: execution_height(state_transaction),
-        });
-        release.artifact_governance = governance.clone();
-        release.revisions.artifact_governance = next;
-        let event = MusubiEvent::ArtifactTakenDown(MusubiArtifactTakedownEventV1 {
-            release: self.release.clone(),
-            archive_id: release.manifest.archive_id,
-            action_digest: self.decision.action_digest,
-            governance_revision: next,
-            finalized_height: execution_height(state_transaction),
-        });
-        let index_revision = bump_resolver_index_revision(state_transaction)?;
-        let mut row = state_transaction
-            .world
-            .musubi_resolver_index
-            .get(&self.release)
-            .cloned()
-            .ok_or_else(|| invariant("Musubi release is absent from the resolver index"))?;
-        row.selection.governance = governance;
-        row.index_revision = index_revision;
-        state_transaction
-            .world
-            .musubi_releases
-            .insert(self.release.clone(), release);
-        state_transaction
-            .world
-            .musubi_resolver_index
-            .insert(self.release.clone(), row);
-        consume_parliament_decision(self.decision, state_transaction);
-        refresh_directory_for_package(&self.release.package, index_revision, state_transaction)?;
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Takedown,
+            |state_transaction, rejection_reason| {
+                let action =
+                    MusubiParliamentActionV1::TakedownArtifact(MusubiTakedownArtifactActionV1 {
+                        release: self.release.clone(),
+                        reason: self.reason.clone(),
+                        expected_artifact_governance_revision: self
+                            .expected_artifact_governance_revision,
+                    });
+                verify_parliament_decision(
+                    &self.decision,
+                    &action,
+                    state_transaction,
+                    rejection_reason,
+                )?;
+                let mut release = state_transaction
+                    .world
+                    .musubi_releases
+                    .get(&self.release)
+                    .cloned()
+                    .ok_or_else(|| release_not_found(&self.release))?;
+                classify_governance_rejection(
+                    ensure_revision(
+                        "artifact governance",
+                        release.revisions.artifact_governance,
+                        self.expected_artifact_governance_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                if !matches!(
+                    release.artifact_governance,
+                    MusubiArtifactGovernanceStateV1::Available
+                ) {
+                    return Err(invariant("Musubi artifact is already taken down"));
+                }
+                let next =
+                    next_revision(release.revisions.artifact_governance, "artifact governance")?;
+                let governance =
+                    MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
+                        action_digest: self.decision.action_digest,
+                        reason: self.reason,
+                        applied_at_height: execution_height(state_transaction),
+                    });
+                release.artifact_governance = governance.clone();
+                release.revisions.artifact_governance = next;
+                let event = MusubiEvent::ArtifactTakenDown(MusubiArtifactTakedownEventV1 {
+                    release: self.release.clone(),
+                    archive_id: release.manifest.archive_id,
+                    action_digest: self.decision.action_digest,
+                    governance_revision: next,
+                    finalized_height: execution_height(state_transaction),
+                });
+                let index_revision = bump_resolver_index_revision(state_transaction)?;
+                let mut row = state_transaction
+                    .world
+                    .musubi_resolver_index
+                    .get(&self.release)
+                    .cloned()
+                    .ok_or_else(|| invariant("Musubi release is absent from the resolver index"))?;
+                row.selection.governance = governance;
+                row.index_revision = index_revision;
+                state_transaction
+                    .world
+                    .musubi_releases
+                    .insert(self.release.clone(), release);
+                state_transaction
+                    .world
+                    .musubi_resolver_index
+                    .insert(self.release.clone(), row);
+                consume_parliament_decision(self.decision, state_transaction)?;
+                refresh_directory_for_package(
+                    &self.release.package,
+                    index_revision,
+                    state_transaction,
+                )?;
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -1340,45 +1883,52 @@ impl Execute for SetMusubiRegistryPolicyV1 {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let action = MusubiParliamentActionV1::SetRegistryPolicy(MusubiSetRegistryPolicyActionV1 {
-            policy: self.policy.clone(),
-            expected_revision: self.expected_policy_revision,
-        });
-        verify_parliament_decision(&self.decision, &action, state_transaction)?;
-        self.policy
-            .validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        let current_revision = state_transaction
-            .world
-            .musubi_registry_policy
-            .get()
-            .revision;
-        ensure_revision(
-            "registry policy",
-            current_revision,
-            self.expected_policy_revision,
-        )?;
-        if self.policy.revision != next_revision(self.expected_policy_revision, "registry policy")?
-        {
-            return Err(invalid_parameter(
-                "Musubi replacement policy revision must be the exact successor",
-            ));
-        }
-        let allowlisted_dataspaces = u16::try_from(self.policy.allowlisted_dataspaces.len())
-            .map_err(|_| invariant("Musubi registry allowlist count overflows u16"))?;
-        let event = MusubiEvent::RegistryPolicyChanged(MusubiRegistryPolicyEventV1 {
-            revision: self.policy.revision,
-            mode: self.policy.mode,
-            alias_pricing_revision: self.policy.alias_pricing.revision,
-            allowlisted_dataspaces,
-            action_digest: self.decision.action_digest,
-            finalized_height: execution_height(state_transaction),
-        });
-        *state_transaction.world.musubi_registry_policy.get_mut() = self.policy;
-        consume_parliament_decision(self.decision, state_transaction);
-        let _ = bump_resolver_index_revision(state_transaction)?;
-        emit_musubi_event(event, state_transaction);
-        Ok(())
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::Policy,
+            |state_transaction, rejection_reason| {
+                let action =
+                    MusubiParliamentActionV1::SetRegistryPolicy(MusubiSetRegistryPolicyActionV1 {
+                        policy: self.policy.clone(),
+                        expected_revision: self.expected_policy_revision,
+                    });
+                verify_parliament_decision(
+                    &self.decision,
+                    &action,
+                    state_transaction,
+                    rejection_reason,
+                )?;
+                let current_policy = state_transaction.world.musubi_registry_policy.get().clone();
+                classify_governance_rejection(
+                    ensure_revision(
+                        "registry policy",
+                        current_policy.revision,
+                        self.expected_policy_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                self.policy
+                    .validate_successor(&current_policy)
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let allowlisted_dataspaces =
+                    u16::try_from(self.policy.allowlisted_dataspaces.len())
+                        .map_err(|_| invariant("Musubi registry allowlist count overflows u16"))?;
+                let event = MusubiEvent::RegistryPolicyChanged(MusubiRegistryPolicyEventV1 {
+                    revision: self.policy.revision,
+                    mode: self.policy.mode,
+                    alias_pricing_revision: self.policy.alias_pricing.revision,
+                    allowlisted_dataspaces,
+                    action_digest: self.decision.action_digest,
+                    finalized_height: execution_height(state_transaction),
+                });
+                *state_transaction.world.musubi_registry_policy.get_mut() = self.policy;
+                consume_parliament_decision(self.decision, state_transaction)?;
+                let _ = bump_resolver_index_revision(state_transaction)?;
+                emit_musubi_event(event, state_transaction);
+                Ok(())
+            },
+        )
     }
 }
 
@@ -1434,11 +1984,79 @@ impl ValidSingularQuery for FindMusubiExactReleaseV1 {
     }
 }
 
-impl ValidSingularQuery for FindMusubiResolverIndexV1 {
-    fn execute(
+/// Internal typed Musubi query failure retained through the Torii telemetry boundary.
+///
+/// The public query error remains [`QueryExecutionFail`]. This wrapper carries
+/// a Musubi-only cursor reason in-process without changing the global query
+/// wire enum or its variant indices.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MusubiQueryExecutionErrorV1 {
+    query_error: QueryExecutionFail,
+    cursor_failure: Option<MusubiCursorFailureV1>,
+}
+
+impl MusubiQueryExecutionErrorV1 {
+    fn cursor(reason: MusubiCursorFailureV1) -> Self {
+        Self {
+            query_error: QueryExecutionFail::Expired,
+            cursor_failure: Some(reason),
+        }
+    }
+
+    /// Return the exact typed cursor failure, when this is a cursor error.
+    #[must_use]
+    pub const fn cursor_failure(&self) -> Option<MusubiCursorFailureV1> {
+        self.cursor_failure
+    }
+
+    /// Drop the process-local telemetry detail and recover the stable public query error.
+    #[must_use]
+    pub fn into_query_error(self) -> QueryExecutionFail {
+        self.query_error
+    }
+}
+
+impl From<QueryExecutionFail> for MusubiQueryExecutionErrorV1 {
+    fn from(query_error: QueryExecutionFail) -> Self {
+        Self {
+            query_error,
+            cursor_failure: None,
+        }
+    }
+}
+
+/// Execute a paged Musubi query while retaining its exact cursor-failure reason.
+///
+/// Ordinary Core callers continue to use [`ValidSingularQuery`]. Torii uses
+/// this trait only to observe the bounded reason before returning the same
+/// public [`QueryExecutionFail`] value.
+pub trait ValidMusubiSingularQuery: iroha_data_model::query::SingularQuery {
+    /// Execute against one read-only state view with typed cursor diagnostics.
+    fn execute_musubi(
         &self,
         state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiResolverIndexPageV1, QueryExecutionFail> {
+    ) -> Result<Self::Output, MusubiQueryExecutionErrorV1>;
+}
+
+macro_rules! impl_valid_singular_query_via_musubi {
+    ($query:ty, $output:ty) => {
+        impl ValidSingularQuery for $query {
+            fn execute(
+                &self,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<$output, QueryExecutionFail> {
+                self.execute_musubi(state_ro)
+                    .map_err(MusubiQueryExecutionErrorV1::into_query_error)
+            }
+        }
+    };
+}
+
+impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
+    fn execute_musubi(
+        &self,
+        state_ro: &impl StateReadOnly,
+    ) -> Result<MusubiResolverIndexPageV1, MusubiQueryExecutionErrorV1> {
         self.request.package.validate().map_err(query_invalid)?;
         if let Some(requirement) = &self.request.requirement {
             requirement.validate().map_err(query_invalid)?;
@@ -1480,12 +2098,13 @@ impl ValidSingularQuery for FindMusubiResolverIndexV1 {
         Ok(page)
     }
 }
+impl_valid_singular_query_via_musubi!(FindMusubiResolverIndexV1, MusubiResolverIndexPageV1);
 
-impl ValidSingularQuery for FindMusubiVersionsV1 {
-    fn execute(
+impl ValidMusubiSingularQuery for FindMusubiVersionsV1 {
+    fn execute_musubi(
         &self,
         state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiVersionPageV1, QueryExecutionFail> {
+    ) -> Result<MusubiVersionPageV1, MusubiQueryExecutionErrorV1> {
         self.request.package.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
         let query_hash = package_page_query_hash(b"versions", &self.request);
@@ -1504,64 +2123,81 @@ impl ValidSingularQuery for FindMusubiVersionsV1 {
         })
     }
 }
+impl_valid_singular_query_via_musubi!(FindMusubiVersionsV1, MusubiVersionPageV1);
 
-impl ValidSingularQuery for FindMusubiMaintainersV1 {
-    fn execute(
+impl ValidMusubiSingularQuery for FindMusubiMaintainersV1 {
+    fn execute_musubi(
         &self,
         state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiMaintainerPageV1, QueryExecutionFail> {
+    ) -> Result<MusubiMaintainerPageV1, MusubiQueryExecutionErrorV1> {
         self.request.package.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
         let query_hash = package_page_query_hash(b"maintainers", &self.request);
-        let package = state_ro
+        state_ro
             .world()
             .musubi_packages()
             .get(&self.request.package)
             .ok_or(QueryExecutionFail::NotFound)?;
-        let rows = package
-            .member_accounts
-            .iter()
-            .map(|account| {
-                let key =
-                    MusubiPackageMemberKeyV1::new(self.request.package.clone(), account.clone());
-                let member = state_ro
-                    .world()
-                    .musubi_package_members()
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| {
-                        QueryExecutionFail::Conversion(
-                            "Musubi package member directory is inconsistent".to_owned(),
-                        )
-                    })?;
-                Ok((format!("{}|{}", key.package, key.account), member))
+        let start = MusubiMaintainerDirectoryKeyV1::package_start(self.request.package.clone());
+        let rows = state_ro
+            .world()
+            .musubi_maintainer_directory()
+            .range(start..)
+            .take_while(|(key, _)| key.package == self.request.package)
+            .filter(|(_, entry)| {
+                maintainer_directory_entry_visible_at_height(entry, snapshot.finalized_height)
             })
-            .collect::<Result<Vec<_>, QueryExecutionFail>>()?;
+            .map(|(key, entry)| {
+                let account = key
+                    .account
+                    .as_ref()
+                    .expect("persisted Musubi maintainer directory keys always carry an account");
+                let invitation = key.invitation.as_ref().map_or_else(
+                    || "accepted".to_owned(),
+                    |invite_id| format!("pending-{}", digest_label(invite_id.as_bytes())),
+                );
+                (format!("{account}|{invitation}"), entry.clone())
+            });
         let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        Ok(MusubiMaintainerPageV1 {
+        let page = MusubiMaintainerPageV1 {
             items,
             next_cursor,
             snapshot,
-        })
+        };
+        page.validate().map_err(query_invalid)?;
+        Ok(page)
     }
 }
+impl_valid_singular_query_via_musubi!(FindMusubiMaintainersV1, MusubiMaintainerPageV1);
 
-impl ValidSingularQuery for FindMusubiArchiveLocationsV1 {
-    fn execute(
+impl ValidMusubiSingularQuery for FindMusubiArchiveLocationsV1 {
+    fn execute_musubi(
         &self,
         state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiArchiveLocationPageV1, QueryExecutionFail> {
+    ) -> Result<MusubiArchiveLocationPageV1, MusubiQueryExecutionErrorV1> {
         if self.request.archive_id.is_zero() {
             return Err(QueryExecutionFail::Conversion(
                 "Musubi archive id must not be zero".to_owned(),
-            ));
+            )
+            .into());
         }
         let snapshot = query_snapshot(state_ro)?;
+        let chain_id = state_ro.chain_id().clone();
+        let genesis_hash = state_ro
+            .block_hashes()
+            .first()
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "Musubi archive-location queries require a finalized genesis block".to_owned(),
+                )
+            })?;
         let query_hash = archive_location_query_hash(&self.request);
         let archive = state_ro
             .world()
             .musubi_archives()
             .get(&self.request.archive_id)
+            .cloned()
             .ok_or(QueryExecutionFail::NotFound)?;
         let rows = archive
             .location_ids
@@ -1589,12 +2225,167 @@ impl ValidSingularQuery for FindMusubiArchiveLocationsV1 {
             })
             .collect::<Result<Vec<_>, QueryExecutionFail>>()?;
         let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        Ok(MusubiArchiveLocationPageV1 {
+        let page = MusubiArchiveLocationPageV1 {
+            chain_id,
+            genesis_hash,
+            archive,
             items,
             next_cursor,
             snapshot,
-        })
+        };
+        page.validate().map_err(query_invalid)?;
+        Ok(page)
     }
+}
+impl_valid_singular_query_via_musubi!(FindMusubiArchiveLocationsV1, MusubiArchiveLocationPageV1);
+
+impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
+    fn execute(
+        &self,
+        state_ro: &impl StateReadOnly,
+    ) -> Result<MusubiArchiveRetentionPageV1, QueryExecutionFail> {
+        self.request.validate().map_err(query_invalid)?;
+        let snapshot = query_snapshot(state_ro)?;
+        if self
+            .request
+            .expected_snapshot
+            .is_some_and(|expected| expected != snapshot)
+        {
+            return Err(QueryExecutionFail::Expired);
+        }
+        let chain_id = state_ro.chain_id().clone();
+        let genesis_hash = state_ro
+            .block_hashes()
+            .first()
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "Musubi archive-retention queries require a finalized genesis block".to_owned(),
+                )
+            })?;
+        let world = state_ro.world();
+        let mut items = Vec::with_capacity(self.request.archive_ids.len());
+        for archive_id in &self.request.archive_ids {
+            items.push(archive_retention_decision(*archive_id, world)?);
+        }
+        let page = MusubiArchiveRetentionPageV1 {
+            chain_id,
+            genesis_hash,
+            items,
+            snapshot,
+        };
+        page.validate().map_err(query_invalid)?;
+        Ok(page)
+    }
+}
+
+fn archive_retention_decision(
+    archive_id: ArchiveId,
+    world: &impl WorldReadOnly,
+) -> Result<MusubiArchiveRetentionDecisionV1, QueryExecutionFail> {
+    let archive = world.musubi_archives().get(&archive_id).cloned();
+    let references = world.musubi_archive_reverse_references().get(&archive_id);
+    let storage = world.musubi_archive_availability().get(&archive_id);
+    let Some(archive) = archive else {
+        if references.is_some() || storage.is_some() {
+            return Err(QueryExecutionFail::Conversion(
+                "Musubi archive retention state has an orphan universal projection".to_owned(),
+            ));
+        }
+        return Ok(MusubiArchiveRetentionDecisionV1 {
+            archive_id,
+            disposition: MusubiArchiveRetentionDispositionV1::RetainUnknown,
+            active_releases: 0,
+            yanked_releases: 0,
+            taken_down_releases: 0,
+            storage: None,
+        });
+    };
+    archive.validate().map_err(query_invalid)?;
+    if archive.archive_id != archive_id {
+        return Err(QueryExecutionFail::Conversion(
+            "Musubi archive retention storage key disagrees with its archive record".to_owned(),
+        ));
+    }
+    let references = references.ok_or_else(|| {
+        QueryExecutionFail::Conversion(
+            "Musubi archive retention state is missing reverse references".to_owned(),
+        )
+    })?;
+    references.validate().map_err(query_invalid)?;
+    if references.archive_id != archive_id {
+        return Err(QueryExecutionFail::Conversion(
+            "Musubi archive retention reverse-reference identity is inconsistent".to_owned(),
+        ));
+    }
+    let storage = storage.cloned().ok_or_else(|| {
+        QueryExecutionFail::Conversion(
+            "Musubi archive retention state is missing storage availability".to_owned(),
+        )
+    })?;
+    storage.validate().map_err(query_invalid)?;
+    if storage.archive_id != archive_id {
+        return Err(QueryExecutionFail::Conversion(
+            "Musubi archive retention storage identity is inconsistent".to_owned(),
+        ));
+    }
+
+    let mut active_releases = 0_u16;
+    let mut yanked_releases = 0_u16;
+    let mut taken_down_releases = 0_u16;
+    for release_id in &references.releases {
+        let release = world.musubi_releases().get(release_id).ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "Musubi archive retention reference names a missing release".to_owned(),
+            )
+        })?;
+        release.validate().map_err(query_invalid)?;
+        if release.manifest.release != *release_id || release.manifest.archive_id != archive_id {
+            return Err(QueryExecutionFail::Conversion(
+                "Musubi archive retention reference disagrees with its release".to_owned(),
+            ));
+        }
+        match &release.artifact_governance {
+            MusubiArtifactGovernanceStateV1::Available if release.yank.yanked => {
+                yanked_releases = yanked_releases.checked_add(1).ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "Musubi archive retention yanked-release count overflow".to_owned(),
+                    )
+                })?;
+            }
+            MusubiArtifactGovernanceStateV1::Available => {
+                active_releases = active_releases.checked_add(1).ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "Musubi archive retention active-release count overflow".to_owned(),
+                    )
+                })?;
+            }
+            MusubiArtifactGovernanceStateV1::TakenDown(_) => {
+                taken_down_releases = taken_down_releases.checked_add(1).ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "Musubi archive retention takedown count overflow".to_owned(),
+                    )
+                })?;
+            }
+        }
+    }
+    let disposition = if active_releases > 0 || yanked_releases > 0 {
+        MusubiArchiveRetentionDispositionV1::RetainReferenced
+    } else if taken_down_releases > 0 {
+        MusubiArchiveRetentionDispositionV1::PruneGovernedTakedown
+    } else {
+        MusubiArchiveRetentionDispositionV1::PruneUnreferenced
+    };
+    let decision = MusubiArchiveRetentionDecisionV1 {
+        archive_id,
+        disposition,
+        active_releases,
+        yanked_releases,
+        taken_down_releases,
+        storage: Some(storage),
+    };
+    decision.validate().map_err(query_invalid)?;
+    Ok(decision)
 }
 
 impl ValidSingularQuery for FindMusubiAliasV1 {
@@ -1612,11 +2403,11 @@ impl ValidSingularQuery for FindMusubiAliasV1 {
     }
 }
 
-impl ValidSingularQuery for FindMusubiAliasHistoryV1 {
-    fn execute(
+impl ValidMusubiSingularQuery for FindMusubiAliasHistoryV1 {
+    fn execute_musubi(
         &self,
         state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiAliasHistoryPageV1, QueryExecutionFail> {
+    ) -> Result<MusubiAliasHistoryPageV1, MusubiQueryExecutionErrorV1> {
         self.request.alias.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
         let query_hash = alias_history_query_hash(&self.request);
@@ -1640,12 +2431,13 @@ impl ValidSingularQuery for FindMusubiAliasHistoryV1 {
         })
     }
 }
+impl_valid_singular_query_via_musubi!(FindMusubiAliasHistoryV1, MusubiAliasHistoryPageV1);
 
-impl ValidSingularQuery for FindMusubiOrderedPrefixV1 {
-    fn execute(
+impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
+    fn execute_musubi(
         &self,
         state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiOrderedPackagePageV1, QueryExecutionFail> {
+    ) -> Result<MusubiOrderedPackagePageV1, MusubiQueryExecutionErrorV1> {
         self.request.prefix.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
         let chain_id = state_ro.chain_id().clone();
@@ -1661,6 +2453,12 @@ impl ValidSingularQuery for FindMusubiOrderedPrefixV1 {
         let query_hash = ordered_prefix_query_hash(&self.request);
         let prefix = self.request.prefix.as_str();
         let (start, namespace, name_prefix) = directory_query_start(&self.request)?;
+        let namespace_binding = state_ro
+            .world()
+            .musubi_namespace_bindings()
+            .get(&namespace)
+            .cloned()
+            .ok_or(QueryExecutionFail::NotFound)?;
         let rows = state_ro
             .world()
             .musubi_public_directory()
@@ -1675,6 +2473,7 @@ impl ValidSingularQuery for FindMusubiOrderedPrefixV1 {
         let page = MusubiOrderedPackagePageV1 {
             chain_id,
             genesis_hash,
+            namespace_binding,
             items,
             next_cursor,
             snapshot,
@@ -1683,6 +2482,7 @@ impl ValidSingularQuery for FindMusubiOrderedPrefixV1 {
         Ok(page)
     }
 }
+impl_valid_singular_query_via_musubi!(FindMusubiOrderedPrefixV1, MusubiOrderedPackagePageV1);
 
 fn query_snapshot(
     state_ro: &impl StateReadOnly,
@@ -1734,18 +2534,19 @@ fn alias_history_query_hash(request: &MusubiAliasQueryV1) -> MusubiQueryHashV1 {
 
 fn alias_history_page_start(
     request: &MusubiAliasQueryV1,
-) -> Result<MusubiAliasHistoryKeyV1, QueryExecutionFail> {
+) -> Result<MusubiAliasHistoryKeyV1, MusubiQueryExecutionErrorV1> {
     let revision = if let Some(cursor) = &request.page.cursor {
-        let (alias, revision) = cursor
-            .last_key
-            .rsplit_once(':')
-            .ok_or(QueryExecutionFail::Expired)?;
+        let (alias, revision) = cursor.last_key.rsplit_once(':').ok_or_else(|| {
+            MusubiQueryExecutionErrorV1::cursor(MusubiCursorFailureV1::LastKeyStale)
+        })?;
         if alias != request.alias.as_str() || revision.len() != 20 {
-            return Err(QueryExecutionFail::Expired);
+            return Err(MusubiQueryExecutionErrorV1::cursor(
+                MusubiCursorFailureV1::LastKeyStale,
+            ));
         }
         revision
             .parse::<u64>()
-            .map_err(|_| QueryExecutionFail::Expired)?
+            .map_err(|_| MusubiQueryExecutionErrorV1::cursor(MusubiCursorFailureV1::LastKeyStale))?
     } else {
         0
     };
@@ -1763,7 +2564,7 @@ fn ordered_prefix_query_hash(request: &MusubiOrderedPrefixQueryV1) -> MusubiQuer
 
 fn directory_query_start(
     request: &MusubiOrderedPrefixQueryV1,
-) -> Result<(MusubiPackageSelectorV1, MusubiNamespaceV1, String), QueryExecutionFail> {
+) -> Result<(MusubiPackageSelectorV1, MusubiNamespaceV1, String), MusubiQueryExecutionErrorV1> {
     let raw = request.prefix.as_str();
     let (namespace_raw, name_prefix) = raw.split_once('/').ok_or_else(|| {
         QueryExecutionFail::Conversion(
@@ -1780,7 +2581,8 @@ fn directory_query_start(
     {
         return Err(QueryExecutionFail::Conversion(
             "Musubi ordered directory package prefix is not portable canonical text".to_owned(),
-        ));
+        )
+        .into());
     }
     let namespace = namespace_raw
         .parse::<MusubiNamespaceV1>()
@@ -1789,9 +2591,13 @@ fn directory_query_start(
         let selector = cursor
             .last_key
             .parse::<MusubiPackageSelectorV1>()
-            .map_err(|_| QueryExecutionFail::Expired)?;
+            .map_err(|_| {
+                MusubiQueryExecutionErrorV1::cursor(MusubiCursorFailureV1::LastKeyStale)
+            })?;
         if selector.namespace != namespace || !selector.name.as_str().starts_with(name_prefix) {
-            return Err(QueryExecutionFail::Expired);
+            return Err(MusubiQueryExecutionErrorV1::cursor(
+                MusubiCursorFailureV1::LastKeyStale,
+            ));
         }
         selector
     } else {
@@ -1801,7 +2607,8 @@ fn directory_query_start(
             if name_prefix.len() == MUSUBI_MAX_PACKAGE_NAME_BYTES_V1 {
                 return Err(QueryExecutionFail::Conversion(
                     "Musubi ordered directory package prefix cannot match a package".to_owned(),
-                ));
+                )
+                .into());
             }
             format!("{name_prefix}0")
         } else {
@@ -1837,12 +2644,40 @@ fn paginate<T>(
     page: &MusubiPageRequestV1,
     query_hash: MusubiQueryHashV1,
     snapshot: MusubiRegistrySnapshotV1,
-) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), QueryExecutionFail> {
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
+    paginate_for_caller(rows, page, query_hash, snapshot, None)
+}
+
+fn paginate_for_caller<T>(
+    rows: impl IntoIterator<Item = (String, T)>,
+    page: &MusubiPageRequestV1,
+    query_hash: MusubiQueryHashV1,
+    snapshot: MusubiRegistrySnapshotV1,
+    expected_caller: Option<&AccountId>,
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
     page.validate().map_err(query_invalid)?;
     let cursor_last_key = if let Some(cursor) = &page.cursor {
-        if cursor.snapshot != snapshot || cursor.query_hash != query_hash || cursor.caller.is_some()
+        if cursor.snapshot.finalized_height != snapshot.finalized_height
+            || cursor.snapshot.finalized_block_hash != snapshot.finalized_block_hash
         {
-            return Err(QueryExecutionFail::Expired);
+            return Err(MusubiQueryExecutionErrorV1::cursor(
+                MusubiCursorFailureV1::FinalizedAnchorMismatch,
+            ));
+        }
+        if cursor.snapshot.index_revision != snapshot.index_revision {
+            return Err(MusubiQueryExecutionErrorV1::cursor(
+                MusubiCursorFailureV1::IndexRevisionMismatch,
+            ));
+        }
+        if cursor.query_hash != query_hash {
+            return Err(MusubiQueryExecutionErrorV1::cursor(
+                MusubiCursorFailureV1::QueryMismatch,
+            ));
+        }
+        if cursor.caller.as_ref() != expected_caller {
+            return Err(MusubiQueryExecutionErrorV1::cursor(
+                MusubiCursorFailureV1::CallerMismatch,
+            ));
         }
         Some(cursor.last_key.as_str())
     } else {
@@ -1864,7 +2699,9 @@ fn paginate<T>(
         }
     }
     if !cursor_seen {
-        return Err(QueryExecutionFail::Expired);
+        return Err(MusubiQueryExecutionErrorV1::cursor(
+            MusubiCursorFailureV1::LastKeyStale,
+        ));
     }
     let has_more = page_rows.len() > limit;
     if has_more {
@@ -1880,7 +2717,7 @@ fn paginate<T>(
             snapshot,
             query_hash,
             last_key: last_key.expect("a page with a successor has at least one item"),
-            caller: None,
+            caller: expected_caller.cloned(),
         })
     } else {
         None
@@ -1892,12 +2729,273 @@ fn query_invalid(error: iroha_data_model::ParseError) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(error.to_string())
 }
 
+fn upsert_maintainer_directory(
+    entry: MusubiMaintainerDirectoryEntryV1,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) {
+    state_transaction
+        .world
+        .musubi_maintainer_directory
+        .insert(entry.key(), entry);
+}
+
+#[must_use = "a package-governance advance plan must be applied after fallible checks complete"]
+struct PackageGovernanceAdvance {
+    revision: u64,
+    invitation_updates: Vec<PackageInvitationUpdate>,
+    invitation_events: Vec<MusubiEvent>,
+    terminal_invitation: Option<MusubiMaintainerInvitationV1>,
+}
+
+struct PackageInvitationUpdate {
+    directory_key: MusubiMaintainerDirectoryKeyV1,
+    invitation: MusubiMaintainerInvitationV1,
+    keep_pending: bool,
+}
+
+impl PackageGovernanceAdvance {
+    fn apply_invitation_updates(&self, state_transaction: &mut StateTransaction<'_, '_>) {
+        for update in &self.invitation_updates {
+            state_transaction
+                .world
+                .musubi_package_invitations
+                .insert(update.invitation.invite_id, update.invitation.clone());
+            if update.keep_pending {
+                upsert_maintainer_directory(
+                    MusubiMaintainerDirectoryEntryV1::PendingInvitation(update.invitation.clone()),
+                    state_transaction,
+                );
+            } else {
+                state_transaction
+                    .world
+                    .musubi_maintainer_directory
+                    .remove(update.directory_key.clone());
+            }
+        }
+    }
+}
+
+fn plan_package_governance_advance(
+    package: &mut MusubiPackageRecordV1,
+    finalized_height: u64,
+    target_transition: Option<(MusubiInviteIdV1, MusubiInvitationStateV1)>,
+    world: &impl WorldReadOnly,
+) -> Result<PackageGovernanceAdvance, Error> {
+    if target_transition.as_ref().is_some_and(|(_, state)| {
+        !matches!(
+            state,
+            MusubiInvitationStateV1::Accepted | MusubiInvitationStateV1::Revoked
+        )
+    }) {
+        return Err(invariant(
+            "Musubi invitation target transition must be terminal",
+        ));
+    }
+    let previous_revision = package.revisions.governance;
+    let revision = next_revision(previous_revision, "package governance")?;
+    let directory_bound = MUSUBI_MAX_PACKAGE_MEMBERS_V1
+        .checked_add(MUSUBI_MAX_PENDING_INVITATIONS_V1)
+        .expect("bounded Musubi maintainer directory size fits usize");
+    let entries = world
+        .musubi_maintainer_directory()
+        .range(MusubiMaintainerDirectoryKeyV1::package_start(package.package.clone())..)
+        .take_while(|(key, _)| key.package == package.package)
+        .take(directory_bound.saturating_add(1))
+        .map(|(key, entry)| (key.clone(), entry.clone()))
+        .collect::<Vec<_>>();
+    if entries.len() > directory_bound {
+        return Err(invariant(
+            "Musubi maintainer directory exceeds its package-local bound",
+        ));
+    }
+    let pending = entries
+        .into_iter()
+        .filter_map(|(key, entry)| match entry {
+            MusubiMaintainerDirectoryEntryV1::Accepted(_) => None,
+            MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation) => {
+                Some((key, invitation))
+            }
+        })
+        .collect::<Vec<_>>();
+    if pending.len() > MUSUBI_MAX_PENDING_INVITATIONS_V1 {
+        return Err(invariant(
+            "Musubi package exceeds the pending-invitation bound",
+        ));
+    }
+    for (directory_key, invitation) in &pending {
+        invitation
+            .validate()
+            .map_err(|error| invariant(error.reason()))?;
+        let expected_key = MusubiMaintainerDirectoryKeyV1::pending(
+            invitation.package.clone(),
+            invitation.invited_account.clone(),
+            invitation.invite_id,
+        );
+        if directory_key != &expected_key
+            || invitation.package != package.package
+            || invitation.state != MusubiInvitationStateV1::Pending
+            || invitation.expected_governance_revision != previous_revision
+            || world
+                .musubi_package_invitations()
+                .get(&invitation.invite_id)
+                != Some(invitation)
+        {
+            return Err(invariant(
+                "Musubi pending-invitation directory is inconsistent with package governance",
+            ));
+        }
+    }
+    if let Some((target_id, _)) = target_transition.as_ref() {
+        let target = pending
+            .iter()
+            .find(|(_, invitation)| invitation.invite_id == *target_id)
+            .map(|(_, invitation)| invitation)
+            .ok_or_else(|| {
+                invariant("Musubi target invitation is absent from the pending directory")
+            })?;
+        if target.expires_at_height < finalized_height {
+            return Err(invariant(
+                "Musubi target invitation expired before its terminal transition",
+            ));
+        }
+    }
+
+    let mut updates = Vec::with_capacity(pending.len());
+    let mut invitation_events = Vec::new();
+    let mut terminal_invitation = None;
+    for (directory_key, mut invitation) in pending {
+        invitation.expected_governance_revision = revision;
+        let keep_pending = if let Some((target_id, target_state)) = target_transition
+            && invitation.invite_id == target_id
+        {
+            invitation.state = target_state;
+            terminal_invitation = Some(invitation.clone());
+            false
+        } else if invitation.expires_at_height < finalized_height {
+            invitation.state = MusubiInvitationStateV1::Expired;
+            invitation_events.push(MusubiEvent::MaintainerInvitationExpired(
+                MusubiMaintainerInvitationLifecycleEventV1 {
+                    package: invitation.package.clone(),
+                    invite_id: invitation.invite_id,
+                    invited_account: invitation.invited_account.clone(),
+                    governance_revision: revision,
+                    finalized_height,
+                },
+            ));
+            false
+        } else {
+            true
+        };
+        invitation
+            .validate()
+            .map_err(|error| invariant(error.reason()))?;
+        updates.push(PackageInvitationUpdate {
+            directory_key,
+            invitation,
+            keep_pending,
+        });
+    }
+    package.revisions.governance = revision;
+    Ok(PackageGovernanceAdvance {
+        revision,
+        invitation_updates: updates,
+        invitation_events,
+        terminal_invitation,
+    })
+}
+
+fn active_pending_invitation_count(
+    package: &MusubiPackageIdV1,
+    current_height: u64,
+    world: &impl WorldReadOnly,
+) -> usize {
+    world
+        .musubi_maintainer_directory()
+        .range(MusubiMaintainerDirectoryKeyV1::package_start(package.clone())..)
+        .take_while(|(key, _)| &key.package == package)
+        .take(MUSUBI_MAX_PACKAGE_MEMBERS_V1 + MUSUBI_MAX_PENDING_INVITATIONS_V1)
+        .filter(|(_, entry)| {
+            matches!(
+                entry,
+                MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation)
+                    if invitation.state == MusubiInvitationStateV1::Pending
+                        && invitation.expires_at_height >= current_height
+            )
+        })
+        .count()
+}
+
+fn pending_invitation_count(package: &MusubiPackageIdV1, world: &impl WorldReadOnly) -> usize {
+    world
+        .musubi_maintainer_directory()
+        .range(MusubiMaintainerDirectoryKeyV1::package_start(package.clone())..)
+        .take_while(|(key, _)| &key.package == package)
+        .take(MUSUBI_MAX_PACKAGE_MEMBERS_V1 + MUSUBI_MAX_PENDING_INVITATIONS_V1)
+        .filter(|(key, _)| key.invitation.is_some())
+        .count()
+}
+
+fn maintainer_directory_entry_visible_at_height(
+    entry: &MusubiMaintainerDirectoryEntryV1,
+    finalized_height: u64,
+) -> bool {
+    match entry {
+        MusubiMaintainerDirectoryEntryV1::Accepted(_) => true,
+        MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation) => {
+            invitation.expires_at_height >= finalized_height
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum PackageCapability {
     Publish,
     Yank,
     Metadata,
     ArchiveLocations,
+}
+
+fn execute_governance_mutation<'block, 'state>(
+    state_transaction: &mut StateTransaction<'block, 'state>,
+    action: MusubiGovernanceActionV1,
+    execute: impl FnOnce(
+        &mut StateTransaction<'block, 'state>,
+        &mut MusubiGovernanceRejectionReasonV1,
+    ) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let mut rejection_reason = MusubiGovernanceRejectionReasonV1::Other;
+    let result = execute(state_transaction, &mut rejection_reason);
+    #[cfg(feature = "telemetry")]
+    {
+        if result.is_err() {
+            state_transaction
+                .telemetry
+                .record_musubi_governance_rejection(action, rejection_reason);
+        }
+    }
+    #[cfg(not(feature = "telemetry"))]
+    let _ = action;
+    result
+}
+
+fn classify_governance_rejection<T>(
+    result: Result<T, Error>,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
+    reason: MusubiGovernanceRejectionReasonV1,
+) -> Result<T, Error> {
+    result.map_err(|error| {
+        *rejection_reason = reason;
+        error
+    })
+}
+
+fn reject_governance_mutation<T>(
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
+    reason: MusubiGovernanceRejectionReasonV1,
+    error: Error,
+) -> Result<T, Error> {
+    *rejection_reason = reason;
+    Err(error)
 }
 
 fn validate_role(role: MusubiPackageRoleV1) -> Result<(), Error> {
@@ -1914,6 +3012,7 @@ fn ensure_package_owner(
     package: &MusubiPackageIdV1,
     authority: &AccountId,
     world: &impl WorldReadOnly,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
 ) -> Result<(), Error> {
     let record = world
         .musubi_packages()
@@ -1922,6 +3021,7 @@ fn ensure_package_owner(
     if record.owners.binary_search(authority).is_ok() {
         Ok(())
     } else {
+        *rejection_reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
         Err(invariant(format!(
             "authority '{authority}' is not an owner of Musubi package '{package}'"
         )))
@@ -1933,6 +3033,7 @@ fn ensure_package_capability(
     authority: &AccountId,
     capability: PackageCapability,
     world: &impl WorldReadOnly,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
 ) -> Result<(), Error> {
     let record = world
         .musubi_packages()
@@ -1957,6 +3058,7 @@ fn ensure_package_capability(
     if permitted {
         Ok(())
     } else {
+        *rejection_reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
         Err(invariant(format!(
             "authority '{authority}' lacks the required Musubi package capability for '{package}'"
         )))
@@ -1967,6 +3069,7 @@ fn ensure_archive_manager(
     archive: &MusubiArchiveRecordV1,
     authority: &AccountId,
     world: &impl WorldReadOnly,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
 ) -> Result<(), Error> {
     if &archive.registered_by == authority {
         return Ok(());
@@ -1975,9 +3078,11 @@ fn ensure_archive_manager(
         .musubi_archive_reverse_references()
         .get(&archive.archive_id)
     else {
+        *rejection_reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
         return Err(invariant("authority cannot manage this Musubi archive"));
     };
     if references.releases.is_empty() {
+        *rejection_reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
         return Err(invariant("authority cannot manage this Musubi archive"));
     }
     for release in &references.releases {
@@ -1986,23 +3091,45 @@ fn ensure_archive_manager(
             authority,
             PackageCapability::ArchiveLocations,
             world,
+            rejection_reason,
         )?;
     }
     Ok(())
 }
 
-fn ensure_namespace_owner(
+fn ensure_namespace_registration_owner(
     binding: &MusubiNamespaceBindingV1,
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
 ) -> Result<(), Error> {
     let (owner, generation) = namespace_owner_and_generation(binding, state_transaction)?;
     binding
         .validate_authority_generation(generation)
         .map_err(|error| invalid_parameter(error.reason()))?;
-    if owner == *authority {
+    ensure_resolved_namespace_owner(binding, authority, &owner, rejection_reason)
+}
+
+fn ensure_namespace_current_owner(
+    binding: &MusubiNamespaceBindingV1,
+    authority: &AccountId,
+    state_transaction: &StateTransaction<'_, '_>,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
+) -> Result<(), Error> {
+    let (owner, _) = namespace_owner_and_generation(binding, state_transaction)?;
+    ensure_resolved_namespace_owner(binding, authority, &owner, rejection_reason)
+}
+
+fn ensure_resolved_namespace_owner(
+    binding: &MusubiNamespaceBindingV1,
+    authority: &AccountId,
+    owner: &AccountId,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
+) -> Result<(), Error> {
+    if owner == authority {
         Ok(())
     } else {
+        *rejection_reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
         Err(invariant(format!(
             "authority '{authority}' does not own Musubi namespace '{}'",
             binding.namespace
@@ -2014,6 +3141,12 @@ fn namespace_owner_and_generation(
     binding: &MusubiNamespaceBindingV1,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(AccountId, u64), Error> {
+    validate_namespace_home_dataspace(
+        binding,
+        state_transaction.world(),
+        &state_transaction.nexus.dataspace_catalog,
+        state_transaction.block_unix_timestamp_ms(),
+    )?;
     match &binding.scope {
         MusubiPackageScopeV1::Domain(domain) => {
             let domain_id =
@@ -2050,20 +3183,95 @@ fn namespace_owner_and_generation(
     }
 }
 
+fn validate_namespace_home_dataspace(
+    binding: &MusubiNamespaceBindingV1,
+    world: &impl WorldReadOnly,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    current_time_ms: u64,
+) -> Result<(), Error> {
+    let alias = binding.namespace.dataspace_segment();
+    let resolved = crate::sns::resolve_active_dataspace_id_by_alias(
+        world,
+        catalog,
+        alias,
+        current_time_ms,
+    )
+    .map_err(|error| {
+        invariant(format!(
+            "Musubi namespace dataspace alias '{alias}' cannot be resolved canonically: {error}"
+        ))
+    })?;
+    if resolved != binding.home_dataspace {
+        return Err(invariant(format!(
+            "Musubi namespace dataspace alias '{alias}' resolves to {resolved}, not declared home dataspace {}",
+            binding.home_dataspace
+        )));
+    }
+    Ok(())
+}
+
 fn ensure_namespace_claim_authority(
     binding: &MusubiNamespaceBindingV1,
     delegation: Option<&MusubiNamespaceDelegationV1>,
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
 ) -> Result<(), Error> {
     let (owner, generation) = namespace_owner_and_generation(binding, state_transaction)?;
+    validate_namespace_claim_authority_classified(
+        binding,
+        delegation,
+        authority,
+        &owner,
+        generation,
+        execution_height(state_transaction),
+        Some(rejection_reason),
+    )
+}
+
+fn validate_namespace_claim_authority(
+    binding: &MusubiNamespaceBindingV1,
+    delegation: Option<&MusubiNamespaceDelegationV1>,
+    authority: &AccountId,
+    authoritative_owner: &AccountId,
+    authoritative_owner_generation: u64,
+    current_height: u64,
+) -> Result<(), Error> {
+    validate_namespace_claim_authority_classified(
+        binding,
+        delegation,
+        authority,
+        authoritative_owner,
+        authoritative_owner_generation,
+        current_height,
+        None,
+    )
+}
+
+fn validate_namespace_claim_authority_classified(
+    binding: &MusubiNamespaceBindingV1,
+    delegation: Option<&MusubiNamespaceDelegationV1>,
+    authority: &AccountId,
+    authoritative_owner: &AccountId,
+    authoritative_owner_generation: u64,
+    current_height: u64,
+    mut rejection_reason: Option<&mut MusubiGovernanceRejectionReasonV1>,
+) -> Result<(), Error> {
     binding
-        .validate_authority_generation(generation)
+        .validate()
         .map_err(|error| invariant(error.reason()))?;
-    if owner == *authority {
+    if authoritative_owner_generation == 0 {
+        return Err(invariant(
+            "Musubi namespace authoritative ownership generation must be non-zero",
+        ));
+    }
+    if authoritative_owner == authority {
         return Ok(());
     }
     let delegation = delegation.ok_or_else(|| {
+        if let Some(reason) = rejection_reason.as_mut() {
+            **reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
+        }
         invariant(format!(
             "authority '{authority}' neither owns nor has a delegation for Musubi namespace '{}'",
             binding.namespace
@@ -2072,12 +3280,17 @@ fn ensure_namespace_claim_authority(
     delegation
         .verify(
             binding,
-            &owner,
-            generation,
+            authoritative_owner,
+            authoritative_owner_generation,
             authority,
-            execution_height(state_transaction),
+            current_height,
         )
-        .map_err(|error| invariant(error.reason()))
+        .map_err(|error| {
+            if let Some(reason) = rejection_reason.as_mut() {
+                **reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
+            }
+            invariant(error.reason())
+        })
 }
 
 fn namespace_binding_for_package(
@@ -2111,12 +3324,15 @@ fn ensure_admitted(
     dataspace: Option<DataSpaceId>,
     authority: &AccountId,
     world: &impl WorldReadOnly,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
 ) -> Result<(), Error> {
     match policy.mode {
         MusubiRegistryAdmissionModeV1::Open => Ok(()),
-        MusubiRegistryAdmissionModeV1::Closed => Err(invariant(
-            "Musubi registry admission is closed for new records",
-        )),
+        MusubiRegistryAdmissionModeV1::Closed => reject_governance_mutation(
+            rejection_reason,
+            MusubiGovernanceRejectionReasonV1::PolicyClosed,
+            invariant("Musubi registry admission is closed for new records"),
+        ),
         MusubiRegistryAdmissionModeV1::Allowlisted => {
             let admitted = if let Some(dataspace) = dataspace {
                 policy
@@ -2138,9 +3354,11 @@ fn ensure_admitted(
             if admitted {
                 Ok(())
             } else {
-                Err(invariant(
-                    "Musubi registry admission requires an allowlisted dataspace",
-                ))
+                reject_governance_mutation(
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::PolicyClosed,
+                    invariant("Musubi registry admission requires an allowlisted dataspace"),
+                )
             }
         }
     }
@@ -2511,24 +3729,43 @@ fn validate_publication_snapshot(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     let snapshot = &publication.resolution.snapshot;
-    let height = u64::try_from(state_transaction.block_hashes().len())
+    let current_height = u64::try_from(state_transaction.block_hashes().len())
         .map_err(|_| invariant("Musubi finalized height overflows u64"))?;
-    let hash = state_transaction
-        .block_hashes()
-        .last()
-        .map(|hash| *hash.as_ref())
-        .ok_or_else(|| invariant("Musubi publication requires a finalized registry snapshot"))?;
-    let revision = state_transaction
+    let snapshot_index = snapshot
+        .finalized_height
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok());
+    let finalized_hash = snapshot_index.and_then(|index| {
+        state_transaction
+            .block_hashes()
+            .get(index)
+            .map(|hash| *hash.as_ref())
+    });
+    let current_revision = state_transaction
         .world
         .musubi_resolver_index_revision
         .get()
         .get();
-    if snapshot.finalized_height != height
-        || snapshot.finalized_block_hash != hash
-        || snapshot.index_revision != revision
+    validate_publication_snapshot_anchor(snapshot, current_height, finalized_hash, current_revision)
+}
+
+fn validate_publication_snapshot_anchor(
+    snapshot: &MusubiRegistrySnapshotV1,
+    current_height: u64,
+    finalized_hash: Option<[u8; 32]>,
+    current_revision: u64,
+) -> Result<(), Error> {
+    snapshot
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    let finalized_hash = finalized_hash
+        .ok_or_else(|| invariant("Musubi publication requires a canonical finalized snapshot"))?;
+    if snapshot.finalized_height > current_height
+        || snapshot.finalized_block_hash != finalized_hash
+        || snapshot.index_revision > current_revision
     {
         return Err(invariant(
-            "Musubi publication proof does not use the current finalized registry snapshot",
+            "Musubi publication proof snapshot is not a canonical finalized registry ancestor",
         ));
     }
     Ok(())
@@ -2615,34 +3852,36 @@ fn validate_resolution_proof(
     Ok(())
 }
 
-fn add_archive_reverse_reference(
+fn plan_archive_reverse_reference(
     archive_id: ArchiveId,
     release: MusubiReleaseIdV1,
-    state_transaction: &mut StateTransaction<'_, '_>,
-) -> Result<(), Error> {
-    let mut references = state_transaction
-        .world
-        .musubi_archive_reverse_references
+    world: &impl WorldReadOnly,
+) -> Result<MusubiArchiveReverseReferencesV1, Error> {
+    let mut references = world
+        .musubi_archive_reverse_references()
         .get(&archive_id)
         .cloned()
-        .unwrap_or(MusubiArchiveReverseReferencesV1 {
-            archive_id,
-            releases: Vec::new(),
-        });
+        .ok_or_else(|| {
+            invariant("Musubi archive is missing its exact reverse-reference projection")
+        })?;
+    references
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    if references.archive_id != archive_id {
+        return Err(invariant(
+            "Musubi archive reverse-reference projection has the wrong archive identity",
+        ));
+    }
     references.releases.push(release);
     references.releases.sort();
     references.releases.dedup();
     references
         .validate()
         .map_err(|error| invariant(error.reason()))?;
-    state_transaction
-        .world
-        .musubi_archive_reverse_references
-        .insert(archive_id, references);
-    Ok(())
+    Ok(references)
 }
 
-fn current_location_providers(
+pub(crate) fn current_location_providers(
     location: &MusubiArchiveLocationV1,
     world: &impl WorldReadOnly,
 ) -> Option<Vec<iroha_data_model::sorafs::capacity::ProviderId>> {
@@ -2864,25 +4103,53 @@ fn refresh_archive_availability(
         .world
         .musubi_archive_availability
         .get(&archive_id)
-        .copied();
-    let location_ids = state_transaction
+        .copied()
+        .ok_or_else(|| {
+            invariant("Musubi archive is missing its authoritative availability projection")
+        })?;
+    let references =
+        exact_archive_projection_references(archive_id, previous, state_transaction.world())?;
+    let archive = state_transaction
         .world
         .musubi_archives
         .get(&archive_id)
-        .map(|archive| archive.location_ids.clone())
+        .cloned()
         .ok_or_else(|| archive_not_found(archive_id))?;
-    let locations = location_ids
+    archive
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    if archive.archive_id != archive_id {
+        return Err(invariant(
+            "Musubi archive record has the wrong embedded archive identity",
+        ));
+    }
+    let locations = archive
+        .location_ids
         .iter()
         .map(|location_id| {
             let key = MusubiArchiveLocationKeyV1::new(archive_id, *location_id);
-            state_transaction
+            let location = state_transaction
                 .world
                 .musubi_archive_locations
                 .get(&key)
                 .cloned()
-                .ok_or_else(|| invariant("Musubi archive location directory is inconsistent"))
+                .ok_or_else(|| invariant("Musubi archive location directory is inconsistent"))?;
+            if location.key() != key {
+                return Err(invariant(
+                    "Musubi archive location record has the wrong embedded identity",
+                ));
+            }
+            location
+                .validate()
+                .map_err(|error| invariant(error.reason()))?;
+            if location.revision > archive.location_revision {
+                return Err(invariant(
+                    "Musubi archive location revision exceeds its archive revision",
+                ));
+            }
+            Ok(location)
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, Error>>()?;
     if locations
         .iter()
         .any(|record| record.state == MusubiArchiveLocationStateV1::Retired)
@@ -2915,11 +4182,10 @@ fn refresh_archive_availability(
     } else {
         MusubiStorageAvailabilityV1::Unavailable
     };
-    if previous.is_some_and(|record| {
-        record.availability == availability
-            && record.healthy_replicas == healthy_replicas
-            && record.active_locations == active_locations
-    }) {
+    if previous.availability == availability
+        && previous.healthy_replicas == healthy_replicas
+        && previous.active_locations == active_locations
+    {
         return Ok(());
     }
     let index_revision = bump_resolver_index_revision(state_transaction)?;
@@ -2939,16 +4205,9 @@ fn refresh_archive_availability(
         .world
         .musubi_archive_availability
         .insert(archive_id, projection);
-    let references = state_transaction
-        .world
-        .musubi_archive_reverse_references
-        .get(&archive_id)
-        .map(|record| record.releases.clone())
-        .unwrap_or_default();
     #[cfg(feature = "telemetry")]
     {
-        if previous
-            .is_some_and(|record| record.availability == MusubiStorageAvailabilityV1::Selectable)
+        if (previous.availability == MusubiStorageAvailabilityV1::Selectable)
             != (projection.availability == MusubiStorageAvailabilityV1::Selectable)
         {
             let release_count = u64::try_from(references.len())
@@ -2966,20 +4225,21 @@ fn refresh_archive_availability(
     }
     let mut packages = BTreeSet::new();
     for release in references {
-        if let Some(mut row) = state_transaction
+        let mut row = state_transaction
             .world
             .musubi_resolver_index
             .get(&release)
             .cloned()
-        {
-            row.selection.storage = projection;
-            row.index_revision = index_revision;
-            packages.insert(release.package.clone());
-            state_transaction
-                .world
-                .musubi_resolver_index
-                .insert(release, row);
-        }
+            .ok_or_else(|| {
+                invariant("Musubi archive reverse reference is missing its exact resolver row")
+            })?;
+        row.selection.storage = projection;
+        row.index_revision = index_revision;
+        packages.insert(release.package.clone());
+        state_transaction
+            .world
+            .musubi_resolver_index
+            .insert(release, row);
     }
     for package in packages {
         refresh_directory_for_package(&package, index_revision, state_transaction)?;
@@ -2989,6 +4249,99 @@ fn refresh_archive_availability(
         state_transaction,
     );
     Ok(())
+}
+
+fn exact_archive_projection_references(
+    archive_id: ArchiveId,
+    availability: MusubiArchiveAvailabilityV1,
+    world: &impl WorldReadOnly,
+) -> Result<Vec<MusubiReleaseIdV1>, Error> {
+    let archive = world
+        .musubi_archives()
+        .get(&archive_id)
+        .ok_or_else(|| archive_not_found(archive_id))?;
+    archive
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    if archive.archive_id != archive_id {
+        return Err(invariant(
+            "Musubi archive record has the wrong embedded archive identity",
+        ));
+    }
+    availability
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    if availability.archive_id != archive_id {
+        return Err(invariant(
+            "Musubi archive availability projection has the wrong archive identity",
+        ));
+    }
+    let references = world
+        .musubi_archive_reverse_references()
+        .get(&archive_id)
+        .ok_or_else(|| {
+            invariant("Musubi archive is missing its exact reverse-reference projection")
+        })?;
+    references
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    if references.archive_id != archive_id {
+        return Err(invariant(
+            "Musubi archive reverse-reference projection has the wrong archive identity",
+        ));
+    }
+
+    let mut packages = BTreeSet::new();
+    for release_id in &references.releases {
+        let release = world.musubi_releases().get(release_id).ok_or_else(|| {
+            invariant("Musubi archive reverse reference names a missing authoritative release")
+        })?;
+        release
+            .validate()
+            .map_err(|error| invariant(error.reason()))?;
+        if release.manifest.release != *release_id || release.manifest.archive_id != archive_id {
+            return Err(invariant(
+                "Musubi archive reverse reference disagrees with its authoritative release",
+            ));
+        }
+        let row = world
+            .musubi_resolver_index()
+            .get(release_id)
+            .ok_or_else(|| {
+                invariant("Musubi archive reverse reference is missing its exact resolver row")
+            })?;
+        row.validate().map_err(|error| invariant(error.reason()))?;
+        if row.release != *release_id
+            || row.release_digest != release.release_digest
+            || row.archive_id != archive_id
+            || row.source_digest != archive.commitment.source_tree_digest
+            || row.interface_digest != release.manifest.interface_digest
+            || row.abi != release.manifest.abi
+            || row.dependencies.as_slice() != release.manifest.dependencies.as_slice()
+            || row.selection.yank != release.yank
+            || row.selection.storage != availability
+            || row.selection.governance != release.artifact_governance
+        {
+            return Err(invariant(
+                "Musubi resolver row diverges from its authoritative archive/release projections",
+            ));
+        }
+        packages.insert(release_id.package.clone());
+    }
+    for package_id in packages {
+        let package = world.musubi_packages().get(&package_id).ok_or_else(|| {
+            invariant("Musubi archive projection references a missing package record")
+        })?;
+        package
+            .validate()
+            .map_err(|error| invariant(error.reason()))?;
+        if package.package != package_id {
+            return Err(invariant(
+                "Musubi archive projection package identity is inconsistent",
+            ));
+        }
+    }
+    Ok(references.releases.clone())
 }
 
 fn refresh_directory_for_package(
@@ -3002,7 +4355,6 @@ fn refresh_directory_for_package(
         .get(package)
         .cloned()
         .ok_or_else(|| package_not_found(package))?;
-    let metadata_revision = package_record.revisions.metadata;
     let latest_selectable = state_transaction
         .world
         .musubi_resolver_index
@@ -3011,21 +4363,34 @@ fn refresh_directory_for_package(
         .filter(|(_, row)| row.selection.fresh_selectable())
         .map(|(release, _)| release.version.clone())
         .max();
-    let selector = MusubiPackageSelectorV1 {
-        namespace: package_record.claimed_namespace,
-        name: package.name.clone(),
-    };
-    state_transaction.world.musubi_public_directory.insert(
-        selector.clone(),
-        MusubiOrderedPackageEntryV1 {
-            selector,
-            package: package.clone(),
-            latest_selectable,
-            metadata_revision,
-            index_revision,
-        },
-    );
+    let entry = plan_package_directory_entry(&package_record, latest_selectable, index_revision)?;
+    state_transaction
+        .world
+        .musubi_public_directory
+        .insert(entry.selector.clone(), entry);
     Ok(())
+}
+
+fn plan_package_directory_entry(
+    package: &MusubiPackageRecordV1,
+    latest_selectable: Option<MusubiVersionV1>,
+    index_revision: u64,
+) -> Result<MusubiOrderedPackageEntryV1, Error> {
+    let selector = MusubiPackageSelectorV1 {
+        namespace: package.claimed_namespace.clone(),
+        name: package.package.name.clone(),
+    };
+    let entry = MusubiOrderedPackageEntryV1 {
+        selector,
+        package: package.package.clone(),
+        latest_selectable,
+        metadata_revision: package.revisions.metadata,
+        index_revision,
+    };
+    entry
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    Ok(entry)
 }
 
 fn archive_has_protected_release(archive_id: ArchiveId, world: &impl WorldReadOnly) -> bool {
@@ -3062,12 +4427,11 @@ fn package_release_start(package: &MusubiPackageIdV1) -> MusubiReleaseIdV1 {
 fn package_release_page_start(
     package: &MusubiPackageIdV1,
     page: &MusubiPageRequestV1,
-) -> Result<MusubiReleaseIdV1, QueryExecutionFail> {
+) -> Result<MusubiReleaseIdV1, MusubiQueryExecutionErrorV1> {
     if let Some(cursor) = &page.cursor {
-        let version = cursor
-            .last_key
-            .parse::<MusubiVersionV1>()
-            .map_err(|_| QueryExecutionFail::Expired)?;
+        let version = cursor.last_key.parse::<MusubiVersionV1>().map_err(|_| {
+            MusubiQueryExecutionErrorV1::cursor(MusubiCursorFailureV1::LastKeyStale)
+        })?;
         Ok(MusubiReleaseIdV1::new(package.clone(), version))
     } else {
         Ok(package_release_start(package))
@@ -3078,17 +4442,22 @@ fn verify_parliament_decision(
     decision: &MusubiGovernanceDecisionV1,
     action: &MusubiParliamentActionV1,
     state_transaction: &StateTransaction<'_, '_>,
+    rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
 ) -> Result<(), Error> {
-    decision
-        .validate()
-        .map_err(|error| invalid_parameter(error.reason()))?;
-    action
-        .validate()
-        .map_err(|error| invalid_parameter(error.reason()))?;
+    decision.validate().map_err(|error| {
+        *rejection_reason = MusubiGovernanceRejectionReasonV1::InvalidDecision;
+        invalid_parameter(error.reason())
+    })?;
+    action.validate().map_err(|error| {
+        *rejection_reason = MusubiGovernanceRejectionReasonV1::InvalidDecision;
+        invalid_parameter(error.reason())
+    })?;
     if decision.action_digest != action.action_digest() {
-        return Err(invariant(
-            "Musubi Parliament decision does not bind the exact requested action",
-        ));
+        return reject_governance_mutation(
+            rejection_reason,
+            MusubiGovernanceRejectionReasonV1::InvalidDecision,
+            invariant("Musubi Parliament decision does not bind the exact requested action"),
+        );
     }
     if state_transaction
         .world
@@ -3096,38 +4465,63 @@ fn verify_parliament_decision(
         .get(&decision.decision_id)
         .is_some()
     {
-        return Err(invariant("Musubi Parliament decision was already consumed"));
+        return reject_governance_mutation(
+            rejection_reason,
+            MusubiGovernanceRejectionReasonV1::Replay,
+            invariant("Musubi Parliament decision was already consumed"),
+        );
     }
     let proposal = state_transaction
         .world
         .governance_proposals
         .get(&decision.decision_id)
-        .ok_or_else(|| invariant("Musubi Parliament decision has no governance proposal"))?;
+        .ok_or_else(|| {
+            *rejection_reason = MusubiGovernanceRejectionReasonV1::InvalidDecision;
+            invariant("Musubi Parliament decision has no governance proposal")
+        })?;
+    if proposal.kind.fingerprint() != decision.decision_id {
+        return reject_governance_mutation(
+            rejection_reason,
+            MusubiGovernanceRejectionReasonV1::InvalidDecision,
+            invariant(
+                "Musubi Parliament proposal storage key differs from its exact typed fingerprint",
+            ),
+        );
+    }
     if proposal.status != GovernanceProposalStatus::Enacted
         || proposal.enacted_at_height != Some(decision.enacted_at_height)
     {
-        return Err(invariant(
-            "Musubi Parliament proposal is not enacted at the claimed height",
-        ));
+        return reject_governance_mutation(
+            rejection_reason,
+            MusubiGovernanceRejectionReasonV1::InvalidDecision,
+            invariant("Musubi Parliament proposal is not enacted at the claimed height"),
+        );
     }
     match &proposal.kind {
         ProposalKind::MusubiRegistryGovernance(enacted) if enacted == action => {}
         _ => {
-            return Err(invariant(
-                "Musubi Parliament proposal payload does not match the requested action",
-            ));
+            return reject_governance_mutation(
+                rejection_reason,
+                MusubiGovernanceRejectionReasonV1::InvalidDecision,
+                invariant("Musubi Parliament proposal payload does not match the requested action"),
+            );
         }
     }
     let minimum = decision
         .enacted_at_height
         .checked_add(state_transaction.gov.min_enactment_delay)
-        .ok_or_else(|| invariant("Musubi Parliament delay overflows block height"))?;
+        .ok_or_else(|| {
+            *rejection_reason = MusubiGovernanceRejectionReasonV1::InvalidDecision;
+            invariant("Musubi Parliament delay overflows block height")
+        })?;
     if decision.execute_after_height < minimum
         || execution_height(state_transaction) < decision.execute_after_height
     {
-        return Err(invariant(
-            "Musubi Parliament decision has not satisfied the enactment delay",
-        ));
+        return reject_governance_mutation(
+            rejection_reason,
+            MusubiGovernanceRejectionReasonV1::InvalidDecision,
+            invariant("Musubi Parliament decision has not satisfied the enactment delay"),
+        );
     }
     Ok(())
 }
@@ -3135,25 +4529,39 @@ fn verify_parliament_decision(
 fn consume_parliament_decision(
     decision: MusubiGovernanceDecisionV1,
     state_transaction: &mut StateTransaction<'_, '_>,
-) {
+) -> Result<(), Error> {
+    let consumption = MusubiGovernanceDecisionConsumptionV1 {
+        decision,
+        minimum_enactment_delay: state_transaction.gov.min_enactment_delay,
+        consumed_at_height: execution_height(state_transaction),
+    };
+    consumption
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
     state_transaction
         .world
         .musubi_governance_decisions
-        .insert(decision.decision_id, decision);
+        .insert(decision.decision_id, consumption);
+    Ok(())
 }
 
 fn bump_resolver_index_revision(
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<u64, Error> {
-    let current = *state_transaction.world.musubi_resolver_index_revision.get();
-    let next = current
-        .checked_next()
-        .ok_or_else(|| invariant("Musubi resolver-index revision overflow"))?;
+    let next = plan_resolver_index_revision(state_transaction)?;
     *state_transaction
         .world
         .musubi_resolver_index_revision
         .get_mut() = next;
     Ok(next.get())
+}
+
+fn plan_resolver_index_revision(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<MusubiResolverIndexRevisionV1, Error> {
+    (*state_transaction.world.musubi_resolver_index_revision.get())
+        .checked_next()
+        .ok_or_else(|| invariant("Musubi resolver-index revision overflow"))
 }
 
 fn execution_height(state_transaction: &StateTransaction<'_, '_>) -> u64 {
@@ -3232,14 +4640,16 @@ fn emit_musubi_event(event: MusubiEvent, state_transaction: &mut StateTransactio
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{State, World},
+        state::{GovernancePipeline, GovernanceProposalRecord, State, World},
     };
+
+    const GOVERNANCE_EXECUTION_HEIGHT: u64 = 42;
 
     fn location_fixture(
         archive_byte: u8,
@@ -3267,12 +4677,882 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    #[cfg(feature = "telemetry")]
+    fn governance_rejection_counts(
+        metrics: &crate::telemetry::Metrics,
+        action: &str,
+        reason: &str,
+    ) -> (u64, u64) {
+        let exposition = metrics.try_to_string().expect("encode metrics");
+        let action_label = format!("action=\"{action}\"");
+        let reason_label = format!("reason=\"{reason}\"");
+        exposition
+            .lines()
+            .filter(|line| line.starts_with("musubi_governance_rejections_total{"))
+            .fold((0_u64, 0_u64), |(total, exact), line| {
+                let (labels, value) = line
+                    .rsplit_once(' ')
+                    .expect("Prometheus counter sample has a value");
+                let value = value.parse::<u64>().expect("counter sample is an integer");
+                let exact = if labels.contains(&action_label) && labels.contains(&reason_label) {
+                    exact + value
+                } else {
+                    exact
+                };
+                (total + value, exact)
+            })
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn governance_rejections_are_counted_once_at_the_authoritative_isi_boundary() {
+        use std::sync::Arc;
+
+        let metrics = Arc::new(crate::telemetry::Metrics::default());
+        let telemetry = crate::telemetry::StateTelemetry::new(Arc::clone(&metrics), true);
+        let state = State::with_telemetry(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            telemetry,
+        );
+        let before_unauthorized = governance_rejection_counts(&metrics, "remove", "unauthorized");
+        let before_stale = governance_rejection_counts(&metrics, "remove", "stale_revision");
+        let before_last_owner = governance_rejection_counts(&metrics, "remove", "last_owner");
+
+        {
+            let header = iroha_data_model::block::BlockHeader::new(
+                std::num::NonZeroU64::new(1).expect("nonzero block height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let owner = account(11);
+            let stranger = account(12);
+            let package = package("telemetry-last-owner");
+            seed_package_owner(&package, &owner, 1, &mut transaction);
+            let remove = |expected_governance_revision| RemoveMusubiPackageMaintainerV1 {
+                package: package.clone(),
+                account: owner.clone(),
+                expected_governance_revision,
+            };
+
+            remove(1)
+                .execute(&stranger, &mut transaction)
+                .expect_err("a non-owner must be rejected");
+            remove(2)
+                .execute(&owner, &mut transaction)
+                .expect_err("a stale governance revision must be rejected");
+            let error = remove(1)
+                .execute(&owner, &mut transaction)
+                .expect_err("the sole owner cannot be removed");
+            assert!(error.to_string().contains("retain its last owner"));
+        }
+
+        let after_unauthorized = governance_rejection_counts(&metrics, "remove", "unauthorized");
+        let after_stale = governance_rejection_counts(&metrics, "remove", "stale_revision");
+        let after_last_owner = governance_rejection_counts(&metrics, "remove", "last_owner");
+        assert_eq!(after_unauthorized.1, before_unauthorized.1 + 1);
+        assert_eq!(after_stale.1, before_stale.1 + 1);
+        assert_eq!(after_last_owner.1, before_last_owner.1 + 1);
+        assert_eq!(after_last_owner.0, before_last_owner.0 + 3);
+    }
+
+    #[test]
+    fn publication_snapshot_accepts_a_canonical_finalized_ancestor() {
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 2,
+            finalized_block_hash: [0x22; 32],
+            index_revision: 7,
+        };
+        validate_publication_snapshot_anchor(&snapshot, 5, Some([0x22; 32]), 9)
+            .expect("a canonical ancestor remains valid while publication evidence finalizes");
+    }
+
+    #[test]
+    fn publication_snapshot_rejects_future_or_noncanonical_anchors() {
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 3,
+            finalized_block_hash: [0x33; 32],
+            index_revision: 4,
+        };
+        assert!(validate_publication_snapshot_anchor(&snapshot, 2, Some([0x33; 32]), 4).is_err());
+        assert!(validate_publication_snapshot_anchor(&snapshot, 3, Some([0x44; 32]), 4).is_err());
+        assert!(validate_publication_snapshot_anchor(&snapshot, 3, Some([0x33; 32]), 3).is_err());
+    }
+
+    fn package(name: &str) -> MusubiPackageIdV1 {
+        MusubiPackageIdV1::new(
+            iroha_data_model::nexus::DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            name.parse().expect("package name"),
+        )
+    }
+
+    fn seed_package_owner(
+        package: &MusubiPackageIdV1,
+        owner: &AccountId,
+        governance_revision: u64,
+        transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        transaction.world.musubi_packages.insert(
+            package.clone(),
+            MusubiPackageRecordV1 {
+                package: package.clone(),
+                claimed_namespace: "sora".parse().expect("namespace"),
+                claimed_namespace_binding: MusubiNamespaceBindingDigestV1::new([1; 32]),
+                owners: vec![owner.clone()],
+                member_accounts: vec![owner.clone()],
+                claimed_at_height: 1,
+                revisions: MusubiPackageRevisionsV1 {
+                    governance: governance_revision,
+                    metadata: 1,
+                    archive_locations: 1,
+                },
+            },
+        );
+        let member = MusubiPackageMemberV1 {
+            package: package.clone(),
+            account: owner.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            accepted_at_height: 1,
+            governance_revision,
+        };
+        transaction
+            .world
+            .musubi_package_members
+            .insert(member.key(), member.clone());
+        upsert_maintainer_directory(
+            MusubiMaintainerDirectoryEntryV1::Accepted(member),
+            transaction,
+        );
+    }
+
+    fn seed_pending_invitation(
+        invitation: MusubiMaintainerInvitationV1,
+        transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        transaction
+            .world
+            .musubi_package_invitations
+            .insert(invitation.invite_id, invitation.clone());
+        upsert_maintainer_directory(
+            MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation),
+            transaction,
+        );
+    }
+
+    fn take_musubi_events(transaction: &mut StateTransaction<'_, '_>) -> Vec<MusubiEvent> {
+        transaction
+            .world
+            .take_external_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                iroha_data_model::events::EventBox::Data(data) => match data.as_ref() {
+                    DataEvent::Musubi(event) => Some(event.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn decision_for_current_block(
+        decision_id: [u8; 32],
+        action: &MusubiParliamentActionV1,
+        transaction: &StateTransaction<'_, '_>,
+    ) -> MusubiGovernanceDecisionV1 {
+        let execute_after_height = execution_height(transaction);
+        let delay = transaction.gov.min_enactment_delay.max(1);
+        let enacted_at_height = execute_after_height
+            .checked_sub(delay)
+            .filter(|height| *height > 0)
+            .expect("fixture block leaves a positive enactment height");
+        MusubiGovernanceDecisionV1 {
+            decision_id,
+            action_digest: action.action_digest(),
+            enacted_at_height,
+            execute_after_height,
+        }
+    }
+
+    fn insert_enacted_proposal(
+        decision_id: [u8; 32],
+        kind: ProposalKind,
+        enacted_at_height: u64,
+        transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        transaction.world.put_governance_proposal(
+            decision_id,
+            GovernanceProposalRecord {
+                proposer: account(80),
+                kind,
+                created_height: enacted_at_height.saturating_sub(1).max(1),
+                status: GovernanceProposalStatus::Enacted,
+                pipeline: GovernancePipeline::default(),
+                parliament_snapshot: None,
+                finalization_evidence: None,
+                enacted_at_height: Some(enacted_at_height),
+            },
+        );
+    }
+
+    fn seed_enacted_decision(
+        action: &MusubiParliamentActionV1,
+        transaction: &mut StateTransaction<'_, '_>,
+    ) -> MusubiGovernanceDecisionV1 {
+        let kind = ProposalKind::MusubiRegistryGovernance(action.clone());
+        let decision_id = kind.fingerprint();
+        let decision = decision_for_current_block(decision_id, action, transaction);
+        insert_enacted_proposal(decision_id, kind, decision.enacted_at_height, transaction);
+        decision
+    }
+
     fn snapshot(revision: u64) -> MusubiRegistrySnapshotV1 {
         MusubiRegistrySnapshotV1 {
             finalized_height: 7,
             finalized_block_hash: [7; 32],
             index_revision: revision,
         }
+    }
+
+    fn retention_archive(seed: u8) -> MusubiArchiveRecordV1 {
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+                [seed; 32],
+            )
+            .expect("retention fixture root CID"),
+            chunker: iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_owned(),
+                name: "sf1".to_owned(),
+                semver: "1.0.0".to_owned(),
+                multihash_code: 0x1f,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new([seed.wrapping_add(1); 32]),
+            por_root: MusubiContentDigestV1::new([seed.wrapping_add(2); 32]),
+            content_length: 1,
+            car_digest: MusubiContentDigestV1::new([seed.wrapping_add(3); 32]),
+            car_size: 1,
+            bundle_digest: MusubiContentDigestV1::new([seed.wrapping_add(4); 32]),
+            source_tree_digest: MusubiContentDigestV1::new([seed.wrapping_add(5); 32]),
+            descriptor_digest: MusubiContentDigestV1::new([seed.wrapping_add(6); 32]),
+            file_count: 1,
+            chunk_count: 1,
+        };
+        let archive_id = commitment.archive_id();
+        let publisher = account(seed);
+        let broker_keypair =
+            KeyPair::try_from_seed(vec![seed.wrapping_add(1); 32], Algorithm::Ed25519)
+                .expect("retention fixture broker keypair");
+        let broker = AccountId::new(broker_keypair.public_key().clone());
+        let receipt_payload = MusubiSeedIngressReceiptPayloadV1 {
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            binding: MusubiSeedIngressReceiptBindingV1 {
+                chain_id: iroha_data_model::ChainId::from("retention-test"),
+                genesis_block_hash: [seed.wrapping_add(7); 32],
+                publisher: publisher.clone(),
+                ingress_broker: broker,
+                seed_provider: iroha_data_model::sorafs::capacity::ProviderId::new(
+                    [seed.wrapping_add(8); 32],
+                ),
+                semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new(
+                    [seed.wrapping_add(9); 32],
+                ),
+                archive_id,
+                car_body_digest: commitment.car_digest,
+                car_body_length: commitment.car_size,
+                nonce: [seed.wrapping_add(10); 32],
+            },
+            issued_at_ms: 1,
+            expires_at_ms: 2,
+        };
+        let receipt_approval = MusubiSeedIngressReceiptApprovalV1 {
+            public_key: broker_keypair.public_key().clone(),
+            signature: SignatureOf::try_from_hash(
+                broker_keypair.private_key(),
+                receipt_payload.signing_hash(),
+            )
+            .expect("sign retention fixture receipt"),
+        };
+        MusubiArchiveRecordV1 {
+            archive_id,
+            commitment: commitment.clone(),
+            staging_receipt: MusubiSeedIngressReceiptV1 {
+                payload: receipt_payload,
+                approvals: vec![receipt_approval],
+            },
+            registered_by: publisher,
+            registered_at_height: 1,
+            location_revision: 1,
+            location_ids: Vec::new(),
+        }
+    }
+
+    fn retention_release(
+        archive_id: ArchiveId,
+        version: &str,
+        yanked: bool,
+        artifact_governance: MusubiArtifactGovernanceStateV1,
+    ) -> MusubiReleaseRecordV1 {
+        let release = MusubiReleaseIdV1::new(
+            package("retention"),
+            version.parse().expect("retention release version"),
+        );
+        let manifest = MusubiReleaseManifestV1 {
+            release: release.clone(),
+            edition: MusubiKotodamaEditionV1::V1,
+            abi: MusubiAbiBindingV1::new([0xA1; 32]).expect("retention ABI"),
+            dependencies: Vec::new(),
+            exports: Vec::new(),
+            interface_digest: MusubiContentDigestV1::new([0xA2; 32]),
+            metadata: MusubiReleaseMetadataV1::default(),
+            archive_id,
+            verification_lock_digest: MusubiVerificationLockDigestV1::new([0xA3; 32]),
+        };
+        MusubiReleaseRecordV1 {
+            release_digest: manifest.release_digest(),
+            manifest,
+            published_by: account(111),
+            published_at_height: 1,
+            yank: MusubiReleaseYankV1 {
+                release,
+                yanked,
+                reason: "retention fixture".parse().expect("yank reason"),
+                changed_by: account(111),
+                changed_at_height: 1,
+                revision: 1,
+            },
+            artifact_governance,
+            revisions: MusubiReleaseRevisionsV1 {
+                yank: 1,
+                artifact_governance: 1,
+            },
+        }
+    }
+
+    fn seed_retention_archive(
+        world: &mut World,
+        archive: MusubiArchiveRecordV1,
+        releases: Vec<MusubiReleaseRecordV1>,
+    ) -> ArchiveId {
+        let archive_id = archive.archive_id;
+        let mut release_ids = releases
+            .iter()
+            .map(|release| release.manifest.release.clone())
+            .collect::<Vec<_>>();
+        release_ids.sort();
+        for release in releases {
+            world
+                .musubi_releases
+                .insert(release.manifest.release.clone(), release);
+        }
+        world.musubi_archives.insert(archive_id, archive);
+        world.musubi_archive_availability.insert(
+            archive_id,
+            MusubiArchiveAvailabilityV1 {
+                archive_id,
+                availability: MusubiStorageAvailabilityV1::Unavailable,
+                healthy_replicas: 0,
+                active_locations: 0,
+                finalized_height: 1,
+                finalized_block_hash: [0xB1; 32],
+                index_revision: 1,
+            },
+        );
+        world.musubi_archive_reverse_references.insert(
+            archive_id,
+            MusubiArchiveReverseReferencesV1 {
+                archive_id,
+                releases: release_ids,
+            },
+        );
+        archive_id
+    }
+
+    #[test]
+    fn availability_refresh_preflights_resolver_rows_and_packages_before_mutation() {
+        let mut world = World::new();
+        let archive = retention_archive(17);
+        let archive_id = archive.archive_id;
+        let source_digest = archive.commitment.source_tree_digest;
+        let release = retention_release(
+            archive_id,
+            "1.0.0",
+            false,
+            MusubiArtifactGovernanceStateV1::Available,
+        );
+        let release_id = release.manifest.release.clone();
+        let resolver_release = release.clone();
+        seed_retention_archive(&mut world, archive, vec![release]);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(2).expect("nonzero fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let availability_before = *transaction
+            .world
+            .musubi_archive_availability
+            .get(&archive_id)
+            .expect("fixture archive has availability");
+        let index_revision_before = transaction.world.musubi_resolver_index_revision.get().get();
+
+        let error = refresh_archive_availability(archive_id, &mut transaction)
+            .expect_err("a reverse-referenced release must have an exact resolver row");
+
+        assert!(error.to_string().contains("missing its exact resolver row"));
+        assert!(
+            transaction
+                .world
+                .musubi_resolver_index
+                .get(&release_id)
+                .is_none()
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_archive_availability
+                .get(&archive_id),
+            Some(&availability_before)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            index_revision_before
+        );
+
+        let row = MusubiResolverReleaseRowV1 {
+            release: release_id.clone(),
+            release_digest: resolver_release.release_digest,
+            archive_id,
+            source_digest,
+            interface_digest: resolver_release.manifest.interface_digest,
+            abi: resolver_release.manifest.abi,
+            dependencies: resolver_release.manifest.dependencies.clone(),
+            selection: MusubiReleaseSelectionStateV1 {
+                yank: resolver_release.yank,
+                storage: availability_before,
+                governance: resolver_release.artifact_governance,
+            },
+            index_revision: index_revision_before,
+        };
+        row.validate().expect("fixture resolver row is canonical");
+        transaction
+            .world
+            .musubi_resolver_index
+            .insert(release_id, row);
+
+        let error = refresh_archive_availability(archive_id, &mut transaction)
+            .expect_err("a reverse-referenced release must retain its package record");
+        assert!(error.to_string().contains("missing package record"));
+        assert_eq!(
+            transaction
+                .world
+                .musubi_archive_availability
+                .get(&archive_id),
+            Some(&availability_before)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            index_revision_before
+        );
+    }
+
+    #[test]
+    fn availability_refresh_rejects_an_invalid_archive_before_mutation() {
+        let mut world = World::new();
+        let mut archive = retention_archive(18);
+        let archive_id = archive.archive_id;
+        archive.location_revision = 0;
+        seed_retention_archive(&mut world, archive.clone(), Vec::new());
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(2).expect("nonzero fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let availability_before = *transaction
+            .world
+            .musubi_archive_availability
+            .get(&archive_id)
+            .expect("fixture archive has availability");
+        let index_revision_before = transaction.world.musubi_resolver_index_revision.get().get();
+
+        let error = refresh_archive_availability(archive_id, &mut transaction)
+            .expect_err("an invalid authoritative archive must fail closed");
+
+        assert!(error.to_string().contains("archive record"));
+        assert_eq!(
+            transaction.world.musubi_archives.get(&archive_id),
+            Some(&archive)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_archive_availability
+                .get(&archive_id),
+            Some(&availability_before)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            index_revision_before
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn availability_refresh_rejects_a_mismatched_archive_identity_before_mutation() {
+        let mut world = World::new();
+        let canonical = retention_archive(19);
+        let archive_id = canonical.archive_id;
+        let mismatched = retention_archive(20);
+        mismatched
+            .validate()
+            .expect("mismatched archive fixture is structurally valid");
+        seed_retention_archive(&mut world, canonical, Vec::new());
+        world.musubi_archives.insert(archive_id, mismatched.clone());
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(2).expect("nonzero fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let availability_before = *transaction
+            .world
+            .musubi_archive_availability
+            .get(&archive_id)
+            .expect("fixture archive has availability");
+        let index_revision_before = transaction.world.musubi_resolver_index_revision.get().get();
+
+        let error = refresh_archive_availability(archive_id, &mut transaction)
+            .expect_err("an archive stored under another identity must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("wrong embedded archive identity")
+        );
+        assert_eq!(
+            transaction.world.musubi_archives.get(&archive_id),
+            Some(&mismatched)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_archive_availability
+                .get(&archive_id),
+            Some(&availability_before)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            index_revision_before
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn availability_refresh_preflights_location_validation_and_identity() {
+        let mut world = World::new();
+        let mut archive = retention_archive(21);
+        let archive_id = archive.archive_id;
+        let location_id = MusubiArchiveLocationIdV1::new([0x51; 32]);
+        archive.location_ids = vec![location_id];
+        archive
+            .validate()
+            .expect("archive with one location identity is valid");
+        seed_retention_archive(&mut world, archive.clone(), Vec::new());
+        let key = MusubiArchiveLocationKeyV1::new(archive_id, location_id);
+        let mut location = location_fixture(
+            0x51,
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x52; 32]),
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x53; 32]),
+        );
+        location.archive_id = archive_id;
+        location.location_id = location_id;
+        world.musubi_archive_locations.insert(key, location.clone());
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(2).expect("nonzero fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let availability_before = *transaction
+            .world
+            .musubi_archive_availability
+            .get(&archive_id)
+            .expect("fixture archive has availability");
+        let index_revision_before = transaction.world.musubi_resolver_index_revision.get().get();
+
+        let invalid = refresh_archive_availability(archive_id, &mut transaction)
+            .expect_err("a malformed location must fail before availability changes");
+        assert!(invalid.to_string().contains("archive location is invalid"));
+        assert_eq!(
+            transaction.world.musubi_archive_locations.get(&key),
+            Some(&location)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_archive_availability
+                .get(&archive_id),
+            Some(&availability_before)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            index_revision_before
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+
+        location.location_id = MusubiArchiveLocationIdV1::new([0x54; 32]);
+        transaction
+            .world
+            .musubi_archive_locations
+            .insert(key, location.clone());
+        let mismatched = refresh_archive_availability(archive_id, &mut transaction)
+            .expect_err("a location stored under another identity must fail closed");
+        assert!(mismatched.to_string().contains("wrong embedded identity"));
+        assert_eq!(
+            transaction.world.musubi_archive_locations.get(&key),
+            Some(&location)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_archive_availability
+                .get(&archive_id),
+            Some(&availability_before)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            index_revision_before
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn archive_retention_point_lookups_keep_active_yanked_and_unknown_archives() {
+        let mut world = World::new();
+        let unreferenced = seed_retention_archive(&mut world, retention_archive(11), Vec::new());
+        let referenced_archive = retention_archive(21);
+        let referenced = referenced_archive.archive_id;
+        let takedown = |seed| {
+            MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
+                action_digest: MusubiGovernanceActionDigestV1::new([seed; 32]),
+                reason: "Parliament fixture".parse().expect("takedown reason"),
+                applied_at_height: 1,
+            })
+        };
+        seed_retention_archive(
+            &mut world,
+            referenced_archive,
+            vec![
+                retention_release(
+                    referenced,
+                    "1.0.0",
+                    false,
+                    MusubiArtifactGovernanceStateV1::Available,
+                ),
+                retention_release(
+                    referenced,
+                    "1.1.0",
+                    true,
+                    MusubiArtifactGovernanceStateV1::Available,
+                ),
+                retention_release(referenced, "1.2.0", false, takedown(31)),
+            ],
+        );
+        let taken_down_archive = retention_archive(41);
+        let taken_down = taken_down_archive.archive_id;
+        seed_retention_archive(
+            &mut world,
+            taken_down_archive,
+            vec![retention_release(taken_down, "2.0.0", true, takedown(42))],
+        );
+        let view = world.view();
+
+        let unknown = archive_retention_decision(ArchiveId::new([0xF1; 32]), &view)
+            .expect("unknown decision");
+        assert_eq!(
+            unknown.disposition,
+            MusubiArchiveRetentionDispositionV1::RetainUnknown
+        );
+        assert!(unknown.must_retain());
+
+        let unreferenced =
+            archive_retention_decision(unreferenced, &view).expect("unreferenced decision");
+        assert_eq!(
+            unreferenced.disposition,
+            MusubiArchiveRetentionDispositionV1::PruneUnreferenced
+        );
+
+        let referenced =
+            archive_retention_decision(referenced, &view).expect("referenced decision");
+        assert_eq!(
+            referenced.disposition,
+            MusubiArchiveRetentionDispositionV1::RetainReferenced
+        );
+        assert_eq!(referenced.active_releases, 1);
+        assert_eq!(referenced.yanked_releases, 1);
+        assert_eq!(referenced.taken_down_releases, 1);
+        assert!(referenced.must_retain());
+
+        let taken_down =
+            archive_retention_decision(taken_down, &view).expect("taken-down decision");
+        assert_eq!(
+            taken_down.disposition,
+            MusubiArchiveRetentionDispositionV1::PruneGovernedTakedown
+        );
+        assert_eq!(taken_down.taken_down_releases, 1);
+        assert!(!taken_down.must_retain());
+    }
+
+    #[test]
+    fn archive_retention_point_lookups_reject_projection_identity_mismatches() {
+        let mut world = World::new();
+        let archive = retention_archive(51);
+        let archive_id = seed_retention_archive(&mut world, archive.clone(), Vec::new());
+        let other_archive_id = retention_archive(52).archive_id;
+        let valid_storage = world
+            .musubi_archive_availability
+            .view()
+            .get(&archive_id)
+            .cloned()
+            .expect("seeded archive availability");
+
+        world
+            .musubi_archives
+            .insert(archive_id, retention_archive(52));
+        assert!(archive_retention_decision(archive_id, &world.view()).is_err());
+        world.musubi_archives.insert(archive_id, archive.clone());
+
+        world.musubi_archive_reverse_references.insert(
+            archive_id,
+            MusubiArchiveReverseReferencesV1 {
+                archive_id: other_archive_id,
+                releases: Vec::new(),
+            },
+        );
+        assert!(archive_retention_decision(archive_id, &world.view()).is_err());
+        world.musubi_archive_reverse_references.insert(
+            archive_id,
+            MusubiArchiveReverseReferencesV1 {
+                archive_id,
+                releases: Vec::new(),
+            },
+        );
+
+        let mut mismatched_storage = valid_storage.clone();
+        mismatched_storage.archive_id = other_archive_id;
+        world
+            .musubi_archive_availability
+            .insert(archive_id, mismatched_storage);
+        assert!(archive_retention_decision(archive_id, &world.view()).is_err());
+        world
+            .musubi_archive_availability
+            .insert(archive_id, valid_storage);
+
+        let missing_release = retention_release(
+            archive_id,
+            "1.0.0",
+            false,
+            MusubiArtifactGovernanceStateV1::Available,
+        )
+        .manifest
+        .release;
+        world.musubi_archive_reverse_references.insert(
+            archive_id,
+            MusubiArchiveReverseReferencesV1 {
+                archive_id,
+                releases: vec![missing_release],
+            },
+        );
+        assert!(archive_retention_decision(archive_id, &world.view()).is_err());
+
+        let mut mismatched_release = retention_release(
+            archive_id,
+            "2.0.0",
+            false,
+            MusubiArtifactGovernanceStateV1::Available,
+        );
+        let referenced_release = mismatched_release.manifest.release.clone();
+        mismatched_release.manifest.release = MusubiReleaseIdV1::new(
+            package("retention"),
+            "2.1.0".parse().expect("mismatched release version"),
+        );
+        mismatched_release.yank.release = mismatched_release.manifest.release.clone();
+        mismatched_release.release_digest = mismatched_release.manifest.release_digest();
+        world
+            .musubi_releases
+            .insert(referenced_release.clone(), mismatched_release);
+        world.musubi_archive_reverse_references.insert(
+            archive_id,
+            MusubiArchiveReverseReferencesV1 {
+                archive_id,
+                releases: vec![referenced_release],
+            },
+        );
+        assert!(archive_retention_decision(archive_id, &world.view()).is_err());
+
+        let mut wrong_archive_release = retention_release(
+            archive_id,
+            "3.0.0",
+            true,
+            MusubiArtifactGovernanceStateV1::Available,
+        );
+        let referenced_release = wrong_archive_release.manifest.release.clone();
+        wrong_archive_release.manifest.archive_id = other_archive_id;
+        wrong_archive_release.release_digest = wrong_archive_release.manifest.release_digest();
+        world
+            .musubi_releases
+            .insert(referenced_release.clone(), wrong_archive_release);
+        world.musubi_archive_reverse_references.insert(
+            archive_id,
+            MusubiArchiveReverseReferencesV1 {
+                archive_id,
+                releases: vec![referenced_release],
+            },
+        );
+        assert!(archive_retention_decision(archive_id, &world.view()).is_err());
     }
 
     #[test]
@@ -3303,37 +5583,94 @@ mod tests {
     }
 
     #[test]
-    fn pagination_rejects_stale_index_revision_and_last_key() {
-        let hash = query_hash(b"test", b"request");
-        let cursor = MusubiFinalizedCursorV1 {
-            snapshot: snapshot(1),
-            query_hash: hash,
-            last_key: "missing".to_owned(),
-            caller: None,
-        };
-        let request = MusubiPageRequestV1 {
-            limit: 1,
-            cursor: Some(cursor),
-        };
-        assert!(matches!(
-            paginate(vec![("a".to_owned(), 1_u8)], &request, hash, snapshot(1)),
-            Err(QueryExecutionFail::Expired)
-        ));
+    fn pagination_preserves_exact_cursor_failure_reasons() {
+        fn assert_reason<T>(
+            result: Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1>,
+            expected: MusubiCursorFailureV1,
+        ) {
+            let error = match result {
+                Ok(_) => panic!("cursor must fail"),
+                Err(error) => error,
+            };
+            assert_eq!(error.cursor_failure(), Some(expected));
+            assert_eq!(error.into_query_error(), QueryExecutionFail::Expired);
+        }
 
-        let cursor = MusubiFinalizedCursorV1 {
-            snapshot: snapshot(1),
-            query_hash: hash,
-            last_key: "a".to_owned(),
-            caller: None,
-        };
-        let request = MusubiPageRequestV1 {
+        let hash = query_hash(b"test", b"request");
+        let cursor =
+            |cursor_snapshot, query_hash, last_key: &str, caller| MusubiFinalizedCursorV1 {
+                snapshot: cursor_snapshot,
+                query_hash,
+                last_key: last_key.to_owned(),
+                caller,
+            };
+        let page = |cursor| MusubiPageRequestV1 {
             limit: 1,
             cursor: Some(cursor),
         };
-        assert!(matches!(
-            paginate(vec![("a".to_owned(), 1_u8)], &request, hash, snapshot(2)),
-            Err(QueryExecutionFail::Expired)
-        ));
+
+        let mut changed_anchor = snapshot(1);
+        changed_anchor.finalized_height += 1;
+        assert_reason(
+            paginate(
+                vec![("a".to_owned(), 1_u8)],
+                &page(cursor(snapshot(1), hash, "a", None)),
+                hash,
+                changed_anchor,
+            ),
+            MusubiCursorFailureV1::FinalizedAnchorMismatch,
+        );
+        assert_reason(
+            paginate(
+                vec![("a".to_owned(), 1_u8)],
+                &page(cursor(snapshot(1), hash, "a", None)),
+                hash,
+                snapshot(2),
+            ),
+            MusubiCursorFailureV1::IndexRevisionMismatch,
+        );
+        assert_reason(
+            paginate(
+                vec![("a".to_owned(), 1_u8)],
+                &page(cursor(
+                    snapshot(1),
+                    query_hash(b"other", b"request"),
+                    "a",
+                    None,
+                )),
+                hash,
+                snapshot(1),
+            ),
+            MusubiCursorFailureV1::QueryMismatch,
+        );
+        let expected_caller = account(1);
+        assert_reason(
+            paginate_for_caller(
+                vec![("a".to_owned(), 1_u8)],
+                &page(cursor(snapshot(1), hash, "a", Some(account(2)))),
+                hash,
+                snapshot(1),
+                Some(&expected_caller),
+            ),
+            MusubiCursorFailureV1::CallerMismatch,
+        );
+        assert_reason(
+            paginate(
+                vec![("a".to_owned(), 1_u8)],
+                &page(cursor(snapshot(1), hash, "missing", None)),
+                hash,
+                snapshot(1),
+            ),
+            MusubiCursorFailureV1::LastKeyStale,
+        );
+
+        let invalid_version_cursor = page(cursor(snapshot(1), hash, "01.0.0", None));
+        let error = package_release_page_start(&package("cursor-test"), &invalid_version_cursor)
+            .expect_err("noncanonical version boundary must fail");
+        assert_eq!(
+            error.cursor_failure(),
+            Some(MusubiCursorFailureV1::LastKeyStale)
+        );
     }
 
     #[test]
@@ -3346,6 +5683,1052 @@ mod tests {
             query_hash(b"versions", b"same"),
             query_hash(b"versions", b"different")
         );
+    }
+
+    #[test]
+    fn concurrent_pending_invitations_rebase_and_accept_independently() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(21);
+        let first_account = account(22);
+        let second_account = account(23);
+        let package = package("concurrent-invites");
+        let first_id = MusubiInviteIdV1::new([0x21; 32]);
+        let second_id = MusubiInviteIdV1::new([0x22; 32]);
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+
+        InviteMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: first_id,
+            invited_account: first_account.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            expires_at_height: 100,
+            expected_governance_revision: 1,
+        }
+        .execute(&owner, &mut transaction)
+        .expect("first invitation advances package governance");
+        InviteMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: second_id,
+            invited_account: second_account.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            expires_at_height: 100,
+            expected_governance_revision: 2,
+        }
+        .execute(&owner, &mut transaction)
+        .expect("second invitation rebases the first invitation");
+
+        for invite_id in [first_id, second_id] {
+            let invitation = transaction
+                .world
+                .musubi_package_invitations
+                .get(&invite_id)
+                .expect("pending invitation remains authoritative");
+            assert_eq!(invitation.state, MusubiInvitationStateV1::Pending);
+            assert_eq!(invitation.expected_governance_revision, 3);
+        }
+
+        AcceptMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: first_id,
+            expected_governance_revision: 3,
+        }
+        .execute(&first_account, &mut transaction)
+        .expect("the rebased first invitation remains acceptable");
+        assert_eq!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&first_id)
+                .expect("accepted invitation remains in history")
+                .state,
+            MusubiInvitationStateV1::Accepted
+        );
+        let second = transaction
+            .world
+            .musubi_package_invitations
+            .get(&second_id)
+            .expect("second invitation remains pending");
+        assert_eq!(second.state, MusubiInvitationStateV1::Pending);
+        assert_eq!(second.expected_governance_revision, 4);
+
+        AcceptMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: second_id,
+            expected_governance_revision: 4,
+        }
+        .execute(&second_account, &mut transaction)
+        .expect("the second invitation remains independently acceptable");
+        let package = transaction
+            .world
+            .musubi_packages
+            .get(&package)
+            .expect("package remains after both acceptances");
+        assert_eq!(package.revisions.governance, 5);
+        assert!(package.owners.binary_search(&first_account).is_ok());
+        assert!(package.owners.binary_search(&second_account).is_ok());
+        assert_eq!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&second_id)
+                .expect("second invitation remains in history")
+                .state,
+            MusubiInvitationStateV1::Accepted
+        );
+    }
+
+    #[test]
+    fn stale_accept_retries_after_an_invitation_race_rebases_the_cas_revision() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(24);
+        let first_account = account(25);
+        let package = package("stale-invite-race");
+        let first_id = MusubiInviteIdV1::new([0x24; 32]);
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+
+        InviteMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: first_id,
+            invited_account: first_account.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            expires_at_height: 100,
+            expected_governance_revision: 1,
+        }
+        .execute(&owner, &mut transaction)
+        .expect("first invitation succeeds");
+        InviteMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: MusubiInviteIdV1::new([0x25; 32]),
+            invited_account: account(26),
+            role: MusubiPackageRoleV1::Owner,
+            expires_at_height: 100,
+            expected_governance_revision: 2,
+        }
+        .execute(&owner, &mut transaction)
+        .expect("racing invitation advances and rebases governance");
+        let _ = take_musubi_events(&mut transaction);
+
+        let stale = AcceptMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: first_id,
+            expected_governance_revision: 2,
+        }
+        .execute(&first_account, &mut transaction)
+        .expect_err("the pre-race CAS revision must remain stale");
+        assert!(
+            stale
+                .to_string()
+                .contains("stale Musubi package governance")
+        );
+        let invitation = transaction
+            .world
+            .musubi_package_invitations
+            .get(&first_id)
+            .expect("stale acceptance leaves the invitation pending");
+        assert_eq!(invitation.state, MusubiInvitationStateV1::Pending);
+        assert_eq!(invitation.expected_governance_revision, 3);
+        assert_eq!(
+            transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("stale acceptance leaves the package unchanged")
+                .revisions
+                .governance,
+            3
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+
+        AcceptMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: first_id,
+            expected_governance_revision: 3,
+        }
+        .execute(&first_account, &mut transaction)
+        .expect("acceptance retries successfully at the rebased revision");
+        assert_eq!(
+            transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("retried acceptance advances governance")
+                .revisions
+                .governance,
+            4
+        );
+    }
+
+    #[test]
+    fn invalid_invitation_is_rejected_before_pending_invitations_are_rebased() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(27);
+        let pending_account = account(28);
+        let package = package("invalid-invite-atomicity");
+        let pending = MusubiMaintainerInvitationV1 {
+            invite_id: MusubiInviteIdV1::new([0x28; 32]),
+            package: package.clone(),
+            invited_by: owner.clone(),
+            invited_account: pending_account.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            expected_governance_revision: 1,
+            expires_at_height: 100,
+            state: MusubiInvitationStateV1::Pending,
+        };
+        let pending_directory_key = MusubiMaintainerDirectoryKeyV1::pending(
+            package.clone(),
+            pending_account,
+            pending.invite_id,
+        );
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+        seed_pending_invitation(pending.clone(), &mut transaction);
+        let directory_before = transaction
+            .world
+            .musubi_maintainer_directory
+            .iter()
+            .map(|(key, entry)| (key.clone(), entry.clone()))
+            .collect::<Vec<_>>();
+
+        let error = InviteMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: MusubiInviteIdV1::new([0; 32]),
+            invited_account: account(29),
+            role: MusubiPackageRoleV1::Owner,
+            expires_at_height: 100,
+            expected_governance_revision: 1,
+        }
+        .execute(&owner, &mut transaction)
+        .expect_err("a zero invitation identity must fail before governance advances");
+
+        assert!(error.to_string().contains("invitation is invalid"));
+        assert_eq!(
+            transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("package remains")
+                .revisions
+                .governance,
+            1
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&pending.invite_id),
+            Some(&pending)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_maintainer_directory
+                .get(&pending_directory_key),
+            Some(&MusubiMaintainerDirectoryEntryV1::PendingInvitation(
+                pending
+            ))
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_maintainer_directory
+                .iter()
+                .map(|(key, entry)| (key.clone(), entry.clone()))
+                .collect::<Vec<_>>(),
+            directory_before
+        );
+        assert!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&MusubiInviteIdV1::new([0; 32]))
+                .is_none()
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn publication_index_overflow_drops_the_unapplied_invitation_plan() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(30);
+        let invited = account(31);
+        let package = package("publication-plan-overflow");
+        let pending = MusubiMaintainerInvitationV1 {
+            invite_id: MusubiInviteIdV1::new([0x30; 32]),
+            package: package.clone(),
+            invited_by: owner.clone(),
+            invited_account: invited,
+            role: MusubiPackageRoleV1::Owner,
+            expected_governance_revision: 1,
+            expires_at_height: 100,
+            state: MusubiInvitationStateV1::Pending,
+        };
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+        seed_pending_invitation(pending.clone(), &mut transaction);
+        *transaction.world.musubi_resolver_index_revision.get_mut() =
+            crate::state::MusubiResolverIndexRevisionV1::new(u64::MAX)
+                .expect("maximum resolver revision remains nonzero");
+        let directory_before = transaction
+            .world
+            .musubi_maintainer_directory
+            .iter()
+            .map(|(key, entry)| (key.clone(), entry.clone()))
+            .collect::<Vec<_>>();
+
+        let error = (|| -> Result<(), Error> {
+            let mut candidate = transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .cloned()
+                .expect("seeded package remains");
+            let advance = plan_package_governance_advance(
+                &mut candidate,
+                execution_height(&transaction),
+                None,
+                transaction.world(),
+            )?;
+            let planned_index_revision = plan_resolver_index_revision(&transaction)?;
+            *transaction.world.musubi_resolver_index_revision.get_mut() = planned_index_revision;
+            transaction
+                .world
+                .musubi_packages
+                .insert(package.clone(), candidate);
+            advance.apply_invitation_updates(&mut transaction);
+            Ok(())
+        })()
+        .expect_err("publication must fail when the resolver revision cannot advance");
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolver-index revision overflow")
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("package remains")
+                .revisions
+                .governance,
+            1
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&pending.invite_id),
+            Some(&pending)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_maintainer_directory
+                .iter()
+                .map(|(key, entry)| (key.clone(), entry.clone()))
+                .collect::<Vec<_>>(),
+            directory_before
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            u64::MAX
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn publication_reverse_reference_failure_drops_the_unapplied_invitation_plan() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(32);
+        let package = package("publication-reverse-bound");
+        let pending = MusubiMaintainerInvitationV1 {
+            invite_id: MusubiInviteIdV1::new([0x32; 32]),
+            package: package.clone(),
+            invited_by: owner.clone(),
+            invited_account: account(33),
+            role: MusubiPackageRoleV1::Owner,
+            expected_governance_revision: 1,
+            expires_at_height: 100,
+            state: MusubiInvitationStateV1::Pending,
+        };
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+        seed_pending_invitation(pending.clone(), &mut transaction);
+        let archive_id = ArchiveId::new([0x34; 32]);
+        let releases = (0..MUSUBI_MAX_RESOLUTION_NODES_V1)
+            .map(|patch| {
+                MusubiReleaseIdV1::new(
+                    package.clone(),
+                    MusubiVersionV1::new(
+                        1,
+                        0,
+                        u64::try_from(patch).expect("bounded patch fits u64"),
+                        Vec::new(),
+                    )
+                    .expect("bounded release version is valid"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let references = MusubiArchiveReverseReferencesV1 {
+            archive_id,
+            releases,
+        };
+        references
+            .validate()
+            .expect("maximum-size reverse-reference fixture is valid");
+        transaction
+            .world
+            .musubi_archive_reverse_references
+            .insert(archive_id, references.clone());
+        let directory_before = transaction
+            .world
+            .musubi_maintainer_directory
+            .iter()
+            .map(|(key, entry)| (key.clone(), entry.clone()))
+            .collect::<Vec<_>>();
+        let new_release = MusubiReleaseIdV1::new(
+            package.clone(),
+            MusubiVersionV1::new(
+                1,
+                0,
+                u64::try_from(MUSUBI_MAX_RESOLUTION_NODES_V1).expect("bounded patch fits u64"),
+                Vec::new(),
+            )
+            .expect("successor release version is valid"),
+        );
+
+        let error = (|| -> Result<(), Error> {
+            let mut candidate = transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .cloned()
+                .expect("seeded package remains");
+            let advance = plan_package_governance_advance(
+                &mut candidate,
+                execution_height(&transaction),
+                None,
+                transaction.world(),
+            )?;
+            let planned_references = plan_archive_reverse_reference(
+                archive_id,
+                new_release.clone(),
+                transaction.world(),
+            )?;
+            transaction
+                .world
+                .musubi_packages
+                .insert(package.clone(), candidate);
+            transaction
+                .world
+                .musubi_archive_reverse_references
+                .insert(archive_id, planned_references);
+            advance.apply_invitation_updates(&mut transaction);
+            Ok(())
+        })()
+        .expect_err("publication must fail when an archive reference bound is exhausted");
+
+        assert!(error.to_string().contains("reverse references"));
+        assert_eq!(
+            transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("package remains")
+                .revisions
+                .governance,
+            1
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&pending.invite_id),
+            Some(&pending)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_maintainer_directory
+                .iter()
+                .map(|(key, entry)| (key.clone(), entry.clone()))
+                .collect::<Vec<_>>(),
+            directory_before
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_archive_reverse_references
+                .get(&archive_id),
+            Some(&references)
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn package_pending_invitation_bound_is_enforced_before_mutation() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(31);
+        let package = MusubiPackageIdV1::new(
+            iroha_data_model::nexus::DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "bounded-invites".parse().expect("package name"),
+        );
+        transaction.world.musubi_packages.insert(
+            package.clone(),
+            MusubiPackageRecordV1 {
+                package: package.clone(),
+                claimed_namespace: "sora".parse().expect("namespace"),
+                claimed_namespace_binding: MusubiNamespaceBindingDigestV1::new([1; 32]),
+                owners: vec![owner.clone()],
+                member_accounts: vec![owner.clone()],
+                claimed_at_height: 1,
+                revisions: MusubiPackageRevisionsV1 {
+                    governance: 1,
+                    metadata: 1,
+                    archive_locations: 1,
+                },
+            },
+        );
+        let owner_member = MusubiPackageMemberV1 {
+            package: package.clone(),
+            account: owner.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            accepted_at_height: 1,
+            governance_revision: 1,
+        };
+        transaction
+            .world
+            .musubi_package_members
+            .insert(owner_member.key(), owner_member.clone());
+        upsert_maintainer_directory(
+            MusubiMaintainerDirectoryEntryV1::Accepted(owner_member),
+            &mut transaction,
+        );
+
+        for index in 0..MUSUBI_MAX_PENDING_INVITATIONS_V1 {
+            let mut bytes = [0_u8; 32];
+            bytes[..8].copy_from_slice(
+                &u64::try_from(index + 1)
+                    .expect("bounded fixture index fits u64")
+                    .to_le_bytes(),
+            );
+            let invitation = MusubiMaintainerInvitationV1 {
+                invite_id: MusubiInviteIdV1::new(bytes),
+                package: package.clone(),
+                invited_by: owner.clone(),
+                invited_account: account(u8::try_from(index % 200 + 32).expect("account seed")),
+                role: MusubiPackageRoleV1::Owner,
+                expected_governance_revision: 1,
+                expires_at_height: 100,
+                state: MusubiInvitationStateV1::Pending,
+            };
+            upsert_maintainer_directory(
+                MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation),
+                &mut transaction,
+            );
+        }
+        assert_eq!(
+            pending_invitation_count(&package, transaction.world()),
+            MUSUBI_MAX_PENDING_INVITATIONS_V1
+        );
+
+        let instruction = InviteMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: MusubiInviteIdV1::new([0xFE; 32]),
+            invited_account: account(232),
+            role: MusubiPackageRoleV1::Owner,
+            expires_at_height: 100,
+            expected_governance_revision: 1,
+        };
+        let error = instruction
+            .execute(&owner, &mut transaction)
+            .expect_err("the 257th pending invitation must fail closed");
+        assert!(error.to_string().contains("pending-invitation bound"));
+        assert_eq!(
+            transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("package remains")
+                .revisions
+                .governance,
+            1
+        );
+    }
+
+    #[test]
+    fn expired_pending_invitations_reclaim_bound_and_emit_bounded_events() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(10).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(31);
+        let package = package("expiry-reclaim");
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+
+        for index in 0..MUSUBI_MAX_PENDING_INVITATIONS_V1 {
+            let mut bytes = [0_u8; 32];
+            bytes[..8].copy_from_slice(
+                &u64::try_from(index + 1)
+                    .expect("bounded fixture index fits u64")
+                    .to_le_bytes(),
+            );
+            seed_pending_invitation(
+                MusubiMaintainerInvitationV1 {
+                    invite_id: MusubiInviteIdV1::new(bytes),
+                    package: package.clone(),
+                    invited_by: owner.clone(),
+                    invited_account: account(u8::try_from(index % 200 + 40).expect("account seed")),
+                    role: MusubiPackageRoleV1::Owner,
+                    expected_governance_revision: 1,
+                    expires_at_height: 5,
+                    state: MusubiInvitationStateV1::Pending,
+                },
+                &mut transaction,
+            );
+        }
+        assert_eq!(
+            pending_invitation_count(&package, transaction.world()),
+            MUSUBI_MAX_PENDING_INVITATIONS_V1
+        );
+
+        let replacement_id = MusubiInviteIdV1::new([0xFE; 32]);
+        InviteMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: replacement_id,
+            invited_account: account(250),
+            role: MusubiPackageRoleV1::Owner,
+            expires_at_height: 100,
+            expected_governance_revision: 1,
+        }
+        .execute(&owner, &mut transaction)
+        .expect("expired invitations reclaim capacity before the bound check");
+
+        assert_eq!(
+            transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("package remains")
+                .revisions
+                .governance,
+            2
+        );
+        assert_eq!(pending_invitation_count(&package, transaction.world()), 1);
+        let (expired, pending) = transaction.world.musubi_package_invitations.iter().fold(
+            (0_usize, 0_usize),
+            |(expired, pending), (_, invitation)| match invitation.state {
+                MusubiInvitationStateV1::Expired => (expired + 1, pending),
+                MusubiInvitationStateV1::Pending => (expired, pending + 1),
+                MusubiInvitationStateV1::Accepted | MusubiInvitationStateV1::Revoked => {
+                    (expired, pending)
+                }
+            },
+        );
+        assert_eq!(expired, MUSUBI_MAX_PENDING_INVITATIONS_V1);
+        assert_eq!(pending, 1);
+        assert_eq!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&replacement_id)
+                .expect("replacement invitation")
+                .state,
+            MusubiInvitationStateV1::Pending
+        );
+
+        let events = take_musubi_events(&mut transaction);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, MusubiEvent::MaintainerInvitationExpired(_)))
+                .count(),
+            MUSUBI_MAX_PENDING_INVITATIONS_V1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, MusubiEvent::MaintainerInvited(_)))
+                .count(),
+            1
+        );
+        assert_eq!(events.len(), MUSUBI_MAX_PENDING_INVITATIONS_V1 + 1);
+    }
+
+    #[test]
+    fn invitation_revoke_is_owner_only_cas_and_replay_safe() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(5).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(51);
+        let stranger = account(52);
+        let invited = account(53);
+        let package = package("revoke-invite");
+        let invite_id = MusubiInviteIdV1::new([0x53; 32]);
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+        seed_pending_invitation(
+            MusubiMaintainerInvitationV1 {
+                invite_id,
+                package: package.clone(),
+                invited_by: owner.clone(),
+                invited_account: invited.clone(),
+                role: MusubiPackageRoleV1::Owner,
+                expected_governance_revision: 1,
+                expires_at_height: 100,
+                state: MusubiInvitationStateV1::Pending,
+            },
+            &mut transaction,
+        );
+
+        let revoke = |expected_governance_revision| RevokeMusubiPackageMaintainerInvitationV1 {
+            package: package.clone(),
+            invite_id,
+            expected_governance_revision,
+        };
+        let unauthorized = revoke(1)
+            .execute(&stranger, &mut transaction)
+            .expect_err("a non-owner cannot revoke an invitation");
+        assert!(unauthorized.to_string().contains("not an owner"));
+        let stale = revoke(2)
+            .execute(&owner, &mut transaction)
+            .expect_err("a stale governance revision fails closed");
+        assert!(
+            stale
+                .to_string()
+                .contains("stale Musubi package governance")
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+
+        revoke(1)
+            .execute(&owner, &mut transaction)
+            .expect("the current owner may revoke the pending invitation");
+        assert_eq!(
+            transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("package remains")
+                .revisions
+                .governance,
+            2
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&invite_id)
+                .expect("historical invitation remains")
+                .state,
+            MusubiInvitationStateV1::Revoked
+        );
+        assert!(
+            transaction
+                .world
+                .musubi_maintainer_directory
+                .get(&MusubiMaintainerDirectoryKeyV1::pending(
+                    package.clone(),
+                    invited,
+                    invite_id,
+                ))
+                .is_none()
+        );
+        assert!(matches!(
+            take_musubi_events(&mut transaction).as_slice(),
+            [MusubiEvent::MaintainerInvitationRevoked(_)]
+        ));
+
+        let replay = revoke(2)
+            .execute(&owner, &mut transaction)
+            .expect_err("a terminal invitation cannot be revoked twice");
+        assert!(replay.to_string().contains("not pending"));
+        let old_revision_replay = revoke(1)
+            .execute(&owner, &mut transaction)
+            .expect_err("the original compare-and-set revision cannot be replayed");
+        assert!(
+            old_revision_replay
+                .to_string()
+                .contains("stale Musubi package governance")
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn accepting_an_expired_invitation_fails_without_mutating_it() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(10).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(61);
+        let invited = account(62);
+        let package = package("expired-accept");
+        let invite_id = MusubiInviteIdV1::new([0x62; 32]);
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+        seed_pending_invitation(
+            MusubiMaintainerInvitationV1 {
+                invite_id,
+                package: package.clone(),
+                invited_by: owner,
+                invited_account: invited.clone(),
+                role: MusubiPackageRoleV1::Owner,
+                expected_governance_revision: 1,
+                expires_at_height: 9,
+                state: MusubiInvitationStateV1::Pending,
+            },
+            &mut transaction,
+        );
+
+        let error = AcceptMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id,
+            expected_governance_revision: 1,
+        }
+        .execute(&invited, &mut transaction)
+        .expect_err("height-expired invitations are never accepted");
+        assert!(
+            error
+                .to_string()
+                .contains("next successful package governance mutation")
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_package_invitations
+                .get(&invite_id)
+                .expect("pending record remains until governance cleanup")
+                .state,
+            MusubiInvitationStateV1::Pending
+        );
+        assert_eq!(pending_invitation_count(&package, transaction.world()), 1);
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn maintainer_query_visibility_excludes_only_height_expired_invitations() {
+        let package = package("query-expiry");
+        let owner = account(71);
+        let accepted = MusubiMaintainerDirectoryEntryV1::Accepted(MusubiPackageMemberV1 {
+            package: package.clone(),
+            account: owner.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            accepted_at_height: 1,
+            governance_revision: 1,
+        });
+        let mut invitation = MusubiMaintainerInvitationV1 {
+            invite_id: MusubiInviteIdV1::new([0x71; 32]),
+            package,
+            invited_by: owner,
+            invited_account: account(72),
+            role: MusubiPackageRoleV1::Owner,
+            expected_governance_revision: 1,
+            expires_at_height: 9,
+            state: MusubiInvitationStateV1::Pending,
+        };
+        assert!(maintainer_directory_entry_visible_at_height(&accepted, 10));
+        assert!(!maintainer_directory_entry_visible_at_height(
+            &MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation.clone()),
+            10,
+        ));
+        invitation.expires_at_height = 10;
+        assert!(maintainer_directory_entry_visible_at_height(
+            &MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation),
+            10,
+        ));
+    }
+
+    #[test]
+    fn identical_alias_replay_requires_current_package_owner_authorization() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let owner = account(81);
+        let stranger = account(82);
+        let package = package("alias-target");
+        let alias: MusubiAliasNameV1 = "repeat".parse().expect("alias");
+        seed_package_owner(&package, &owner, 1, &mut transaction);
+        transaction.world.musubi_aliases.insert(
+            alias.clone(),
+            MusubiAliasRecordV1 {
+                alias: alias.clone(),
+                target: package.clone(),
+                registered_by: owner.clone(),
+                pricing_revision: 1,
+                paid_xor: 1,
+                registered_at_height: 1,
+                history_revision: 1,
+            },
+        );
+        let mut closed_policy = MusubiRegistryPolicyV1::default();
+        closed_policy.revision = 2;
+        closed_policy.mode = MusubiRegistryAdmissionModeV1::Closed;
+        closed_policy.alias_pricing.revision = 2;
+        closed_policy.alias_pricing.length_5_to_32_xor = 2;
+        *transaction.world.musubi_registry_policy.get_mut() = closed_policy;
+
+        let error = RegisterMusubiAliasV1 {
+            alias: alias.clone(),
+            target: package.clone(),
+            expected_pricing_revision: 1,
+        }
+        .execute(&stranger, &mut transaction)
+        .expect_err("an arbitrary authority cannot obtain successful alias replay");
+        assert!(error.to_string().contains("not an owner"));
+        assert_eq!(
+            transaction
+                .world
+                .musubi_aliases
+                .get(&alias)
+                .expect("alias remains")
+                .history_revision,
+            1
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+
+        RegisterMusubiAliasV1 {
+            alias: alias.clone(),
+            target: package,
+            expected_pricing_revision: u64::MAX,
+        }
+        .execute(&owner, &mut transaction)
+        .expect("the current owner may replay an identical alias under closed admission");
+        assert_eq!(
+            transaction
+                .world
+                .musubi_aliases
+                .get(&alias)
+                .expect("alias remains")
+                .history_revision,
+            1
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
     }
 
     #[test]
@@ -3400,7 +6783,7 @@ mod tests {
     }
 
     #[test]
-    fn idempotent_and_rejected_namespace_bindings_emit_no_events() {
+    fn namespace_binding_replay_requires_current_owner_authorization() {
         let state = State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -3416,6 +6799,34 @@ mod tests {
         );
         let mut block = state.block(header);
         let mut transaction = block.transaction();
+        let owner = account(1);
+        let stranger = account(2);
+        let selector =
+            crate::sns::selector_for_dataspace_alias("sora").expect("dataspace alias selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
+            .expect("account address");
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            crate::sns::SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace id metadata key"),
+            iroha_primitives::json::Json::new(7_u64),
+        );
+        let mut record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            10,
+            20,
+            30,
+            metadata,
+        );
+        transaction
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
         let binding = MusubiNamespaceBindingV1 {
             namespace: "sora".parse().expect("namespace"),
             home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
@@ -3426,10 +6837,35 @@ mod tests {
             .world
             .musubi_namespace_bindings
             .insert(binding.namespace.clone(), binding.clone());
+        let mut closed_policy = MusubiRegistryPolicyV1::default();
+        closed_policy.revision = 2;
+        closed_policy.mode = MusubiRegistryAdmissionModeV1::Closed;
+        *transaction.world.musubi_registry_policy.get_mut() = closed_policy;
 
-        RegisterMusubiNamespaceBindingV1::new(binding.clone(), 1)
-            .execute(&account(1), &mut transaction)
-            .expect("identical namespace registration is idempotent");
+        let unauthorized = RegisterMusubiNamespaceBindingV1::new(binding.clone(), 1)
+            .execute(&stranger, &mut transaction)
+            .expect_err("an arbitrary authority cannot obtain a successful namespace replay");
+        assert!(unauthorized.to_string().contains("does not own"));
+        assert!(transaction.world.take_external_events().is_empty());
+
+        RegisterMusubiNamespaceBindingV1::new(binding.clone(), u64::MAX)
+            .execute(&owner, &mut transaction)
+            .expect("the current owner may replay an identical binding under closed admission");
+        assert!(transaction.world.take_external_events().is_empty());
+
+        record.owner = stranger.clone();
+        record.ownership_generation = 2;
+        transaction
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
+        let former_owner = RegisterMusubiNamespaceBindingV1::new(binding.clone(), u64::MAX)
+            .execute(&owner, &mut transaction)
+            .expect_err("the former namespace owner cannot replay after ownership changes");
+        assert!(former_owner.to_string().contains("does not own"));
+        RegisterMusubiNamespaceBindingV1::new(binding.clone(), u64::MAX)
+            .execute(&stranger, &mut transaction)
+            .expect("the live owner may replay an immutable older-generation binding");
         assert!(transaction.world.take_external_events().is_empty());
 
         let conflicting = MusubiNamespaceBindingV1 {
@@ -3437,9 +6873,632 @@ mod tests {
             ..binding
         };
         RegisterMusubiNamespaceBindingV1::new(conflicting, 1)
-            .execute(&account(1), &mut transaction)
+            .execute(&stranger, &mut transaction)
             .expect_err("conflicting immutable namespace binding is rejected");
         assert!(transaction.world.take_external_events().is_empty());
+    }
+
+    #[test]
+    fn namespace_claim_uses_live_owner_generation_after_immutable_binding_registration() {
+        let owner_keypair = KeyPair::try_from_seed(vec![41; 32], Algorithm::Ed25519)
+            .expect("owner fixture keypair");
+        let owner = AccountId::new(owner_keypair.public_key().clone());
+        let delegate = account(42);
+        let binding = MusubiNamespaceBindingV1 {
+            namespace: "dex.universal".parse().expect("namespace"),
+            home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+            scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
+            generation: 1,
+        };
+        let sign_delegation = |owner_generation| {
+            let payload = MusubiNamespaceDelegationPayloadV1 {
+                version: MUSUBI_REGISTRY_VERSION_V1,
+                namespace_binding: binding.digest(),
+                owner_generation,
+                owner: owner.clone(),
+                delegate: delegate.clone(),
+                expires_at_height: 100,
+            };
+            MusubiNamespaceDelegationV1 {
+                approvals: vec![MusubiNamespaceDelegationApprovalV1 {
+                    public_key: owner_keypair.public_key().clone(),
+                    signature: SignatureOf::try_from_hash(
+                        owner_keypair.private_key(),
+                        payload.signing_hash(),
+                    )
+                    .expect("sign namespace delegation"),
+                }],
+                payload,
+            }
+        };
+
+        validate_namespace_claim_authority(&binding, None, &owner, &owner, 2, 50)
+            .expect("the live owner may claim after ownership generation advances");
+        validate_namespace_claim_authority(
+            &binding,
+            Some(&sign_delegation(2)),
+            &delegate,
+            &owner,
+            2,
+            50,
+        )
+        .expect("a delegation signed by the live owner generation may claim");
+        validate_namespace_claim_authority(
+            &binding,
+            Some(&sign_delegation(1)),
+            &delegate,
+            &owner,
+            2,
+            50,
+        )
+        .expect_err("a delegation from the immutable binding generation is stale");
+        validate_namespace_claim_authority(&binding, None, &owner, &owner, 0, 50)
+            .expect_err("a zero live ownership generation must fail closed");
+    }
+
+    #[test]
+    fn namespace_home_dataspace_matches_catalog_for_root_and_domain_scopes() {
+        let world = World::default();
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let bindings = [
+            MusubiNamespaceBindingV1 {
+                namespace: "universal".parse().expect("root namespace"),
+                home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                scope: MusubiPackageScopeV1::DataspaceRoot,
+                generation: 1,
+            },
+            MusubiNamespaceBindingV1 {
+                namespace: "dex.universal".parse().expect("domain namespace"),
+                home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
+                generation: 1,
+            },
+        ];
+
+        for binding in &bindings {
+            validate_namespace_home_dataspace(binding, &world.view(), &catalog, 50)
+                .expect("namespace alias and structural dataspace agree");
+            let mismatched = MusubiNamespaceBindingV1 {
+                home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+                ..binding.clone()
+            };
+            validate_namespace_home_dataspace(&mismatched, &world.view(), &catalog, 50)
+                .expect_err("cross-dataspace namespace binding must fail closed");
+        }
+    }
+
+    #[test]
+    fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scopes() {
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let selector =
+            crate::sns::selector_for_dataspace_alias("universal").expect("dataspace selector");
+        let owner = account(43);
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
+            .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner,
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            10,
+            110,
+            210,
+            310,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
+        let bindings = [
+            MusubiNamespaceBindingV1 {
+                namespace: "universal".parse().expect("root namespace"),
+                home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                scope: MusubiPackageScopeV1::DataspaceRoot,
+                generation: 1,
+            },
+            MusubiNamespaceBindingV1 {
+                namespace: "dex.universal".parse().expect("domain namespace"),
+                home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
+                generation: 1,
+            },
+        ];
+
+        for binding in &bindings {
+            let error = validate_namespace_home_dataspace(binding, &world.view(), &catalog, 50)
+                .expect_err("conflicting static and dynamic dataspace mappings must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains(crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE),
+                "unexpected namespace mapping error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn release_yank_rejects_decoded_empty_reason_before_state_lookup() {
+        let release = MusubiReleaseIdV1::new(
+            MusubiPackageIdV1::new(
+                iroha_data_model::nexus::DataSpaceId::new(7),
+                MusubiPackageScopeV1::DataspaceRoot,
+                "validation".parse().expect("package name"),
+            ),
+            "1.0.0".parse().expect("release version"),
+        );
+        let canonical = SetMusubiReleaseYankV1::new(
+            release,
+            true,
+            MusubiReasonV1::new("valid reason").expect("reason"),
+            1,
+        );
+        let json = norito::json::to_json(&canonical).expect("serialize yank request");
+        let hostile = json.replacen("valid reason", "", 1);
+        assert_ne!(hostile, json, "reason fixture must be replaced");
+        let decoded: SetMusubiReleaseYankV1 =
+            norito::json::from_json(&hostile).expect("decode structurally valid hostile request");
+
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let error = decoded
+            .execute(&account(44), &mut transaction)
+            .expect_err("decoded empty reason must fail before the missing-release lookup");
+        assert!(
+            matches!(error, Error::InvalidParameter(_)),
+            "unexpected decoded-yank rejection: {error}"
+        );
+    }
+
+    #[test]
+    fn parliament_consumption_records_server_execution_height() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(GOVERNANCE_EXECUTION_HEIGHT)
+                .expect("nonzero governance fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let minimum_enactment_delay = transaction.gov.min_enactment_delay;
+        let decision = MusubiGovernanceDecisionV1 {
+            decision_id: [0x91; 32],
+            action_digest: MusubiGovernanceActionDigestV1::new([0x92; 32]),
+            enacted_at_height: GOVERNANCE_EXECUTION_HEIGHT
+                .checked_sub(minimum_enactment_delay.max(1))
+                .expect("governance fixture height exceeds its minimum delay"),
+            execute_after_height: GOVERNANCE_EXECUTION_HEIGHT,
+        };
+
+        consume_parliament_decision(decision, &mut transaction)
+            .expect("valid decision is consumed at the server block height");
+        let consumed = transaction
+            .world
+            .musubi_governance_decisions
+            .get(&decision.decision_id)
+            .expect("decision consumption retained");
+        assert_eq!(consumed.decision, decision);
+        assert_eq!(consumed.minimum_enactment_delay, minimum_enactment_delay);
+        assert_eq!(consumed.consumed_at_height, GOVERNANCE_EXECUTION_HEIGHT);
+    }
+
+    #[test]
+    fn proposal_fingerprint_mismatch_is_rejected_before_recovery_mutation() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(GOVERNANCE_EXECUTION_HEIGHT)
+                .expect("nonzero governance fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let package = package("fingerprint-guard");
+        let old_owner = account(81);
+        let replacement = account(82);
+        seed_package_owner(&package, &old_owner, 1, &mut transaction);
+        let action = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
+            package: package.clone(),
+            owners: vec![replacement.clone()],
+            expected_revision: 1,
+        });
+        let wrong_id = [0xA5; 32];
+        let kind = ProposalKind::MusubiRegistryGovernance(action.clone());
+        assert_ne!(wrong_id, kind.fingerprint());
+        let decision = decision_for_current_block(wrong_id, &action, &transaction);
+        insert_enacted_proposal(wrong_id, kind, decision.enacted_at_height, &mut transaction);
+
+        let error = RecoverMusubiPackageV1 {
+            decision,
+            package: package.clone(),
+            owners: vec![replacement.clone()],
+            expected_governance_revision: 1,
+        }
+        .execute(&account(83), &mut transaction)
+        .expect_err("a proposal stored under a non-fingerprint key must fail closed");
+        assert!(error.to_string().contains("fingerprint"), "{error}");
+
+        let persisted = transaction
+            .world
+            .musubi_packages
+            .get(&package)
+            .expect("seeded package remains");
+        assert_eq!(persisted.owners, vec![old_owner]);
+        assert_eq!(persisted.revisions.governance, 1);
+        assert!(
+            transaction
+                .world
+                .musubi_package_members
+                .get(&MusubiPackageMemberKeyV1::new(package, replacement))
+                .is_none()
+        );
+        assert!(
+            transaction
+                .world
+                .musubi_governance_decisions
+                .get(&wrong_id)
+                .is_none()
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn owner_recovery_binds_consumption_state_event_and_rejects_replay() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(GOVERNANCE_EXECUTION_HEIGHT)
+                .expect("nonzero governance fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let package = package("recovery-proof");
+        let old_owner = account(84);
+        seed_package_owner(&package, &old_owner, 1, &mut transaction);
+        let mut replacement_owners = vec![account(86), account(85)];
+        replacement_owners.sort();
+        replacement_owners.dedup();
+        let action = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
+            package: package.clone(),
+            owners: replacement_owners.clone(),
+            expected_revision: 1,
+        });
+        let decision = seed_enacted_decision(&action, &mut transaction);
+
+        RecoverMusubiPackageV1 {
+            decision,
+            package: package.clone(),
+            owners: replacement_owners.clone(),
+            expected_governance_revision: 1,
+        }
+        .execute(&account(87), &mut transaction)
+        .expect("canonical owner recovery executes");
+
+        let consumption = *transaction
+            .world
+            .musubi_governance_decisions
+            .get(&decision.decision_id)
+            .expect("decision consumption retained");
+        assert_eq!(consumption.decision, decision);
+        assert_eq!(consumption.consumed_at_height, GOVERNANCE_EXECUTION_HEIGHT);
+        let persisted = transaction
+            .world
+            .musubi_packages
+            .get(&package)
+            .cloned()
+            .expect("recovered package retained");
+        assert_eq!(persisted.owners, replacement_owners);
+        assert_eq!(persisted.member_accounts, replacement_owners);
+        assert_eq!(persisted.revisions.governance, 2);
+        for owner in &replacement_owners {
+            let member = transaction
+                .world
+                .musubi_package_members
+                .get(&MusubiPackageMemberKeyV1::new(
+                    package.clone(),
+                    owner.clone(),
+                ))
+                .expect("recovered owner member retained");
+            assert_eq!(member.role, MusubiPackageRoleV1::Owner);
+            assert_eq!(member.governance_revision, 2);
+            assert_eq!(member.accepted_at_height, consumption.consumed_at_height);
+        }
+        assert!(
+            transaction
+                .world
+                .musubi_package_members
+                .get(&MusubiPackageMemberKeyV1::new(package.clone(), old_owner))
+                .is_none()
+        );
+
+        let events = take_musubi_events(&mut transaction);
+        let [MusubiEvent::PackageRecovered(event)] = events.as_slice() else {
+            panic!("expected exactly one package-recovery event: {events:?}");
+        };
+        assert_eq!(event.package, package);
+        assert_eq!(event.action_digest, consumption.decision.action_digest);
+        assert_eq!(event.finalized_height, consumption.consumed_at_height);
+        assert_eq!(event.governance_revision, persisted.revisions.governance);
+        assert_eq!(usize::from(event.owner_count), persisted.owners.len());
+
+        let replay_error = RecoverMusubiPackageV1 {
+            decision,
+            package: package.clone(),
+            owners: replacement_owners,
+            expected_governance_revision: 1,
+        }
+        .execute(&account(87), &mut transaction)
+        .expect_err("the same Parliament decision cannot be replayed");
+        assert!(replay_error.to_string().contains("already consumed"));
+        assert_eq!(
+            transaction.world.musubi_packages.get(&package),
+            Some(&persisted)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_governance_decisions
+                .get(&decision.decision_id),
+            Some(&consumption)
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_rejects_replay() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(GOVERNANCE_EXECUTION_HEIGHT)
+                .expect("nonzero governance fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+
+        let archive = retention_archive(91);
+        let archive_id = archive.archive_id;
+        let source_digest = archive.commitment.source_tree_digest;
+        let initial_release = retention_release(
+            archive_id,
+            "1.0.0",
+            false,
+            MusubiArtifactGovernanceStateV1::Available,
+        );
+        initial_release
+            .validate()
+            .expect("initial release fixture is valid");
+        let release_id = initial_release.manifest.release.clone();
+        let package = release_id.package.clone();
+        seed_package_owner(&package, &account(92), 1, &mut transaction);
+
+        let initial_index_revision = transaction.world.musubi_resolver_index_revision.get().get();
+        let expected_index_revision = initial_index_revision
+            .checked_add(1)
+            .expect("fixture resolver revision has a successor");
+        let initial_row = MusubiResolverReleaseRowV1 {
+            release: release_id.clone(),
+            release_digest: initial_release.release_digest,
+            archive_id,
+            source_digest,
+            interface_digest: initial_release.manifest.interface_digest,
+            abi: initial_release.manifest.abi,
+            dependencies: initial_release.manifest.dependencies.clone(),
+            selection: MusubiReleaseSelectionStateV1 {
+                yank: initial_release.yank.clone(),
+                storage: MusubiArchiveAvailabilityV1 {
+                    archive_id,
+                    availability: MusubiStorageAvailabilityV1::Selectable,
+                    healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    active_locations: 1,
+                    finalized_height: 1,
+                    finalized_block_hash: [0xB1; 32],
+                    index_revision: initial_index_revision,
+                },
+                governance: MusubiArtifactGovernanceStateV1::Available,
+            },
+            index_revision: initial_index_revision,
+        };
+        initial_row
+            .validate()
+            .expect("initial resolver row is fresh-selectable");
+        transaction
+            .world
+            .musubi_releases
+            .insert(release_id.clone(), initial_release.clone());
+        transaction
+            .world
+            .musubi_resolver_index
+            .insert(release_id.clone(), initial_row.clone());
+
+        let (namespace, metadata_revision) = {
+            let package_record = transaction
+                .world
+                .musubi_packages
+                .get(&package)
+                .expect("seeded package remains available");
+            (
+                package_record.claimed_namespace.clone(),
+                package_record.revisions.metadata,
+            )
+        };
+        let selector = MusubiPackageSelectorV1 {
+            namespace,
+            name: package.name.clone(),
+        };
+        let initial_directory = MusubiOrderedPackageEntryV1 {
+            selector: selector.clone(),
+            package: package.clone(),
+            latest_selectable: Some(release_id.version.clone()),
+            metadata_revision,
+            index_revision: initial_index_revision,
+        };
+        initial_directory
+            .validate()
+            .expect("initial directory fixture is valid");
+        transaction
+            .world
+            .musubi_public_directory
+            .insert(selector.clone(), initial_directory);
+
+        let reason: MusubiReasonV1 = "governed security response"
+            .parse()
+            .expect("bounded takedown reason");
+        let action = MusubiParliamentActionV1::TakedownArtifact(MusubiTakedownArtifactActionV1 {
+            release: release_id.clone(),
+            reason: reason.clone(),
+            expected_artifact_governance_revision: 1,
+        });
+        let decision = seed_enacted_decision(&action, &mut transaction);
+        let minimum_enactment_delay = transaction.gov.min_enactment_delay;
+
+        SetMusubiArtifactTakedownV1 {
+            decision,
+            release: release_id.clone(),
+            reason: reason.clone(),
+            expected_artifact_governance_revision: 1,
+        }
+        .execute(&account(93), &mut transaction)
+        .expect("canonical artifact takedown executes");
+
+        let expected_governance =
+            MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
+                action_digest: decision.action_digest,
+                reason: reason.clone(),
+                applied_at_height: GOVERNANCE_EXECUTION_HEIGHT,
+            });
+        let mut expected_release = initial_release;
+        expected_release.artifact_governance = expected_governance.clone();
+        expected_release.revisions.artifact_governance = 2;
+        let mut expected_row = initial_row;
+        expected_row.selection.governance = expected_governance;
+        expected_row.index_revision = expected_index_revision;
+        let expected_directory = MusubiOrderedPackageEntryV1 {
+            selector: selector.clone(),
+            package: package.clone(),
+            latest_selectable: None,
+            metadata_revision,
+            index_revision: expected_index_revision,
+        };
+        let expected_consumption = MusubiGovernanceDecisionConsumptionV1 {
+            decision,
+            minimum_enactment_delay,
+            consumed_at_height: GOVERNANCE_EXECUTION_HEIGHT,
+        };
+        assert!(decision.enacted_at_height < decision.execute_after_height);
+        assert!(decision.execute_after_height <= expected_consumption.consumed_at_height);
+        assert_eq!(
+            transaction.world.musubi_releases.get(&release_id),
+            Some(&expected_release)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index.get(&release_id),
+            Some(&expected_row)
+        );
+        assert_eq!(
+            transaction.world.musubi_public_directory.get(&selector),
+            Some(&expected_directory)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_governance_decisions
+                .get(&decision.decision_id),
+            Some(&expected_consumption)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            expected_index_revision
+        );
+        assert_eq!(
+            take_musubi_events(&mut transaction),
+            vec![MusubiEvent::ArtifactTakenDown(
+                MusubiArtifactTakedownEventV1 {
+                    release: release_id.clone(),
+                    archive_id,
+                    action_digest: decision.action_digest,
+                    governance_revision: 2,
+                    finalized_height: GOVERNANCE_EXECUTION_HEIGHT,
+                }
+            )]
+        );
+
+        let replay_error = SetMusubiArtifactTakedownV1 {
+            decision,
+            release: release_id.clone(),
+            reason,
+            expected_artifact_governance_revision: 1,
+        }
+        .execute(&account(93), &mut transaction)
+        .expect_err("the same artifact takedown decision cannot be replayed");
+        assert!(replay_error.to_string().contains("already consumed"));
+        assert_eq!(
+            transaction.world.musubi_releases.get(&release_id),
+            Some(&expected_release)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index.get(&release_id),
+            Some(&expected_row)
+        );
+        assert_eq!(
+            transaction.world.musubi_public_directory.get(&selector),
+            Some(&expected_directory)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .musubi_governance_decisions
+                .get(&decision.decision_id),
+            Some(&expected_consumption)
+        );
+        assert_eq!(
+            transaction.world.musubi_resolver_index_revision.get().get(),
+            expected_index_revision
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty());
     }
 
     #[test]

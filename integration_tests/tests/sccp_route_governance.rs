@@ -383,16 +383,15 @@ async fn exact_sccp_route_governance_converges_and_rejects_adversarial_updates()
         .with_config_layer(|layer| {
             layer.write("chain", TAIRA_CHAIN_ID);
         })
-        .with_genesis_instruction(Register::domain(Domain::new(
-            route.settlement.asset_definition_id.domain().clone(),
-        )))
         .with_genesis_instruction(Register::account(Account::new(
             route.settlement.custody_account_id.clone(),
         )))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(route.settlement.asset_definition_id.clone())
-                .with_name("xor".to_owned()),
-        ))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            route.settlement.asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
         .with_genesis_instruction(Mint::asset_quantity(1_u64, custody_asset))
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanManageSccpGovernance),

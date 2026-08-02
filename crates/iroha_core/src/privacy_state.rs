@@ -9770,7 +9770,7 @@ mod tests {
             PrivacyCommitmentV1::new(nonzero(13)),
             PrivacyPolicyDigestV1::new(nonzero(14)),
             1,
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("asset").expect("asset name"),
             ),
@@ -10657,7 +10657,7 @@ mod tests {
     fn orchard_persisted_fixture() -> OrchardPersistedFixture {
         let namespace = orchard_namespace(0xA7);
         let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0xA8));
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("orchard_asset").expect("asset name"),
         );
@@ -10857,7 +10857,7 @@ mod tests {
     fn proof_managed_note_persisted_fixture(
         protocol_id: PrivacyProtocolIdV1,
     ) -> ProofManagedPersistedFixture {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("private_note_state").expect("asset name"),
         );
@@ -11072,7 +11072,7 @@ mod tests {
     }
 
     fn fcmp_persisted_fixture() -> FcmpPersistedFixture {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("fcmp_state").expect("asset name"),
         );
@@ -13972,7 +13972,7 @@ mod tests {
 
     #[test]
     fn proof_managed_note_frontier_is_durable_bounded_and_self_authenticating() {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("private_note").expect("asset name"),
         );

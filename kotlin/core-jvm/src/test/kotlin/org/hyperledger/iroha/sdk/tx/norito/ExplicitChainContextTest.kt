@@ -203,6 +203,11 @@ class ExplicitChainContextTest {
             "nativeEncodeUnshieldSignedTransaction",
             2,
         )
+        assertMethodHasParameterCount(
+            NativeSignerBridge::class.java,
+            "nativeEncodeUnshieldSignedTransaction",
+            15,
+        )
         assertMethodHasIntParameter(
             NativeSignerBridge::class.java,
             "nativeEncodeRegisterZkAssetSignedTransaction",
@@ -420,6 +425,16 @@ class ExplicitChainContextTest {
             ?: error("missing method ${type.name}.$name")
         assertTrue(method.parameterCount > parameterIndex)
         assertEquals(Int::class.javaPrimitiveType, method.parameterTypes[parameterIndex])
+    }
+
+    private fun assertMethodHasParameterCount(
+        type: Class<*>,
+        name: String,
+        parameterCount: Int,
+    ) {
+        val method = type.declaredMethods.firstOrNull { it.name == name }
+            ?: error("missing method ${type.name}.$name")
+        assertEquals(parameterCount, method.parameterCount)
     }
 
     private companion object {

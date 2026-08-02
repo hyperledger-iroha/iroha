@@ -85,6 +85,11 @@ name = "taira_privacy_prebundle_gate"
 path = "src/bin/taira_privacy_prebundle_gate.rs"
 required-features = ["dev-tools", "zk-stark"]
 
+[[bin]]
+name = "taira_bootle_lantern_broker"
+path = "src/bin/taira_bootle_lantern_broker.rs"
+required-features = ["daemon"]
+
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
 is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-iroha/iroha" }

@@ -84,8 +84,46 @@ pub fn create_block<'a>(
     (block, state_block)
 }
 
+fn domain_for_index(domains: &[DomainId], total_items: usize, index: usize) -> Option<&DomainId> {
+    if domains.is_empty() || total_items == 0 {
+        return None;
+    }
+    let domain_index = index.saturating_mul(domains.len()) / total_items;
+    domains.get(domain_index.min(domains.len() - 1))
+}
+
+/// Return the semantic name assigned by [`generate_ids`] to an asset fixture.
+///
+/// # Panics
+///
+/// Panics when the fixture collection cannot be partitioned evenly by domain.
+pub fn generated_asset_definition_name(
+    domain_count: usize,
+    total_assets: usize,
+    index: usize,
+) -> String {
+    assert!(
+        domain_count > 0,
+        "benchmark fixture needs at least one domain"
+    );
+    assert!(
+        total_assets > 0,
+        "benchmark fixture needs at least one asset"
+    );
+    assert_eq!(
+        total_assets % domain_count,
+        0,
+        "benchmark assets must be partitioned evenly by domain"
+    );
+    let assets_per_domain = total_assets / domain_count;
+    format!(
+        "non_inlinable_asset_definition_name_{}",
+        index % assets_per_domain
+    )
+}
+
 pub fn populate_state(
-    _domains: &[DomainId],
+    domains: &[DomainId],
     accounts: &[AccountId],
     asset_definitions: &[AssetDefinitionId],
     owner_id: &AccountId,
@@ -104,9 +142,13 @@ pub fn populate_state(
         instructions.push(can_unregister_account.into());
     }
 
-    for asset_definition_id in asset_definitions {
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string());
+    for (index, asset_definition_id) in asset_definitions.iter().enumerate() {
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            generated_asset_definition_name(domains.len(), asset_definitions.len(), index),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        );
         instructions.push(Register::asset_definition(asset_definition).into());
         let can_unregister_asset_definition = Grant::account_permission(
             CanUnregisterAssetDefinition {
@@ -126,18 +168,6 @@ pub fn delete_every_nth(
     asset_definitions: &[AssetDefinitionId],
     nth: usize,
 ) -> Vec<InstructionBox> {
-    fn domain_for_index<'a>(
-        domains: &'a [DomainId],
-        total_items: usize,
-        index: usize,
-    ) -> Option<&'a DomainId> {
-        if domains.is_empty() || total_items == 0 {
-            return None;
-        }
-        let domain_index = index.saturating_mul(domains.len()) / total_items;
-        domains.get(domain_index.min(domains.len() - 1))
-    }
-
     let mut instructions: Vec<InstructionBox> = Vec::new();
     for (i, domain_id) in domains.iter().enumerate() {
         // Runtime domain re-registration is intentionally unavailable; churn the
@@ -158,7 +188,12 @@ pub fn delete_every_nth(
         }
         for (k, asset_definition_id) in asset_definitions
             .iter()
-            .filter(|asset_definition_id| asset_definition_id.domain() == domain_id)
+            .enumerate()
+            .filter(|(index, _)| {
+                domain_for_index(domains, asset_definitions.len(), *index)
+                    .is_some_and(|domain| domain == domain_id)
+            })
+            .map(|(_, asset_definition_id)| asset_definition_id)
             .enumerate()
         {
             if delete_all_children || k % nth == 0 {
@@ -175,18 +210,6 @@ pub fn restore_every_nth(
     asset_definitions: &[AssetDefinitionId],
     nth: usize,
 ) -> Vec<InstructionBox> {
-    fn domain_for_index<'a>(
-        domains: &'a [DomainId],
-        total_items: usize,
-        index: usize,
-    ) -> Option<&'a DomainId> {
-        if domains.is_empty() || total_items == 0 {
-            return None;
-        }
-        let domain_index = index.saturating_mul(domains.len()) / total_items;
-        domains.get(domain_index.min(domains.len() - 1))
-    }
-
     let mut instructions: Vec<InstructionBox> = Vec::new();
     for (i, domain_id) in domains.iter().enumerate() {
         // Domains remain present so this restore batch uses only ordinary
@@ -205,14 +228,26 @@ pub fn restore_every_nth(
                 instructions.push(Register::account(account).into());
             }
         }
-        for (k, asset_definition_id) in asset_definitions
+        for (k, (asset_index, asset_definition_id)) in asset_definitions
             .iter()
-            .filter(|asset_definition_id| asset_definition_id.domain() == domain_id)
+            .enumerate()
+            .filter(|(index, _)| {
+                domain_for_index(domains, asset_definitions.len(), *index)
+                    .is_some_and(|domain| domain == domain_id)
+            })
             .enumerate()
         {
             if k % nth == 0 || i % nth == 0 {
-                let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-                    .with_name(asset_definition_id.name().to_string());
+                let asset_definition = AssetDefinition::numeric(
+                    asset_definition_id.clone(),
+                    generated_asset_definition_name(
+                        domains.len(),
+                        asset_definitions.len(),
+                        asset_index,
+                    ),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                );
                 instructions.push(Register::asset_definition(asset_definition).into());
             }
         }
@@ -433,7 +468,7 @@ mod tests {
 }
 
 fn construct_asset_definition_id(i: usize, domain_id: DomainId) -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         domain_id,
         format!("non_inlinable_asset_definition_name_{i}")
             .parse()

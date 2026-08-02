@@ -23,6 +23,10 @@ Background prover reports (non‑consensus verification):
 - `DELETE /v1/zk/prover/reports` — bulk delete reports matching the same list filters
 - `DELETE /v1/zk/prover/reports/{id}` — delete a report
 
+Confidential-tree witnesses (committed ledger reads):
+- `POST   /v1/zk/roots` — return the bounded recent-root window for one asset
+- `POST   /v1/zk/merkle-path` — return current inclusion paths and the next zero-leaf path
+
 IVM prove helper (non-consensus proof generation):
 - `POST   /v1/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only)
 - `POST   /v1/zk/ivm/prove` — submit a prove job for execution-derived `IvmProved` payload (returns `{ job_id }`)
@@ -48,6 +52,7 @@ Notes
 - STARK verification (`stark/fri` family) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).
 - For `halo2/*` and `stark/fri` backends, proof bytes are expected to be a Norito-encoded `OpenVerifyEnvelope`.
 - For STARK wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes; concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
+- Confidential-tree reads dispatch exclusively through the tree profile persisted in `ZkAssetState`. The first release admits only `PoseidonPastaV1`; verifier-role bindings and node-local configuration do not select a tree hash or depth. Torii validates every retained root and frontier checkpoint before serving witnesses. A registered tree with no commitments returns the profile-defined depth-16 empty root as both `latest` and the sole root entry.
 
 ## Configuration
 
@@ -106,6 +111,8 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Jobs older than `zk_ivm_prove_job_ttl_secs` are evicted. Started blocking work is discard-only on cancellation and keeps its capacity/memory reservation until physical completion.
 - `torii.max_content_len` (bytes)
   - Global HTTP request body limit; applies to attachments uploads as an upper bound.
+- `confidential.tree_roots_history_len` (non-zero usize)
+  - Bounds recent roots returned by `/v1/zk/roots`; the effective minimum is one. Empty-root construction and tree depth are fixed by the persisted confidential-tree profile and have no runtime configuration knobs.
 
 Access control and rate limiting:
 - `torii.require_api_token` (bool) and `torii.api_tokens` (list of strings)
@@ -203,4 +210,4 @@ iroha app zk ivm delete --job-id <job_id>
 iroha app zk ivm derive-pk --vk ./halo2_ipa__ivm-exec-v1.vk --out ./halo2_ipa__ivm-exec-v1.pk
 ```
 
-See also: the ZK vote tally convenience endpoint (`POST /v1/zk/vote/tally`) and CLI helper `iroha app zk vote tally` for inspecting election tallies.
+See also: the ZK vote tally convenience endpoint (`POST /v1/zk/vote/tally`) and CLI helper `iroha app zk vote tally` for inspecting election tallies. Successful tally responses include `evaluated_block_height` and `evaluated_block_hash` from the same immutable state view used for lookup; unknown election identifiers return `404`.

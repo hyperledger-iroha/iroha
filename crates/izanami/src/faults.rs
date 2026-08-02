@@ -500,7 +500,7 @@ fn spam_invalid_transactions<P: FaultPeer>(
             .parse()
             .map_err(|_| eyre!("failed to parse bogus asset name"))?;
         let bogus_definition: AssetDefinitionId =
-            AssetDefinitionId::new(base_domain.clone(), bogus_name);
+            AssetDefinitionId::derive_from_components(base_domain.clone(), bogus_name);
         let asset = AssetId::new(bogus_definition, ALICE_ID.clone());
         let instruction = Mint::asset_quantity(1_u32, asset);
         let res = client.submit_instruction(instruction);

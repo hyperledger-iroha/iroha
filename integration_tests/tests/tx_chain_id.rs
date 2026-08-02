@@ -19,7 +19,7 @@ fn send_tx_with_different_chain_id() {
     // Given
     let (sender_id, sender_keypair) = gen_account_in("wonderland");
     let (receiver_id, _receiver_keypair) = gen_account_in("wonderland");
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "test_asset".parse().unwrap(),
     );
@@ -29,8 +29,12 @@ fn send_tx_with_different_chain_id() {
     let create_receiver_account = Register::account(Account::new(receiver_id.clone()));
     let register_asset_definition = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::numeric(
+            __asset_definition_id.clone(),
+            "test_asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     });
     let register_asset = Mint::asset_quantity(
         10_u32,
@@ -53,7 +57,7 @@ fn send_tx_with_different_chain_id() {
 
     let transfer_instruction = Transfer::asset_quantity(
         AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "test_asset".parse().unwrap(),
             ),

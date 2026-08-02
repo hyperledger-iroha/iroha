@@ -110,6 +110,12 @@ pub trait StorageReadOnly<K: Key, V: Value> {
         K: Borrow<Q>,
         Q: Ord + ?Sized;
 
+    /// Read the entry with the smallest canonical key without walking the map.
+    fn first_key_value(&self) -> Option<(&K, &V)>;
+
+    /// Read the entry with the largest canonical key without walking the map.
+    fn last_key_value(&self) -> Option<(&K, &V)>;
+
     /// Get amount of entries in the storage
     fn len(&self) -> usize;
 
@@ -178,6 +184,23 @@ mod view {
                     ViewInner::Txn(txn) => Box::new(txn.range(bounds)),
                     ViewInner::Snapshot(snapshot) => Box::new(snapshot.range(bounds)),
                 },
+            }
+        }
+
+        fn first_key_value(&self) -> Option<(&K, &V)> {
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.first_key_value(),
+                ViewInner::Snapshot(snapshot) => snapshot.iter().next(),
+            }
+        }
+
+        fn last_key_value(&self) -> Option<(&K, &V)> {
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.last_key_value(),
+                // `concread` does not expose endpoint lookup on a write-backed
+                // snapshot. Such snapshots only exist inside an in-flight state
+                // transaction; persistent read views take the indexed branch.
+                ViewInner::Snapshot(snapshot) => snapshot.iter().last(),
             }
         }
 
@@ -309,6 +332,14 @@ mod block {
             }
         }
 
+        fn first_key_value(&self) -> Option<(&K, &V)> {
+            self.blocks.first_key_value()
+        }
+
+        fn last_key_value(&self) -> Option<(&K, &V)> {
+            self.blocks.last_key_value()
+        }
+
         fn len(&self) -> usize {
             self.blocks.len()
         }
@@ -384,6 +415,14 @@ mod block {
             Q: Ord + ?Sized,
         {
             self.block.range(bounds)
+        }
+
+        fn first_key_value(&self) -> Option<(&K, &V)> {
+            self.block.first_key_value()
+        }
+
+        fn last_key_value(&self) -> Option<(&K, &V)> {
+            self.block.last_key_value()
         }
 
         fn len(&self) -> usize {
@@ -503,6 +542,26 @@ mod tests {
         assert_eq!(view3.get(&2), Some(&0));
         assert_eq!(view3.get(&3), Some(&1));
         assert_eq!(view3.get(&4), Some(&2));
+    }
+
+    #[test]
+    fn endpoint_lookups_follow_canonical_key_order() {
+        let storage = Storage::<u64, u64>::from_iter([(7, 70), (2, 20), (11, 110)]);
+        let view = storage.view();
+
+        assert_eq!(view.first_key_value(), Some((&2, &20)));
+        assert_eq!(view.last_key_value(), Some((&11, &110)));
+
+        let mut block = storage.block();
+        assert_eq!(block.first_key_value(), Some((&2, &20)));
+        assert_eq!(block.last_key_value(), Some((&11, &110)));
+        {
+            let mut transaction = block.transaction();
+            transaction.insert(1, 10);
+            transaction.insert(12, 120);
+            assert_eq!(transaction.first_key_value(), Some((&1, &10)));
+            assert_eq!(transaction.last_key_value(), Some((&12, &120)));
+        }
     }
 
     #[test]

@@ -119,6 +119,15 @@ import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 
 const DEFAULT_PAGE_SIZE = 100;
+const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
+const EXPLORER_CURSOR_MAX_LIMIT = 100;
+const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
+const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const SORAFS_POR_PAGE_DEFAULT_LIMIT = 100;
+const SORAFS_POR_PAGE_MAX_LIMIT = 1_000;
+const SORAFS_POR_PAGE_DEFAULT_MAX_BYTES = 4_194_304;
+const SORAFS_POR_CURSOR_MAX_LENGTH = 256;
 const APPLICATION_JSON = "application/json";
 const APPLICATION_NORITO = "application/x-norito";
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: APPLICATION_JSON });
@@ -1142,41 +1151,25 @@ const TRANSACTION_QUERY_OPTION_KEYS = [
   "untilTimestampMs",
 ];
 const EXPLORER_NFT_LIST_OPTION_KEYS = new Set([
-  "page",
-  "perPage",
   "limit",
-  "offset",
+  "cursor",
   "ownedBy",
-  "owned_by",
   "domainId",
-  "domain_id",
-  "domain",
-  "pageSize",
-  "maxItems",
   "signal",
 ]);
 const EXPLORER_NFT_ITERATOR_OPTION_KEYS = new Set([
   ...EXPLORER_NFT_LIST_OPTION_KEYS,
-  "pageSize",
   "maxItems",
 ]);
 const EXPLORER_RWA_LIST_OPTION_KEYS = new Set([
-  "page",
-  "perPage",
   "limit",
-  "offset",
+  "cursor",
   "ownedBy",
-  "owned_by",
   "domainId",
-  "domain_id",
-  "domain",
-  "pageSize",
-  "maxItems",
   "signal",
 ]);
 const EXPLORER_RWA_ITERATOR_OPTION_KEYS = new Set([
   ...EXPLORER_RWA_LIST_OPTION_KEYS,
-  "pageSize",
   "maxItems",
 ]);
 const UPLOAD_ATTACHMENT_OPTION_KEYS = new Set(["contentType", "content_type"]);
@@ -2129,7 +2122,7 @@ export class ToriiClient {
   /**
    * List explorer NFTs with optional owner/domain filters (`GET /v1/explorer/nfts`).
    * @param {ExplorerNftListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
+   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
    */
   async listExplorerNfts(options = {}) {
     const normalized = ToriiClient._normalizeExplorerNftListOptions(
@@ -2137,9 +2130,11 @@ export class ToriiClient {
       "listExplorerNfts options",
     );
     const params = {
-      page: normalized.page,
-      per_page: normalized.perPage,
+      limit: normalized.limit,
     };
+    if (normalized.cursor !== undefined) {
+      params.cursor = normalized.cursor;
+    }
     if (normalized.ownedBy !== undefined) {
       params.owned_by = normalized.ownedBy;
     }
@@ -2172,18 +2167,20 @@ export class ToriiClient {
     const { maxItems, ...listOptions } = normalized;
     const self = this;
     return (async function* iterator() {
-      let page = normalized.page;
+      let cursor = normalized.cursor;
       let remaining = maxItems;
+      const seenCursors = new Set();
+      if (cursor !== undefined) seenCursors.add(cursor);
       while (true) {
+        const limit = remaining === null
+          ? normalized.limit
+          : Math.min(normalized.limit, remaining);
         const pageResult = await self.listExplorerNfts({
           ...listOptions,
-          page,
-          perPage: normalized.perPage,
+          cursor,
+          limit,
         });
         const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
-        if (items.length === 0) {
-          return;
-        }
         for (const item of items) {
           yield item;
           if (remaining !== null) {
@@ -2194,13 +2191,14 @@ export class ToriiClient {
           }
         }
         const { pagination } = pageResult;
-        if (
-          (pagination && pagination.totalPages && page >= pagination.totalPages) ||
-          items.length < normalized.perPage
-        ) {
+        if (!pagination.hasMore) {
           return;
         }
-        page += 1;
+        cursor = pagination.nextCursor;
+        if (seenCursors.has(cursor)) {
+          throw new Error("explorer nfts endpoint repeated a cursor");
+        }
+        seenCursors.add(cursor);
       }
     })();
   }
@@ -2209,7 +2207,7 @@ export class ToriiClient {
    * List NFTs owned by an account (`GET /v1/explorer/nfts?owned_by=...`).
    * @param {string} accountId
    * @param {ExplorerNftListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
+   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
    */
   async listAccountNfts(accountId, options = {}) {
     const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
@@ -2286,7 +2284,7 @@ export class ToriiClient {
   /**
    * List explorer RWAs with optional owner/domain filters (`GET /v1/explorer/rwas`).
    * @param {ExplorerRwaListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<object>}>}
+   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<object>}>}
    */
   async listExplorerRwas(options = {}) {
     const normalized = ToriiClient._normalizeExplorerRwaListOptions(
@@ -2294,9 +2292,11 @@ export class ToriiClient {
       "listExplorerRwas options",
     );
     const params = {
-      page: normalized.page,
-      per_page: normalized.perPage,
+      limit: normalized.limit,
     };
+    if (normalized.cursor !== undefined) {
+      params.cursor = normalized.cursor;
+    }
     if (normalized.ownedBy !== undefined) {
       params.owned_by = normalized.ownedBy;
     }
@@ -2354,18 +2354,20 @@ export class ToriiClient {
     const { maxItems, ...listOptions } = normalized;
     const self = this;
     return (async function* iterator() {
-      let page = normalized.page;
+      let cursor = normalized.cursor;
       let remaining = maxItems;
+      const seenCursors = new Set();
+      if (cursor !== undefined) seenCursors.add(cursor);
       while (true) {
+        const limit = remaining === null
+          ? normalized.limit
+          : Math.min(normalized.limit, remaining);
         const pageResult = await self.listExplorerRwas({
           ...listOptions,
-          page,
-          perPage: normalized.perPage,
+          cursor,
+          limit,
         });
         const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
-        if (items.length === 0) {
-          return;
-        }
         for (const item of items) {
           yield item;
           if (remaining !== null) {
@@ -2376,13 +2378,14 @@ export class ToriiClient {
           }
         }
         const { pagination } = pageResult;
-        if (
-          (pagination && pagination.totalPages && page >= pagination.totalPages) ||
-          items.length < normalized.perPage
-        ) {
+        if (!pagination.hasMore) {
           return;
         }
-        page += 1;
+        cursor = pagination.nextCursor;
+        if (seenCursors.has(cursor)) {
+          throw new Error("explorer rwas endpoint repeated a cursor");
+        }
+        seenCursors.add(cursor);
       }
     })();
   }
@@ -2391,7 +2394,7 @@ export class ToriiClient {
    * List explorer RWAs owned by an account (`GET /v1/explorer/rwas?owned_by=...`).
    * @param {string} accountId
    * @param {ExplorerRwaListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<object>}>}
+   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<object>}>}
    */
   async listAccountRwas(accountId, options = {}) {
     const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
@@ -12500,31 +12503,20 @@ export class ToriiClient {
       EXPLORER_NFT_LIST_OPTION_KEYS,
     );
     const { signal } = normalizeSignalOption(normalized, context);
-    const perPageSource =
-      normalized.perPage ?? normalized.limit ?? normalized.per_page ?? normalized.limit;
-    const perPage = ToriiClient._normalizeUnsignedInteger(
-      perPageSource ?? DEFAULT_PAGE_SIZE,
-      `${context}.perPage`,
-      { allowZero: false },
+    const limit = ToriiClient._normalizeUnsignedInteger(
+      normalized.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
+      `${context}.limit`,
+      { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
     );
-    let pageValue = normalized.page ?? normalized.page_number ?? null;
-    if (pageValue !== null && pageValue !== undefined) {
-      pageValue = ToriiClient._normalizeUnsignedInteger(
-        pageValue,
-        `${context}.page`,
-        { allowZero: false },
-      );
-    } else {
-      const offset = ToriiClient._normalizeOffset(normalized.offset);
-      pageValue = Math.floor(offset / perPage) + 1;
-    }
-    const ownedByRaw = normalized.ownedBy ?? normalized.owned_by;
-    const domainRaw = normalized.domainId ?? normalized.domain_id ?? normalized.domain;
+    const ownedByRaw = normalized.ownedBy;
+    const domainRaw = normalized.domainId;
     const base = {
-      page: pageValue,
-      perPage,
+      limit,
       signal,
     };
+    if (normalized.cursor !== undefined && normalized.cursor !== null) {
+      base.cursor = normalizeExplorerCursorValue(normalized.cursor, `${context}.cursor`);
+    }
     if (ownedByRaw !== undefined && ownedByRaw !== null) {
       base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
     }
@@ -12543,16 +12535,9 @@ export class ToriiClient {
       context,
       EXPLORER_NFT_ITERATOR_OPTION_KEYS,
     );
-    const { pageSize, maxItems, ...listOptions } = normalized;
+    const { maxItems, ...listOptions } = normalized;
     const base = ToriiClient._normalizeExplorerNftListOptions(listOptions, context);
     const iterator = { ...base };
-    if (pageSize !== undefined && pageSize !== null) {
-      iterator.perPage = ToriiClient._normalizeUnsignedInteger(
-        pageSize,
-        `${context}.pageSize`,
-        { allowZero: false },
-      );
-    }
     if (maxItems !== undefined && maxItems !== null) {
       iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
         maxItems,
@@ -12572,31 +12557,20 @@ export class ToriiClient {
       EXPLORER_RWA_LIST_OPTION_KEYS,
     );
     const { signal } = normalizeSignalOption(normalized, context);
-    const perPageSource =
-      normalized.perPage ?? normalized.limit ?? normalized.per_page ?? normalized.limit;
-    const perPage = ToriiClient._normalizeUnsignedInteger(
-      perPageSource ?? DEFAULT_PAGE_SIZE,
-      `${context}.perPage`,
-      { allowZero: false },
+    const limit = ToriiClient._normalizeUnsignedInteger(
+      normalized.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
+      `${context}.limit`,
+      { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
     );
-    let pageValue = normalized.page ?? normalized.page_number ?? null;
-    if (pageValue !== null && pageValue !== undefined) {
-      pageValue = ToriiClient._normalizeUnsignedInteger(
-        pageValue,
-        `${context}.page`,
-        { allowZero: false },
-      );
-    } else {
-      const offset = ToriiClient._normalizeOffset(normalized.offset);
-      pageValue = Math.floor(offset / perPage) + 1;
-    }
-    const ownedByRaw = normalized.ownedBy ?? normalized.owned_by;
-    const domainRaw = normalized.domainId ?? normalized.domain_id ?? normalized.domain;
+    const ownedByRaw = normalized.ownedBy;
+    const domainRaw = normalized.domainId;
     const base = {
-      page: pageValue,
-      perPage,
+      limit,
       signal,
     };
+    if (normalized.cursor !== undefined && normalized.cursor !== null) {
+      base.cursor = normalizeExplorerCursorValue(normalized.cursor, `${context}.cursor`);
+    }
     if (ownedByRaw !== undefined && ownedByRaw !== null) {
       base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
     }
@@ -12615,16 +12589,9 @@ export class ToriiClient {
       context,
       EXPLORER_RWA_ITERATOR_OPTION_KEYS,
     );
-    const { pageSize, maxItems, ...listOptions } = normalized;
+    const { maxItems, ...listOptions } = normalized;
     const base = ToriiClient._normalizeExplorerRwaListOptions(listOptions, context);
     const iterator = { ...base };
-    if (pageSize !== undefined && pageSize !== null) {
-      iterator.perPage = ToriiClient._normalizeUnsignedInteger(
-        pageSize,
-        `${context}.pageSize`,
-        { allowZero: false },
-      );
-    }
     if (maxItems !== undefined && maxItems !== null) {
       iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
         maxItems,
@@ -20937,15 +20904,24 @@ function normalizeExplorerNftRecord(payload, context) {
 
 function normalizeExplorerNftPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer nfts response");
+  requireExactExplorerCursorFields(
+    record,
+    ["pagination", "items"],
+    "explorer nfts response",
+  );
   const items = record.items;
   if (!Array.isArray(items)) {
     throw new TypeError("explorer nfts response.items must be an array");
   }
+  const pagination = normalizeExplorerCursorMeta(
+    record.pagination,
+    "explorer nfts response.pagination",
+  );
+  if (items.length > pagination.limit) {
+    throw new TypeError("explorer nfts response.items must not exceed pagination.limit");
+  }
   return {
-    pagination: normalizeExplorerPaginationMeta(
-      record.pagination ?? {},
-      "explorer nfts response.pagination",
-    ),
+    pagination,
     items: items.map((item, index) =>
       normalizeExplorerNftRecord(item, `explorer nfts response.items[${index}]`),
     ),
@@ -20991,15 +20967,24 @@ function normalizeExplorerRwaRecord(payload, context) {
 
 function normalizeExplorerRwaPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer rwas response");
+  requireExactExplorerCursorFields(
+    record,
+    ["pagination", "items"],
+    "explorer rwas response",
+  );
   const items = record.items;
   if (!Array.isArray(items)) {
     throw new TypeError("explorer rwas response.items must be an array");
   }
+  const pagination = normalizeExplorerCursorMeta(
+    record.pagination,
+    "explorer rwas response.pagination",
+  );
+  if (items.length > pagination.limit) {
+    throw new TypeError("explorer rwas response.items must not exceed pagination.limit");
+  }
   return {
-    pagination: normalizeExplorerPaginationMeta(
-      record.pagination ?? {},
-      "explorer rwas response.pagination",
-    ),
+    pagination,
     items: items.map((item, index) =>
       normalizeExplorerRwaRecord(item, `explorer rwas response.items[${index}]`),
     ),
@@ -21082,6 +21067,78 @@ function normalizeExplorerPaginationMeta(payload, context) {
       `${context}.total_items`,
       { allowZero: true },
     ),
+  };
+}
+
+function normalizeExplorerCursorValue(value, context, { nullable = false } = {}) {
+  if (value === null && nullable) return null;
+  if (typeof value !== "string" || value.length === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a non-empty base64url string`,
+      context,
+    );
+  }
+  const remainder = value.length % 4;
+  const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
+  const hasNonCanonicalTrailingBits =
+    (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (trailingSextet & 0x03) !== 0);
+  if (
+    value.length > EXPLORER_CURSOR_MAX_LENGTH ||
+    remainder === 1 ||
+    !EXPLORER_CURSOR_PATTERN.test(value) ||
+    hasNonCanonicalTrailingBits
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be canonical base64url without padding and at most ${EXPLORER_CURSOR_MAX_LENGTH} characters`,
+      context,
+    );
+  }
+  return value;
+}
+
+function requireExactExplorerCursorFields(record, expectedFields, context) {
+  const expected = new Set(expectedFields);
+  const unknown = Object.keys(record).find((field) => !expected.has(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
+  const missing = expectedFields.find(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  if (missing !== undefined) {
+    throw new TypeError(`${context} is missing required field ${missing}`);
+  }
+  return record;
+}
+
+function normalizeExplorerCursorMeta(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  requireExactExplorerCursorFields(record, ["limit", "next_cursor", "has_more"], context);
+  const limit = ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
+    allowZero: false,
+    max: EXPLORER_CURSOR_MAX_LIMIT,
+  });
+  if (typeof record.has_more !== "boolean") {
+    throw new TypeError(`${context}.has_more must be a boolean`);
+  }
+  if (record.next_cursor === undefined) {
+    throw new TypeError(`${context}.next_cursor must be a string or null`);
+  }
+  const nextCursor = normalizeExplorerCursorValue(
+    record.next_cursor,
+    `${context}.next_cursor`,
+    { nullable: true },
+  );
+  if (record.has_more !== (nextCursor !== null)) {
+    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+  }
+  return {
+    limit,
+    nextCursor,
+    hasMore: record.has_more,
   };
 }
 
@@ -31058,21 +31115,21 @@ function buildSorafsPorStatusParams(options = {}) {
       "epoch",
       "status",
       "limit",
-      "page_token",
-      "pageToken",
-      "pageTokenHex",
+      "max_bytes",
+      "maxBytes",
+      "cursor",
     ]),
     "getSorafsPorStatus options",
   );
   const params = {};
-  const manifest = record.manifest;
+  const manifest = record.manifest ?? record.manifestHex;
   if (manifest !== undefined && manifest !== null) {
     params.manifest = requireHexString(
       manifest,
       "sorafsPorStatus.manifestHex",
     );
   }
-  const provider = record.provider;
+  const provider = record.provider ?? record.providerHex;
   if (provider !== undefined && provider !== null) {
     params.provider = requireHexString(
       provider,
@@ -31092,46 +31149,97 @@ function buildSorafsPorStatusParams(options = {}) {
       "sorafsPorStatus.status",
     ).trim();
   }
-  if (record.limit !== undefined && record.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      record.limit,
-      "sorafsPorStatus.limit",
-      { allowZero: false },
-    );
+  params.limit = ToriiClient._normalizeUnsignedInteger(
+    record.limit ?? SORAFS_POR_PAGE_DEFAULT_LIMIT,
+    "sorafsPorStatus.limit",
+    { allowZero: false, max: SORAFS_POR_PAGE_MAX_LIMIT },
+  );
+  params.max_bytes = ToriiClient._normalizeUnsignedInteger(
+    record.max_bytes ?? record.maxBytes ?? SORAFS_POR_PAGE_DEFAULT_MAX_BYTES,
+    "sorafsPorStatus.maxBytes",
+    { allowZero: false, max: SORAFS_POR_PAGE_DEFAULT_MAX_BYTES },
+  );
+  if (record.cursor !== undefined && record.cursor !== null) {
+    params.cursor = normalizeSorafsPorCursor(record.cursor, "sorafsPorStatus.cursor");
   }
-  const pageToken = record.page_token;
-  if (pageToken !== undefined && pageToken !== null) {
-    params.page_token = requireHexString(
-      pageToken,
-      "sorafsPorStatus.pageTokenHex",
-    );
-  }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return params;
 }
 
 function buildSorafsPorExportParams(options = {}) {
   const record = ensureRecord(options, "exportSorafsPorStatus options");
   assertSupportedOptionKeys(
     record,
-    new Set(["start_epoch", "startEpoch", "end_epoch", "endEpoch"]),
+    new Set([
+      "start_epoch",
+      "startEpoch",
+      "end_epoch",
+      "endEpoch",
+      "limit",
+      "max_bytes",
+      "maxBytes",
+      "cursor",
+    ]),
     "exportSorafsPorStatus options",
   );
   const params = {};
-  if (record.start_epoch !== undefined || record.startEpoch !== undefined) {
+  const startEpoch = record.start_epoch ?? record.startEpoch;
+  const endEpoch = record.end_epoch ?? record.endEpoch;
+  if ((startEpoch == null) !== (endEpoch == null)) {
+    throw new TypeError(
+      "sorafsPorExport.startEpoch and sorafsPorExport.endEpoch must be supplied together",
+    );
+  }
+  if (startEpoch != null) {
     params.start_epoch = ToriiClient._normalizeUnsignedInteger(
-      record.start_epoch,
+      startEpoch,
       "sorafsPorExport.startEpoch",
       { allowZero: false },
     );
   }
-  if (record.end_epoch !== undefined || record.endEpoch !== undefined) {
+  if (endEpoch != null) {
     params.end_epoch = ToriiClient._normalizeUnsignedInteger(
-      record.end_epoch,
+      endEpoch,
       "sorafsPorExport.endEpoch",
       { allowZero: false },
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  params.limit = ToriiClient._normalizeUnsignedInteger(
+    record.limit ?? SORAFS_POR_PAGE_DEFAULT_LIMIT,
+    "sorafsPorExport.limit",
+    { allowZero: false, max: SORAFS_POR_PAGE_MAX_LIMIT },
+  );
+  params.max_bytes = ToriiClient._normalizeUnsignedInteger(
+    record.max_bytes ?? record.maxBytes ?? SORAFS_POR_PAGE_DEFAULT_MAX_BYTES,
+    "sorafsPorExport.maxBytes",
+    { allowZero: false, max: SORAFS_POR_PAGE_DEFAULT_MAX_BYTES },
+  );
+  if (record.cursor !== undefined && record.cursor !== null) {
+    params.cursor = normalizeSorafsPorCursor(record.cursor, "sorafsPorExport.cursor");
+  }
+  return params;
+}
+
+function normalizeSorafsPorCursor(value, context) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > SORAFS_POR_CURSOR_MAX_LENGTH ||
+    value.length % 4 === 1 ||
+    !EXPLORER_CURSOR_PATTERN.test(value)
+  ) {
+    throw new TypeError(
+      `${context} must be canonical base64url without padding and at most ${SORAFS_POR_CURSOR_MAX_LENGTH} characters`,
+    );
+  }
+  const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
+  const remainder = value.length % 4;
+  if (
+    (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (trailingSextet & 0x03) !== 0)
+  ) {
+    throw new TypeError(`${context} must use canonical base64url trailing bits`);
+  }
+  return value;
 }
 
 function normalizeSorafsPinListResponse(payload, context = "sorafs pin list response") {

@@ -174,7 +174,7 @@ use iroha_data_model::{
         HijiriFeePolicy as ModelHijiriFeePolicy, Q16 as ModelQ16,
     },
     jurisdiction::JdgSignatureScheme,
-    name::{self, Name},
+    name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
@@ -712,11 +712,6 @@ pub struct Root {
     #[config(env = "TRUSTED_PEERS", default)]
     trusted_peers: WithOrigin<TrustedPeers>,
     #[config(
-        env = "DEFAULT_ACCOUNT_DOMAIN_LABEL",
-        default = "defaults::common::default_account_domain_label()"
-    )]
-    default_account_domain_label: WithOrigin<String>,
-    #[config(
         env = "CHAIN_DISCRIMINANT",
         default = "defaults::common::chain_discriminant()"
     )]
@@ -838,9 +833,6 @@ pub enum ParseError {
     /// Compute lane configuration contained invalid or inconsistent values.
     #[error("Invalid compute configuration")]
     InvalidComputeConfig,
-    /// IVM configuration contained invalid or inconsistent values.
-    #[error("Invalid IVM configuration")]
-    InvalidIvmConfig,
     /// Concurrency configuration contained invalid values.
     #[error("Invalid concurrency configuration")]
     InvalidConcurrencyConfig,
@@ -856,9 +848,6 @@ pub enum ParseError {
     /// Snapshot configuration contained an invalid audited-bootstrap policy.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
-    /// Common address-related configuration contained invalid values.
-    #[error("Invalid common configuration")]
-    InvalidCommonConfig,
 }
 
 struct AccountAddressParseScope {
@@ -866,16 +855,7 @@ struct AccountAddressParseScope {
 }
 
 impl AccountAddressParseScope {
-    fn enter(
-        default_domain_label: &str,
-        chain_discriminant: u16,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Self {
-        if let Err(err) = name::canonicalize_domain_label(default_domain_label) {
-            emitter.emit(Report::new(ParseError::InvalidCommonConfig).attach(format!(
-                "invalid default_account_domain_label `{default_domain_label}`: {err}",
-            )));
-        }
+    fn enter(chain_discriminant: u16) -> Self {
         Self {
             _chain_discriminant: iroha_data_model::account::address::ChainDiscriminantGuard::enter(
                 chain_discriminant,
@@ -1060,11 +1040,8 @@ impl Root {
     #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> Result<actual::Root, ParseError> {
         let mut emitter = Emitter::new();
-        let _account_address_scope = AccountAddressParseScope::enter(
-            self.default_account_domain_label.value(),
-            *self.chain_discriminant.value(),
-            &mut emitter,
-        );
+        let _account_address_scope =
+            AccountAddressParseScope::enter(*self.chain_discriminant.value());
 
         let (private_key, private_key_origin) = self.private_key.into_tuple();
         let (public_key, public_key_origin) = self.public_key.into_tuple();
@@ -1189,16 +1166,6 @@ impl Root {
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
         }
-        if let Some(ref compute) = compute
-            && !compute
-                .resource_profiles
-                .contains_key(&ivm.memory_budget_profile)
-        {
-            emitter.emit(Report::new(ParseError::InvalidIvmConfig).attach(format!(
-                "ivm.memory_budget_profile `{}` missing from compute.resource_profiles",
-                ivm.memory_budget_profile
-            )));
-        }
         if let Err(message) = snapshot.bootstrap.validate() {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
@@ -1239,7 +1206,6 @@ impl Root {
             key_pair,
             peer,
             trusted_peers,
-            default_account_domain_label: self.default_account_domain_label,
             chain_discriminant: self.chain_discriminant,
         };
 
@@ -2622,18 +2588,6 @@ pub struct Concurrency {
         default = "defaults::concurrency::SUMERAGI_STACK_BYTES"
     )]
     pub sumeragi_stack_bytes: usize,
-    /// Guest stack size (bytes) for IVM instances.
-    #[config(
-        env = "CONCURRENCY_GUEST_STACK_BYTES",
-        default = "defaults::concurrency::GUEST_STACK_BYTES"
-    )]
-    pub guest_stack_bytes: u64,
-    /// Gas→stack multiplier (bytes of stack available per unit of gas).
-    #[config(
-        env = "CONCURRENCY_GAS_TO_STACK_MULTIPLIER",
-        default = "defaults::concurrency::GAS_TO_STACK_MULTIPLIER"
-    )]
-    pub gas_to_stack_multiplier: u64,
 }
 
 impl Concurrency {
@@ -2647,8 +2601,6 @@ impl Concurrency {
             scheduler_stack_bytes: self.scheduler_stack_bytes,
             prover_stack_bytes: self.prover_stack_bytes,
             sumeragi_stack_bytes: self.sumeragi_stack_bytes,
-            guest_stack_bytes: self.guest_stack_bytes,
-            gas_to_stack_multiplier: self.gas_to_stack_multiplier,
         }
     }
 }
@@ -3906,30 +3858,12 @@ pub struct Zk {
     #[config(nested)]
     /// SCCP proof-admission and deterministic verifier-work limits.
     pub sccp: Sccp,
-    /// Maximum number of recent shielded Merkle roots kept per asset.
-    #[config(
-        env = "ZK_ROOT_HISTORY_CAP",
-        default = "defaults::zk::ledger::ROOT_HISTORY_CAP"
-    )]
-    pub root_history_cap: usize,
     /// Maximum number of recent ballot ciphertexts kept per election.
     #[config(
         env = "ZK_BALLOT_HISTORY_CAP",
         default = "defaults::zk::vote::BALLOT_HISTORY_CAP"
     )]
     pub ballot_history_cap: usize,
-    /// Include explicit empty-tree root for assets with no commitments.
-    #[config(
-        env = "ZK_EMPTY_ROOT_ON_EMPTY",
-        default = "defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY"
-    )]
-    pub empty_root_on_empty: bool,
-    /// Depth to use when computing the explicit empty-tree root.
-    #[config(
-        env = "ZK_MERKLE_DEPTH",
-        default = "defaults::zk::ledger::EMPTY_ROOT_DEPTH"
-    )]
-    pub merkle_depth: u8,
     /// Maximum accepted proof size for stateless pre-verification (bytes).
     #[config(
         env = "ZK_PREVERIFY_MAX_BYTES",
@@ -3999,10 +3933,7 @@ impl Zk {
             fastpq: self.fastpq.parse(),
             stark: self.stark.parse(),
             sccp: self.sccp.parse(),
-            root_history_cap: self.root_history_cap,
             ballot_history_cap: self.ballot_history_cap,
-            empty_root_on_empty: self.empty_root_on_empty,
-            merkle_depth: self.merkle_depth,
             preverify_max_bytes: self.preverify_max_bytes,
             preverify_budget_bytes: self.preverify_budget_bytes,
             proof_history_cap: self.proof_history_cap,
@@ -4578,12 +4509,9 @@ impl Fastpq {
     }
 }
 
-/// IVM/runtime presentation toggles (user view).
-#[derive(Debug, ReadConfig, Clone)]
+/// IVM runtime presentation toggles (user view).
+#[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct Ivm {
-    /// Compute resource profile name used to cap IVM guest stack budgets.
-    #[config(default = "defaults::ivm::memory_budget_profile()")]
-    pub memory_budget_profile: Name,
     /// Startup banner settings.
     #[config(nested)]
     pub banner: Banner,
@@ -4592,7 +4520,6 @@ pub struct Ivm {
 impl Ivm {
     fn parse(self) -> actual::Ivm {
         actual::Ivm {
-            memory_budget_profile: self.memory_budget_profile,
             banner: self.banner.parse(),
         }
     }
@@ -4601,7 +4528,6 @@ impl Ivm {
 impl Default for Ivm {
     fn default() -> Self {
         Self {
-            memory_budget_profile: defaults::ivm::memory_budget_profile(),
             banner: Banner::default(),
         }
     }
@@ -8165,9 +8091,9 @@ pub struct Confidential {
     /// Grace window (in blocks) around policy activation for conversions.
     #[config(default = "defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS")]
     pub policy_transition_window_blocks: u64,
-    /// Commitment tree root history length to retain.
+    /// Non-zero commitment tree root history length to retain.
     #[config(default = "defaults::confidential::TREE_ROOTS_HISTORY_LEN")]
-    pub tree_roots_history_len: u64,
+    pub tree_roots_history_len: NonZeroUsize,
     /// Interval (in blocks) between frontier checkpoints.
     #[config(default = "defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL")]
     pub tree_frontier_checkpoint_interval: u64,
@@ -14395,6 +14321,8 @@ pub struct ToriiBootleLanternIssuer {
     /// Durable one-shot authorization store directory.
     #[config(default = "defaults::torii::privacy_bootle_lantern_issuer::state_dir()")]
     pub state_dir: PathBuf,
+    /// Exact concurrent native-issuance bound. Required when enabled.
+    pub max_inflight: Option<usize>,
     /// Exact governed issuer identifier as 64 lowercase hexadecimal characters.
     pub issuer_id_hex: Option<String>,
     /// Exact governed policy identifier as 64 lowercase hexadecimal characters.
@@ -14430,6 +14358,7 @@ impl Default for ToriiBootleLanternIssuer {
         Self {
             enabled: issuer::ENABLED,
             state_dir: issuer::state_dir(),
+            max_inflight: None,
             issuer_id_hex: None,
             policy_id_hex: None,
             authorization_lifetime_blocks: issuer::AUTHORIZATION_LIFETIME_BLOCKS,
@@ -14498,6 +14427,17 @@ impl ToriiBootleLanternIssuer {
             emit_torii_config_error(
                 emitter,
                 "torii.privacy_bootle_lantern_issuer.state_dir must be a non-empty absolute path",
+            );
+        }
+        let max_inflight = self.max_inflight.and_then(NonZeroUsize::new);
+        if max_inflight.is_none_or(|value| value.get() > limits::MAX_INFLIGHT_HARD) {
+            policy_valid = false;
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.privacy_bootle_lantern_issuer.max_inflight is required when enabled and must be within 1..={}",
+                    limits::MAX_INFLIGHT_HARD
+                ),
             );
         }
         if !(1..=limits::AUTHORIZATION_LIFETIME_BLOCKS_MAX)
@@ -14589,6 +14529,7 @@ impl ToriiBootleLanternIssuer {
 
         Some(actual::ToriiBootleLanternIssuer {
             state_dir: self.state_dir,
+            max_inflight: max_inflight?,
             issuer_id: PrivacyIssuerIdV1::new(issuer_id?),
             policy_id: PrivacyPolicyIdV1::new(policy_id?),
             authorization_lifetime_blocks: self.authorization_lifetime_blocks,
@@ -14610,6 +14551,7 @@ mod torii_bootle_lantern_issuer_tests {
         ToriiBootleLanternIssuer {
             enabled: true,
             state_dir: PathBuf::from("/var/lib/iroha/privacy/bootle-lantern/issuer"),
+            max_inflight: Some(2),
             issuer_id_hex: Some("41".repeat(32)),
             policy_id_hex: Some("42".repeat(32)),
             runtime_provider_registry_handle: Some(
@@ -14636,6 +14578,7 @@ mod torii_bootle_lantern_issuer_tests {
         assert!(emitter.into_result().is_ok());
         assert_eq!(parsed.issuer_id, PrivacyIssuerIdV1::new([0x41; 32]));
         assert_eq!(parsed.policy_id, PrivacyPolicyIdV1::new([0x42; 32]));
+        assert_eq!(parsed.max_inflight, NonZeroUsize::new(2).unwrap());
         assert_eq!(parsed.runtime_provider_registry_revision, 7);
         assert_eq!(parsed.runtime_provider_registry_policy_digest, [0x43; 32]);
         assert_eq!(
@@ -14666,6 +14609,20 @@ mod torii_bootle_lantern_issuer_tests {
         config.max_total_bytes = Bytes(1);
         config.terminal_retention_blocks = 0;
         assert_rejected(config);
+    }
+
+    #[test]
+    fn enabled_issuer_requires_a_bounded_explicit_inflight_limit() {
+        let mut missing = valid_config();
+        missing.max_inflight = None;
+        let mut zero = valid_config();
+        zero.max_inflight = Some(0);
+        let mut excessive = valid_config();
+        excessive.max_inflight =
+            Some(defaults::torii::privacy_bootle_lantern_issuer::MAX_INFLIGHT_HARD + 1);
+        for config in [missing, zero, excessive] {
+            assert_rejected(config);
+        }
     }
 
     #[test]
@@ -17349,7 +17306,7 @@ mod torii_faucet_tests {
         let key_file = TestKeyFile::create(
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53\n",
         );
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("sora", "universal").expect("domain"),
             "xor".parse().expect("name"),
         )
@@ -29064,7 +29021,7 @@ mod sorafs_repair_gc_tests {
     #[test]
     fn sorafs_appeal_finance_rejects_invalid_asset_and_policy_bounds() {
         let mut config = SorafsAppealFinanceSettlement::default();
-        config.asset_definition_id = AssetDefinitionId::new(
+        config.asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("xor", "universal").expect("domain id"),
             "other".parse().expect("asset definition name"),
         );
@@ -30291,7 +30248,6 @@ impl SorafsGateway {
             enforce_capabilities,
             salt_schedule_dir,
             site_bindings: site_bindings.parse(),
-            cdn_policy_path: None,
             rate_limit: rate_limit.parse(),
             untrusted_hosting: untrusted_hosting.parse(),
             acme: acme.parse(emitter),
@@ -31933,7 +31889,7 @@ mod offline_cfg_tests {
 
     #[test]
     fn iso_bridge_json_deserializes() {
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fin", "universal").expect("domain"),
             "usd".parse().expect("name"),
         )
@@ -32309,14 +32265,14 @@ mod offline_cfg_tests {
         assert!(parsed.plain_voting_enabled);
         assert_eq!(
             parsed.voting_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+            iroha_data_model::asset::prelude::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap()
             )
         );
         assert_eq!(
             parsed.citizenship_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+            iroha_data_model::asset::prelude::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap()
             )
@@ -32347,7 +32303,7 @@ mod offline_cfg_tests {
         assert_eq!(parsed.parliament_min_stake, Quantity::from(456_u64));
         assert_eq!(
             parsed.parliament_eligibility_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+            iroha_data_model::asset::prelude::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("stake", "universal").unwrap(),
                 "SORA".parse().unwrap()
             )
@@ -32739,8 +32695,14 @@ policy_digest_hex = "{policy_digest_hex}"
                 ("private_key".into(), Value::String(private_key)),
                 ("minimum_xor_balance".into(), Value::String("1".into())),
                 ("max_tx_value".into(), Value::String("1000000000".into())),
-                ("operation_registry_max_entries".into(), Value::Integer(4096)),
-                ("operation_registry_max_bytes".into(), Value::Integer(524288)),
+                (
+                    "operation_registry_max_entries".into(),
+                    Value::Integer(4096),
+                ),
+                (
+                    "operation_registry_max_bytes".into(),
+                    Value::Integer(524288),
+                ),
             ])),
         );
 

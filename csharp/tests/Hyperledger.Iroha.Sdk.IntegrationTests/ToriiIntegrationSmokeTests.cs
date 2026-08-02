@@ -53,10 +53,9 @@ public sealed class ToriiIntegrationSmokeTests
 
         var explorerAccounts = await client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery
         {
-            Page = 1,
-            PerPage = 1,
+            Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerAccounts.Pagination.TotalItems >= (ulong)explorerAccounts.Items.Count);
+        Assert.True(explorerAccounts.Items.Count <= explorerAccounts.Pagination.Limit);
         if (explorerAccounts.Items.Count > 0)
         {
             var explorerAccount = await client.GetExplorerAccountAsync(explorerAccounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
@@ -65,10 +64,9 @@ public sealed class ToriiIntegrationSmokeTests
 
         var explorerDomains = await client.GetExplorerDomainsAsync(new ToriiExplorerDomainsQuery
         {
-            Page = 1,
-            PerPage = 1,
+            Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerDomains.Pagination.TotalItems >= (ulong)explorerDomains.Items.Count);
+        Assert.True(explorerDomains.Items.Count <= explorerDomains.Pagination.Limit);
         if (explorerDomains.Items.Count > 0)
         {
             var explorerDomain = await client.GetExplorerDomainAsync(explorerDomains.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
@@ -77,10 +75,9 @@ public sealed class ToriiIntegrationSmokeTests
 
         var explorerAssetDefinitions = await client.GetExplorerAssetDefinitionsAsync(new ToriiExplorerAssetDefinitionsQuery
         {
-            Page = 1,
-            PerPage = 1,
+            Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerAssetDefinitions.Pagination.TotalItems >= (ulong)explorerAssetDefinitions.Items.Count);
+        Assert.True(explorerAssetDefinitions.Items.Count <= explorerAssetDefinitions.Pagination.Limit);
         if (explorerAssetDefinitions.Items.Count > 0)
         {
             var explorerAssetDefinition = await client.GetExplorerAssetDefinitionAsync(explorerAssetDefinitions.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
@@ -89,10 +86,9 @@ public sealed class ToriiIntegrationSmokeTests
 
         var explorerAssets = await client.GetExplorerAssetsAsync(new ToriiExplorerAssetsQuery
         {
-            Page = 1,
-            PerPage = 1,
+            Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerAssets.Pagination.TotalItems >= (ulong)explorerAssets.Items.Count);
+        Assert.True(explorerAssets.Items.Count <= explorerAssets.Pagination.Limit);
         if (explorerAssets.Items.Count > 0)
         {
             var explorerAsset = await client.GetExplorerAssetAsync(explorerAssets.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
@@ -101,10 +97,9 @@ public sealed class ToriiIntegrationSmokeTests
 
         var explorerNfts = await client.GetExplorerNftsAsync(new ToriiExplorerNftsQuery
         {
-            Page = 1,
-            PerPage = 1,
+            Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerNfts.Pagination.TotalItems >= (ulong)explorerNfts.Items.Count);
+        Assert.True(explorerNfts.Items.Count <= explorerNfts.Pagination.Limit);
         if (explorerNfts.Items.Count > 0)
         {
             var explorerNft = await client.GetExplorerNftAsync(explorerNfts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
@@ -113,10 +108,9 @@ public sealed class ToriiIntegrationSmokeTests
 
         var explorerRwas = await client.GetExplorerRwasAsync(new ToriiExplorerRwasQuery
         {
-            Page = 1,
-            PerPage = 1,
+            Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerRwas.Pagination.TotalItems >= (ulong)explorerRwas.Items.Count);
+        Assert.True(explorerRwas.Items.Count <= explorerRwas.Pagination.Limit);
         if (explorerRwas.Items.Count > 0)
         {
             var explorerRwa = await client.GetExplorerRwaAsync(explorerRwas.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);

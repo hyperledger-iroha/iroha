@@ -12,7 +12,6 @@
 # chain =
 # public_key =
 # private_key =
-# default_account_domain_label = "default.universal"  # Used only for AccountAddress selector encoding/compression; AccountId parsing stays domainless.
 # chain_discriminant = 0x02F1              # I105 prefix / chain discriminant; override for dev/test networks.
 
 telemetry_enabled = true
@@ -294,7 +293,6 @@ expected_hash = "<exact signed genesis block hash>"
 # format = "full"
 
 [ivm]
-# memory_budget_profile = "cpu-small" # Compute resource profile used to cap IVM guest stack budgets.
 
 [ivm.banner]
 # show = true   # Print the Norito/IVM startup banner on daemon launch.

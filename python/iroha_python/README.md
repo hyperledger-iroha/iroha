@@ -182,26 +182,31 @@ print(formats["i105_warning"])
 ## Ledger reads and faucet bootstrap
 
 `ToriiClient` includes convenience helpers for common ledger reads so
-applications do not need to duplicate Torii pagination, compatibility retries,
-or account-asset matching logic:
+applications do not need to duplicate Torii pagination or account-asset
+matching logic:
+
+Caller-supplied IDs are sent only to their exact URL-encoded REST routes. The
+client never substitutes a network prefix and never retries an alternate ID.
+`find_account` and `account_exists` fall back to the paginated account list
+only when the exact account route returns `503` with
+`x-iroha-reject-code: route_unavailable`, and the fallback requires exact ID
+equality. A `404` reports absence; `400`, including a wrong-network-prefix
+rejection, propagates without fallback.
 
 ```python
 from iroha_python import ToriiClient, authority_fee_payment
 
 client = ToriiClient("https://taira.sora.org")
+account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 
-exists = client.account_exists("adult@is", include_taira_prefix_variant=True)
-balance = client.asset_balance(
-    "adult@is",
-    "ds#wonderland.is",
-    include_taira_prefix_variant=True,
-)
+exists = client.account_exists(account_id)
+balance = client.asset_balance(account_id, "ds#wonderland.is")
 definition = client.get_asset_definition("ds#wonderland.is")
 
 puzzle = client.get_account_faucet_puzzle()
-anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow("adult@is", puzzle)
+anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow(account_id, puzzle)
 response = client.submit_account_faucet_claim(
-    "adult@is",
+    account_id,
     pow_anchor_height=anchor_height,
     pow_nonce_hex=nonce_hex,
 )
@@ -345,10 +350,14 @@ client.unshield_prepared_and_wait(
     public_amount="3",
     inputs=["dd" * 32],
     proof=prepared_proof,
-    outputs=[],
     root_hint="ee" * 32,
 )
 ```
+
+The first-release `Unshield` instruction does not accept caller-supplied output
+commitments. Verified proof policy determines every private output. Passing the
+retired `outputs` keyword or decoding an output-bearing pre-release payload
+fails closed; the SDK does not ignore or translate it.
 
 ## Dataspace lifecycle helpers
 
@@ -500,7 +509,13 @@ from iroha_python import ToriiClient, rwa_query_envelope
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
 chain_page = client.list_rwas_typed(limit=20, offset=0)
-detail_page = client.list_explorer_rwas_typed(domain="commodities", page=1, per_page=25)
+detail_page = client.list_explorer_rwas_typed(domain="commodities", limit=25)
+if detail_page.pagination.has_more:
+    next_page = client.list_explorer_rwas_typed(
+        domain="commodities",
+        limit=25,
+        cursor=detail_page.pagination.next_cursor,
+    )
 detail = client.get_explorer_rwa_detail_typed("lot-001$commodities")
 filtered = client.query_rwas_typed(
     filter={"eq": [{"name": "id"}, "lot-001$commodities"]},
@@ -961,12 +976,16 @@ draft.register_domain("wonderland") \
      .register_account("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", metadata={"role": "admin"}) \
      .register_asset_definition(
         "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        owner="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+        owning_domain="wonderland",
+        balance_scope_policy="Global",
+        name="rose",
         scale=2,
         mintable="Infinitely",
         metadata={"sym": "ROS"},
      ) \
      .mint_asset_quantity("norito:<asset-id-hex>", 10)
+
+# The transaction authority in ``config`` owns the registered definition.
 
 pair = Ed25519KeyPair.from_private_key(bytes([1] * 32))
 envelope, fee_quote = draft.quote_and_sign(client, pair.private_key)
@@ -1452,7 +1471,7 @@ client = create_torii_client(
 client.set_protected_namespaces(["apps", "system"])
 protected = client.get_protected_namespaces()
 governed_contract = client.get_governance_contract_typed(
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
 )
 council = client.get_governance_council_current()
 audit = client.get_governance_council_audit(epoch=42)

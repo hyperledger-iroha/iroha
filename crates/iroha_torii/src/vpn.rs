@@ -9,7 +9,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use iroha_config::client_api::ConfigGetDTO;
-use iroha_core::{kiso::KisoHandle, state::WorldReadOnly};
+use iroha_core::{
+    kiso::KisoHandle,
+    state::{VPN_SETTLED_RECEIPT_HISTORY_LIMIT as MAX_RECEIPTS_PER_ACCOUNT, WorldReadOnly},
+};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, PublicKey,
     soranet::{
@@ -41,7 +44,6 @@ use crate::{Error, SharedAppState};
 
 const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-security"];
 const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
-const MAX_RECEIPTS_PER_ACCOUNT: usize = 24;
 const MAX_SESSION_ADDRESS_ALLOCATION_ATTEMPTS: u32 = 4_096;
 
 /// Immutable VPN relay trust derived from an authenticated guard-directory snapshot.
@@ -506,6 +508,13 @@ fn not_permitted_error(message: impl Into<String>) -> Error {
     Error::Query(ValidationFail::NotPermitted(message.into()))
 }
 
+fn inconsistent_vpn_state(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "vpn_state_inconsistent",
+        message: message.into(),
+    }
+}
+
 fn normalize_exit_class(value: &str, default_value: &str) -> Result<String, Error> {
     let candidate = if value.trim().is_empty() {
         default_value.trim()
@@ -678,7 +687,7 @@ fn xor_asset_definition_id() -> AssetDefinitionId {
     let domain =
         DomainId::parse_fully_qualified("universal.universal").expect("static XOR domain id");
     let name = Name::from_str("xor").expect("static XOR asset name");
-    AssetDefinitionId::new(domain, name)
+    AssetDefinitionId::derive_from_components(domain, name)
 }
 
 fn parse_profile_account_id(raw: &str, field: &str) -> Result<AccountId, Error> {
@@ -1162,17 +1171,37 @@ fn list_receipts_for_account(
         .map(|record| record.lease_id_hex.clone())
         .collect::<HashSet<_>>();
     let world = app.state.world_view();
-    for (_, lease) in world.vpn_leases().iter() {
-        if &lease.client_account_id != account_id {
-            continue;
+    let indexed_leases = world.vpn_settled_leases_by_account().get(account_id);
+    for (settled_at_ms, lease_id) in indexed_leases
+        .into_iter()
+        .flat_map(|leases| leases.iter().rev())
+    {
+        let lease = world.vpn_leases().get(lease_id).ok_or_else(|| {
+            inconsistent_vpn_state(format!(
+                "settled VPN receipt index references missing lease {}",
+                hex::encode(lease_id)
+            ))
+        })?;
+        if &lease.client_account_id != account_id
+            || lease.status != VpnLeaseStatusV1::Settled
+            || lease.settled_at_ms != Some(*settled_at_ms)
+            || lease.lease_id != *lease_id
+        {
+            return Err(inconsistent_vpn_state(format!(
+                "settled VPN receipt index entry does not match lease {}",
+                hex::encode(lease_id)
+            )));
         }
         let lease_id_hex = hex::encode(lease.lease_id);
         if cached_lease_ids.contains(&lease_id_hex) {
             continue;
         }
-        if let Some(record) = receipt_record_from_settled_lease(lease)? {
-            records.push(record);
-        }
+        let record = receipt_record_from_settled_lease(lease)?.ok_or_else(|| {
+            inconsistent_vpn_state(format!(
+                "settled VPN receipt index references incomplete lease {lease_id_hex}"
+            ))
+        })?;
+        records.push(record);
     }
     records.sort_by(|left, right| right.disconnected_at_ms.cmp(&left.disconnected_at_ms));
     records.truncate(MAX_RECEIPTS_PER_ACCOUNT);
@@ -1939,7 +1968,7 @@ pub(crate) async fn handle_submit_vpn_receipt(
 
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeSet, sync::Arc};
 
     use axum::{body::to_bytes, response::IntoResponse};
     use iroha_core::state::World;
@@ -2278,6 +2307,35 @@ mod tests {
             earned_fee,
             refunded_fee,
         }
+    }
+
+    fn settled_lease_for_account(account: &AccountId, ordinal: u16) -> VpnLeaseRecordV1 {
+        let mut lease_id = [0_u8; 32];
+        lease_id[..2].copy_from_slice(&ordinal.to_be_bytes());
+        let mut session = sample_session_record(account);
+        session.session_id = hex::encode(lease_id);
+        session.quote_id = hex::encode(lease_id);
+        session.payment_reference = hex::encode(lease_id);
+        let settled_at_ms = 10_000_u64 + u64::from(ordinal);
+        let relay_receipt = VpnSessionReceiptV1 {
+            session_id: relay_session_id_from_session_id(&session.session_id),
+            quote_id: lease_id,
+            payment_tx_hash: decode_hex_32(&session.payment_tx_hash, "payment").expect("payment"),
+            account_hash: account_hash(account),
+            relay_id: session.relay_id,
+            ingress_bytes: u64::from(ordinal),
+            egress_bytes: u64::from(ordinal),
+            cover_bytes: 0,
+            uptime_secs: 1,
+            started_at_ms: session.connected_at_ms,
+            ended_at_ms: settled_at_ms,
+            exit_class: VpnExitClassV1::Standard,
+            meter_hash: [0x44; 32],
+            earned_fee: Quantity::from(1_u64),
+            highest_voucher_sequence: u64::from(ordinal),
+            client_voucher_hash: [0x55; 32],
+        };
+        lease_record_from_session_record(&session, VpnLeaseStatusV1::Settled, Some(relay_receipt))
     }
 
     #[test]
@@ -3406,6 +3464,89 @@ mod tests {
         assert_eq!(body.items[0].receipt_source, "wsv");
         assert_eq!(body.items[0].status, "settled");
         assert_eq!(body.items[0].earned_fee, Quantity::from(100_u64));
+    }
+
+    #[test]
+    fn list_vpn_receipts_uses_bounded_account_projection() {
+        let account = checked_vpn_account(0x74);
+        let unrelated_account = checked_vpn_account(0x75);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+
+        for ordinal in 1..=30_u16 {
+            app.state
+                .insert_vpn_lease_for_testing(settled_lease_for_account(&account, ordinal));
+        }
+        for ordinal in 100..200_u16 {
+            app.state
+                .insert_vpn_lease_for_testing(settled_lease_for_account(
+                    &unrelated_account,
+                    ordinal,
+                ));
+        }
+
+        let world = app.state.world_view();
+        assert_eq!(
+            world
+                .vpn_settled_leases_by_account()
+                .get(&account)
+                .map(BTreeSet::len),
+            Some(MAX_RECEIPTS_PER_ACCOUNT)
+        );
+        assert_eq!(
+            world
+                .vpn_settled_leases_by_account()
+                .get(&unrelated_account)
+                .map(BTreeSet::len),
+            Some(MAX_RECEIPTS_PER_ACCOUNT)
+        );
+        drop(world);
+
+        let receipts = list_receipts_for_account(&app, &account).expect("bounded receipt page");
+        assert_eq!(receipts.len(), MAX_RECEIPTS_PER_ACCOUNT);
+        assert_eq!(receipts[0].disconnected_at_ms, 10_030);
+        assert_eq!(
+            receipts[MAX_RECEIPTS_PER_ACCOUNT - 1].disconnected_at_ms,
+            10_007
+        );
+        assert!(
+            receipts
+                .iter()
+                .all(|receipt| receipt.account_id == account.to_string())
+        );
+    }
+
+    #[test]
+    fn list_vpn_receipts_fails_closed_on_stale_projection() {
+        let account = checked_vpn_account(0x76);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+        app.state
+            .insert_vpn_settled_lease_index_entry_for_testing(account.clone(), 1, [0xA5; 32]);
+
+        let error = list_receipts_for_account(&app, &account)
+            .expect_err("missing indexed lease must fail closed");
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "vpn_state_inconsistent",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn list_vpn_receipts_cannot_reintroduce_a_global_lease_scan() {
+        let source = include_str!("vpn.rs");
+        let start = source
+            .find("fn list_receipts_for_account(")
+            .expect("receipt projection function");
+        let tail = &source[start..];
+        let end = tail
+            .find("fn external_signed_transaction_results(")
+            .expect("receipt projection terminator");
+        let implementation = &tail[..end];
+
+        assert!(implementation.contains("vpn_settled_leases_by_account()"));
+        assert!(!implementation.contains("vpn_leases().iter()"));
     }
 
     #[tokio::test]

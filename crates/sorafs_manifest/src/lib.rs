@@ -255,8 +255,7 @@ pub use governance::{
     SoraFsModerationBallotGovernanceEventValidationError, SoraFsModerationBallotGovernanceTallyV1,
     SoraFsModerationVoteChoiceV1, SoraFsModerationVoteCountsV1, governance_dag_block_cid_v1,
     governance_dag_submission_account_digest_v1, governance_log_node_cid_v1,
-    validate_governance_dag_chain_v1,
-    validate_governance_dag_head_against_chain_v1,
+    validate_governance_dag_chain_v1, validate_governance_dag_head_against_chain_v1,
     validate_governance_dag_head_against_rotatable_chain_v1,
 };
 pub use hedging::signed::{

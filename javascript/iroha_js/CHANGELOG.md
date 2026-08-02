@@ -4,6 +4,14 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Replaced offset pagination on the six Explorer world collections with bounded,
+  opaque seek cursors. Node and browser clients now send `cursor`/`limit`,
+  validate the `{limit,next_cursor,has_more}` continuation contract, and the NFT
+  and RWA async iterators advance only through server-issued cursors.
+- Removed caller-supplied `outputs` from the first-release `Unshield`
+  instruction. JavaScript builders, TypeScript declarations, and both native
+  and pure-JavaScript Norito codecs now use the exact six-field shape and reject
+  stale output-bearing objects and archives without a compatibility fallback.
 - Added a Node-only native authenticated `BlockProofs` verifier. It accepts
   bounded canonical bridge-finality, exact executed-`SignedBlockWire`, and
   proof archives; pins the application-selected chain, height context, and

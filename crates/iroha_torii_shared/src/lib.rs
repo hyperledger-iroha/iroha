@@ -967,6 +967,52 @@ mod tests {
     }
 
     #[test]
+    fn privacy_issuance_error_fixture_matches_authoritative_norito_serializer() {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../fixtures/privacy/bootle_lantern_issuance_client_v1.json"
+        ))
+        .expect("privacy issuance cross-SDK fixture must parse");
+        let rows = fixture
+            .get("errors")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|errors| errors.get("responses"))
+            .and_then(norito::json::Value::as_array)
+            .expect("privacy issuance fixture error rows");
+        let mut checked = 0_usize;
+        let mut mismatches = Vec::new();
+        for row in rows {
+            let status = row
+                .get("status")
+                .and_then(norito::json::Value::as_u64)
+                .expect("privacy issuance fixture status");
+            if status == 406 {
+                continue;
+            }
+            let code = row
+                .get("code")
+                .and_then(norito::json::Value::as_str)
+                .expect("privacy issuance fixture error code");
+            let fixture_hex = row
+                .get("body_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("Norito privacy issuance fixture body_hex");
+            let canonical = norito::to_bytes(&ErrorEnvelope::new(code, code))
+                .expect("authoritative ErrorEnvelope serialization");
+            let canonical_hex = hex::encode(canonical);
+            if fixture_hex != canonical_hex {
+                mismatches.push(format!("status {status}: {canonical_hex}"));
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 7, "every non-406 error row must use Norito");
+        assert!(
+            mismatches.is_empty(),
+            "stale privacy issuance body_hex; replace only with these authoritative serializer outputs:\n{}",
+            mismatches.join("\n"),
+        );
+    }
+
+    #[test]
     fn fee_program_selector_and_quote_response_roundtrip_canonically() {
         let account = AccountId::new(checked_test_keypair(0x24).public_key().clone());
         let program_id = FeeSponsorProgramId::new(

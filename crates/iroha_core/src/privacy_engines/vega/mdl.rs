@@ -63,6 +63,13 @@ impl VegaMdlWitnessV1 {
         issuer_signature: &[u8],
         device_signature: &[u8],
     ) -> Result<Self, VegaMdlError> {
+        // Take ownership of private document material behind zeroizing guards
+        // before the first fallible shape check. Every early return below then
+        // scrubs all moved witness buffers, including fields validated later.
+        let issuer_authentication_sig_structure =
+            Zeroizing::new(issuer_authentication_sig_structure);
+        let mobile_security_object_payload = Zeroizing::new(mobile_security_object_payload);
+        let birth_date_issuer_signed_item = Zeroizing::new(birth_date_issuer_signed_item);
         validate_exact_input_length(
             "issuer_authentication_sig_structure",
             issuer_authentication_sig_structure.len(),
@@ -80,18 +87,49 @@ impl VegaMdlWitnessV1 {
         )?;
         validate_exact_input_length("issuer_signature", issuer_signature.len(), 64)?;
         validate_exact_input_length("device_signature", device_signature.len(), 64)?;
-        let mut issuer_signature_bytes = [0_u8; 64];
+        let mut issuer_signature_bytes = Zeroizing::new([0_u8; 64]);
         issuer_signature_bytes.copy_from_slice(issuer_signature);
-        let mut device_signature_bytes = [0_u8; 64];
+        let mut device_signature_bytes = Zeroizing::new([0_u8; 64]);
         device_signature_bytes.copy_from_slice(device_signature);
+        Self::from_zeroizing_parts(
+            issuer_authentication_sig_structure,
+            mobile_security_object_payload,
+            birth_date_issuer_signed_item,
+            issuer_signature_bytes,
+            device_signature_bytes,
+        )
+    }
+
+    /// Assemble guarded private inputs already represented at fixed signature
+    /// width, revalidating all variable-width document fragments.
+    pub(super) fn from_zeroizing_parts(
+        issuer_authentication_sig_structure: Zeroizing<Vec<u8>>,
+        mobile_security_object_payload: Zeroizing<Vec<u8>>,
+        birth_date_issuer_signed_item: Zeroizing<Vec<u8>>,
+        issuer_signature: Zeroizing<[u8; 64]>,
+        device_signature: Zeroizing<[u8; 64]>,
+    ) -> Result<Self, VegaMdlError> {
+        validate_exact_input_length(
+            "issuer_authentication_sig_structure",
+            issuer_authentication_sig_structure.len(),
+            VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
+        )?;
+        validate_exact_input_length(
+            "mobile_security_object_payload",
+            mobile_security_object_payload.len(),
+            VEGA_MDL_MSO_PAYLOAD_BYTES_V1,
+        )?;
+        validate_exact_input_length(
+            "birth_date_issuer_signed_item",
+            birth_date_issuer_signed_item.len(),
+            VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
+        )?;
         Ok(Self {
-            issuer_authentication_sig_structure: Zeroizing::new(
-                issuer_authentication_sig_structure,
-            ),
-            mobile_security_object_payload: Zeroizing::new(mobile_security_object_payload),
-            birth_date_issuer_signed_item: Zeroizing::new(birth_date_issuer_signed_item),
-            issuer_signature: Zeroizing::new(issuer_signature_bytes),
-            device_signature: Zeroizing::new(device_signature_bytes),
+            issuer_authentication_sig_structure,
+            mobile_security_object_payload,
+            birth_date_issuer_signed_item,
+            issuer_signature,
+            device_signature,
         })
     }
 }
@@ -887,7 +925,10 @@ mod tests {
     use p256::ecdsa::{SigningKey, signature::hazmat::PrehashSigner};
 
     use super::*;
-    use crate::privacy_engines::vega::{VEGA_MDL_PUBLIC_INPUT_COUNT_V1, verify_mdl_figure9_v1};
+    use crate::privacy_engines::vega::{
+        VEGA_MDL_PUBLIC_INPUT_COUNT_V1, VEGA_PRIVACY_ACTION_INDEX_V1, VegaBindingFieldV1,
+        verify_mdl_figure9_v1,
+    };
 
     const TRUSTED_TIMESTAMP_MS: u64 = 1_785_024_000_000;
 
@@ -998,7 +1039,7 @@ mod tests {
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             chain_id: ChainId::from("taira-vega-test"),
-            action_index: 3,
+            action_index: VEGA_PRIVACY_ACTION_INDEX_V1,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x26; 32]),
             parameter_id: PrivacyParameterIdV1::new([0x21; 32]),
             parameter_digest: PrivacyParameterDigestV1::new([0x22; 32]),
@@ -1266,12 +1307,17 @@ mod tests {
                 .expect("threshold digest"),
             baseline
         );
-        let mut action = statement.clone();
-        action.context.action_index += 1;
-        assert_ne!(
-            derive_device_authentication_digest_v1(&action, &binding(&action))
-                .expect("action digest"),
-            baseline
+        let mut noncanonical_action = statement.clone();
+        noncanonical_action.context.action_index += 1;
+        assert_eq!(
+            derive_device_authentication_digest_v1(
+                &noncanonical_action,
+                &binding(&noncanonical_action)
+            )
+            .expect_err("first-release Vega admits only action index zero"),
+            VegaMdlError::BindingMismatch {
+                field: VegaBindingFieldV1::ActionIndex,
+            }
         );
         let mut intent = statement.clone();
         intent.context.transaction_intent_digest =

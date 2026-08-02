@@ -61,12 +61,7 @@ enum RouteCheckMethod {
 
 const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
     ("status", RouteCheckMethod::Get, "/status", &[200]),
-    (
-        "time_now",
-        RouteCheckMethod::Get,
-        "/v1/time/now",
-        &[200],
-    ),
+    ("time_now", RouteCheckMethod::Get, "/v1/time/now", &[200]),
     (
         "sumeragi_status",
         RouteCheckMethod::Get,
@@ -230,9 +225,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         let url = join_url(&public_root, path)?;
         let (method, body) = match method {
             RouteCheckMethod::Get => (reqwest::Method::GET, None),
-            RouteCheckMethod::PostEmptyObject => {
-                (reqwest::Method::POST, Some(&empty_object))
-            }
+            RouteCheckMethod::PostEmptyObject => (reqwest::Method::POST, Some(&empty_object)),
         };
         let result = http_json(&http, method, url.as_str(), body)?;
         let status_ok = expected_statuses.contains(&result.status);
@@ -2859,9 +2852,13 @@ mod tests {
 
     #[test]
     fn faucet_challenge_matches_python_fixture_shape() {
-        let challenge =
-            build_faucet_challenge("testu1example", 7, &"11".repeat(32), Some(&"22".repeat(32)))
-                .expect("challenge");
+        let challenge = build_faucet_challenge(
+            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            7,
+            &"11".repeat(32),
+            Some(&"22".repeat(32)),
+        )
+        .expect("challenge");
         assert_eq!(challenge.len(), 32);
         assert_ne!(challenge, [0_u8; 32]);
     }
@@ -2871,11 +2868,15 @@ mod tests {
         let puzzle = norito::json!({
             "difficulty_bits": 0,
         });
-        let body = solve_faucet_puzzle("testu1example", &puzzle).expect("claim body");
+        let body = solve_faucet_puzzle(
+            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            &puzzle,
+        )
+        .expect("claim body");
         let body = body.as_object().expect("object");
         assert_eq!(
             body.get("account_id").and_then(Value::as_str),
-            Some("testu1example")
+            Some("testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         );
         assert!(!body.contains_key("pow_nonce_hex"));
     }

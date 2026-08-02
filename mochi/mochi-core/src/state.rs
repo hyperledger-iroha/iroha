@@ -15,10 +15,7 @@ use iroha_data_model::query::{
 use iroha_data_model::{
     HasMetadata, Identifiable,
     account::{Account, AccountId},
-    asset::{
-        AssetId, alias::AssetDefinitionAlias, definition::AssetDefinition, id::AssetDefinitionId,
-        value::Asset,
-    },
+    asset::{AssetId, definition::AssetDefinition, id::AssetDefinitionId, value::Asset},
     domain::{Domain, DomainId},
     metadata::Metadata,
     peer::PeerId,
@@ -249,7 +246,7 @@ impl StateEntry {
         let owner = asset_id.account().clone();
         let owner_str = owner.to_string();
         let owner_lower = owner_str.to_ascii_lowercase();
-        let domain = asset_definition_domain_hint(asset_id.definition(), None);
+        let domain = None;
         let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
@@ -307,7 +304,7 @@ impl StateEntry {
         let owner = asset_id.account().clone();
         let owner_str = owner.to_string();
         let owner_lower = owner_str.to_ascii_lowercase();
-        let domain = asset_definition_domain_hint(asset_id.definition(), None);
+        let domain = None;
         let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
@@ -347,7 +344,7 @@ impl StateEntry {
 
     fn from_asset_definition(definition: AssetDefinition) -> Self {
         let definition_id = definition.id().clone();
-        let domain = asset_definition_domain_hint(&definition_id, definition.alias().as_ref());
+        let domain = asset_definition_domain_hint(definition.owning_domain().as_ref());
         let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let owner = definition.owned_by().to_string();
         let owner_lower = owner.to_ascii_lowercase();
@@ -403,7 +400,7 @@ impl StateEntry {
     }
 
     fn from_asset_definition_id(id: AssetDefinitionId) -> Self {
-        let domain = asset_definition_domain_hint(&id, None);
+        let domain = None;
         let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = id.to_string();
         let definition_lower = definition.to_ascii_lowercase();
@@ -564,19 +561,8 @@ fn metadata_summary(metadata: &Metadata) -> String {
     }
 }
 
-fn asset_definition_domain_hint(
-    id: &AssetDefinitionId,
-    alias: Option<&AssetDefinitionAlias>,
-) -> Option<String> {
-    id.try_domain()
-        .map(ToString::to_string)
-        .or_else(|| alias.and_then(asset_alias_domain_hint))
-}
-
-fn asset_alias_domain_hint(alias: &AssetDefinitionAlias) -> Option<String> {
-    alias
-        .domain_segment()
-        .map(|domain| format!("{domain}.{}", alias.dataspace_segment()))
+fn asset_definition_domain_hint(owning_domain: Option<&DomainId>) -> Option<String> {
+    owning_domain.map(ToString::to_string)
 }
 
 fn encode_json<T: json::JsonSerialize>(value: &T) -> (Option<String>, Option<Vec<u8>>) {
@@ -1031,8 +1017,14 @@ mod tests {
         let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
             .parse()
             .expect("definition id");
-        let definition =
-            AssetDefinition::new(definition_id, NumericSpec::default()).build(&ALICE_ID);
+        let definition = AssetDefinition::new(
+            definition_id,
+            "asset".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let entry = StateEntry::from_asset_definition(definition);
         assert!(
             entry.domain.is_none(),

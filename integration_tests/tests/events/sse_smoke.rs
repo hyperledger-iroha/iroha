@@ -89,7 +89,7 @@ fn sse_smoke_scenarios() -> Result<()> {
 
         let trigger_id: TriggerId = "sse_smoke_trigger_exec".parse()?;
         let asset_id = AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "rose".parse()?,
             ),

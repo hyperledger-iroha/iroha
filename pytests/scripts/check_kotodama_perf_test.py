@@ -818,6 +818,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         representative_job = workflow.split(
             "  representative-regression:\n", 1
         )[1]
+        self.assertIn('      CARGO_BUILD_JOBS: "1"', representative_job)
         self.assertIn('      RUSTUP_TOOLCHAIN: "1.93.1"', representative_job)
 
         comparison_marker = "      - name: Check out comparison base\n"
@@ -920,11 +921,12 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "\n      - name:", 1
         )[0]
         self.assertIn(
-            "cargo bench --locked -p ivm --bench bench_kotodama", base_step
+            "cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama",
+            base_step,
         )
         self.assertTrue(
             all(
-                line.strip().startswith("cargo bench --locked ")
+                line.strip().startswith("cargo bench --locked --jobs 1 ")
                 for line in base_step.splitlines()
                 if line.strip().startswith("cargo bench ")
             )
@@ -941,7 +943,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )[0]
         self.assertTrue(
             all(
-                line.strip().startswith("cargo bench --locked ")
+                line.strip().startswith("cargo bench --locked --jobs 1 ")
                 for line in candidate_step.splitlines()
                 if line.strip().startswith("cargo bench ")
             )

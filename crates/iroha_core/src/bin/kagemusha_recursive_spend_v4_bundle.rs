@@ -19,12 +19,15 @@ use std::{
 
 use iroha_core::zk::kagemusha_artifact_v4::{
     KagemushaValidatedArtifactPayloadV4, read_kagemusha_pasta_cycle_artifact_v4,
+    read_kagemusha_pasta_cycle_candidate_artifact_v4,
     write_kagemusha_pasta_cycle_artifact_from_reader_v4, write_kagemusha_pasta_cycle_artifact_v4,
 };
 use iroha_core::zk::kagemusha_v2::{
-    KagemushaGenerationSupervisorPermitV4, claim_kagemusha_generation_supervisor_permit_v4,
-    generate_kagemusha_pasta_cycle_artifacts_v4, validate_kagemusha_proof_pair_measurement_v4,
-    validate_kagemusha_step_bootstrap_payload_v4,
+    KagemushaGenerationMemoryGuardV4, KagemushaQualificationMemoryContractV4,
+    generate_candidate_recursive_step_two_receipt_v4, generate_kagemusha_pasta_cycle_artifacts_v4,
+    kagemusha_generation_memory_capacity_v1, start_kagemusha_generation_memory_guard_v4,
+    validate_kagemusha_proof_pair_measurement_v4, validate_kagemusha_step_bootstrap_payload_v4,
+    verify_candidate_recursive_step_two_receipt_v4,
 };
 use iroha_data_model::{
     ChainId,
@@ -50,6 +53,8 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
@@ -72,10 +77,10 @@ use iroha_data_model::{
         KagemushaPastaCycleFramedArtifactHeaderV4, KagemushaPastaCycleParityV1,
         KagemushaPastaCycleProofProfileV4, KagemushaRecursiveSpendArtifactManifestV4,
         KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
-        KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseAttestationV4,
-        KagemushaRecursiveSpendReleasePolicyV1, KagemushaReviewedSourceClosureV1,
-        KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactReferenceV4,
-        KagemushaTopUpFinalityRosterArtifactV2,
+        KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendQualificationReceiptV4,
+        KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
+        KagemushaReviewedSourceClosureV1, KagemushaStepCircuitParamsV4,
+        KagemushaTopUpFinalityRosterArtifactReferenceV4, KagemushaTopUpFinalityRosterArtifactV2,
     },
 };
 use norito::{JsonDeserialize, JsonSerialize};
@@ -85,6 +90,8 @@ const HELP: &str = "\
 Generate an unsigned ABI-21 candidate, then finalize those exact bytes after approval.
 
 Usage:
+  <binary_path-from-sealed-kagemusha-candidate-build.json> memory-capacity-v1
+
   python3 scripts/build_kagemusha_v4_candidate_bundle.py \\
     > sealed-kagemusha-candidate-build.json
   python3 scripts/run_kagemusha_v4_generation.py \\
@@ -130,16 +137,28 @@ and reviewed source closure, rechecks every staged
 inode/size/hash, and copies those exact bytes without keygen or proof generation.
 Both output directories must be new.
 
-The generate-candidate command is intentionally available only through
-scripts/run_kagemusha_v4_generation.py, which owns the host-global lock,
-process group, physical-memory ceiling, per-run staging identity, cleanup, and
-resource report. If generation is terminated, the launcher removes only the
-owner-private staging directory carrying that invocation's unguessable id.
-Build the source-sealed release binary with the helper before entering that
-64 GiB / half-physical-RAM guard: wrapping `cargo run` would include the compiler
-in the guarded process group. The finalize-release and validate-candidate
-commands do not require the generation guard.
+The source-sealed binary always starts its own fail-closed physical-footprint
+monitor before generation, qualification verification, validation, or
+finalization. Its ceiling is min(64 GiB, physical RAM / 2); the optional
+--memory-limit-bytes argument can only lower that ceiling and is bound into the
+candidate. The launcher additionally owns the host-global lock, process group,
+per-run staging identity, cleanup, descendant monitoring, and resource report.
+If generation is terminated, it removes only its owner-private staging
+directory. Build the binary before entering the external process-group guard:
+wrapping `cargo run` would include the compiler in that group.
+Every command that renames a staging directory to its final leaf emits one
+`iroha.kagemusha.publication_outcome.v1` record. A durable parent sync reports
+`committed` and exits zero; a post-rename parent-sync failure reports
+`commit-uncertain` and exits 75, so operators must retain the journal and treat
+the visible final leaf as fail-stop state rather than retrying blindly.
+The read-only `memory-capacity-v1` operation emits the exact container-aware
+physical capacity, safety ceiling, absolute maximum, enforcement profile, and
+policy used by the in-process guard. It does not start a monitor or allocate
+candidate material.
 ";
+
+const OPTIONAL_MEMORY_LIMIT_OPTION: &str = "memory-limit-bytes";
+const MEMORY_CAPACITY_OPTIONS: &[&str] = &[];
 
 const GENERATE_OPTIONS: &[&str] = &[
     "out-dir",
@@ -156,6 +175,7 @@ const GENERATE_OPTIONS: &[&str] = &[
     "source-tree-sha256",
     "activation-height",
     "withdrawal-height",
+    OPTIONAL_MEMORY_LIMIT_OPTION,
     "step-eq-circuit-params",
     "step-ep-circuit-params",
     "topup-finality-roster",
@@ -168,6 +188,7 @@ const FINALIZE_OPTIONS: &[&str] = &[
     "release-attestation",
     "benchmark-evidence",
     "cryptographic-review",
+    OPTIONAL_MEMORY_LIMIT_OPTION,
 ];
 
 const PUBLISH_STAGED_CANDIDATE_OPTIONS: &[&str] = &[
@@ -177,9 +198,11 @@ const PUBLISH_STAGED_CANDIDATE_OPTIONS: &[&str] = &[
     "output-parent-fd",
     "source-commit",
     "source-tree-sha256",
+    OPTIONAL_MEMORY_LIMIT_OPTION,
 ];
 
-const VALIDATE_CANDIDATE_OPTIONS: &[&str] = &["candidate-dir", "out-dir"];
+const VALIDATE_CANDIDATE_OPTIONS: &[&str] =
+    &["candidate-dir", "out-dir", OPTIONAL_MEMORY_LIMIT_OPTION];
 
 const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
 const MANIFEST_NORITO_FILE_NAME: &str = "manifest.norito";
@@ -188,10 +211,12 @@ const CANDIDATE_MANIFEST_JSON_FILE_NAME: &str = "candidate-manifest.json";
 const CANDIDATE_MANIFEST_NORITO_FILE_NAME: &str = "candidate-manifest.norito";
 const CANDIDATE_MANIFEST_SHA256_FILE_NAME: &str = "candidate-manifest.norito.sha256";
 const PROMOTION_RECORD_FILE_NAME_V4: &str = "promotion-record-v4.norito";
-const CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1: &str = "candidate-validation-v1.json";
+const CANDIDATE_VALIDATION_REPORT_FILE_NAME_V2: &str = "candidate-validation-v2.json";
 const CANDIDATE_VALIDATION_MANIFEST_FILE_NAME_V4: &str = "manifest-v4.norito";
-const CANDIDATE_VALIDATION_REPORT_SCHEMA_V1: &str =
-    "iroha.kagemusha.recursive_spend.candidate_validation.v1";
+const CANDIDATE_VALIDATION_REPORT_SCHEMA_V2: &str =
+    "iroha.kagemusha.recursive_spend.candidate_validation.v2";
+const PUBLICATION_OUTCOME_SCHEMA_V1: &str = "iroha.kagemusha.publication_outcome.v1";
+const PUBLICATION_COMMIT_UNCERTAIN_EXIT_CODE: u8 = 75;
 const MAX_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_ATTESTATION_BYTES: u64 = 1024 * 1024;
@@ -437,6 +462,8 @@ struct BundleMetadata {
     source_tree_sha256: [u8; 32],
     reviewed_source_closure: KagemushaReviewedSourceClosureV1,
     reviewed_source_closure_descriptor_sha256: [u8; 32],
+    generation_memory_limit_bytes: u64,
+    generation_memory_enforcement_profile: String,
     activation_height: u64,
     withdrawal_height: u64,
     max_proof_bytes: u32,
@@ -581,14 +608,19 @@ struct CandidateValidationArtifactV1 {
 }
 
 #[derive(Debug, JsonSerialize)]
-struct CandidateValidationReportV1 {
+struct CandidateValidationReportV2 {
     schema: String,
     candidate_record_sha256: String,
     candidate_manifest_sha256: String,
+    qualification_receipt_file_name: String,
+    qualification_receipt_sha256: String,
+    qualified_candidate_sha256: String,
     source_commit: String,
     source_tree_sha256: String,
     source_repo_dirty: bool,
     reviewed_source_closure_descriptor_sha256: String,
+    generation_memory_limit_bytes: u64,
+    generation_memory_enforcement_profile: String,
     generation: String,
     bridge_abi_version: u32,
     artifact_count: u32,
@@ -608,7 +640,72 @@ struct FullSourceTreeIdentityV1 {
     reviewed_source_closure_descriptor_sha256: String,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[derive(Debug)]
+enum PublicationCommitOutcomeV1 {
+    Committed {
+        final_path: PathBuf,
+    },
+    CommitUncertain {
+        final_path: PathBuf,
+        parent_sync_error: String,
+    },
+}
+
+impl PublicationCommitOutcomeV1 {
+    fn emit(self) -> std::process::ExitCode {
+        let (status, final_path, parent_directory_durable, parent_sync_error) = match self {
+            Self::Committed { final_path } => ("committed", final_path, true, None),
+            Self::CommitUncertain {
+                final_path,
+                parent_sync_error,
+            } => (
+                "commit-uncertain",
+                final_path,
+                false,
+                Some(parent_sync_error),
+            ),
+        };
+        #[cfg(unix)]
+        let final_path_hex = {
+            use std::os::unix::ffi::OsStrExt as _;
+            hex::encode(final_path.as_os_str().as_bytes())
+        };
+        #[cfg(not(unix))]
+        let final_path_hex = hex::encode(final_path.to_string_lossy().as_bytes());
+        let error_hex = parent_sync_error
+            .as_deref()
+            .map_or_else(|| "-".to_owned(), |error| hex::encode(error.as_bytes()));
+        let record = format!(
+            "{PUBLICATION_OUTCOME_SCHEMA_V1} status={status} final_path_encoding=bytes-hex final_path_hex={final_path_hex} parent_directory_durable={} parent_sync_error_utf8_hex={error_hex}",
+            u8::from(parent_directory_durable),
+        );
+        if parent_directory_durable {
+            println!("{record}");
+            std::process::ExitCode::SUCCESS
+        } else {
+            eprintln!("{record}");
+            std::process::ExitCode::from(PUBLICATION_COMMIT_UNCERTAIN_EXIT_CODE)
+        }
+    }
+}
+
+enum CommandOutcomeV1 {
+    Completed,
+    Publication(PublicationCommitOutcomeV1),
+}
+
+fn main() -> std::process::ExitCode {
+    match run_main() {
+        Ok(CommandOutcomeV1::Completed) => std::process::ExitCode::SUCCESS,
+        Ok(CommandOutcomeV1::Publication(outcome)) => outcome.emit(),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_main() -> Result<CommandOutcomeV1, Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
     let Some(command) = arguments.next() else {
         return Err(format!("missing command\n\n{HELP}").into());
@@ -618,9 +715,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err("--help must be the only argument".into());
         }
         print!("{HELP}");
-        return Ok(());
+        return Ok(CommandOutcomeV1::Completed);
     }
     let required_options = match command.as_str() {
+        "memory-capacity-v1" => MEMORY_CAPACITY_OPTIONS,
         "generate-candidate" => GENERATE_OPTIONS,
         "publish-staged-candidate" => PUBLISH_STAGED_CANDIDATE_OPTIONS,
         "finalize-release" => FINALIZE_OPTIONS,
@@ -630,22 +728,37 @@ fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_options(arguments, required_options)?;
     if options.contains_key("help") {
         print!("{HELP}");
-        return Ok(());
+        return Ok(CommandOutcomeV1::Completed);
     }
     for option in required_options {
-        if !options.contains_key(*option) {
+        if *option != OPTIONAL_MEMORY_LIMIT_OPTION && !options.contains_key(*option) {
             return Err(format!("missing required option --{option}\n\n{HELP}").into());
         }
     }
+    if command == "memory-capacity-v1" {
+        println!(
+            "{}",
+            kagemusha_generation_memory_capacity_v1()?.canonical_record()
+        );
+        return Ok(CommandOutcomeV1::Completed);
+    }
+    let requested_memory_limit_bytes =
+        parse_optional_nonzero_u64(&options, OPTIONAL_MEMORY_LIMIT_OPTION)?;
+    let memory_guard = start_kagemusha_generation_memory_guard_v4(requested_memory_limit_bytes)?;
     match command.as_str() {
         "generate-candidate" => {
-            build_candidate(&options, claim_kagemusha_generation_supervisor_permit_v4()?)
+            build_candidate(&options, memory_guard)?;
+            Ok(CommandOutcomeV1::Completed)
         }
         "publish-staged-candidate" => {
-            publish_staged_candidate(&options, claim_kagemusha_generation_supervisor_permit_v4()?)
+            publish_staged_candidate(&options, memory_guard).map(CommandOutcomeV1::Publication)
         }
-        "finalize-release" => finalize_release(&options),
-        "validate-candidate" => validate_candidate(&options),
+        "finalize-release" => {
+            finalize_release(&options, memory_guard).map(CommandOutcomeV1::Publication)
+        }
+        "validate-candidate" => {
+            validate_candidate(&options, memory_guard).map(CommandOutcomeV1::Publication)
+        }
         _ => unreachable!("command was checked above"),
     }
 }
@@ -776,6 +889,25 @@ fn parse_u64(options: &BTreeMap<String, String>, name: &str) -> Result<u64, Box<
         .map_err(|error| format!("--{name} must fit u64: {error}").into())
 }
 
+fn parse_optional_nonzero_u64(
+    options: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<Option<u64>, Box<dyn Error>> {
+    let Some(value) = options.get(name) else {
+        return Ok(None);
+    };
+    if !canonical_unsigned_decimal(value) {
+        return Err(format!("--{name} must be a canonical unsigned decimal").into());
+    }
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|error| format!("--{name} must fit u64: {error}"))?;
+    if parsed == 0 {
+        return Err(format!("--{name} must be nonzero").into());
+    }
+    Ok(Some(parsed))
+}
+
 fn parse_digest(
     options: &BTreeMap<String, String>,
     name: &str,
@@ -903,7 +1035,7 @@ fn prepare_bundle_metadata(
     source_identity: &FullSourceTreeIdentityV1,
     vesta_params_input: &mut OpenedInput,
     pallas_params_input: &mut OpenedInput,
-    supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
     vesta_proving_key_output: &mut (dyn Write + Send),
     pallas_proving_key_output: &mut (dyn Write + Send),
 ) -> Result<PreparedBundle, Box<dyn Error>> {
@@ -956,6 +1088,9 @@ fn prepare_bundle_metadata(
     if activation_height == 0 || withdrawal_height <= activation_height {
         return Err("release heights must define a non-empty, nonzero activation window".into());
     }
+    let generation_memory_limit_bytes = memory_guard.effective_memory_limit_bytes();
+    let generation_memory_enforcement_profile =
+        memory_guard.memory_enforcement_profile().to_owned();
 
     let requested_vesta_params =
         decode_canonical_circuit_params(vesta_params_input, "--step-eq-circuit-params")?;
@@ -964,7 +1099,7 @@ fn prepare_bundle_metadata(
     let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
         requested_vesta_params,
         requested_pallas_params,
-        supervisor_permit,
+        memory_guard,
         vesta_proving_key_output,
         pallas_proving_key_output,
     )
@@ -1082,6 +1217,8 @@ fn prepare_bundle_metadata(
             source_tree_sha256: parse_digest(options, "source-tree-sha256")?,
             reviewed_source_closure: source_identity.reviewed_source_closure.clone(),
             reviewed_source_closure_descriptor_sha256,
+            generation_memory_limit_bytes,
+            generation_memory_enforcement_profile,
             activation_height,
             withdrawal_height,
             max_proof_bytes,
@@ -1510,6 +1647,39 @@ fn validate_current_manifest_source(
     Ok(())
 }
 
+fn generation_memory_binding_is_exact_v4(
+    manifest_memory_limit_bytes: u64,
+    manifest_memory_enforcement_profile: &str,
+    expected_memory_limit_bytes: u64,
+    expected_memory_enforcement_profile: &str,
+) -> bool {
+    manifest_memory_limit_bytes == expected_memory_limit_bytes
+        && manifest_memory_enforcement_profile == expected_memory_enforcement_profile
+}
+
+fn validate_generation_memory_binding_v4(
+    manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    expected_memory_limit_bytes: u64,
+    expected_memory_enforcement_profile: &str,
+) -> Result<(), Box<dyn Error>> {
+    if !generation_memory_binding_is_exact_v4(
+        manifest.generation_memory_limit_bytes,
+        &manifest.generation_memory_enforcement_profile,
+        expected_memory_limit_bytes,
+        expected_memory_enforcement_profile,
+    ) {
+        return Err(format!(
+            "candidate memory-enforcement contract differs from the active in-process guard: manifest={} bytes/{}, active={} bytes/{}",
+            manifest.generation_memory_limit_bytes,
+            manifest.generation_memory_enforcement_profile,
+            expected_memory_limit_bytes,
+            expected_memory_enforcement_profile,
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn validate_embedded_candidate_source(
     expected_commit: &str,
     expected_tree_sha256: [u8; 32],
@@ -1560,7 +1730,7 @@ fn validate_embedded_candidate_source(
 )]
 fn build_candidate(
     options: &BTreeMap<String, String>,
-    supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Result<(), Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err(
@@ -1625,7 +1795,7 @@ fn build_candidate(
             &source_identity,
             &mut vesta_params_input,
             &mut pallas_params_input,
-            supervisor_permit,
+            &memory_guard,
             &mut vesta_proving_key_output,
             &mut pallas_proving_key_output,
         )?;
@@ -1673,6 +1843,9 @@ fn build_candidate(
         {
             return Err("top-up finality roster aliases a cryptographic artifact digest".into());
         }
+        let expected_memory_limit_bytes = metadata.generation_memory_limit_bytes;
+        let expected_memory_enforcement_profile =
+            metadata.generation_memory_enforcement_profile.clone();
 
         if let Err(error) = write_candidate(
             &publication,
@@ -1692,6 +1865,48 @@ fn build_candidate(
             &publication,
             required(options, "source-commit"),
             expected_tree,
+            expected_memory_limit_bytes,
+            &expected_memory_enforcement_profile,
+            false,
+        )?;
+        let qualification_receipt =
+            generate_staged_candidate_recursive_step_two_receipt_v4(&publication, &memory_guard)?;
+        let qualification_receipt_bytes = canonical_norito_bytes(
+            &qualification_receipt,
+            "V4 actual-recursion qualification receipt",
+        )?;
+        publication.write_atomic_exact_file(
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+            &qualification_receipt_bytes,
+        )?;
+        publication.verify_exact_file(
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+            &qualification_receipt_bytes,
+            u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4)?,
+        )?;
+        // The qualification pass reparses large PK/VK material through pinned
+        // handles. Recheck the complete staged inventory afterward before any
+        // durability or supervisor-owned publication step can begin.
+        verify_staged_candidate_for_publication(
+            &publication,
+            required(options, "source-commit"),
+            expected_tree,
+            expected_memory_limit_bytes,
+            &expected_memory_enforcement_profile,
+            true,
+        )?;
+        let verified_receipt =
+            verify_staged_candidate_recursive_step_two_receipt_v4(&publication, &memory_guard)?;
+        if verified_receipt != qualification_receipt {
+            return Err("stored V4 qualification receipt changed after atomic publication".into());
+        }
+        verify_staged_candidate_for_publication(
+            &publication,
+            required(options, "source-commit"),
+            expected_tree,
+            expected_memory_limit_bytes,
+            &expected_memory_enforcement_profile,
+            true,
         )?;
         publication.sync()?;
         validate_current_source(required(options, "source-commit"), expected_tree)?;
@@ -1705,8 +1920,8 @@ fn build_candidate(
 
 fn publish_staged_candidate(
     options: &BTreeMap<String, String>,
-    _supervisor_permit: KagemushaGenerationSupervisorPermitV4,
-) -> Result<(), Box<dyn Error>> {
+    memory_guard: KagemushaGenerationMemoryGuardV4,
+) -> Result<PublicationCommitOutcomeV1, Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err(
         "Kagemusha V4 bundle publication requires Linux, Android, or macOS atomic directory publication"
@@ -1715,6 +1930,8 @@ fn publish_staged_candidate(
 
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
+        let expected_memory_limit_bytes = memory_guard.effective_memory_limit_bytes();
+        let expected_memory_enforcement_profile = memory_guard.memory_enforcement_profile();
         let expected_tree = parse_digest(options, "source-tree-sha256")?;
         validate_current_source(required(options, "source-commit"), expected_tree)?;
         validate_embedded_candidate_source(
@@ -1748,7 +1965,12 @@ fn publish_staged_candidate(
             &publication,
             required(options, "source-commit"),
             expected_tree,
+            expected_memory_limit_bytes,
+            expected_memory_enforcement_profile,
+            true,
         )?;
+        verify_staged_candidate_recursive_step_two_receipt_v4(&publication, &memory_guard)?;
+        validate_current_source(required(options, "source-commit"), expected_tree)?;
         trusted_parent.publish_presynced(std::ffi::OsStr::new(staging_name), &publication)
     }
 }
@@ -1777,8 +1999,15 @@ fn verify_staged_candidate_for_publication(
     candidate: &PublicationDirectory,
     expected_commit: &str,
     expected_tree_sha256: [u8; 32],
+    expected_memory_limit_bytes: u64,
+    expected_memory_enforcement_profile: &str,
+    qualification_receipt_required: bool,
 ) -> Result<(), Box<dyn Error>> {
-    candidate.verify_candidate_inventory()?;
+    if qualification_receipt_required {
+        candidate.verify_candidate_inventory()?;
+    } else {
+        candidate.verify_unqualified_candidate_inventory()?;
+    }
     let mut tracked_metadata = Vec::new();
     let mut candidate_input = candidate.open_bound_input(
         CANDIDATE_MANIFEST_NORITO_FILE_NAME,
@@ -1792,6 +2021,11 @@ fn verify_staged_candidate_for_publication(
         .validate()
         .map_err(|error| format!("invalid staged V4 candidate record: {error}"))?;
     let manifest = &candidate_record.manifest;
+    validate_generation_memory_binding_v4(
+        manifest,
+        expected_memory_limit_bytes,
+        expected_memory_enforcement_profile,
+    )?;
     let current_source = validate_current_source(expected_commit, expected_tree_sha256)?;
     if manifest.source_commit != expected_commit
         || manifest.source_tree_sha256 != expected_tree_sha256
@@ -1922,8 +2156,208 @@ fn verify_staged_candidate_for_publication(
         input.rehash_and_verify()?;
     }
     roster_input.rehash_and_verify()?;
-    candidate.verify_candidate_inventory()?;
+    if qualification_receipt_required {
+        candidate.verify_candidate_inventory()?;
+    } else {
+        candidate.verify_unqualified_candidate_inventory()?;
+    }
     Ok(())
+}
+
+fn process_staged_candidate_recursive_step_two_v4(
+    publication: &PublicationDirectory,
+    receipt: Option<&KagemushaRecursiveSpendQualificationReceiptV4>,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
+) -> Result<KagemushaRecursiveSpendQualificationReceiptV4, Box<dyn Error>> {
+    let mut candidate_input = publication.open_bound_input(
+        CANDIDATE_MANIFEST_NORITO_FILE_NAME,
+        MAX_MANIFEST_BYTES,
+        "staged V4 candidate record for recursive qualification",
+    )?;
+    let candidate_bytes = candidate_input.read_all()?;
+    let candidate_record: KagemushaRecursiveSpendCandidateV4 = decode_canonical_norito(
+        &candidate_bytes,
+        "staged V4 candidate record for recursive qualification",
+    )?;
+    candidate_record
+        .validate()
+        .map_err(|error| format!("invalid staged V4 candidate record: {error}"))?;
+    let candidate_sha256 = candidate_record
+        .sha256()
+        .map_err(|error| format!("failed to identify staged V4 candidate: {error}"))?;
+    if candidate_sha256 != <[u8; 32]>::from(Sha256::digest(&candidate_bytes)) {
+        return Err("staged V4 candidate record changed before recursive qualification".into());
+    }
+    let manifest_sha256: [u8; 32] =
+        Sha256::digest(norito::encode_canonical(&candidate_record.manifest)?).into();
+    candidate_input.rehash_and_verify()?;
+
+    let descriptor = |parity, kind| -> Result<KagemushaPastaCycleArtifactV4, Box<dyn Error>> {
+        candidate_record
+            .manifest
+            .profiles
+            .iter()
+            .find(|profile| profile.parity == parity)
+            .and_then(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.kind == kind)
+            })
+            .cloned()
+            .ok_or_else(|| "staged V4 candidate recursive qualification role is absent".into())
+    };
+    let step_eq_proving_key = descriptor(
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+    )?;
+    let step_ep_proving_key = descriptor(
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+    )?;
+    let open_proving_key =
+        |descriptor: &KagemushaPastaCycleArtifactV4| -> Result<File, Box<dyn Error>> {
+            publication.verify_candidate_framed_artifact(&candidate_record.manifest, descriptor)?;
+            let input = publication.open_bound_input(
+                &descriptor.file_name,
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
+                "staged V4 recursive qualification proving key",
+            )?;
+            if input.size_bytes != descriptor.size_bytes || input.sha256 != descriptor.sha256 {
+                return Err(format!(
+                    "staged V4 recursive qualification proving key changed: {}",
+                    descriptor.file_name
+                )
+                .into());
+            }
+            Ok(input.file)
+        };
+    let step_eq_proving_key_file = open_proving_key(&step_eq_proving_key)?;
+    let step_ep_proving_key_file = open_proving_key(&step_ep_proving_key)?;
+
+    let mut load = |parity, kind| {
+        if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
+            return Err(
+                "bounded Kagemusha V4 recursive qualification loader requested a proving key"
+                    .to_owned(),
+            );
+        }
+        let descriptor = candidate_record
+            .manifest
+            .profiles
+            .iter()
+            .find(|profile| profile.parity == parity)
+            .and_then(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.kind == kind)
+            })
+            .ok_or_else(|| "staged V4 recursive qualification role is absent".to_owned())?;
+        publication
+            .verify_candidate_framed_artifact(&candidate_record.manifest, descriptor)
+            .map_err(|error| error.to_string())?;
+        let mut input = publication
+            .open_bound_input(
+                &descriptor.file_name,
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
+                "staged V4 recursive qualification artifact",
+            )
+            .map_err(|error| error.to_string())?;
+        if input.size_bytes != descriptor.size_bytes || input.sha256 != descriptor.sha256 {
+            return Err(format!(
+                "staged V4 recursive qualification artifact changed: {}",
+                descriptor.file_name
+            ));
+        }
+        let payload = read_kagemusha_pasta_cycle_candidate_artifact_v4(
+            &mut input.file,
+            &candidate_record,
+            candidate_sha256,
+            manifest_sha256,
+            descriptor,
+        )?;
+        input
+            .rehash_and_verify()
+            .map_err(|error| error.to_string())?;
+        Ok(payload)
+    };
+    let qualified_receipt = match receipt {
+        None => generate_candidate_recursive_step_two_receipt_v4(
+            &candidate_record,
+            candidate_sha256,
+            manifest_sha256,
+            memory_guard,
+            step_eq_proving_key_file,
+            step_ep_proving_key_file,
+            &mut load,
+        ),
+        Some(receipt) => {
+            let qualification_memory_contract =
+                KagemushaQualificationMemoryContractV4::for_operator(memory_guard);
+            let evidence = verify_candidate_recursive_step_two_receipt_v4(
+                &candidate_record,
+                candidate_sha256,
+                manifest_sha256,
+                receipt,
+                &qualification_memory_contract,
+                step_eq_proving_key_file,
+                step_ep_proving_key_file,
+                &mut load,
+            )?;
+            evidence.validate_for_candidate(&candidate_record)?;
+            Ok(receipt.clone())
+        }
+    }
+    .map_err(|error: String| {
+        format!("staged V4 recursive step-two qualification failed: {error}")
+    })?;
+    qualified_receipt
+        .validate_against_candidate(&candidate_record)
+        .map_err(|error| format!("invalid staged V4 qualification receipt: {error}"))?;
+    Ok(qualified_receipt)
+}
+
+fn generate_staged_candidate_recursive_step_two_receipt_v4(
+    publication: &PublicationDirectory,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
+) -> Result<KagemushaRecursiveSpendQualificationReceiptV4, Box<dyn Error>> {
+    process_staged_candidate_recursive_step_two_v4(publication, None, memory_guard)
+}
+
+fn verify_staged_candidate_recursive_step_two_receipt_v4(
+    publication: &PublicationDirectory,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
+) -> Result<KagemushaRecursiveSpendQualificationReceiptV4, Box<dyn Error>> {
+    publication.verify_candidate_inventory()?;
+    let mut candidate_input = publication.open_bound_input(
+        CANDIDATE_MANIFEST_NORITO_FILE_NAME,
+        MAX_MANIFEST_BYTES,
+        "V4 candidate record for qualification receipt",
+    )?;
+    let candidate_bytes = candidate_input.read_all()?;
+    let candidate_record: KagemushaRecursiveSpendCandidateV4 =
+        decode_canonical_norito(&candidate_bytes, "V4 candidate qualification record")?;
+    let mut receipt_input = publication.open_bound_input(
+        KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+        u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4)?,
+        "V4 actual-recursion qualification receipt",
+    )?;
+    let receipt_bytes = receipt_input.read_all()?;
+    let receipt =
+        KagemushaRecursiveSpendQualificationReceiptV4::decode_canonical_against_candidate(
+            &receipt_bytes,
+            &candidate_record,
+        )
+        .map_err(|error| format!("invalid V4 qualification receipt: {error}"))?;
+    candidate_input.rehash_and_verify()?;
+    receipt_input.rehash_and_verify()?;
+    let verified =
+        process_staged_candidate_recursive_step_two_v4(publication, Some(&receipt), memory_guard)?;
+    candidate_input.rehash_and_verify()?;
+    receipt_input.rehash_and_verify()?;
+    publication.verify_candidate_inventory()?;
+    Ok(verified)
 }
 
 #[cfg_attr(
@@ -1933,7 +2367,10 @@ fn verify_staged_candidate_for_publication(
         reason = "candidate validation and its atomically published evidence report form one ordered fail-closed audit"
     )
 )]
-fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+fn validate_candidate(
+    options: &BTreeMap<String, String>,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
+) -> Result<PublicationCommitOutcomeV1, Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err("Kagemusha V4 candidate validation requires Linux, Android, or macOS".into());
 
@@ -1941,6 +2378,8 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
     {
         use std::os::unix::fs::PermissionsExt as _;
 
+        let expected_memory_limit_bytes = memory_guard.effective_memory_limit_bytes();
+        let expected_memory_enforcement_profile = memory_guard.memory_enforcement_profile();
         let candidate =
             PublicationDirectory::open_existing(PathBuf::from(required(options, "candidate-dir")))?;
         candidate.verify_candidate_inventory()?;
@@ -1958,7 +2397,23 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
             .validate()
             .map_err(|error| format!("invalid V4 candidate record: {error}"))?;
         let manifest = &candidate_record.manifest;
+        validate_generation_memory_binding_v4(
+            manifest,
+            expected_memory_limit_bytes,
+            expected_memory_enforcement_profile,
+        )?;
         validate_current_manifest_source(manifest)?;
+        let qualification_receipt =
+            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, &memory_guard)?;
+        qualification_receipt
+            .validate_against_candidate(&candidate_record)
+            .map_err(|error| format!("invalid candidate qualification receipt: {error}"))?;
+        let qualification_receipt_sha256 = qualification_receipt
+            .canonical_sha256_against_candidate(&candidate_record)
+            .map_err(|error| format!("failed to identify qualification receipt: {error}"))?;
+        let qualified_candidate_sha256 = qualification_receipt
+            .qualified_candidate_sha256(&candidate_record)
+            .map_err(|error| format!("failed to identify qualified candidate: {error}"))?;
         tracked_metadata.push(candidate_input);
 
         let candidate_sha256: [u8; 32] = Sha256::digest(&candidate_bytes).into();
@@ -2093,16 +2548,24 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
             );
         }
 
-        let report = CandidateValidationReportV1 {
-            schema: CANDIDATE_VALIDATION_REPORT_SCHEMA_V1.to_owned(),
+        let report = CandidateValidationReportV2 {
+            schema: CANDIDATE_VALIDATION_REPORT_SCHEMA_V2.to_owned(),
             candidate_record_sha256: hex::encode(candidate_sha256),
             candidate_manifest_sha256: hex::encode(manifest_sha256),
+            qualification_receipt_file_name:
+                KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.to_owned(),
+            qualification_receipt_sha256: hex::encode(qualification_receipt_sha256),
+            qualified_candidate_sha256: hex::encode(qualified_candidate_sha256),
             source_commit: manifest.source_commit.clone(),
             source_tree_sha256: hex::encode(manifest.source_tree_sha256),
             source_repo_dirty: manifest.source_repo_dirty,
             reviewed_source_closure_descriptor_sha256: hex::encode(
                 manifest.reviewed_source_closure_descriptor_sha256,
             ),
+            generation_memory_limit_bytes: manifest.generation_memory_limit_bytes,
+            generation_memory_enforcement_profile: manifest
+                .generation_memory_enforcement_profile
+                .clone(),
             generation: manifest.generation.clone(),
             bridge_abi_version: manifest.bridge_abi_version,
             artifact_count: u32::try_from(artifact_report.len())?,
@@ -2158,7 +2621,7 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
         publication
             .write_exact_file(CANDIDATE_VALIDATION_MANIFEST_FILE_NAME_V4, &manifest_bytes)?;
         publication.write_exact_file(
-            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1,
+            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V2,
             report_json.as_bytes(),
         )?;
         publication.verify_exact_file(
@@ -2167,13 +2630,13 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
             MAX_MANIFEST_BYTES,
         )?;
         publication.verify_exact_file(
-            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1,
+            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V2,
             report_json.as_bytes(),
             MAX_MANIFEST_BYTES,
         )?;
         publication.verify_inventory(&BTreeSet::from([
             CANDIDATE_VALIDATION_MANIFEST_FILE_NAME_V4.to_owned(),
-            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1.to_owned(),
+            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V2.to_owned(),
         ]))?;
         publication.sync()?;
         for input in &mut tracked_metadata {
@@ -2185,9 +2648,16 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
         roster_input.rehash_and_verify()?;
         candidate.verify_candidate_inventory()?;
         validate_current_manifest_source(manifest)?;
-        trusted_parent.publish(&staging_name, &publication)?;
+        let final_receipt =
+            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, &memory_guard)?;
+        if final_receipt != qualification_receipt {
+            return Err(
+                "candidate qualification receipt changed before validation publication".into(),
+            );
+        }
+        let outcome = trusted_parent.publish(&staging_name, &publication)?;
         let _published = staging.keep();
-        Ok(())
+        Ok(outcome)
     }
 }
 
@@ -2198,7 +2668,10 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
         reason = "release authentication, byte-for-byte copying, revalidation, and atomic publication form one ordered security ceremony"
     )
 )]
-fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+fn finalize_release(
+    options: &BTreeMap<String, String>,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
+) -> Result<PublicationCommitOutcomeV1, Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err(
         "Kagemusha V4 release finalization requires Linux, Android, or macOS atomic directory publication"
@@ -2209,6 +2682,8 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
     {
         use std::os::unix::fs::PermissionsExt as _;
 
+        let expected_memory_limit_bytes = memory_guard.effective_memory_limit_bytes();
+        let expected_memory_enforcement_profile = memory_guard.memory_enforcement_profile();
         let candidate =
             PublicationDirectory::open_existing(PathBuf::from(required(options, "candidate-dir")))?;
         candidate.verify_candidate_inventory()?;
@@ -2225,7 +2700,24 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
         candidate_record
             .validate()
             .map_err(|error| format!("invalid V4 candidate record: {error}"))?;
+        validate_generation_memory_binding_v4(
+            &candidate_record.manifest,
+            expected_memory_limit_bytes,
+            expected_memory_enforcement_profile,
+        )?;
         validate_current_manifest_source(&candidate_record.manifest)?;
+        let qualification_receipt =
+            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, &memory_guard)?;
+        let qualification_receipt_bytes = canonical_norito_bytes(
+            &qualification_receipt,
+            "V4 actual-recursion qualification receipt",
+        )?;
+        let qualification_receipt_sha256 = qualification_receipt
+            .canonical_sha256_against_candidate(&candidate_record)
+            .map_err(|error| format!("failed to identify V4 qualification receipt: {error}"))?;
+        let qualified_candidate_sha256 = qualification_receipt
+            .qualified_candidate_sha256(&candidate_record)
+            .map_err(|error| format!("failed to identify qualified V4 candidate: {error}"))?;
         let candidate_manifest = candidate_record.manifest.clone();
         tracked_metadata.push(candidate_manifest_input);
 
@@ -2297,6 +2789,8 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
         KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
             &review_bytes,
             &candidate_record,
+            qualification_receipt_sha256,
+            qualified_candidate_sha256,
         )
         .map_err(|error| format!("invalid signed V4 cryptographic review: {error}"))?;
 
@@ -2321,6 +2815,8 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             return Err("V4 benchmark and review evidence must be distinct".into());
         }
         let mut manifest = candidate_manifest.clone();
+        manifest.qualification_receipt_sha256 = qualification_receipt_sha256;
+        manifest.qualified_candidate_sha256 = qualified_candidate_sha256;
         manifest.benchmark_evidence_sha256 = benchmark_evidence_sha256;
         manifest.cryptographic_review_sha256 = cryptographic_review_sha256;
         manifest.release_attestation_sha256 = Sha256::digest(&attestation_bytes).into();
@@ -2342,7 +2838,7 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
         }
 
         let mut headers = BTreeMap::new();
-        let mut staged_inputs = Vec::with_capacity(INPUTS.len() + 1);
+        let mut staged_inputs = Vec::with_capacity(INPUTS.len() + 2);
         for descriptor in manifest
             .profiles
             .iter()
@@ -2383,6 +2879,20 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             return Err("V4 candidate top-up finality roster changed".into());
         }
         staged_inputs.push((roster_descriptor.file_name.clone(), roster_input));
+        let mut qualification_receipt_input = candidate.open_bound_input(
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+            u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4)?,
+            "V4 actual-recursion qualification receipt",
+        )?;
+        if qualification_receipt_input.read_all()? != qualification_receipt_bytes
+            || qualification_receipt_input.sha256 != qualification_receipt_sha256
+        {
+            return Err("V4 qualification receipt changed before finalization".into());
+        }
+        staged_inputs.push((
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.to_owned(),
+            qualification_receipt_input,
+        ));
         candidate.verify_candidate_inventory()?;
 
         let manifest_bytes = canonical_norito_bytes(&manifest, "final V4 manifest")?;
@@ -2554,6 +3064,8 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             candidate_sha256: candidate_record
                 .sha256()
                 .map_err(|error| format!("failed to identify immutable V4 candidate: {error}"))?,
+            qualification_receipt_sha256,
+            qualified_candidate_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),
@@ -2611,9 +3123,15 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
         }
         candidate.verify_candidate_inventory()?;
         validate_current_manifest_source(&candidate_record.manifest)?;
-        trusted_parent.publish(&staging_name, &publication)?;
+        let final_receipt =
+            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, &memory_guard)?;
+        if final_receipt != qualification_receipt {
+            return Err("V4 qualification receipt changed before final release publication".into());
+        }
+        publication.verify_final_inventory()?;
+        let outcome = trusted_parent.publish(&staging_name, &publication)?;
         let _published = staging.keep();
-        Ok(())
+        Ok(outcome)
     }
 }
 
@@ -2720,12 +3238,16 @@ fn write_candidate(
         reviewed_source_closure: metadata.reviewed_source_closure,
         reviewed_source_closure_descriptor_sha256: metadata
             .reviewed_source_closure_descriptor_sha256,
+        generation_memory_limit_bytes: metadata.generation_memory_limit_bytes,
+        generation_memory_enforcement_profile: metadata.generation_memory_enforcement_profile,
         chain_id: metadata.chain_id,
         asset: metadata.asset,
         asset_scale: metadata.asset_scale,
         activation_height: metadata.activation_height,
         withdrawal_height: metadata.withdrawal_height,
         max_proof_bytes: metadata.max_proof_bytes,
+        qualification_receipt_sha256: [0; 32],
+        qualified_candidate_sha256: [0; 32],
         profiles: vec![
             KagemushaPastaCycleProofProfileV4 {
                 parity: metadata.profiles[0].parity,
@@ -3002,7 +3524,7 @@ impl TrustedOutputParent {
         &self,
         staging_name: &std::ffi::OsStr,
         publication: &PublicationDirectory,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<PublicationCommitOutcomeV1, Box<dyn Error>> {
         self.file.sync_all()?;
         self.publish_presynced(staging_name, publication)
     }
@@ -3011,7 +3533,19 @@ impl TrustedOutputParent {
         &self,
         staging_name: &std::ffi::OsStr,
         publication: &PublicationDirectory,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<PublicationCommitOutcomeV1, Box<dyn Error>> {
+        self.publish_presynced_with_parent_sync(staging_name, publication, File::sync_all)
+    }
+
+    fn publish_presynced_with_parent_sync<F>(
+        &self,
+        staging_name: &std::ffi::OsStr,
+        publication: &PublicationDirectory,
+        sync_parent: F,
+    ) -> Result<PublicationCommitOutcomeV1, Box<dyn Error>>
+    where
+        F: FnOnce(&File) -> io::Result<()>,
+    {
         use rustix::fs::FileType as RustixFileType;
 
         publication.verify_identity()?;
@@ -3035,12 +3569,13 @@ impl TrustedOutputParent {
             &self.output_name,
             rustix::fs::RenameFlags::NOREPLACE,
         )?;
-        self.file.sync_all().map_err(|error| {
-            format!(
-                "V4 bundle was promoted as {} but parent durability failed: {error}",
-                self.path.join(&self.output_name).display()
-            )
-            .into()
+        let final_path = self.path.join(&self.output_name);
+        Ok(match sync_parent(&self.file) {
+            Ok(()) => PublicationCommitOutcomeV1::Committed { final_path },
+            Err(error) => PublicationCommitOutcomeV1::CommitUncertain {
+                final_path,
+                parent_sync_error: error.to_string(),
+            },
         })
     }
 }
@@ -3190,6 +3725,24 @@ impl PublicationDirectory {
         let mut file = self.create_file(name)?;
         file.write_all(bytes)?;
         file.sync_all()
+    }
+
+    #[cfg(unix)]
+    fn write_atomic_exact_file(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
+        validate_publication_file_name(name)?;
+        let temporary_name = format!(".{name}.part");
+        let mut temporary = self.create_file(&temporary_name)?;
+        temporary.write_all(bytes)?;
+        temporary.sync_all()?;
+        drop(temporary);
+        rustix::fs::renameat_with(
+            &self.file,
+            temporary_name.as_str(),
+            &self.file,
+            name,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+        self.file.sync_all()
     }
 
     fn open_file(&self, name: &str) -> io::Result<File> {
@@ -3432,8 +3985,16 @@ impl PublicationDirectory {
         Ok(header)
     }
 
+    fn verify_unqualified_candidate_inventory(&self) -> io::Result<()> {
+        self.verify_candidate_inventory_with_receipt(false)
+    }
+
     fn verify_candidate_inventory(&self) -> io::Result<()> {
-        let expected = INPUTS
+        self.verify_candidate_inventory_with_receipt(true)
+    }
+
+    fn verify_candidate_inventory_with_receipt(&self, receipt_required: bool) -> io::Result<()> {
+        let mut expected = INPUTS
             .iter()
             .map(|spec| spec.file_name)
             .chain([
@@ -3444,6 +4005,10 @@ impl PublicationDirectory {
             ])
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
+        if receipt_required {
+            expected
+                .insert(KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.to_owned());
+        }
         self.verify_inventory(&expected)
     }
 
@@ -3459,6 +4024,7 @@ impl PublicationDirectory {
                 KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
                 PROMOTION_RECORD_FILE_NAME_V4,
             ])
             .map(str::to_owned)
@@ -3707,6 +4273,49 @@ mod tests {
     }
 
     #[test]
+    fn post_rename_parent_sync_failure_is_commit_uncertain_not_generic_failure() {
+        let root = tempfile::tempdir().expect("temporary test root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("owner-private test root");
+        let out_dir = root.path().join("published");
+        let trusted_parent = TrustedOutputParent::open(&out_dir).expect("open trusted parent");
+        let staging_name = std::ffi::OsStr::new("staging");
+        let staging_path = root.path().join(staging_name);
+        fs::create_dir(&staging_path).expect("create staging directory");
+        fs::set_permissions(&staging_path, fs::Permissions::from_mode(0o700))
+            .expect("owner-private staging directory");
+        let publication =
+            PublicationDirectory::open_at(&trusted_parent.file, staging_path.clone(), staging_name)
+                .expect("open staging descriptor");
+
+        let outcome = trusted_parent
+            .publish_presynced_with_parent_sync(staging_name, &publication, |_| {
+                Err(io::Error::other("injected post-rename sync failure"))
+            })
+            .expect("rename success is represented as a publication outcome");
+        match outcome {
+            PublicationCommitOutcomeV1::CommitUncertain {
+                final_path,
+                parent_sync_error,
+            } => {
+                assert_eq!(final_path, out_dir);
+                assert!(parent_sync_error.contains("injected post-rename sync failure"));
+            }
+            PublicationCommitOutcomeV1::Committed { .. } => {
+                panic!("injected parent sync failure cannot be reported as committed")
+            }
+        }
+        assert!(
+            out_dir.is_dir(),
+            "the rename already made the final leaf visible"
+        );
+        assert!(
+            !staging_path.exists(),
+            "a commit-uncertain outcome must expose that the staging name was consumed"
+        );
+    }
+
+    #[test]
     fn artifact_inventory_is_exact_eq_then_ep_four_role_order() {
         assert_eq!(INPUTS.len(), 8);
         assert_eq!(
@@ -3932,6 +4541,46 @@ mod tests {
         assert!(canonical_unsigned_decimal("19"));
         assert!(!canonical_unsigned_decimal("01"));
         assert!(!canonical_unsigned_decimal("+1"));
+        let omitted = BTreeMap::new();
+        assert_eq!(
+            parse_optional_nonzero_u64(&omitted, OPTIONAL_MEMORY_LIMIT_OPTION)
+                .expect("omitted memory lowering is valid"),
+            None
+        );
+        let lowered = BTreeMap::from([(
+            OPTIONAL_MEMORY_LIMIT_OPTION.to_owned(),
+            "1073741824".to_owned(),
+        )]);
+        assert_eq!(
+            parse_optional_nonzero_u64(&lowered, OPTIONAL_MEMORY_LIMIT_OPTION)
+                .expect("canonical nonzero lowering is valid"),
+            Some(1_073_741_824)
+        );
+        let zero = BTreeMap::from([(OPTIONAL_MEMORY_LIMIT_OPTION.to_owned(), "0".to_owned())]);
+        assert!(parse_optional_nonzero_u64(&zero, OPTIONAL_MEMORY_LIMIT_OPTION).is_err());
+    }
+
+    #[test]
+    fn active_memory_guard_must_match_the_candidate_contract_exactly() {
+        let profile = "self-physical-footprint-v1";
+        assert!(generation_memory_binding_is_exact_v4(
+            8 * 1024 * 1024 * 1024,
+            profile,
+            8 * 1024 * 1024 * 1024,
+            profile,
+        ));
+        assert!(!generation_memory_binding_is_exact_v4(
+            8 * 1024 * 1024 * 1024,
+            profile,
+            4 * 1024 * 1024 * 1024,
+            profile,
+        ));
+        assert!(!generation_memory_binding_is_exact_v4(
+            8 * 1024 * 1024 * 1024,
+            "substituted-profile",
+            8 * 1024 * 1024 * 1024,
+            profile,
+        ));
     }
 
     #[test]

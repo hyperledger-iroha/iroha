@@ -615,8 +615,7 @@ mod tests {
         let restart_decoded: SumeragiV2Status = norito::json::from_slice(&restart_body)
             .expect("decode restart-required authoritative status");
         assert!(
-            restart_decoded.liveness.no_progress_age_ms
-                >= decoded.liveness.no_progress_age_ms,
+            restart_decoded.liveness.no_progress_age_ms >= decoded.liveness.no_progress_age_ms,
             "read-time liveness age must be monotonic"
         );
         let mut expected_at_restart_read = expected;
@@ -1029,21 +1028,26 @@ mod tests {
             provider: Some(hex::encode(challenge_a.provider_id)),
             epoch: Some(challenge_a.epoch_id),
             status: Some("pending".to_string()),
-            limit: Some(5),
-            page_token: None,
+            limit: 5,
+            max_bytes: POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
+            cursor: None,
         };
-        let statuses = super::handle_get_sorafs_por_status(coordinator.clone(), status_query)
+        let status_page = super::handle_get_sorafs_por_status(coordinator.clone(), status_query)
             .expect("status handler responds");
-        assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].challenge_id, challenge_a.challenge_id);
+        assert_eq!(status_page.statuses.len(), 1);
+        assert_eq!(
+            status_page.statuses[0].challenge_id,
+            challenge_a.challenge_id
+        );
 
         let oversized_status_query = PorStatusQueryDto {
             manifest: None,
             provider: None,
             epoch: None,
             status: None,
-            limit: Some(POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 + 1),
-            page_token: None,
+            limit: POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 + 1,
+            max_bytes: POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
+            cursor: None,
         };
         assert!(
             super::handle_get_sorafs_por_status(coordinator.clone(), oversized_status_query)
@@ -1055,11 +1059,17 @@ mod tests {
             PorExportQueryDto {
                 start_epoch: Some(challenge_a.epoch_id),
                 end_epoch: Some(challenge_a.epoch_id),
+                limit: 5,
+                max_bytes: POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
+                cursor: None,
             },
         )
         .expect("export handler responds");
-        assert_eq!(export.statuses.len(), 1);
-        assert_eq!(export.statuses[0].challenge_id, challenge_a.challenge_id);
+        assert_eq!(export.page.statuses.len(), 1);
+        assert_eq!(
+            export.page.statuses[0].challenge_id,
+            challenge_a.challenge_id
+        );
 
         let invalid_report_response = super::handle_get_sorafs_por_report(
             coordinator.clone(),

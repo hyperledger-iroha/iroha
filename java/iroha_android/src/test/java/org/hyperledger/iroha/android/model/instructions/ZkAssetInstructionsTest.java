@@ -23,7 +23,8 @@ public final class ZkAssetInstructionsTest {
     confidentialEncryptedPayloadMatchesRustWireFixture();
     proofAttachmentValidatesBackendAndJsonShape();
     shieldInstructionValidatesCanonicalFieldsAndCopiesBytes();
-    unshieldInstructionValidatesInputsOutputsAndProof();
+    unshieldInstructionValidatesInputsAndProofWithExactShape();
+    unshieldFromArgumentsRejectsStaleOutputBearingPayload();
     registerZkAssetInstructionValidatesModeAndVerifierIds();
     nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch();
     nativeSignerFeePaymentRejectsInvalidBoundsBeforeNativeDispatch();
@@ -178,9 +179,8 @@ public final class ZkAssetInstructionsTest {
     expectThrows(() -> ShieldInstruction.builder().setNoteCommitment(new byte[32]));
   }
 
-  private static void unshieldInstructionValidatesInputsOutputsAndProof() {
+  private static void unshieldInstructionValidatesInputsAndProofWithExactShape() {
     final byte[] input = fill(0x20, 32);
-    final byte[] output = fill(0x21, 32);
     final byte[] root = fill(0x22, 32);
     final UnshieldInstruction instruction =
         UnshieldInstruction.builder()
@@ -188,21 +188,21 @@ public final class ZkAssetInstructionsTest {
             .setTo("bob")
             .setPublicAmount("0.25")
             .addInput(input)
-            .addOutput(output)
             .setProof(sampleProof())
             .setRootHint(root)
             .build();
     input[0] = 0;
-    output[0] = 0;
     root[0] = 0;
     assert "Unshield".equals(instruction.toArguments().get("action"));
     assert "0.25".equals(instruction.publicAmount());
+    assert Arrays.equals(
+        new String[] {"action", "asset", "to", "public_amount", "inputs", "proof", "root_hint"},
+        instruction.toArguments().keySet().toArray(new String[0]));
+    assert !instruction.toArguments().containsKey("outputs");
     expectThrows(() -> UnshieldInstruction.builder().setPublicAmount("00.25"));
     expectThrows(() -> UnshieldInstruction.builder().setPublicAmount("-0.25"));
     assert instruction.inputs().size() == 1;
-    assert instruction.outputs().size() == 1;
     assert instruction.inputs().get(0)[0] == 0x20;
-    assert instruction.outputs().get(0)[0] == 0x21;
     assert instruction.rootHint()[0] == 0x22;
 
     expectThrows(
@@ -213,8 +213,20 @@ public final class ZkAssetInstructionsTest {
             .setProof(sampleProof())
             .build());
     expectThrows(() -> UnshieldInstruction.builder().addInput(new byte[32]));
-    expectThrows(() -> UnshieldInstruction.builder().addOutput(fill(1, 31)));
     expectThrows(() -> UnshieldInstruction.builder().setRootHint(fill(1, 31)));
+  }
+
+  private static void unshieldFromArgumentsRejectsStaleOutputBearingPayload() {
+    final java.util.LinkedHashMap<String, String> staleArguments = new java.util.LinkedHashMap<>();
+    staleArguments.put("action", "Unshield");
+    staleArguments.put("asset", "rose#wonderland");
+    staleArguments.put("to", "bob");
+    staleArguments.put("public_amount", "1");
+    staleArguments.put("inputs", repeat("20", 32));
+    staleArguments.put("outputs", repeat("21", 32));
+    staleArguments.put("proof", sampleProof().toNativeJson());
+    staleArguments.put("root_hint", "");
+    expectUnsupported(() -> UnshieldInstruction.fromArguments(staleArguments));
   }
 
   private static void registerZkAssetInstructionValidatesModeAndVerifierIds() {
@@ -342,10 +354,10 @@ public final class ZkAssetInstructionsTest {
   private static void nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable()
       throws Exception {
     assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 21;
-    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 1;
+    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 2;
     if (!NativeSignerBridge.isNativeAvailable()) {
       throw new AssertionError(
-          "connect_norito_bridge ABI 21 native-signer contract revision 1 is required");
+          "connect_norito_bridge ABI 21 native-signer contract revision 2 is required");
     }
 
     final byte[] seed = new byte[32];
@@ -490,6 +502,14 @@ public final class ZkAssetInstructionsTest {
     return out;
   }
 
+  private static String repeat(final String value, final int count) {
+    final StringBuilder repeated = new StringBuilder(value.length() * count);
+    for (int i = 0; i < count; i++) {
+      repeated.append(value);
+    }
+    return repeated.toString();
+  }
+
   private static void expectThrows(final Runnable runnable) {
     try {
       runnable.run();
@@ -497,5 +517,14 @@ public final class ZkAssetInstructionsTest {
       return;
     }
     throw new AssertionError("expected exception");
+  }
+
+  private static void expectUnsupported(final Runnable runnable) {
+    try {
+      runnable.run();
+    } catch (final UnsupportedOperationException expected) {
+      return;
+    }
+    throw new AssertionError("expected UnsupportedOperationException");
   }
 }

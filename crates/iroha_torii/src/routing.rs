@@ -179,8 +179,9 @@ pub mod debug_match_flag {
 }
 
 use crate::sorafs::{
-    PorCoordinatorError, PorStatusExportV1, PorStatusFilter, QuotaExceeded, SorafsAction,
-    SorafsQuotaEnforcer,
+    POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorCoordinatorError, PorStatusExportPageV1,
+    PorStatusFilter, PorStatusPageCursor, PorStatusPageLimits, PorStatusPageV1, QuotaExceeded,
+    SorafsAction, SorafsQuotaEnforcer,
 };
 #[cfg(feature = "app_api")]
 use crate::{
@@ -5760,9 +5761,9 @@ pub struct ZkRootsGetRequestDto {
 )]
 /// Response with recent roots and the exact committed state snapshot.
 pub struct ZkRootsGetResponseDto {
-    /// Latest root as hex string (32 bytes, lowercase, 0x‑less)
+    /// Latest or profile-defined empty root as a lowercase, 0x-less hex string.
     pub latest: String,
-    /// Recent roots (0..N), hex strings
+    /// Bounded recent roots, or the sole profile-defined empty root.
     pub roots: Vec<String>,
     /// Committed block height at which the roots were read.
     pub evaluated_block_height: u64,
@@ -5778,7 +5779,7 @@ pub struct ZkRootsGetResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Request for current zk-assets confidential-v2 inclusion paths.
+/// Request for current profiled confidential-tree inclusion paths.
 pub struct ZkMerklePathGetRequestDto {
     /// Asset selector (unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`)
     /// whose shielded pool commitment paths to fetch.
@@ -5795,19 +5796,19 @@ pub struct ZkMerklePathGetRequestDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Inclusion path for one zk-assets confidential-v2 commitment.
+/// Inclusion path for one commitment in a profiled confidential tree.
 pub struct ZkMerklePathDto {
     /// Commitment being proven, encoded as lowercase 32-byte hex.
     pub commitment: String,
     /// Zero-based commitment index in the current frontier.
     pub leaf_index: u32,
-    /// Poseidon sibling nodes, leaf level first, encoded as lowercase 32-byte hex.
+    /// Profile-defined sibling nodes, leaf level first, encoded as lowercase 32-byte hex.
     pub siblings: Vec<String>,
     /// Direction bytes parallel to `siblings`: 0 means current node was left, 1 means right.
     pub directions: Vec<u8>,
     /// Intermediate parent nodes, leaf level first, encoded as lowercase 32-byte hex.
     pub witness_nodes: Vec<String>,
-    /// Current confidential-v2 Merkle root for this path.
+    /// Current profiled confidential-tree root for this path.
     pub root: String,
 }
 
@@ -5819,17 +5820,17 @@ pub struct ZkMerklePathDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Response with current zk-assets confidential-v2 inclusion paths.
+/// Response with current profiled confidential-tree inclusion paths.
 pub struct ZkMerklePathGetResponseDto {
     /// Committed block height at which the frontier and paths were read.
     pub evaluated_block_height: u64,
     /// Canonical lowercase hash of that committed block.
     pub evaluated_block_hash: String,
-    /// Current confidential-v2 Merkle root, encoded as lowercase 32-byte hex.
+    /// Current profiled confidential-tree root, encoded as lowercase 32-byte hex.
     pub root: String,
     /// Number of commitments in the current frontier.
     pub frontier_len: u32,
-    /// Fixed confidential-v2 tree depth.
+    /// Depth authenticated by the asset's persisted tree profile.
     pub tree_depth: u32,
     /// Inclusion path for the next padded zero leaf at `frontier_len`.
     pub next_zero_path: Option<ZkMerklePathDto>,
@@ -5861,6 +5862,10 @@ pub struct ZkVoteGetTallyRequestDto {
 )]
 /// Response with election tally (convenience JSON wrapper).
 pub struct ZkVoteGetTallyResponseDto {
+    /// Height of the committed block whose state supplied this tally.
+    pub evaluated_block_height: u64,
+    /// Canonical lowercase hash of that committed block.
+    pub evaluated_block_hash: String,
     /// True when the election has been finalized on-chain.
     pub finalized: bool,
     /// Public tally counts per option (length equals number of options).
@@ -7462,7 +7467,10 @@ mod sccp_first_release_api_tests {
             );
             let definition = iroha_data_model::asset::AssetDefinition::new(
                 fixture.route.settlement.asset_definition_id.clone(),
+                "xor".to_owned(),
                 spec,
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
             )
             .build(&authority);
             iroha_core::state::World::with(
@@ -9656,6 +9664,28 @@ pub(crate) struct ZkVerifyBatchLimits {
 }
 
 #[cfg(feature = "zk-verify-batch")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ZkVerifyBatchOutcome {
+    Verified,
+    Invalid,
+    Error(&'static str),
+}
+
+#[cfg(feature = "zk-verify-batch")]
+impl ZkVerifyBatchOutcome {
+    fn into_json(self) -> Value {
+        match self {
+            Self::Verified => json_object(vec![json_entry("status", "verified")]),
+            Self::Invalid => json_object(vec![json_entry("status", "invalid")]),
+            Self::Error(code) => json_object(vec![
+                json_entry("status", "error"),
+                json_entry("code", code),
+            ]),
+        }
+    }
+}
+
+#[cfg(feature = "zk-verify-batch")]
 fn verify_batch_limit_rejected(
     reason: &'static str,
     max: usize,
@@ -9678,40 +9708,68 @@ fn verify_batch_limit_rejected(
 }
 
 #[cfg(feature = "zk-verify-batch")]
-fn envelope_allowed_for_diagnostics(
+fn envelope_diagnostic_error(
     env: &iroha_zkp_halo2::OpenVerifyEnvelope,
     encoded_len: usize,
     limits: ZkVerifyBatchLimits,
-) -> bool {
+) -> Option<&'static str> {
     if encoded_len > limits.max_envelope_bytes {
-        return false;
+        return Some("envelope_too_large");
     }
     if limits.enforce_transcript_label_ascii && !env.transcript_label.is_ascii() {
-        return false;
+        return Some("non_ascii_transcript_label");
     }
-    true
+    None
 }
 
 #[cfg(feature = "zk-verify-batch")]
-fn verify_batch_statuses(
+fn verify_batch_outcomes(
     envs: &[iroha_zkp_halo2::OpenVerifyEnvelope],
     encoded_lens: &[usize],
     limits: ZkVerifyBatchLimits,
-) -> Vec<bool> {
+) -> Vec<ZkVerifyBatchOutcome> {
     envs.iter()
         .zip(encoded_lens.iter().copied())
         .map(|(env, encoded_len)| {
-            if !envelope_allowed_for_diagnostics(env, encoded_len, limits) {
-                return false;
+            if let Some(code) = envelope_diagnostic_error(env, encoded_len, limits) {
+                return ZkVerifyBatchOutcome::Error(code);
             }
             let results = iroha_zkp_halo2::batch::verify_open_batch_with_limits(
                 std::slice::from_ref(env),
                 &iroha_zkp_halo2::batch::BatchOptions::default(),
                 limits.open,
             );
-            matches!(results.first(), Some(Ok(true)))
+            match results.first() {
+                Some(Ok(true)) => ZkVerifyBatchOutcome::Verified,
+                Some(Ok(false)) => ZkVerifyBatchOutcome::Invalid,
+                Some(Err(error)) => ZkVerifyBatchOutcome::Error(match error {
+                    iroha_zkp_halo2::Error::EnvelopeLimitExceeded { .. } => {
+                        "verification_limit_exceeded"
+                    }
+                    iroha_zkp_halo2::Error::UnsupportedBackend { .. } => "unsupported_backend",
+                    iroha_zkp_halo2::Error::UnsupportedVersion { .. } => "unsupported_version",
+                    iroha_zkp_halo2::Error::DimensionMismatch { .. }
+                    | iroha_zkp_halo2::Error::InvalidN(_)
+                    | iroha_zkp_halo2::Error::CurveMismatch { .. }
+                    | iroha_zkp_halo2::Error::InvalidProofShape { .. }
+                    | iroha_zkp_halo2::Error::InvalidEncoding => "invalid_envelope",
+                    iroha_zkp_halo2::Error::InversionOfZero
+                    | iroha_zkp_halo2::Error::VerificationFailed => "verification_error",
+                }),
+                None => ZkVerifyBatchOutcome::Error("verification_error"),
+            }
         })
         .collect()
+}
+
+#[cfg(feature = "zk-verify-batch")]
+fn batch_outcomes_json(outcomes: Vec<ZkVerifyBatchOutcome>) -> Value {
+    Value::Array(
+        outcomes
+            .into_iter()
+            .map(ZkVerifyBatchOutcome::into_json)
+            .collect(),
+    )
 }
 
 #[cfg(feature = "zk-verify-batch")]
@@ -9759,8 +9817,8 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
                 .iter()
                 .map(|env| norito::to_bytes(env).map_or(usize::MAX, |bytes| bytes.len()))
                 .collect();
-            let statuses = verify_batch_statuses(&envs, &encoded_lens, limits);
-            statuses_json = bools_to_json_array(&statuses);
+            let outcomes = verify_batch_outcomes(&envs, &encoded_lens, limits);
+            statuses_json = batch_outcomes_json(outcomes);
             ok = true;
         }
     } else if ct.contains("application/json") {
@@ -9774,28 +9832,30 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
                         arr.len(),
                     );
                 }
-                let statuses: Vec<bool> = arr
+                let outcomes: Vec<ZkVerifyBatchOutcome> = arr
                     .iter()
                     .map(|item| {
                         let Some(s) = item.as_str() else {
-                            return false;
+                            return ZkVerifyBatchOutcome::Error("invalid_entry_type");
                         };
                         let Ok(bytes) =
                             base64::engine::general_purpose::STANDARD.decode(s.as_bytes())
                         else {
-                            return false;
+                            return ZkVerifyBatchOutcome::Error("invalid_base64");
                         };
                         let encoded_len = bytes.len();
                         let Ok(env) = norito::decode_from_bytes::<
                             iroha_zkp_halo2::OpenVerifyEnvelope,
                         >(&bytes) else {
-                            return false;
+                            return ZkVerifyBatchOutcome::Error("invalid_envelope");
                         };
-                        let results = verify_batch_statuses(&[env], &[encoded_len], limits);
-                        results.first().copied().unwrap_or(false)
+                        verify_batch_outcomes(&[env], &[encoded_len], limits)
+                            .into_iter()
+                            .next()
+                            .unwrap_or(ZkVerifyBatchOutcome::Error("verification_error"))
                     })
                     .collect();
-                statuses_json = bools_to_json_array(&statuses);
+                statuses_json = batch_outcomes_json(outcomes);
                 ok = true;
             }
         }
@@ -9807,9 +9867,9 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
 ///
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
 /// Returns recent shielded roots for the requested asset, bounded by the configured
-/// `zk.root_history_cap`. Only assets bound to the canonical confidential-v2
-/// transfer verifier are accepted. A confidential-v2 asset with no shielded
-/// state returns an empty set.
+/// `confidential.tree_roots_history_len`. Tree construction is selected by the profile persisted
+/// with the asset state. An asset with no commitments returns its profile-defined
+/// empty root.
 pub(crate) fn resolve_asset_definition_selector(
     world: &impl WorldReadOnly,
     asset_literal: &str,
@@ -9880,34 +9940,20 @@ fn zk_merkle_not_found() -> Error {
     ))
 }
 
-fn ensure_confidential_v2_asset(
-    world: &impl WorldReadOnly,
+fn validated_confidential_tree_root(
     asset_id: &iroha_data_model::asset::id::AssetDefinitionId,
     st: &iroha_core::state::ZkAssetState,
-    current_root: &[u8; 32],
-) -> Result<()> {
-    let transfer_vk_is_confidential_v2 = st
-        .vk_transfer
-        .as_ref()
-        .and_then(|binding| world.verifying_keys().get(&binding.id))
-        .is_some_and(|record| {
-            iroha_core::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
-                &record.circuit_id,
-            )
-        });
-    if !transfer_vk_is_confidential_v2 {
-        return Err(zk_query_conversion_error(format!(
-            "asset `{asset_id}` does not use the confidential-v2 Merkle tree"
-        )));
-    }
-    if let Some(recorded_root) = st.root_history.last() {
-        if recorded_root != current_root {
-            return Err(zk_query_conversion_error(format!(
-                "asset `{asset_id}` confidential-v2 root history does not match the current commitment frontier"
-            )));
-        }
-    }
-    Ok(())
+) -> Result<[u8; 32]> {
+    st.validate_tree_integrity().map_err(|error| {
+        zk_query_conversion_error(format!(
+            "asset `{asset_id}` confidential tree state is inconsistent with its persisted profile: {error}"
+        ))
+    })?;
+    st.current_root().map_err(|error| {
+        zk_query_conversion_error(format!(
+            "failed to compute current confidential root for asset `{asset_id}`: {error}"
+        ))
+    })
 }
 
 fn unique_commitment_index(commitments: &[[u8; 32]], commitment: &[u8; 32]) -> Result<usize> {
@@ -9958,7 +10004,8 @@ fn zk_witness_snapshot_identity(
 ///
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
 /// Returns recent shielded roots for the requested asset, bounded by the configured
-/// `zk.root_history_cap`. If the asset has no shielded state, returns an empty set.
+/// `confidential.tree_roots_history_len`. If the asset has no commitments, returns the canonical
+/// empty root defined by its persisted tree profile.
 pub async fn handle_v1_zk_roots(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
@@ -9970,20 +10017,21 @@ pub async fn handle_v1_zk_roots(
     let world = state_view.world();
     let ad = resolve_asset_definition_selector(world, &req.asset_id, now_ms)?;
     // Bound the requested window by config cap (0 -> cap)
-    let cap = state_view.zk.root_history_cap;
+    let cap = state_view.zk.tree_roots_history_len.get();
     let want = if req.max == 0 {
         cap
     } else {
         core::cmp::min(cap, req.max as usize)
     };
     let st = world.zk_assets().get(&ad).ok_or_else(zk_merkle_not_found)?;
-    let current_root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(
-        &st.commitments,
-    )
-    .map_err(|err| zk_query_conversion_error(format!("failed to compute current root: {err}")))?;
-    ensure_confidential_v2_asset(world, &ad, st, &current_root)?;
-    // Fetch the validated confidential-v2 roots and build the response window.
-    let roots_all = st.root_history.clone();
+    let current_root = validated_confidential_tree_root(&ad, st)?;
+    // Root history stores non-empty prefixes. Expose the profile-defined anchor
+    // as the sole root for an empty registered tree.
+    let roots_all = if st.commitments.is_empty() {
+        vec![current_root]
+    } else {
+        st.root_history.clone()
+    };
     let latest_opt = roots_all.last().copied();
     let roots_tail: Vec<[u8; 32]> = if roots_all.len() <= want {
         roots_all.clone()
@@ -10003,12 +10051,11 @@ pub async fn handle_v1_zk_roots(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 
-/// POST /v1/zk/merkle-path — current confidential-v2 commitment inclusion paths.
+/// POST /v1/zk/merkle-path — current confidential commitment inclusion paths.
 ///
 /// Returns inclusion paths for commitments in the current `zk_assets` frontier.
-/// The endpoint intentionally serves only assets bound to the canonical
-/// confidential-transfer-v2 verifier, so callers do not accidentally mix legacy
-/// shielded roots with confidential-v2 proof witnesses.
+/// Path construction is selected exclusively by the tree profile persisted with
+/// the asset state; verifier-role bindings do not select the hash construction.
 pub async fn handle_v1_zk_merkle_path(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
@@ -10037,24 +10084,19 @@ pub async fn handle_v1_zk_merkle_path(
     let world = state_view.world();
     let ad = resolve_asset_definition_selector(world, &req.asset_id, now_ms)?;
     let st = world.zk_assets().get(&ad).ok_or_else(zk_merkle_not_found)?;
-    let root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
-        .map_err(|err| {
-            zk_query_conversion_error(format!("failed to compute current root: {err}"))
-        })?;
-    ensure_confidential_v2_asset(world, &ad, st, &root)?;
+    let root = validated_confidential_tree_root(&ad, st)?;
 
     let mut paths = Vec::with_capacity(requested.len());
     for commitment in requested {
         let leaf_index = unique_commitment_index(&st.commitments, &commitment)?;
-        let path = iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(
-            &st.commitments,
-            leaf_index,
-        )
-        .map_err(|err| {
-            zk_query_conversion_error(format!(
-                "failed to compute commitment path at index {leaf_index}: {err}"
-            ))
-        })?;
+        let path = st
+            .tree_profile
+            .compute_path(&st.commitments, leaf_index)
+            .map_err(|err| {
+                zk_query_conversion_error(format!(
+                    "failed to compute commitment path at index {leaf_index}: {err}"
+                ))
+            })?;
         if path.root != root {
             return Err(zk_query_conversion_error(
                 "computed commitment path root does not match current frontier root",
@@ -10076,21 +10118,18 @@ pub async fn handle_v1_zk_merkle_path(
     let frontier_len = u32::try_from(st.commitments.len()).map_err(|_| {
         zk_query_conversion_error("frontier length does not fit in the response schema")
     })?;
-    let tree_depth = u32::try_from(iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2)
+    let tree_depth = u32::try_from(st.tree_profile.depth())
         .map_err(|_| zk_query_conversion_error("tree depth does not fit in the response schema"))?;
-    let next_zero_path = if st.commitments.len()
-        < iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2
-    {
+    let next_zero_path = if st.commitments.len() < st.tree_profile.capacity() {
         let leaf_index = st.commitments.len();
-        let path = iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(
-            &st.commitments,
-            leaf_index,
-        )
-        .map_err(|err| {
-            zk_query_conversion_error(format!(
-                "failed to compute next zero-leaf path at index {leaf_index}: {err}"
-            ))
-        })?;
+        let path = st
+            .tree_profile
+            .compute_path(&st.commitments, leaf_index)
+            .map_err(|err| {
+                zk_query_conversion_error(format!(
+                    "failed to compute next zero-leaf path at index {leaf_index}: {err}"
+                ))
+            })?;
         if path.root != root {
             return Err(zk_query_conversion_error(
                 "computed next zero-leaf path root does not match current frontier root",
@@ -10129,14 +10168,10 @@ pub async fn handle_v1_zk_merkle_path(
 /// Build a bounded V1 tally response without cloning malformed world state.
 fn validated_zk_vote_tally_response(
     election_id: &str,
-    election: Option<&iroha_core::state::ElectionState>,
+    election: &iroha_core::state::ElectionState,
+    evaluated_block_height: u64,
+    evaluated_block_hash: String,
 ) -> Result<ZkVoteGetTallyResponseDto> {
-    let Some(election) = election else {
-        return Ok(ZkVoteGetTallyResponseDto {
-            finalized: false,
-            tally: Vec::new(),
-        });
-    };
     iroha_data_model::isi::zk::validate_election_tally_v1(election.options, election.tally.len())
         .map_err(|error| {
         zk_query_conversion_error(format!(
@@ -10144,6 +10179,8 @@ fn validated_zk_vote_tally_response(
         ))
     })?;
     Ok(ZkVoteGetTallyResponseDto {
+        evaluated_block_height,
+        evaluated_block_hash,
         finalized: election.finalized,
         tally: election.tally.clone(),
     })
@@ -10158,11 +10195,20 @@ pub async fn handle_v1_zk_vote_tally(
     accept: Option<axum::http::HeaderValue>,
     NoritoJson(req): NoritoJson<ZkVoteGetTallyRequestDto>,
 ) -> Result<Response> {
-    // Read-only lookup from WSV elections
-    let world = state.world_view();
+    // Anchor both provenance and lookup to one immutable committed state view.
+    let state_view = state.view();
+    let (evaluated_block_height, evaluated_block_hash, _) =
+        zk_witness_snapshot_identity(&state_view)?;
+    let world = state_view.world();
+    let election = world
+        .elections()
+        .get(&req.election_id)
+        .ok_or_else(zk_merkle_not_found)?;
     let payload = validated_zk_vote_tally_response(
         &req.election_id,
-        world.elections().get(&req.election_id),
+        election,
+        evaluated_block_height,
+        evaluated_block_hash,
     )?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -10193,7 +10239,8 @@ mod zk_vote_tally_response_tests {
         ] {
             let state = election(options, tally);
             assert!(
-                validated_zk_vote_tally_response("corrupt", Some(&state)).is_err(),
+                validated_zk_vote_tally_response("corrupt", &state, 7, hex::encode([9_u8; 32]))
+                    .is_err(),
                 "shape ({options}, {}) must fail closed",
                 state.tally.len()
             );
@@ -10201,18 +10248,17 @@ mod zk_vote_tally_response_tests {
     }
 
     #[test]
-    fn tally_response_accepts_v1_boundaries_and_missing_elections() {
+    fn tally_response_accepts_v1_boundaries_with_snapshot_identity() {
         for (options, tally_len) in [(1, 1), (64, 64)] {
             let state = election(options, vec![7; tally_len]);
-            let response = validated_zk_vote_tally_response("bounded", Some(&state))
-                .expect("bounded election response");
+            let expected_hash = hex::encode([9_u8; 32]);
+            let response =
+                validated_zk_vote_tally_response("bounded", &state, 7, expected_hash.clone())
+                    .expect("bounded election response");
             assert_eq!(response.tally.len(), tally_len);
+            assert_eq!(response.evaluated_block_height, 7);
+            assert_eq!(response.evaluated_block_hash, expected_hash);
         }
-
-        let missing =
-            validated_zk_vote_tally_response("missing", None).expect("missing election response");
-        assert!(!missing.finalized);
-        assert!(missing.tally.is_empty());
     }
 }
 
@@ -10332,9 +10378,7 @@ fn test_asset_definition_literal_from_hex(hex_literal: &str) -> String {
 }
 
 fn asset_definition_display_name(id: &AssetDefinitionId) -> String {
-    id.try_name()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| id.to_string())
+    id.to_string()
 }
 
 #[cfg(test)]
@@ -10471,11 +10515,12 @@ fn bind_account_alias_for_test(
         iroha_data_model::alias_setup::AliasLeaseAcquisitionV1::new(1, None),
         iroha_data_model::alias_setup::AliasQuoteGuardV1 {
             expected_policy_version: 0,
-            expected_payment_asset: iroha_data_model::asset::AssetDefinitionId::new(
-                iroha_data_model::domain::DomainId::try_new("assets", "universal")
-                    .expect("fixture asset domain"),
-                "xor".parse().expect("fixture asset name"),
-            ),
+            expected_payment_asset:
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    iroha_data_model::domain::DomainId::try_new("assets", "universal")
+                        .expect("fixture asset domain"),
+                    "xor".parse().expect("fixture asset name"),
+                ),
             max_amount: iroha_primitives::numeric::Quantity::zero(),
             valid_until_ms: 0,
         },
@@ -10596,7 +10641,8 @@ mod zk_roots_selector_tests {
     use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
 
-    fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
+    fn selector_state_without_zk() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId)
+    {
         let authority = AccountId::new(
             super::checked_routing_fixture_keypair(
                 0xe6,
@@ -10607,13 +10653,17 @@ mod zk_roots_selector_tests {
             .clone(),
         );
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
-        let definition_id = AssetDefinitionId::new(
+        let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name"),
         );
-        let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("usd".to_owned())
-            .build(&authority);
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "usd".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
@@ -10622,13 +10672,12 @@ mod zk_roots_selector_tests {
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
         bind_permanent_asset_alias_for_test(&state, &authority, &definition_id, "usd#main");
-        seed_zk_asset_frontier_for_test(
-            &state,
-            &definition_id,
-            Vec::new(),
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            None,
-        );
+        (state, definition_id)
+    }
+
+    fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
+        let (state, definition_id) = selector_state_without_zk();
+        seed_zk_asset_frontier_for_test(&state, &definition_id, Vec::new(), None);
         (state, definition_id)
     }
 
@@ -10636,24 +10685,15 @@ mod zk_roots_selector_tests {
         state: &std::sync::Arc<iroha_core::state::State>,
         definition_id: &AssetDefinitionId,
         commitments: Vec<[u8; 32]>,
-        circuit_id: &str,
-        root_override: Option<[u8; 32]>,
+        root_history_override: Option<Vec<[u8; 32]>>,
     ) -> [u8; 32] {
-        let root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(&commitments)
+        let tree_profile = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1;
+        let root = tree_profile
+            .compute_root(&commitments)
             .expect("confidential-v2 root");
-        let vk_id =
-            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "torii_transfer_v2_test");
-        let mut vk_record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
-            1,
-            circuit_id,
-            None,
-            "test",
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            "pallas",
-            [0x42; 32],
-            [0x43; 32],
-        );
-        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        let prefix_roots = tree_profile
+            .compute_prefix_roots(&commitments)
+            .expect("confidential-v2 prefix roots");
 
         let next_height =
             core::num::NonZeroU64::new((state.committed_height() as u64).saturating_add(1).max(1))
@@ -10663,20 +10703,10 @@ mod zk_roots_selector_tests {
         let mut tx = block.transaction();
         {
             let world = tx.world_mut_for_testing();
-            world
-                .verifying_keys_mut_for_testing()
-                .insert(vk_id.clone(), vk_record);
             let mut zk_state = iroha_core::state::ZkAssetState::default();
+            zk_state.tree_profile = tree_profile;
             zk_state.commitments = commitments;
-            zk_state.root_history = match root_override {
-                Some(root) => vec![root],
-                None if zk_state.commitments.is_empty() => Vec::new(),
-                None => vec![root],
-            };
-            zk_state.vk_transfer = Some(iroha_core::state::ZkAssetVerifierBinding {
-                id: vk_id,
-                commitment: [0x43; 32],
-            });
+            zk_state.root_history = root_history_override.unwrap_or(prefix_roots);
             world
                 .zk_assets_mut_for_testing()
                 .insert(definition_id.clone(), zk_state);
@@ -10695,9 +10725,10 @@ mod zk_roots_selector_tests {
         ));
     }
 
-    fn assert_empty_anchored_roots(payload: &ZkRootsGetResponseDto) {
-        assert_eq!(payload.latest, "");
-        assert!(payload.roots.is_empty());
+    fn assert_profile_anchored_empty_roots(payload: &ZkRootsGetResponseDto) {
+        let empty_root = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1.empty_root();
+        assert_eq!(payload.latest, hex::encode(empty_root));
+        assert_eq!(payload.roots, vec![hex::encode(empty_root)]);
         assert!(payload.evaluated_block_height > 0);
         assert_eq!(payload.evaluated_block_hash.len(), 64);
         assert!(
@@ -10994,7 +11025,7 @@ mod zk_roots_selector_tests {
     }
 
     #[tokio::test]
-    async fn handle_v1_zk_roots_accepts_alias_literal_and_returns_empty_json_payload() {
+    async fn handle_v1_zk_roots_accepts_alias_literal_and_returns_profile_empty_root() {
         let (state, _) = selector_state();
 
         let response = handle_v1_zk_roots(
@@ -11024,7 +11055,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_empty_anchored_roots(&payload);
+        assert_profile_anchored_empty_roots(&payload);
     }
 
     #[tokio::test]
@@ -11085,7 +11116,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::decode_from_bytes(&bytes).expect("norito response payload");
-        assert_empty_anchored_roots(&payload);
+        assert_profile_anchored_empty_roots(&payload);
     }
 
     #[tokio::test]
@@ -11121,7 +11152,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_empty_anchored_roots(&payload);
+        assert_profile_anchored_empty_roots(&payload);
     }
 
     #[tokio::test]
@@ -11155,7 +11186,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_empty_anchored_roots(&payload);
+        assert_profile_anchored_empty_roots(&payload);
     }
 
     #[tokio::test]
@@ -11189,7 +11220,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_empty_anchored_roots(&payload);
+        assert_profile_anchored_empty_roots(&payload);
     }
 
     #[tokio::test]
@@ -11223,7 +11254,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_empty_anchored_roots(&payload);
+        assert_profile_anchored_empty_roots(&payload);
     }
 
     #[tokio::test]
@@ -11259,7 +11290,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_empty_anchored_roots(&payload);
+        assert_profile_anchored_empty_roots(&payload);
     }
 
     #[tokio::test]
@@ -11363,17 +11394,12 @@ mod zk_roots_selector_tests {
     }
 
     #[tokio::test]
-    async fn handle_v1_zk_roots_rejects_non_confidential_v2_asset() {
+    async fn handle_v1_zk_roots_uses_profile_without_transfer_verifier_binding() {
         let (state, definition_id) = selector_state();
-        seed_zk_asset_frontier_for_test(
-            &state,
-            &definition_id,
-            vec![[0xaa; 32]],
-            "legacy-transfer-circuit",
-            None,
-        );
+        let expected_root =
+            seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x2a; 32]], None);
 
-        let err = handle_v1_zk_roots(
+        let response = handle_v1_zk_roots(
             state,
             None,
             crate::NoritoJson(ZkRootsGetRequestDto {
@@ -11382,22 +11408,25 @@ mod zk_roots_selector_tests {
             }),
         )
         .await
-        .expect_err("legacy shielded roots must not be exposed as confidential-v2 witnesses");
-
-        assert_query_conversion_contains(err, "does not use the confidential-v2 Merkle tree");
+        .expect("persisted tree profile, not a transfer verifier, selects root construction");
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, hex::encode(expected_root));
+        assert_eq!(payload.roots, vec![hex::encode(expected_root)]);
     }
 
     #[tokio::test]
     async fn handle_v1_zk_merkle_path_returns_batch_paths_in_request_order() {
         let (state, definition_id) = selector_state();
         let commitments = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
-        let root = seed_zk_asset_frontier_for_test(
-            &state,
-            &definition_id,
-            commitments.clone(),
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            None,
-        );
+        let root =
+            seed_zk_asset_frontier_for_test(&state, &definition_id, commitments.clone(), None);
 
         let response = handle_v1_zk_merkle_path(
             state,
@@ -11434,7 +11463,7 @@ mod zk_roots_selector_tests {
         assert_eq!(payload.frontier_len, commitments.len() as u32);
         assert_eq!(
             payload.tree_depth,
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 as u32
+            iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1.depth() as u32
         );
         assert_eq!(payload.paths.len(), 2);
         assert_eq!(payload.paths[0].commitment, hex::encode(commitments[2]));
@@ -11442,9 +11471,9 @@ mod zk_roots_selector_tests {
         assert_eq!(payload.paths[1].commitment, hex::encode(commitments[0]));
         assert_eq!(payload.paths[1].leaf_index, 0);
 
-        let expected =
-            iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(&commitments, 2)
-                .expect("expected path");
+        let expected = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1
+            .compute_path(&commitments, 2)
+            .expect("expected path");
         assert_eq!(
             payload.paths[0].siblings,
             expected
@@ -11469,25 +11498,17 @@ mod zk_roots_selector_tests {
             .expect("next zero path should be present");
         assert_eq!(next_zero_path.commitment, hex::encode([0u8; 32]));
         assert_eq!(next_zero_path.leaf_index, commitments.len() as u32);
-        let expected_zero = iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(
-            &commitments,
-            commitments.len(),
-        )
-        .expect("expected next zero path");
+        let expected_zero = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1
+            .compute_path(&commitments, commitments.len())
+            .expect("expected next zero path");
         assert_eq!(next_zero_path.root, hex::encode(expected_zero.root));
     }
 
     #[tokio::test]
     async fn handle_v1_zk_merkle_path_negotiates_norito_response_when_requested() {
         let (state, definition_id) = selector_state();
-        let commitments = vec![[0x44; 32]];
-        seed_zk_asset_frontier_for_test(
-            &state,
-            &definition_id,
-            commitments.clone(),
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            None,
-        );
+        let commitments = vec![[0x24; 32]];
+        seed_zk_asset_frontier_for_test(&state, &definition_id, commitments.clone(), None);
 
         let response = handle_v1_zk_merkle_path(
             state,
@@ -11532,14 +11553,9 @@ mod zk_roots_selector_tests {
     #[tokio::test]
     async fn handle_v1_zk_merkle_path_returns_current_root_for_empty_request() {
         let (state, definition_id) = selector_state();
-        let commitments = vec![[0x55; 32]];
-        let root = seed_zk_asset_frontier_for_test(
-            &state,
-            &definition_id,
-            commitments.clone(),
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            None,
-        );
+        let commitments = vec![[0x25; 32]];
+        let root =
+            seed_zk_asset_frontier_for_test(&state, &definition_id, commitments.clone(), None);
 
         let response = handle_v1_zk_merkle_path(
             state,
@@ -11574,7 +11590,7 @@ mod zk_roots_selector_tests {
 
     #[tokio::test]
     async fn handle_v1_zk_merkle_path_rejects_asset_without_zk_state() {
-        let (state, definition_id) = selector_state();
+        let (state, definition_id) = selector_state_without_zk();
 
         let err = handle_v1_zk_merkle_path(
             state,
@@ -11598,20 +11614,14 @@ mod zk_roots_selector_tests {
     #[tokio::test]
     async fn handle_v1_zk_merkle_path_rejects_missing_commitment() {
         let (state, definition_id) = selector_state();
-        seed_zk_asset_frontier_for_test(
-            &state,
-            &definition_id,
-            vec![[0x77; 32]],
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            None,
-        );
+        seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x27; 32]], None);
 
         let err = handle_v1_zk_merkle_path(
             state,
             None,
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
-                commitments: vec![hex::encode([0x78; 32])],
+                commitments: vec![hex::encode([0x28; 32])],
             }),
         )
         .await
@@ -11646,20 +11656,14 @@ mod zk_roots_selector_tests {
     #[tokio::test]
     async fn handle_v1_zk_merkle_path_rejects_ambiguous_frontier_commitment() {
         let (state, definition_id) = selector_state();
-        seed_zk_asset_frontier_for_test(
-            &state,
-            &definition_id,
-            vec![[0x99; 32], [0x99; 32]],
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            None,
-        );
+        seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x29; 32], [0x29; 32]], None);
 
         let err = handle_v1_zk_merkle_path(
             state,
             None,
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
-                commitments: vec![hex::encode([0x99; 32])],
+                commitments: vec![hex::encode([0x29; 32])],
             }),
         )
         .await
@@ -11708,28 +11712,30 @@ mod zk_roots_selector_tests {
     }
 
     #[tokio::test]
-    async fn handle_v1_zk_merkle_path_rejects_non_confidential_v2_asset() {
+    async fn handle_v1_zk_merkle_path_uses_profile_without_transfer_verifier_binding() {
         let (state, definition_id) = selector_state();
-        seed_zk_asset_frontier_for_test(
-            &state,
-            &definition_id,
-            vec![[0xaa; 32]],
-            "legacy-transfer-circuit",
-            None,
-        );
+        seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x2a; 32]], None);
 
-        let err = handle_v1_zk_merkle_path(
+        let response = handle_v1_zk_merkle_path(
             state,
             None,
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
-                commitments: vec![hex::encode([0xaa; 32])],
+                commitments: vec![hex::encode([0x2a; 32])],
             }),
         )
         .await
-        .expect_err("non-confidential-v2 asset should fail");
-
-        assert_query_conversion_contains(err, "does not use the confidential-v2 Merkle tree");
+        .expect("persisted tree profile, not a transfer verifier, selects path construction");
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkMerklePathGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.paths.len(), 1);
+        assert_eq!(payload.paths[0].commitment, hex::encode([0x2a; 32]));
     }
 
     #[tokio::test]
@@ -11738,9 +11744,8 @@ mod zk_roots_selector_tests {
         seed_zk_asset_frontier_for_test(
             &state,
             &definition_id,
-            vec![[0xbb; 32]],
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            Some([0xcc; 32]),
+            vec![[0x2b; 32]],
+            Some(vec![[0xcc; 32]]),
         );
 
         let err = handle_v1_zk_merkle_path(
@@ -11748,11 +11753,36 @@ mod zk_roots_selector_tests {
             None,
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
-                commitments: vec![hex::encode([0xbb; 32])],
+                commitments: vec![hex::encode([0x2b; 32])],
             }),
         )
         .await
         .expect_err("mismatched root history should fail");
+
+        assert_query_conversion_contains(err, "root history does not match");
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_rejects_drift_in_older_retained_root() {
+        let (state, definition_id) = selector_state();
+        let commitments = vec![[0x10; 32], [0x20; 32], [0x30; 32]];
+        let profile = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1;
+        let mut roots = profile
+            .compute_prefix_roots(&commitments)
+            .expect("canonical prefix roots");
+        roots[0] = [0xdd; 32];
+        seed_zk_asset_frontier_for_test(&state, &definition_id, commitments, Some(roots));
+
+        let err = handle_v1_zk_roots(
+            state,
+            None,
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 3,
+            }),
+        )
+        .await
+        .expect_err("drift in any retained root must fail the query");
 
         assert_query_conversion_contains(err, "root history does not match");
     }
@@ -11763,16 +11793,6 @@ where
     H: AsRef<[u8; iroha_crypto::Hash::LENGTH]>,
 {
     hex::encode(hash.as_ref())
-}
-
-fn bools_to_json_array(values: &[bool]) -> norito::json::native::Value {
-    norito::json::native::Value::Array(
-        values
-            .iter()
-            .copied()
-            .map(norito::json::native::Value::from)
-            .collect(),
-    )
 }
 
 fn evidence_to_json(rec: &EvidenceRecord) -> Value {
@@ -16292,7 +16312,7 @@ mod contract_state_tests {
     #[tokio::test]
     async fn contract_state_exact_path_can_scope_by_contract_address() {
         let contract_address: iroha_data_model::smart_contract::ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let mut world = World::default();
@@ -16330,7 +16350,7 @@ mod contract_state_tests {
     #[tokio::test]
     async fn contract_state_prefix_can_scope_by_contract_address() {
         let contract_address: iroha_data_model::smart_contract::ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let mut world = World::default();
@@ -23795,14 +23815,14 @@ mod multisig_contract_call_tests {
     fn contract_runtime_permission_target_is_exactly_bound_to_instance_and_selector() {
         let authority = sample_account_id();
         let first = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             iroha_data_model::nexus::DataSpaceId::new(10),
         )
         .expect("first contract address");
         let second = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             2,
             iroha_data_model::nexus::DataSpaceId::new(10),
@@ -23841,7 +23861,7 @@ mod multisig_contract_call_tests {
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &multisig,
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -23880,7 +23900,7 @@ mod multisig_contract_call_tests {
     fn multisig_contract_call_instruction_envelope_hashes_deterministically() {
         let multisig = sample_account_id();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &multisig,
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -23958,7 +23978,7 @@ mod multisig_contract_call_tests {
     fn multisig_contract_call_intent_requires_exact_canonical_envelope() {
         let multisig = sample_account_id();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &multisig,
             7,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -24394,7 +24414,7 @@ mod multisig_contract_call_tests {
             provenance: None,
         };
         let contract_address: iroha_data_model::smart_contract::ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let metadata = build_contract_call_metadata(
@@ -25088,7 +25108,7 @@ seiyaku ZkIvmPayloadNormalizeTest {
         assert_eq!(normalized, payload);
 
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -25736,7 +25756,7 @@ mod multisig_selector_tests {
         deploy_nonce: u64,
     ) -> iroha_data_model::smart_contract::ContractAddress {
         iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             authority,
             deploy_nonce,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -27352,8 +27372,13 @@ mod multisig_selector_tests {
         );
         let controlled_account_id: dm::AccountId = scoped_account_id.clone().into();
         let asset_definition_id = test_asset_definition_id();
-        let definition =
-            dm::AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
+        let definition = dm::AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "asset_transfer_control".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let domain = Domain::new(domain_id).build(&authority);
 
         let record = dm::AssetTransferControlRecord {
@@ -28303,7 +28328,7 @@ seiyaku BytesPayloadNormalizeTest {
         let paynet_dataspace_id = DataSpaceId::new(10);
         let paynet_lane_id = LaneId::new(2);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &signer_account_id,
             7,
             paynet_dataspace_id,
@@ -33053,8 +33078,12 @@ pub struct PorStatusQueryDto {
     pub provider: Option<String>,
     pub epoch: Option<u64>,
     pub status: Option<String>,
-    pub limit: Option<usize>,
-    pub page_token: Option<String>,
+    /// Required non-zero record ceiling, at most 1,000.
+    pub limit: usize,
+    /// Required non-zero sum-of-canonical-record-bytes ceiling, at most 4 MiB.
+    pub max_bytes: usize,
+    /// Opaque continuation returned by the preceding page.
+    pub cursor: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -33063,6 +33092,12 @@ pub struct PorStatusQueryDto {
 pub struct PorExportQueryDto {
     pub start_epoch: Option<u64>,
     pub end_epoch: Option<u64>,
+    /// Required non-zero record ceiling, at most 1,000.
+    pub limit: usize,
+    /// Required non-zero sum-of-canonical-record-bytes ceiling, at most 4 MiB.
+    pub max_bytes: usize,
+    /// Opaque continuation returned by the preceding page.
+    pub cursor: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -33504,23 +33539,9 @@ pub(crate) async fn handle_post_sorafs_record_por_proof(
     if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &proof.provider_id) {
         return Err(quota_limit_error(err));
     }
-    por_coordinator
-        .record_proof(&proof, &admitted_provider_key)
-        .map_err(por_coordinator_error)?;
-    if let Err(node_error) = sorafs_node.record_por_proof(&proof, &admitted_provider_key) {
-        if let Err(rollback_error) = por_coordinator.rollback_proof(&proof) {
-            iroha_logger::error!(
-                ?node_error,
-                ?rollback_error,
-                challenge_id = %hex::encode(proof.challenge_id),
-                "failed to compensate SoraFS PoR proof node commit"
-            );
-            return Err(conversion_error(format!(
-                "PoR proof node commit failed ({node_error}); coordinator rollback also failed ({rollback_error})"
-            )));
-        }
-        return Err(por_tracker_error(node_error));
-    }
+    let node_result = sorafs_node.record_por_proof(&proof, &admitted_provider_key);
+    refresh_authoritative_por_projection(&sorafs_node, &por_coordinator)?;
+    node_result.map_err(por_tracker_error)?;
 
     iroha_logger::info!(
         provider_id = %hex::encode(proof.provider_id),
@@ -33566,26 +33587,23 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
     if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &verdict.provider_id) {
         return Err(quota_limit_error(err));
     }
-    por_coordinator
-        .validate_verdict_candidate(&verdict, &trusted_auditor_keys, auditor_threshold)
-        .map_err(por_coordinator_error)?;
-    let outcome = match sorafs_node.record_por_verdict(
-        &verdict,
-        &trusted_auditor_keys,
-        auditor_threshold,
-        repair_handoff,
-    ) {
-        Ok(outcome) => outcome,
-        Err(node_error) => return Err(por_tracker_error(node_error)),
-    };
-    por_coordinator
-        .record_verdict(&verdict, &trusted_auditor_keys, auditor_threshold)
-        .map_err(por_coordinator_error)?;
+    let node_result =
+        sorafs_node.record_por_verdict(&verdict, &trusted_auditor_keys, auditor_threshold);
+    refresh_authoritative_por_projection(&sorafs_node, &por_coordinator)?;
+    let outcome = node_result.map_err(por_tracker_error)?;
     debug_assert_eq!(
         outcome.repair_task_id.is_some(),
         verdict.outcome == sorafs_manifest::por::AuditOutcomeV1::Failed
     );
     observe_sorafs_metering(&telemetry, &sorafs_node);
+
+    if let Err(error) = sorafs_node.reconcile_next_por_repair_handoff(repair_handoff) {
+        iroha_logger::warn!(
+            ?error,
+            challenge_id = %hex::encode(verdict.challenge_id),
+            "PoR verdict committed with a pending durable repair handoff"
+        );
+    }
 
     iroha_logger::info!(
         provider_id = %hex::encode(verdict.provider_id),
@@ -33611,7 +33629,7 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
 pub fn handle_get_sorafs_por_status(
     coordinator: Arc<sorafs::PorCoordinator>,
     query: PorStatusQueryDto,
-) -> Result<Vec<PorChallengeStatusV1>, Error> {
+) -> Result<PorStatusPageV1, Error> {
     let manifest = match query.manifest.as_ref() {
         Some(hex) => Some(parse_hex_array::<32>(hex, "manifest")?),
         None => None,
@@ -33627,10 +33645,8 @@ pub fn handle_get_sorafs_por_status(
             })?),
             None => None,
         };
-    let page_token = match query.page_token.as_ref() {
-        Some(token) => Some(parse_hex_array::<32>(token, "page_token")?),
-        None => None,
-    };
+    let cursor =
+        PorStatusPageCursor::from_opaque(query.cursor.as_deref()).map_err(por_coordinator_error)?;
 
     let filter = PorStatusFilter {
         manifest,
@@ -33638,30 +33654,33 @@ pub fn handle_get_sorafs_por_status(
         epoch: query.epoch,
         status: outcome,
     };
-    let limit = query
-        .limit
-        .unwrap_or(POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1);
-    if limit > POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 {
-        return Err(conversion_error(format!(
-            "`limit` {limit} exceeds the PoR status page maximum of {POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1}"
-        )));
-    }
-    Ok(coordinator.query_statuses(&filter, Some(limit), page_token))
+    let limits =
+        PorStatusPageLimits::new(query.limit, query.max_bytes).map_err(por_coordinator_error)?;
+    coordinator
+        .query_status_page(&filter, limits, cursor)
+        .map_err(por_coordinator_error)
 }
 
 #[cfg(feature = "app_api")]
 pub fn handle_get_sorafs_por_export(
     coordinator: Arc<sorafs::PorCoordinator>,
     query: PorExportQueryDto,
-) -> Result<PorStatusExportV1, Error> {
+) -> Result<PorStatusExportPageV1, Error> {
     let range = match (query.start_epoch, query.end_epoch) {
         (Some(start), Some(end)) => Some((start, end)),
-        (Some(start), None) => Some((start, start)),
-        (None, Some(end)) => Some((end, end)),
         (None, None) => None,
+        _ => {
+            return Err(conversion_error(
+                "`start_epoch` and `end_epoch` must be supplied together",
+            ));
+        }
     };
+    let limits =
+        PorStatusPageLimits::new(query.limit, query.max_bytes).map_err(por_coordinator_error)?;
+    let cursor =
+        PorStatusPageCursor::from_opaque(query.cursor.as_deref()).map_err(por_coordinator_error)?;
     coordinator
-        .export_statuses(range)
+        .export_status_page(range, limits, cursor)
         .map_err(por_coordinator_error)
 }
 
@@ -33937,11 +33956,38 @@ fn por_tracker_error(err: sorafs_node::PorTrackerError) -> Error {
     }
 }
 
+#[cfg(feature = "app_api")]
+fn refresh_authoritative_por_projection(
+    node: &sorafs_node::NodeHandle,
+    coordinator: &sorafs::PorCoordinator,
+) -> Result<(), Error> {
+    let snapshot = node
+        .por_status_authority_snapshot()
+        .map_err(por_tracker_error)?;
+    coordinator
+        .install_authoritative_projection(snapshot)
+        .map_err(por_coordinator_error)
+}
+
 fn por_coordinator_error(err: PorCoordinatorError) -> Error {
     use iroha_data_model::query::error::QueryExecutionFail;
     match err {
         PorCoordinatorError::UnknownChallenge { .. } => Error::Query(
             iroha_data_model::ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
+        ),
+        internal @ (PorCoordinatorError::AuthoritativeProjectionUnavailable
+        | PorCoordinatorError::RetentionExhausted { .. }
+        | PorCoordinatorError::StatusGenerationExhausted
+        | PorCoordinatorError::PageCursorEncoding(_)
+        | PorCoordinatorError::StatusIndexCorrupt { .. }
+        | PorCoordinatorError::StatusPageEncoding(_)
+        | PorCoordinatorError::StatusPageByteOverflow
+        | PorCoordinatorError::CanonicalVerdictEncoding(_)
+        | PorCoordinatorError::RollbackConflict { .. }
+        | PorCoordinatorError::IsoWeekComputation
+        | PorCoordinatorError::PersistenceFaultLatched { .. }
+        | PorCoordinatorError::Persistence(_)) => Error::Query(
+            iroha_data_model::ValidationFail::InternalError(internal.to_string()),
         ),
         other => conversion_error(other.to_string()),
     }
@@ -35722,11 +35768,14 @@ mod sorafs_capacity_tests {
         .expect("auditor signer public key");
         let trusted_auditor_keys = vec![verdict.auditor_signatures[0].public_key.clone()];
 
-        por_coordinator
-            .record_challenge(&challenge)
-            .expect("scheduler challenge accepted by coordinator");
         node.record_por_challenge(&challenge)
             .expect("scheduler challenge accepted by node");
+        por_coordinator
+            .install_authoritative_projection(
+                node.por_status_authority_snapshot()
+                    .expect("authoritative node projection"),
+            )
+            .expect("install authoritative scheduler projection");
 
         let proof_resp = handle_post_sorafs_record_por_proof(
             telemetry.clone(),
@@ -35776,6 +35825,32 @@ mod sorafs_capacity_tests {
         match error {
             Error::AppForbidden { code, .. } => assert_eq!(code, expected),
             other => panic!("expected PoR forbidden error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn por_persistence_uncertainty_and_fault_latch_are_internal_errors() {
+        let uncertain = por_coordinator_error(PorCoordinatorError::Persistence(
+            crate::sorafs::por::PorPersistenceError::CommitUncertain(
+                "injected post-publication sync failure".to_owned(),
+            ),
+        ));
+        let latched = por_coordinator_error(PorCoordinatorError::PersistenceFaultLatched {
+            reason: "restart and reconcile".to_owned(),
+        });
+
+        for (error, expected) in [
+            (uncertain, "commit may already be durable"),
+            (latched, "restart and reconcile"),
+        ] {
+            let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error
+            else {
+                panic!("server persistence fault was exposed as a client error: {error:?}");
+            };
+            assert!(
+                message.contains(expected),
+                "internal error omitted persistence context: {message}"
+            );
         }
     }
 
@@ -38493,24 +38568,40 @@ fn instruction_matches_account_id(
 fn instruction_matches_domain_predicate<F>(
     instr: &iroha_data_model::isi::InstructionBox,
     matches_domain: &F,
+    asset_definition_domains: &BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
 ) -> bool
 where
     F: Fn(&DomainId) -> bool,
 {
     use iroha_data_model::isi::{
-        BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
+        BurnBox, CustomInstruction, MintBox, RegisterBox, RemoveAssetKeyValue, SetAssetKeyValue,
         TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
     };
     use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
     let matches_asset_definition_domain =
         |definition: &iroha_data_model::asset::AssetDefinitionId| {
-            definition
-                .try_domain()
+            asset_definition_domains
+                .get(definition)
                 .is_some_and(|domain_id| matches_domain(domain_id))
         };
 
     let any = instr.as_any();
+    if let Some(register) = any.downcast_ref::<RegisterBox>() {
+        return match register {
+            RegisterBox::Domain(register) => matches_domain(&register.object().id),
+            RegisterBox::AssetDefinition(register) => register
+                .object()
+                .owning_domain
+                .as_ref()
+                .is_some_and(matches_domain),
+            RegisterBox::Nft(register) => matches_domain(register.object().id.domain()),
+            RegisterBox::Peer(_)
+            | RegisterBox::Account(_)
+            | RegisterBox::Role(_)
+            | RegisterBox::Trigger(_) => false,
+        };
+    }
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
             TransferBox::Domain(inner) => matches_domain(inner.object()),
@@ -38557,10 +38648,15 @@ where
                     .is_some_and(|domain_id| matches_domain(domain_id)),
                 MultisigInstructionBox::Approve(_approve) => false,
                 MultisigInstructionBox::Cancel(_cancel) => false,
-                MultisigInstructionBox::Propose(propose) => propose
-                    .instructions
-                    .iter()
-                    .any(|nested| instruction_matches_domain_predicate(nested, matches_domain)),
+                MultisigInstructionBox::Propose(propose) => {
+                    propose.instructions.iter().any(|nested| {
+                        instruction_matches_domain_predicate(
+                            nested,
+                            matches_domain,
+                            asset_definition_domains,
+                        )
+                    })
+                }
             };
         }
         return false;
@@ -38594,13 +38690,18 @@ fn executable_contains_account_id(
 fn executable_contains_domain_predicate<F>(
     executable: &iroha_data_model::transaction::Executable,
     matches_domain: &F,
+    asset_definition_domains: &BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
 ) -> bool
 where
     F: Fn(&DomainId) -> bool,
 {
     let mut found = false;
     executable_explicit_instructions(executable, |instruction| {
-        found |= instruction_matches_domain_predicate(instruction, matches_domain);
+        found |= instruction_matches_domain_predicate(
+            instruction,
+            matches_domain,
+            asset_definition_domains,
+        );
     });
     found
 }
@@ -38634,18 +38735,22 @@ pub(crate) fn tx_references_account_id(
 fn tx_references_domain_predicate<F>(
     tx: &iroha_data_model::query::CommittedTransaction,
     matches_domain: &F,
+    asset_definition_domains: &BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
 ) -> bool
 where
     F: Fn(&DomainId) -> bool,
 {
     match tx.entrypoint() {
-        TransactionEntrypoint::External(signed) => {
-            executable_contains_domain_predicate(signed.instructions(), matches_domain)
-        }
+        TransactionEntrypoint::External(signed) => executable_contains_domain_predicate(
+            signed.instructions(),
+            matches_domain,
+            asset_definition_domains,
+        ),
         TransactionEntrypoint::SealedCommitment(_) => false,
         TransactionEntrypoint::SealedReveal(reveal) => executable_contains_domain_predicate(
             reveal.signed_transaction().instructions(),
             matches_domain,
+            asset_definition_domains,
         ),
         TransactionEntrypoint::PrivateKaigi(private) => match &private.action {
             iroha_data_model::transaction::PrivateKaigiAction::Create(create) => {
@@ -38658,10 +38763,13 @@ where
                 matches_domain(&end.call_id.domain_id)
             }
         },
-        TransactionEntrypoint::Time(entry) => entry
-            .instructions
-            .iter()
-            .any(|instruction| instruction_matches_domain_predicate(instruction, matches_domain)),
+        TransactionEntrypoint::Time(entry) => entry.instructions.iter().any(|instruction| {
+            instruction_matches_domain_predicate(
+                instruction,
+                matches_domain,
+                asset_definition_domains,
+            )
+        }),
     }
 }
 
@@ -38669,17 +38777,22 @@ where
 fn tx_references_dataspace_alias(
     tx: &iroha_data_model::query::CommittedTransaction,
     expected_dataspace_alias: &str,
+    asset_definition_domains: &BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
 ) -> bool {
     let expected_dataspace_alias = expected_dataspace_alias.trim();
     if expected_dataspace_alias.is_empty() {
         return false;
     }
-    tx_references_domain_predicate(tx, &|domain_id| {
-        domain_id
-            .dataspace()
-            .as_ref()
-            .eq_ignore_ascii_case(expected_dataspace_alias)
-    })
+    tx_references_domain_predicate(
+        tx,
+        &|domain_id| {
+            domain_id
+                .dataspace()
+                .as_ref()
+                .eq_ignore_ascii_case(expected_dataspace_alias)
+        },
+        asset_definition_domains,
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -38702,6 +38815,7 @@ pub(crate) struct TxHistoryVisibilityScope {
     pub viewer_account_ids: Vec<AccountId>,
     pub viewer_dataspace_id: String,
     pub allow_dataspace_wide: bool,
+    pub asset_definition_domains: BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -38710,7 +38824,11 @@ fn tx_matches_history_visibility_scope(
     visibility: &TxHistoryVisibilityScope,
 ) -> bool {
     if visibility.allow_dataspace_wide {
-        return tx_references_dataspace_alias(tx, &visibility.viewer_dataspace_id);
+        return tx_references_dataspace_alias(
+            tx,
+            &visibility.viewer_dataspace_id,
+            &visibility.asset_definition_domains,
+        );
     }
     visibility
         .viewer_account_ids
@@ -40304,13 +40422,8 @@ fn explorer_qr_error(err: iroha_torii_shared::qr::QrError) -> Error {
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod address_metrics_tests {
-    use std::sync::{LazyLock, Mutex, MutexGuard};
-
     use iroha_data_model::{
-        account::{
-            AccountAddress, AccountId,
-            address::{AddressDomainKind, default_domain_name, set_default_domain_name},
-        },
+        account::{AccountAddress, AccountId, address::AddressDomainKind},
         domain::DomainId,
     };
     use norito::json::Value;
@@ -40320,7 +40433,6 @@ mod address_metrics_tests {
 
     const TEST_CONTEXT: &str = "/tests/account-metrics";
     const KAIGI_SSE_CONTEXT: &str = "/v1/kaigi/relays/events?relay";
-    static DEFAULT_DOMAIN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn local8_literal() -> &'static str {
         "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora"
@@ -40448,31 +40560,6 @@ mod address_metrics_tests {
         assert_eq!(after, before + 1);
     }
 
-    struct DefaultDomainGuard {
-        _lock: MutexGuard<'static, ()>,
-        previous: String,
-    }
-
-    impl DefaultDomainGuard {
-        fn set(label: &str) -> Self {
-            let lock = DEFAULT_DOMAIN_LOCK
-                .lock()
-                .expect("acquire default domain lock");
-            let previous = default_domain_name();
-            set_default_domain_name(label.to_owned()).expect("set default domain label");
-            Self {
-                _lock: lock,
-                previous: previous.to_string(),
-            }
-        }
-    }
-
-    impl Drop for DefaultDomainGuard {
-        fn drop(&mut self) {
-            let _ = set_default_domain_name(self.previous.clone());
-        }
-    }
-
     fn i105_literal(domain_label: &str) -> String {
         let _domain = DomainId::try_new(domain_label, "universal").expect("domain parses");
         let kp = checked_routing_fixture_keypair(
@@ -40486,7 +40573,6 @@ mod address_metrics_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn parse_account_literal_records_default_domain_metrics() {
-        let _guard = DefaultDomainGuard::set("wonderland");
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = TEST_CONTEXT;
         let literal = i105_literal("wonderland");
@@ -42689,6 +42775,7 @@ mod tx_query_filter_tests {
             viewer_account_ids: Vec::new(),
             viewer_dataspace_id: "banka".to_owned(),
             allow_dataspace_wide: true,
+            asset_definition_domains: BTreeMap::new(),
         };
 
         let banka_tx = make_external_tx_with_instructions(
@@ -44523,7 +44610,13 @@ mod query_endpoint_tests {
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let asset_def_id: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "query_asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&alice_id);
         let asset_id = AssetId::new(asset_def_id, alice_id.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(13_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
@@ -45911,7 +46004,7 @@ mod governance_stream_tests {
             id: proposal_id,
             proposer: sample_account(),
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse()
                     .expect("contract address"),
             ),
@@ -49221,14 +49314,14 @@ mod validation_fee_torii_ingress_tests {
     }
 
     fn fee_asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "paynet").expect("domain id"),
             "fee_token".parse().expect("asset name"),
         )
     }
 
     fn xor_asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "paynet").expect("domain id"),
             "xor".parse().expect("asset name"),
         )
@@ -49236,7 +49329,7 @@ mod validation_fee_torii_ingress_tests {
 
     fn payout_contract_address(user: &AccountId) -> ContractAddress {
         ContractAddress::derive(
-            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             user,
             42,
             DataSpaceId::UNIVERSAL,
@@ -49247,7 +49340,7 @@ mod validation_fee_torii_ingress_tests {
     fn pool_contract_address() -> ContractAddress {
         let (deployer, _) = account(4, "derive validation-fee pool deployer");
         ContractAddress::derive(
-            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &deployer,
             43,
             DataSpaceId::UNIVERSAL,
@@ -49435,12 +49528,18 @@ mod validation_fee_torii_ingress_tests {
         let domain = Domain::new(domain_id).build(user);
         let asset_definition = AssetDefinition::new(
             fee_asset.clone(),
+            "fee_token".to_owned(),
             NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(user);
         let xor_asset_definition = AssetDefinition::new(
             xor_asset_definition_id(),
+            "xor".to_owned(),
             NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(user);
         let user_asset = Asset::new(
@@ -50222,7 +50321,7 @@ mod validation_fee_torii_ingress_tests {
         );
 
         let ambiguous_queue = queue();
-        let xor = AssetDefinitionId::new(
+        let xor = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "paynet").expect("domain id"),
             "xor".parse().expect("asset name"),
         );
@@ -54581,7 +54680,7 @@ mod tx_projection_display_tests {
             timestamp_ms: Some(456),
             entrypoint_hash: "feedface".into(),
             result_ok: true,
-            contract_address: "tairac1router".into(),
+            contract_address: "irohac1router".into(),
             contract_alias: Some("dlmm_router".into()),
             contract_entrypoint: Some("route_swap".into()),
             contract_payload: Some(norito::json!({
@@ -54745,7 +54844,7 @@ mod tx_projection_display_tests {
             block_height: 9,
             block_hash_hex: "block-feedface".into(),
             result_ok: true,
-            contract_address: "tairac1router".into(),
+            contract_address: "irohac1router".into(),
             contract_alias: Some("dlmm_router".into()),
             module: "dlmm_router".into(),
             event_kind: "route_swap".into(),
@@ -54919,7 +55018,7 @@ mod tx_projection_display_tests {
     #[test]
     fn uranai_event_payload_normalization_redacts_private_proofs() {
         assert_eq!(
-            canonical_contract_module(Some("uranai::markets.universal"), "tairac1uranai"),
+            canonical_contract_module(Some("uranai::markets.universal"), "irohac1uranai"),
             Some("uranai")
         );
         assert_eq!(
@@ -54978,7 +55077,7 @@ mod tx_projection_display_tests {
             block_height,
             block_hash_hex: format!("block-{block_height}"),
             result_ok: true,
-            contract_address: "tairac1uranai".into(),
+            contract_address: "irohac1uranai".into(),
             contract_alias: Some("uranai::markets.universal".into()),
             module: "uranai".into(),
             event_kind: event_kind.into(),
@@ -55280,7 +55379,7 @@ mod tx_projection_display_tests {
     fn sample_swap_fill_rollup() -> SwapFillRollup {
         SwapFillRollup {
             authority: ALICE_ID.to_string(),
-            contract_address: "tairac1router".into(),
+            contract_address: "irohac1router".into(),
             contract_alias: Some("dlmm_router::dlmm.universal".into()),
             base_asset_id: "xor#universal".into(),
             quote_asset_id: "usdt#soraswap.universal".into(),
@@ -56298,15 +56397,23 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
         .unwrap();
     Register::asset_definition({
         let __asset_definition_id = cash_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(asset_definition_display_name(&__asset_definition_id))
+        AssetDefinition::numeric(
+            __asset_definition_id.clone(),
+            asset_definition_display_name(&__asset_definition_id),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     })
     .execute(&authority_id, &mut stx)
     .unwrap();
     Register::asset_definition({
         let __asset_definition_id = collateral_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(asset_definition_display_name(&__asset_definition_id))
+        AssetDefinition::numeric(
+            __asset_definition_id.clone(),
+            asset_definition_display_name(&__asset_definition_id),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     })
     .execute(&authority_id, &mut stx)
     .unwrap();
@@ -58357,7 +58464,7 @@ fn faucet_claim_scanner_includes_instruction_items_from_mixed_batch() {
     let transfer: InstructionBox =
         Transfer::asset_quantity(source_asset_id.clone(), amount.clone(), BOB_ID.clone()).into();
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        0,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         1,
         DataSpaceId::UNIVERSAL,
@@ -62830,17 +62937,23 @@ mod asset_definitions_query_tests {
         let mut cbdc_metadata = dm::Metadata::default();
         cbdc_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
         let cbdc_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        let cbdc = dm::AssetDefinition::numeric(cbdc_id.clone())
-            .with_name("CBDC".to_owned())
-            .with_metadata(cbdc_metadata)
-            .build(&authority);
+        let cbdc = dm::AssetDefinition::numeric(
+            cbdc_id.clone(),
+            "CBDC".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(cbdc_metadata)
+        .build(&authority);
 
         let mut usd_metadata = dm::Metadata::default();
         usd_metadata.insert("rank".parse().expect("metadata key"), 1_u32);
-        let usd = dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
-            "550e8400e29b41d4a7164466554400ee",
-        ))
-        .with_name("USD".to_owned())
+        let usd = dm::AssetDefinition::numeric(
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ee"),
+            "USD".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .with_metadata(usd_metadata)
         .build(&authority);
 
@@ -63089,10 +63202,12 @@ mod asset_definitions_query_tests {
             "derive asset-definition sort fixture authority",
         );
         let older = AssetDefinitionListItem {
-            definition: dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
-                "550e8400e29b41d4a7164466554400dd",
-            ))
-            .with_name("CBDC".to_owned())
+            definition: dm::AssetDefinition::numeric(
+                test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd"),
+                "CBDC".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&authority),
             id: "older".to_owned(),
             name: "CBDC".to_owned(),
@@ -63106,10 +63221,12 @@ mod asset_definitions_query_tests {
             }),
         };
         let newer = AssetDefinitionListItem {
-            definition: dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
-                "550e8400e29b41d4a7164466554400ee",
-            ))
-            .with_name("USD".to_owned())
+            definition: dm::AssetDefinition::numeric(
+                test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ee"),
+                "USD".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&authority),
             id: "newer".to_owned(),
             name: "USD".to_owned(),
@@ -63146,7 +63263,7 @@ mod asset_definitions_query_tests {
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_accounts(
     state: Arc<CoreState>,
-    pagination: crate::explorer::ExplorerPaginationQuery,
+    pagination: crate::explorer::ExplorerCursorQuery,
     domain: Option<DomainId>,
     definition: Option<AssetDefinitionId>,
 ) -> Result<AxResponse, Error> {
@@ -63155,25 +63272,21 @@ pub async fn handle_v1_explorer_accounts(
         &world,
         domain.as_ref(),
         definition.as_ref(),
-        pagination.page,
-        pagination.per_page,
-    );
+        &pagination,
+    )
+    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
 
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_domains(
     state: Arc<CoreState>,
-    pagination: crate::explorer::ExplorerPaginationQuery,
+    pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let page = crate::explorer::domains_page_for_filters(
-        &world,
-        owned_by.as_ref(),
-        pagination.page,
-        pagination.per_page,
-    );
+    let page = crate::explorer::domains_page_for_filters(&world, owned_by.as_ref(), &pagination)
+        .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
 
@@ -63192,7 +63305,7 @@ fn explorer_circulating_quantity(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
-    pagination: crate::explorer::ExplorerPaginationQuery,
+    pagination: crate::explorer::ExplorerCursorQuery,
     domain: Option<DomainId>,
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
@@ -63202,9 +63315,9 @@ pub async fn handle_v1_explorer_asset_definitions(
         &world,
         domain.as_ref(),
         owned_by.as_ref(),
-        pagination.page,
-        pagination.per_page,
-    );
+        &pagination,
+    )
+    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
 
     // Enrich the governance voting asset definition with locked/circulating supply figures.
     // (Other assets default to null for these fields.)
@@ -63243,7 +63356,7 @@ pub async fn handle_v1_explorer_asset_definitions(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_assets(
     state: Arc<CoreState>,
-    pagination: crate::explorer::ExplorerPaginationQuery,
+    pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     definition: Option<AssetDefinitionId>,
     asset_id: Option<AssetId>,
@@ -63254,16 +63367,16 @@ pub async fn handle_v1_explorer_assets(
         owned_by.as_ref(),
         definition.as_ref(),
         asset_id.as_ref(),
-        pagination.page,
-        pagination.per_page,
-    );
+        &pagination,
+    )
+    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
 
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_nfts(
     state: Arc<CoreState>,
-    pagination: crate::explorer::ExplorerPaginationQuery,
+    pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
 ) -> Result<AxResponse, Error> {
@@ -63272,16 +63385,16 @@ pub async fn handle_v1_explorer_nfts(
         &world,
         owned_by.as_ref(),
         domain.as_ref(),
-        pagination.page,
-        pagination.per_page,
-    );
+        &pagination,
+    )
+    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
 
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_rwas(
     state: Arc<CoreState>,
-    pagination: crate::explorer::ExplorerPaginationQuery,
+    pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
 ) -> Result<AxResponse, Error> {
@@ -63290,9 +63403,9 @@ pub async fn handle_v1_explorer_rwas(
         &world,
         owned_by.as_ref(),
         domain.as_ref(),
-        pagination.page,
-        pagination.per_page,
-    );
+        &pagination,
+    )
+    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
 
@@ -65371,8 +65484,12 @@ mod explorer_asset_definition_econometrics_tests {
             .ok();
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
-            dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(asset_definition_display_name(&__asset_definition_id))
+            dm::AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                asset_definition_display_name(&__asset_definition_id),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -65714,8 +65831,12 @@ mod explorer_asset_definition_snapshot_tests {
             .ok();
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
-            dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(asset_definition_display_name(&__asset_definition_id))
+            dm::AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                asset_definition_display_name(&__asset_definition_id),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -65900,8 +66021,12 @@ mod explorer_asset_definition_snapshot_tests {
             .ok();
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
-            dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(asset_definition_display_name(&__asset_definition_id))
+            dm::AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                asset_definition_display_name(&__asset_definition_id),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -69386,10 +69511,12 @@ pub async fn handle_post_v1_subscription_plan(
 
     let plan_key = (*SUBSCRIPTION_PLAN_KEY).clone();
     let instructions = vec![
-        InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(plan_id.clone())
-                .with_name(asset_definition_display_name(&plan_id)),
-        )),
+        InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            plan_id.clone(),
+            asset_definition_display_name(&plan_id),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))),
         InstructionBox::from(SetKeyValue::asset_definition(
             plan_id.clone(),
             plan_key,
@@ -70608,8 +70735,14 @@ mod subscription_api_tests {
         let asset_definitions: Vec<AssetDefinition> = plans
             .into_iter()
             .map(|(plan_id, plan)| {
-                let mut def =
-                    AssetDefinition::new(plan_id, NumericSpec::integer()).build(&provider);
+                let mut def = AssetDefinition::new(
+                    plan_id,
+                    "subscription_plan".to_owned(),
+                    NumericSpec::integer(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&provider);
                 def.metadata
                     .insert((*SUBSCRIPTION_PLAN_KEY).clone(), IrohaJson::new(plan));
                 def
@@ -71599,11 +71732,15 @@ mod adapter_filter_tests {
             .public_key()
             .clone(),
         );
-        let definition = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("issuer", "universal").expect("domain"),
-            "cbdc".parse().expect("name"),
-        ))
-        .with_name("CBDC".to_owned())
+        let definition = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("issuer", "universal").expect("domain"),
+                "cbdc".parse().expect("name"),
+            ),
+            "CBDC".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&authority);
         let item = AssetDefinitionListItem {
             definition,
@@ -71694,7 +71831,7 @@ mod adapter_filter_tests {
     fn asset_holder_filter_adapter_accepts_asset_and_scope_eq() {
         use iroha_test_samples::ALICE_ID;
 
-        let asset_def = AssetDefinitionId::new(
+        let asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),
         );
@@ -71715,7 +71852,7 @@ mod adapter_filter_tests {
     fn asset_holder_filter_matches_asset_and_scope() {
         use iroha_test_samples::ALICE_ID;
 
-        let asset_def = AssetDefinitionId::new(
+        let asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),
         );
@@ -71736,7 +71873,7 @@ mod adapter_filter_tests {
         let scope_expr = FilterExpr::Eq(FieldPath("scope".into()), Value::from("global"));
         assert!(filter_asset_holder_item(&scope_expr, &item));
 
-        let other_def = AssetDefinitionId::new(
+        let other_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("issuer", "universal").expect("domain"),
             "usd".parse().expect("name"),
         );

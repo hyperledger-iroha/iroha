@@ -3,6 +3,8 @@
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
+/// Deployment-injected supervised private Musubi publication service.
+pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
 mod nexus_fee_relay_worker;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
@@ -35,8 +37,12 @@ pub mod sorafs_provider_ingest_runtime;
 pub mod sorafs_reputation_finalized_query;
 /// Supervised committed `SoraFS` reputation projector and publisher.
 pub mod sorafs_reputation_runtime;
+/// Native Falcon-backed standalone Taira Bootle/Lantern issuer broker.
+#[cfg(feature = "daemon")]
+pub mod taira_bootle_lantern_broker;
 
 pub use runtime_provider_broker::{
+    BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
     RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
     serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_lifecycle_v1,
@@ -1375,6 +1381,11 @@ pub struct Iroha {
 /// those implementations and must never be sourced from `iroha_config`.
 #[derive(Clone, Default)]
 pub struct IrohaRuntimeDeps {
+    bootle_lantern_issuance_provider_registry: Option<
+        Arc<
+            dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1,
+        >,
+    >,
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider:
         Option<Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>>,
@@ -1497,7 +1508,8 @@ impl IrohaRuntimeDeps {
     /// process-local authority when configuration requested no provider.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.moderation_quarantine_key_wrapper.is_none()
+        self.bootle_lantern_issuance_provider_registry.is_none()
+            && self.moderation_quarantine_key_wrapper.is_none()
             && self.privacy_cycle_prf_provider.is_none()
             && self.privacy_release_anchor.is_none()
             && self.transparency_leader_lease_provider.is_none()
@@ -1550,6 +1562,18 @@ impl IrohaRuntimeDeps {
             && self.sorafs_por_finalized_replay_archive.is_none()
             && self.soracloud_runtime_mutation_signer.is_none()
             && self.soracloud_hf_inference_credential_provider.is_none()
+    }
+
+    /// Attach the deployment-owned Bootle/Lantern issuer and authentication registry.
+    #[must_use]
+    pub fn with_bootle_lantern_issuance_provider_registry(
+        mut self,
+        registry: Arc<
+            dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1,
+        >,
+    ) -> Self {
+        self.bootle_lantern_issuance_provider_registry = Some(registry);
+        self
     }
 
     /// Attach the production PKCS#11/KMS wrapper for moderation quarantine
@@ -8976,6 +9000,7 @@ impl Iroha {
             logger,
             shutdown_signal,
             IrohaRuntimeDeps::default(),
+            None,
         ))
         .await
     }
@@ -8988,12 +9013,14 @@ impl Iroha {
     /// handoffs, and all hedging/billing query, verification, HSM,
     /// publication, acknowledgement, and witness adapters must be supplied by
     /// an injecting launcher; enabling the dependent path without one fails
-    /// closed. The reputation queue submitter is a separately injected
-    /// deployment boundary. The Torii proxy bridge signer remains a separate
-    /// native node role. Any configured signed Governance DAG producer requires
-    /// a sealed monotonic checkpoint store; enabling its public service
-    /// additionally requires separately qualified IPFS/head authenticators. The
-    /// exact historical reputation query is daemon-owned and backed only by the
+    /// closed. A private Musubi publication runner is likewise available only
+    /// through explicit deployment injection and joins this node's supervisor.
+    /// The reputation queue submitter is a separately injected deployment
+    /// boundary. The Torii proxy bridge signer remains a separate native node
+    /// role. Any configured signed Governance DAG producer requires a sealed
+    /// monotonic checkpoint store; enabling its public service additionally
+    /// requires separately qualified IPFS/head authenticators. The exact
+    /// historical reputation query is daemon-owned and backed only by the
     /// configured Kura-authenticated archive.
     ///
     /// # Errors
@@ -9008,6 +9035,9 @@ impl Iroha {
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
         mut runtime_deps: IrohaRuntimeDeps,
+        musubi_publication_deployment: Option<
+            musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+        >,
     ) -> ReportResult<
         (
             Self,
@@ -10640,6 +10670,9 @@ impl Iroha {
         let sorafs_repair_config =
             sorafs_node::config::RepairConfig::from(&config.torii.sorafs_repair);
         let sorafs_gc_config = sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc);
+        let bootle_lantern_issuance_provider_registry = runtime_deps
+            .bootle_lantern_issuance_provider_registry
+            .clone();
         let moderation_quarantine_key_wrapper =
             runtime_deps.moderation_quarantine_key_wrapper.clone();
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
@@ -11329,6 +11362,11 @@ impl Iroha {
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret)
             .with_vpn_relay_trust(vpn_relay_trust);
+        let runtime_deps = if let Some(registry) = bootle_lantern_issuance_provider_registry {
+            runtime_deps.with_bootle_lantern_issuance_provider_registry(registry)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(runtime) = sorafs_reputation_runtime.as_ref() {
             let reader: Arc<dyn sorafs_node::reputation::runtime::ReputationCommittedReadApiV1> =
                 Arc::new(ReadyReputationCommittedReaderV1 {
@@ -11566,6 +11604,15 @@ impl Iroha {
         supervisor
             .setup_shutdown_on_os_signals()
             .change_context(StartError::ListenOsSignal)?;
+
+        let (_availability, publication_child) =
+            musubi_publication_service::start_injected_musubi_publication_private_service_v1(
+                musubi_publication_deployment,
+                supervisor.shutdown_signal(),
+            );
+        if let Some(child) = publication_child {
+            supervisor.monitor(child);
+        }
 
         supervisor.shutdown_on_external_signal(shutdown_signal);
 
@@ -12488,47 +12535,24 @@ fn fastpq_metal_overrides_from_config(
     }
 }
 
-fn ivm_stack_budget_bytes(config: &Config) -> u64 {
-    config
-        .compute
-        .resource_profiles
-        .get(&config.ivm.memory_budget_profile)
-        .map(|budget| budget.max_stack_bytes.get())
-        .expect("ivm.memory_budget_profile missing from compute.resource_profiles")
-}
-
 /// Apply concurrency settings (IVM scheduler + Rayon) derived from configuration.
-fn apply_concurrency_config(
-    concurrency: &iroha_config::parameters::actual::Concurrency,
-    stack_budget_bytes: u64,
-) {
+fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) {
     let stack_outcome = ivm::apply_stack_sizes(
         concurrency.scheduler_stack_bytes,
         concurrency.prover_stack_bytes,
-        concurrency.guest_stack_bytes,
-        stack_budget_bytes,
     );
     iroha_core::sumeragi::set_sumeragi_stack_size_bytes(concurrency.sumeragi_stack_bytes);
-    if stack_outcome.scheduler_clamped
-        || stack_outcome.prover_clamped
-        || stack_outcome.guest_clamped
-        || stack_outcome.budget_clamped
-    {
+    if stack_outcome.scheduler_clamped || stack_outcome.prover_clamped {
         iroha_logger::warn!(
             requested_scheduler_bytes = stack_outcome.requested_scheduler_bytes,
             requested_prover_bytes = stack_outcome.requested_prover_bytes,
-            requested_guest_bytes = stack_outcome.requested_guest_bytes,
-            requested_budget_bytes = stack_outcome.requested_budget_bytes,
             scheduler_bytes = stack_outcome.scheduler_bytes,
             prover_bytes = stack_outcome.prover_bytes,
-            guest_bytes = stack_outcome.guest_bytes,
-            budget_bytes = stack_outcome.budget_bytes,
             min_stack_bytes = ivm::MIN_STACK_BYTES,
             max_stack_bytes = ivm::MAX_STACK_BYTES,
             "Stack size overrides were clamped to the supported range"
         );
     }
-    ivm::set_gas_to_stack_multiplier(concurrency.gas_to_stack_multiplier);
     let min = concurrency.scheduler_min_threads;
     let max = concurrency.scheduler_max_threads;
     ivm::set_scheduler_thread_limits(
@@ -12679,8 +12703,7 @@ pub fn read_config_and_genesis(
     #[cfg(feature = "fastpq-gpu")]
     preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
 
-    let stack_budget_bytes = ivm_stack_budget_bytes(&config);
-    apply_concurrency_config(&config.concurrency, stack_budget_bytes);
+    apply_concurrency_config(&config.concurrency);
 
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
     // uses the configured archive bounds and GPU offload policy.
@@ -12692,15 +12715,6 @@ pub fn read_config_and_genesis(
     apply_ivm_acceleration_config(&config.accel);
     rs16::set_simd_enabled(config.accel.enable_simd);
 
-    iroha_data_model::account::address::set_default_domain_name(
-        config.common.default_account_domain_label.value().clone(),
-    )
-    .map_err(|err| {
-        Report::new(ConfigError::ParseConfig).attach(format!(
-            "invalid default account domain label `{}`: {err}",
-            config.common.default_account_domain_label.value()
-        ))
-    })?;
     iroha_data_model::account::address::set_chain_discriminant(
         *config.common.chain_discriminant.value(),
     );
@@ -14612,26 +14626,6 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
         }
     }
 
-    if config.compute.enabled {
-        let guest_stack = config.concurrency.guest_stack_bytes;
-        let budget_stack = config
-            .compute
-            .resource_profiles
-            .get(&config.ivm.memory_budget_profile)
-            .map_or_else(|| guest_stack.max(1), |budget| budget.max_stack_bytes.get());
-        if guest_stack < budget_stack {
-            log_config_warning(&format!(
-                "concurrency.guest_stack_bytes ({guest_stack}) is smaller than ivm.memory_budget_profile `{}` max_stack_bytes ({budget_stack}); guest stack limits will be clamped to the smaller value",
-                config.ivm.memory_budget_profile
-            ));
-        } else if guest_stack != budget_stack {
-            log_config_warning(&format!(
-                "concurrency.guest_stack_bytes ({guest_stack}) differs from ivm.memory_budget_profile `{}` max_stack_bytes ({budget_stack}); effective stacks use the minimum of the caps",
-                config.ivm.memory_budget_profile
-            ));
-        }
-    }
-
     if config.sumeragi.role == iroha_config::parameters::actual::NodeRole::Validator {
         if !config.confidential.enabled {
             emitter.emit(
@@ -14733,7 +14727,7 @@ pub fn main_entry(default_build_line: BuildLine) {
         env::var(BUILD_LINE_ENV).ok(),
         default_build_line.daemon_bin(),
     );
-    if let Err(report) = run_main(build_line, None) {
+    if let Err(report) = run_main(build_line, None, None) {
         eprintln!("{report:?}");
         std::process::exit(1);
     }
@@ -14759,7 +14753,55 @@ pub fn run_with_runtime_provider_registry(
         env::var(BUILD_LINE_ENV).ok(),
         default_build_line.daemon_bin(),
     );
-    run_main(build_line, Some(registry))
+    run_main(build_line, Some(registry), None)
+}
+
+/// Run the standard CLI launcher with a deployment-owned private Musubi publication service.
+///
+/// The caller must assemble the complete private HTTPS runner, including its durable clock and
+/// journal, receipt signer, and admitted SoraFS backends, before invoking this function. The
+/// launcher transfers that opaque deployment into the daemon supervisor without requiring an
+/// unrelated runtime-provider registry. It never exposes the private routes through Torii or
+/// reads service credentials from argv or node configuration. An unexpected private-runner exit
+/// is fatal to the same supervisor that owns the node.
+///
+/// # Errors
+///
+/// Returns a launcher error if configuration, subsystem startup, or supervised execution fails.
+pub fn run_with_musubi_publication(
+    default_build_line: BuildLine,
+    deployment: musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+) -> ReportResult<(), MainError> {
+    let build_line = resolve_build_line_from_env(
+        env::var(BUILD_LINE_ENV).ok(),
+        default_build_line.daemon_bin(),
+    );
+    run_main(build_line, None, Some(deployment))
+}
+
+/// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
+/// publication service.
+///
+/// The caller must assemble the complete private HTTPS runner, including its durable clock and
+/// journal, receipt signer, and admitted SoraFS backends, before invoking this function. The
+/// launcher only transfers that opaque deployment into the daemon supervisor; it never exposes
+/// the private routes through Torii or reads service credentials from argv or node configuration.
+/// An unexpected private-runner exit is fatal to the same supervisor that owns the node.
+///
+/// # Errors
+///
+/// Returns a launcher error if configuration, provider resolution, subsystem startup, or
+/// supervised execution fails.
+pub fn run_with_runtime_provider_registry_and_musubi_publication(
+    default_build_line: BuildLine,
+    registry: &dyn IrohaRuntimeProviderRegistryV1,
+    deployment: musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+) -> ReportResult<(), MainError> {
+    let build_line = resolve_build_line_from_env(
+        env::var(BUILD_LINE_ENV).ok(),
+        default_build_line.daemon_bin(),
+    );
+    run_main(build_line, Some(registry), Some(deployment))
 }
 
 fn parse_fastpq_execution_mode(value: &str) -> Result<FastpqExecutionMode, String> {
@@ -15003,6 +15045,9 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
 fn run_main(
     build_line: BuildLine,
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
+    musubi_publication_deployment: Option<
+        musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+    >,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
 
@@ -15154,7 +15199,12 @@ fn run_main(
         .map_err(Report::from)
         .change_context(MainError::IrohaStart)?;
 
-    let result = rt.block_on(run_node(config, genesis, runtime_deps));
+    let result = rt.block_on(run_node(
+        config,
+        genesis,
+        runtime_deps,
+        musubi_publication_deployment,
+    ));
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
 }
@@ -16805,6 +16855,9 @@ async fn run_node(
     config: Config,
     genesis: Option<GenesisBlock>,
     runtime_deps: IrohaRuntimeDeps,
+    musubi_publication_deployment: Option<
+        musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+    >,
 ) -> ReportResult<(), MainError> {
     let logger = iroha_logger::init_global(config.logger.clone()).map_err(|err| {
         // https://github.com/hashintel/hash/issues/4295
@@ -16860,8 +16913,14 @@ async fn run_node(
         default_hook(info);
     }));
 
-    let start =
-        Iroha::start_with_runtime_deps(config, genesis, logger, shutdown_on_panic, runtime_deps);
+    let start = Iroha::start_with_runtime_deps(
+        config,
+        genesis,
+        logger,
+        shutdown_on_panic,
+        runtime_deps,
+        musubi_publication_deployment,
+    );
     let (_iroha, supervisor_fut) = Box::pin(start)
         .await
         .change_context(MainError::IrohaStart)?;
@@ -17593,14 +17652,16 @@ mod tests {
             "an explicitly injected deployment registry must remain authoritative"
         );
         assert!(
-            run_main_source.contains("rt.block_on(run_node(config,genesis,runtime_deps))"),
-            "standard CLI startup must forward the resolved dependency set"
+            run_main_source.contains(
+                "rt.block_on(run_node(config,genesis,runtime_deps,musubi_publication_deployment))"
+            ),
+            "standard CLI startup must forward the resolved dependency set and private publication deployment"
         );
         assert!(
             run_node_source.contains(
-                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps)"
+                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps,musubi_publication_deployment)"
             ),
-            "daemon startup must consume the resolved dependency set"
+            "daemon startup must consume the resolved dependency set and private publication deployment"
         );
         assert!(
             !run_main_source
@@ -17622,6 +17683,59 @@ mod tests {
         assert!(
             validation < resolution && resolution < runtime_start,
             "provider resolution must follow config validation and precede Tokio/node startup"
+        );
+    }
+
+    #[test]
+    fn explicit_musubi_private_deployment_is_threaded_and_supervised_fail_closed() {
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+
+        assert!(
+            compact_source.contains("run_main(build_line,None,None)"),
+            "the stock launcher must not construct or start a private publication service"
+        );
+        assert!(
+            compact_source.contains("run_main(build_line,Some(registry),None)"),
+            "the existing custom registry launcher must preserve fail-closed publication defaults"
+        );
+        assert!(
+            compact_source.contains("run_main(build_line,None,Some(deployment))"),
+            "the standalone publication launcher must not require an unrelated provider registry"
+        );
+        assert!(
+            compact_source.contains("run_main(build_line,Some(registry),Some(deployment))"),
+            "the combined custom launcher must inject both deployment-owned dependencies"
+        );
+
+        let startup_source = compact_source
+            .split_once("pub(crate)asyncfnstart_with_runtime_deps(")
+            .expect("start_with_runtime_deps source")
+            .1
+            .split_once("fnvalidate_membership_snapshot_against_live_peers(")
+            .expect("start_with_runtime_deps source boundary")
+            .0;
+        let signal_setup = startup_source
+            .find("supervisor.setup_shutdown_on_os_signals()")
+            .expect("OS signal setup");
+        let publication_start = startup_source
+            .find(
+                "musubi_publication_service::start_injected_musubi_publication_private_service_v1(musubi_publication_deployment,supervisor.shutdown_signal())",
+            )
+            .expect("injected publication service startup");
+        let publication_monitor = startup_source
+            .find("ifletSome(child)=publication_child{supervisor.monitor(child);}")
+            .expect("publication child supervision");
+        let external_signal = startup_source
+            .find("supervisor.shutdown_on_external_signal(shutdown_signal)")
+            .expect("external shutdown signal hookup");
+        assert!(
+            signal_setup < publication_start
+                && publication_start < publication_monitor
+                && publication_monitor < external_signal,
+            "the private runner must start only after fallible signal setup and join the node supervisor"
         );
     }
 
@@ -17997,7 +18111,7 @@ mod tests {
                 std::num::NonZeroU64::new(7).expect("nonzero message cap");
             config.zk.sccp.max_pending_outbound_payload_bytes =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
-            let offline_asset_definition_id = AssetDefinitionId::new(
+            let offline_asset_definition_id = AssetDefinitionId::derive_from_components(
                 iroha_data_model::domain::DomainId::try_new("boi", "is")
                     .expect("offline asset domain"),
                 "ds".parse().expect("offline asset name"),
@@ -20704,7 +20818,7 @@ mod tests {
             );
 
             config.settlement.offline.escrow_accounts.insert(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     iroha_data_model::domain::DomainId::try_new("offline", "universal")
                         .expect("offline asset domain"),
                     "cash".parse().expect("offline asset name"),
@@ -21810,50 +21924,6 @@ mod tests {
                     "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
                 );
             }
-
-            Ok(())
-        }
-
-        #[test]
-        fn stack_budget_mismatch_warns_but_allows_config() -> eyre::Result<()> {
-            let (config, _dir, _config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    let mut cpu_balanced = toml::Table::new();
-                    cpu_balanced.insert("max_cycles".to_owned(), toml::Value::Integer(10_000_000));
-                    cpu_balanced.insert(
-                        "max_memory_bytes".to_owned(),
-                        toml::Value::Integer(256 * 1024 * 1024),
-                    );
-                    cpu_balanced.insert(
-                        "max_stack_bytes".to_owned(),
-                        toml::Value::Integer(8 * 1024 * 1024),
-                    );
-                    cpu_balanced.insert(
-                        "max_io_bytes".to_owned(),
-                        toml::Value::Integer(24 * 1024 * 1024),
-                    );
-                    cpu_balanced.insert(
-                        "max_egress_bytes".to_owned(),
-                        toml::Value::Integer(12 * 1024 * 1024),
-                    );
-                    cpu_balanced.insert("allow_gpu_hints".to_owned(), toml::Value::Boolean(true));
-                    cpu_balanced.insert("allow_wasi".to_owned(), toml::Value::Boolean(true));
-
-                    let mut profiles = toml::Table::new();
-                    profiles.insert("cpu-balanced".to_owned(), toml::Value::Table(cpu_balanced));
-
-                    iroha_config::base::toml::Writer::new(table)
-                        .write(["compute", "enabled"], true)
-                        .write(
-                            ["compute", "resource_profiles"],
-                            toml::Value::Table(profiles),
-                        )
-                        .write(["compute", "default_resource_profile"], "cpu-balanced")
-                        .write(["ivm", "memory_budget_profile"], "cpu-balanced")
-                        .write(["concurrency", "guest_stack_bytes"], 4_i64 * 1024 * 1024);
-                })?;
-
-            validate_config(&config).map_err(|report| eyre::eyre!("{report:?}"))?;
 
             Ok(())
         }

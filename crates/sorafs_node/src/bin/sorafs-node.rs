@@ -24,24 +24,7 @@ use sorafs_manifest::{
         PorProofV1, decode_audit_verdict_v1, decode_por_challenge_v1, decode_por_proof_v1,
     },
 };
-use sorafs_node::{
-    NodeHandle, PorFailedRepairIntentV1, PorRepairHandoff, PorRepairHandoffError,
-    PorVerdictOutcome, config::StorageConfig, store::StorageBackend,
-};
-
-#[derive(Debug)]
-struct UnavailableCliPorRepairHandoff;
-
-impl PorRepairHandoff for UnavailableCliPorRepairHandoff {
-    fn enqueue_failed_por_repair(
-        &self,
-        _intent: &PorFailedRepairIntentV1,
-    ) -> Result<[u8; 32], PorRepairHandoffError> {
-        Err(PorRepairHandoffError(
-            "the node developer CLI has no native repair transaction handoff".to_owned(),
-        ))
-    }
-}
+use sorafs_node::{NodeHandle, PorVerdictOutcome, config::StorageConfig, store::StorageBackend};
 
 fn main() {
     if let Err(err) = run() {
@@ -82,7 +65,7 @@ fn print_usage() {
 fn print_por_usage() {
     eprintln!(
         "Usage: sorafs-node ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]\n\n\
-         Offline replay helper: verifies embedded signatures and lifecycle binding, but does not establish provider admission, trusted-auditor membership, or beacon/VRF provenance. Failed verdicts are rejected because this developer CLI has no native repair transaction handoff; production mutation must use Torii's authenticated lifecycle."
+         Offline replay helper: verifies embedded signatures and lifecycle binding, but does not establish provider admission, trusted-auditor membership, or beacon/VRF provenance. Failed verdicts remain in the node's durable repair outbox; production mutation and repair reconciliation must use Torii's authenticated lifecycle."
     );
 }
 
@@ -338,12 +321,7 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
             .map(|signature| signature.public_key.clone())
             .collect::<Vec<_>>();
         let outcome = handle
-            .record_por_verdict(
-                &verdict,
-                &embedded_auditor_keys,
-                1,
-                &UnavailableCliPorRepairHandoff,
-            )
+            .record_por_verdict(&verdict, &embedded_auditor_keys, 1)
             .map_err(|err| format!("failed to record verdict: {err}"))?;
         Some((verdict, outcome))
     } else {

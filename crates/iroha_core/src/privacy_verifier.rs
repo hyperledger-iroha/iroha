@@ -2750,7 +2750,7 @@ mod tests {
         let statement =
             PrivacyStatementV1::VeRangeTransparentRangeV1(VeRangeTransparentRangeStatementV1 {
                 context,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("asset").expect("name"),
                 ),
@@ -2829,18 +2829,32 @@ mod tests {
                 },
             ));
             let chain_id = ChainId::from("taira-privacy-jindo-test");
-            let polynomial = vec![
-                jindo_field(3),
-                jindo_field(5),
-                jindo_field(7),
-                jindo_field(11),
+            let polynomials = vec![
+                vec![
+                    jindo_field(3),
+                    jindo_field(5),
+                    jindo_field(7),
+                    jindo_field(11),
+                ],
+                vec![jindo_field(13), jindo_field(17)],
+                vec![jindo_field(19), jindo_field(23)],
+                vec![jindo_field(29), jindo_field(31)],
             ];
             let evaluation_point = jindo_field(13);
-            let claim = evaluate_polynomial_v1(&polynomial, evaluation_point)
-                .expect("canonical Jindo evaluation");
-            let (commitment, opening) =
-                commit_polynomial_v1(&polynomial, &mut KatRng::new([0x6a; 32]))
-                    .expect("Jindo commitment");
+            let claimed_evaluations = polynomials
+                .iter()
+                .map(|polynomial| {
+                    evaluate_polynomial_v1(polynomial, evaluation_point)
+                        .expect("canonical Jindo evaluation")
+                })
+                .collect();
+            let mut commitment_rng = KatRng::new([0x6a; 32]);
+            let (polynomial_commitments, openings): (Vec<_>, Vec<_>) = polynomials
+                .iter()
+                .map(|polynomial| {
+                    commit_polynomial_v1(polynomial, &mut commitment_rng).expect("Jindo commitment")
+                })
+                .unzip();
             let statement = IrohaJindoPolynomialCommitmentStatementV1 {
                 context: PrivacyStatementContextV1 {
                     chain_id: chain_id.clone(),
@@ -2852,9 +2866,9 @@ mod tests {
                     statement_schema_digest: compiled.statement_schema_digest,
                     engine_manifest_digest: compiled.engine_manifest_digest,
                 },
-                polynomial_commitments: vec![commitment],
+                polynomial_commitments,
                 evaluation_point,
-                claimed_evaluations: vec![claim],
+                claimed_evaluations,
             };
             let typed_statement =
                 PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone());
@@ -2872,7 +2886,7 @@ mod tests {
                 generator_digest: jindo_crs_digest_v1(),
             };
             let proof =
-                prove_batched_evaluation_v1(&statement, &[polynomial], &[opening], &transcript)
+                prove_batched_evaluation_v1(&statement, &polynomials, &openings, &transcript)
                     .expect("Jindo proof");
             assert_eq!(proof.len(), JINDO_NATIVE_PROOF_BYTES_V1);
             Self {
@@ -3245,7 +3259,7 @@ mod tests {
                 PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
             );
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("orchard_asset").expect("name"),
             );
@@ -3513,7 +3527,7 @@ mod tests {
             ));
             let chain_id = ChainId::from("taira-privacy-fcmp-test");
             let pool_id = PrivacyPoolIdV1::new([0xC1; 32]);
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("fcmp_asset").expect("name"),
             );
@@ -3796,7 +3810,7 @@ mod tests {
                 policy_digest: PrivacyPolicyDigestV1::new([0x9B; 32]),
                 source: account(0x9C),
                 destination: account(0x9D),
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("privacy domain"),
                     Name::from_str("zkace_runtime").expect("asset name"),
                 ),
@@ -4323,7 +4337,7 @@ mod tests {
             let statement =
                 PrivacyStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
                     context: statement_context,
-                    asset_definition_id: AssetDefinitionId::new(
+                    asset_definition_id: AssetDefinitionId::derive_from_components(
                         DomainId::try_new("privacy", "universal").expect("domain"),
                         Name::from_str("asset").expect("name"),
                     ),
@@ -5138,7 +5152,7 @@ mod tests {
         let wrong_asset = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
             fixture.namespace,
             PrivacyOrchardPoolBootstrapDigestV1::new([0xC3; 32]),
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("wrong_orchard_asset").expect("name"),
             ),
@@ -5502,7 +5516,7 @@ mod tests {
                 PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
                     PrivacyIvmPrivateNotePoolBootstrapV1 {
                         pool_id: fixture.statement.pool_id,
-                        asset_definition_id: AssetDefinitionId::new(
+                        asset_definition_id: AssetDefinitionId::derive_from_components(
                             DomainId::try_new("privacy", "universal").expect("domain"),
                             Name::from_str("wrong_private_asset").expect("name"),
                         ),
@@ -5693,7 +5707,7 @@ mod tests {
         let wrong_asset = PrivacyProofManagedPoolSnapshotV1::canonical_pq_masp_bootstrap_for_test(
             PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1 {
                 pool_id: fixture.statement.pool_id,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("wrong_pq_asset").expect("name"),
                 ),
@@ -6032,7 +6046,7 @@ mod tests {
         let wrong_asset = PrivacyProofManagedPoolSnapshotV1::canonical_fcmp_bootstrap_for_test(
             PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
                 pool_id: statement.pool_id,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("wrong_fcmp_asset").expect("name"),
                 ),
@@ -6669,10 +6683,11 @@ mod tests {
         assert_rejected(&changed_policy, &activation, &chain_id, "changed-policy");
 
         let mut changed_asset = envelope.clone();
-        verange_statement_mut(&mut changed_asset).asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("privacy", "universal").expect("domain"),
-            Name::from_str("other_asset").expect("name"),
-        );
+        verange_statement_mut(&mut changed_asset).asset_definition_id =
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("other_asset").expect("name"),
+            );
         refresh_statement_digest(&mut changed_asset);
         assert_rejected(&changed_asset, &activation, &chain_id, "changed-asset");
 

@@ -2915,7 +2915,7 @@ mod tests {
     fn asset_definition(name: &str) -> AssetDefinitionId {
         let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let asset_name = Name::from_str(name).expect("asset name");
-        AssetDefinitionId::new(domain, asset_name)
+        AssetDefinitionId::derive_from_components(domain, asset_name)
     }
 
     fn bond_policy(minimum: &str, asset: &AssetDefinitionId) -> RelayBondPolicyV1 {

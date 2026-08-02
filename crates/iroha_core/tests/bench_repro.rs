@@ -64,7 +64,7 @@ fn execute_register_domain_like_bench() {
         AliasLeaseAcquisitionV1::new(1, None),
         AliasQuoteGuardV1 {
             expected_policy_version: 0,
-            expected_payment_asset: AssetDefinitionId::new(
+            expected_payment_asset: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("valid payment asset domain"),
                 "xor".parse().expect("valid payment asset name"),
             ),

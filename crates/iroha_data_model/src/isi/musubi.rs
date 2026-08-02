@@ -311,6 +311,30 @@ impl AcceptMusubiPackageMaintainerV1 {
 impl crate::seal::Instruction for AcceptMusubiPackageMaintainerV1 {}
 
 isi! {
+    /// Revoke a pending package role invitation as a current package owner.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct RevokeMusubiPackageMaintainerInvitationV1 {
+        /// Stable package identity.
+        pub package: MusubiPackageIdV1,
+        /// Exact pending invitation identity.
+        pub invite_id: crate::musubi::MusubiInviteIdV1,
+        /// Compare-and-set governance revision.
+        pub expected_governance_revision: u64,
+    }
+}
+
+impl RevokeMusubiPackageMaintainerInvitationV1 {
+    /// First-release stable wire identifier.
+    pub const WIRE_ID: &'static str = "iroha.musubi.v1.package_member.invitation.revoke";
+}
+
+impl crate::seal::Instruction for RevokeMusubiPackageMaintainerInvitationV1 {}
+
+isi! {
     /// Change an accepted package member's role.
     #[cfg_attr(
         feature = "json",
@@ -617,6 +641,11 @@ impl_decode_musubi_instruction!(AcceptMusubiPackageMaintainerV1 {
     invite_id: crate::musubi::MusubiInviteIdV1,
     expected_governance_revision: u64,
 });
+impl_decode_musubi_instruction!(RevokeMusubiPackageMaintainerInvitationV1 {
+    package: MusubiPackageIdV1,
+    invite_id: crate::musubi::MusubiInviteIdV1,
+    expected_governance_revision: u64,
+});
 impl_decode_musubi_instruction!(SetMusubiPackageMaintainerRoleV1 {
     package: MusubiPackageIdV1,
     account: AccountId,
@@ -714,6 +743,15 @@ mod tests {
     }
 
     #[test]
+    fn pending_invitation_revoke_roundtrips() {
+        assert_slice_roundtrip(RevokeMusubiPackageMaintainerInvitationV1 {
+            package: package(),
+            invite_id: crate::musubi::MusubiInviteIdV1::new([0x34; 32]),
+            expected_governance_revision: 9,
+        });
+    }
+
+    #[test]
     fn publish_namespace_is_explicit_in_wire_roundtrip() {
         let release = release();
         let lock = MusubiVerificationLockV1 {
@@ -766,6 +804,7 @@ mod tests {
             SetMusubiPackageMetadataV1::WIRE_ID,
             InviteMusubiPackageMaintainerV1::WIRE_ID,
             AcceptMusubiPackageMaintainerV1::WIRE_ID,
+            RevokeMusubiPackageMaintainerInvitationV1::WIRE_ID,
             SetMusubiPackageMaintainerRoleV1::WIRE_ID,
             RemoveMusubiPackageMaintainerV1::WIRE_ID,
             RegisterMusubiAliasV1::WIRE_ID,

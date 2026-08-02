@@ -1475,6 +1475,13 @@ function validateDecodedInstructionProofAttachments(instruction) {
     if (!isPlainObject(payload)) {
       continue;
     }
+    if (variant === "Unshield") {
+      assertOnlyObjectKeys(
+        payload,
+        ["asset", "to", "public_amount", "inputs", "proof", "root_hint"],
+        "zk.Unshield",
+      );
+    }
     if (!Object.prototype.hasOwnProperty.call(payload, field)) {
       throw new TypeError(`zk.${variant}.${field} is required`);
     }
@@ -4498,28 +4505,14 @@ function decodeZkInstructionPayload(wireId, payload) {
       };
     }
     case "iroha_data_model::isi::zk::Unshield": {
-      let fields;
-      try {
-        fields = decodeStructFields(payload, "zk.Unshield", [
-          "asset",
-          "to",
-          "public_amount",
-          "inputs",
-          "outputs",
-          "proof",
-          "root_hint",
-        ]);
-      } catch (_error) {
-        fields = decodeStructFields(payload, "zk.Unshield", [
-          "asset",
-          "to",
-          "public_amount",
-          "inputs",
-          "proof",
-          "root_hint",
-        ]);
-        fields.outputs = encodeNoritoVec([], (entry) => entry);
-      }
+      const fields = decodeStructFields(payload, "zk.Unshield", [
+        "asset",
+        "to",
+        "public_amount",
+        "inputs",
+        "proof",
+        "root_hint",
+      ]);
       return {
         zk: {
           Unshield: {
@@ -4540,18 +4533,6 @@ function decodeZkInstructionPayload(wireId, payload) {
                   ),
                 ),
               "zk.Unshield.inputs",
-            ),
-            outputs: decodeNoritoVec(
-              fields.outputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.Unshield.outputs[${index}]`,
-                  ),
-                ),
-              "zk.Unshield.outputs",
             ),
             proof: decodeProofAttachmentValue(fields.proof, "zk.Unshield.proof"),
             root_hint: decodeOptionValue(
@@ -5177,6 +5158,50 @@ function encodeNewAssetDefinitionValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  const hasOwningDomain = Object.prototype.hasOwnProperty.call(value, "owning_domain");
+  const hasCamelOwningDomain = Object.prototype.hasOwnProperty.call(value, "owningDomain");
+  if (!hasOwningDomain && !hasCamelOwningDomain) {
+    throw new TypeError(
+      `${context}.owning_domain is required; use null for an intentionally unowned global definition`,
+    );
+  }
+  if (
+    hasOwningDomain &&
+    hasCamelOwningDomain &&
+    value.owning_domain !== value.owningDomain
+  ) {
+    throw new TypeError(`${context} ownership aliases disagree`);
+  }
+  const owningDomain = hasOwningDomain ? value.owning_domain : value.owningDomain;
+  if (owningDomain === undefined) {
+    throw new TypeError(`${context}.owning_domain must be a domain identifier or null`);
+  }
+  const hasBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    value,
+    "balance_scope_policy",
+  );
+  const hasCamelBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    value,
+    "balanceScopePolicy",
+  );
+  if (!hasBalanceScopePolicy && !hasCamelBalanceScopePolicy) {
+    throw new TypeError(`${context}.balance_scope_policy is required`);
+  }
+  if (
+    hasBalanceScopePolicy &&
+    hasCamelBalanceScopePolicy &&
+    value.balance_scope_policy !== value.balanceScopePolicy
+  ) {
+    throw new TypeError(`${context} balance-scope policy aliases disagree`);
+  }
+  const balanceScopePolicy = hasBalanceScopePolicy
+    ? value.balance_scope_policy
+    : value.balanceScopePolicy;
+  if (balanceScopePolicy === "DataspaceRestricted" && owningDomain === null) {
+    throw new TypeError(
+      `${context}.owning_domain is required for DataspaceRestricted balances`,
+    );
+  }
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.id, `${context}.id`)],
     [encodeStringValue(value.name ?? "", `${context}.name`)],
@@ -5194,10 +5219,11 @@ function encodeNewAssetDefinitionValue(value, context) {
     [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
     [
       encodeAssetBalancePolicyValue(
-        value.balance_scope_policy ?? value.balanceScopePolicy ?? "Global",
+        balanceScopePolicy,
         `${context}.balance_scope_policy`,
       ),
     ],
+    [encodeOptionValue(owningDomain, encodeDomainIdValue, `${context}.owning_domain`)],
     [
       encodeAssetConfidentialPolicyValue(
         value.confidential_policy ?? value.confidentialPolicy ?? defaultAssetConfidentialPolicy(),
@@ -5218,6 +5244,7 @@ function decodeNewAssetDefinitionValue(payload, context) {
     "logo",
     "metadata",
     "balance_scope_policy",
+    "owning_domain",
     "confidential_policy",
   ]);
   return {
@@ -5236,6 +5263,11 @@ function decodeNewAssetDefinitionValue(payload, context) {
     balance_scope_policy: decodeAssetBalancePolicyValue(
       fields.balance_scope_policy,
       `${context}.balance_scope_policy`,
+    ),
+    owning_domain: decodeOptionValue(
+      fields.owning_domain,
+      decodeDomainIdValue,
+      `${context}.owning_domain`,
     ),
     confidential_policy: decodeAssetConfidentialPolicyValue(
       fields.confidential_policy,
@@ -6488,15 +6520,17 @@ function encodeZkTransferPayload(value) {
 }
 
 function encodeUnshieldPayload(value) {
+  assertOnlyObjectKeys(
+    value,
+    ["asset", "to", "public_amount", "inputs", "proof", "root_hint"],
+    "zk.Unshield",
+  );
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.Unshield.asset")],
     [encodeAccountIdValue(value.to, "zk.Unshield.to")],
     [encodeQuantityValue(value.public_amount, "zk.Unshield.public_amount")],
     [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
       encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
-    )],
-    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.outputs[${index}]`),
     )],
     [encodeProofAttachmentValue(value.proof, "zk.Unshield.proof")],
     [

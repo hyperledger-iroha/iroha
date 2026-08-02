@@ -3557,6 +3557,16 @@ pub mod codec {
         /// Declared stream lengths do not match the payload.
         #[error("bundle rANS stream length mismatch")]
         LengthMismatch,
+        /// A bundle record advertises a width outside the authenticated table domain.
+        #[error("invalid bundle bit length at index {index}: found {bit_len}, expected 1..={max}")]
+        InvalidBitLength {
+            /// Position within the bundle record stream.
+            index: u32,
+            /// Width advertised by the record.
+            bit_len: u8,
+            /// Maximum width authenticated by the selected tables.
+            max: u8,
+        },
         /// Table checksum does not match the telemetry-provided checksum.
         #[error("bundle table checksum mismatch: expected {expected:?}, found {found:?}")]
         ChecksumMismatch { expected: Hash, found: Hash },
@@ -8029,6 +8039,16 @@ pub mod codec {
         bundles: &[BundleRecord],
         tables: &BundleAnsTables,
     ) -> Result<Vec<u8>, BundleDecodeError> {
+        let max_width = tables.max_width();
+        for (index, record) in bundles.iter().enumerate() {
+            if record.bit_len == 0 || record.bit_len > max_width {
+                return Err(BundleDecodeError::InvalidBitLength {
+                    index: saturating_usize_to_u32(index),
+                    bit_len: record.bit_len,
+                    max: max_width,
+                });
+            }
+        }
         if bundles
             .iter()
             .any(|record| matches!(record.bundle_type, BundleType::SignificanceRle))
@@ -10627,6 +10647,53 @@ mod tests {
         let err =
             codec::decode_bundle_stream(&stream, &bundles, tables.as_ref()).expect_err("bad len");
         assert!(matches!(err, codec::BundleDecodeError::LengthMismatch));
+    }
+
+    #[test]
+    fn decode_bundle_stream_rejects_zero_bit_length_before_rle_shift() {
+        let tables = codec::default_bundle_tables();
+        let bundles = [codec::BundleRecord {
+            bundle_type: codec::BundleType::SignificanceRle,
+            context: codec::BundleContextId::new(0),
+            bits: u8::MAX,
+            bit_len: 0,
+            flush: codec::BundleFlushReason::EndOfBlock,
+        }];
+
+        let err = codec::decode_bundle_stream(&[], &bundles, tables.as_ref())
+            .expect_err("zero-width records must fail before shifting");
+        assert_eq!(
+            err,
+            codec::BundleDecodeError::InvalidBitLength {
+                index: 0,
+                bit_len: 0,
+                max: tables.max_width(),
+            }
+        );
+    }
+
+    #[test]
+    fn decode_bundle_stream_rejects_width_above_authenticated_tables() {
+        let tables = codec::default_bundle_tables();
+        let invalid_width = tables.max_width().checked_add(1).expect("bounded width");
+        let bundles = [codec::BundleRecord {
+            bundle_type: codec::BundleType::SignificanceRle,
+            context: codec::BundleContextId::new(0),
+            bits: u8::MAX,
+            bit_len: invalid_width,
+            flush: codec::BundleFlushReason::EndOfBlock,
+        }];
+
+        let err = codec::decode_bundle_stream(&[], &bundles, tables.as_ref())
+            .expect_err("out-of-domain widths must fail before shifting");
+        assert_eq!(
+            err,
+            codec::BundleDecodeError::InvalidBitLength {
+                index: 0,
+                bit_len: invalid_width,
+                max: tables.max_width(),
+            }
+        );
     }
 
     #[test]

@@ -23,6 +23,8 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// Stable category for an atomic-write failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AtomicWriteErrorCode {
+    /// The platform cannot provide the required race-safe atomic replacement primitive.
+    UnsupportedPlatform,
     /// The requested destination was empty, absolute, or contained a non-normal component.
     InvalidRelativePath,
     /// The configured write root was not a stable, real directory.
@@ -46,6 +48,7 @@ impl AtomicWriteErrorCode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::UnsupportedPlatform => "MUSUBI_ATOMIC_UNSUPPORTED_PLATFORM",
             Self::InvalidRelativePath => "MUSUBI_ATOMIC_INVALID_RELATIVE_PATH",
             Self::UnsafeRoot => "MUSUBI_ATOMIC_UNSAFE_ROOT",
             Self::SymlinkAncestor => "MUSUBI_ATOMIC_SYMLINK_ANCESTOR",
@@ -133,11 +136,25 @@ pub struct AtomicWriteRoot {
 impl AtomicWriteRoot {
     /// Bind future writes to an existing, non-symlink directory.
     ///
+    /// Musubi V1 enables this writer on Unix. Other targets fail closed until
+    /// they expose a safe handle-relative replace-existing operation.
+    ///
     /// # Errors
     ///
     /// Returns an error if `root` is missing, is a symlink, is not a directory,
     /// changes during canonicalization, or cannot be inspected.
     pub fn new(root: &Path) -> Result<Self, AtomicWriteError> {
+        if !cfg!(unix) {
+            // TODO: Enable Windows after a safe handle-relative replace-existing primitive is
+            // available to this crate. Dropping a retained directory handle around
+            // `std::fs::rename` would reintroduce the reparse/substitution race this writer is
+            // intended to exclude.
+            return Err(AtomicWriteError::new(
+                AtomicWriteErrorCode::UnsupportedPlatform,
+                root,
+                "bind a race-safe atomic write root on this platform",
+            ));
+        }
         let linked = fs::symlink_metadata(root)
             .map_err(|error| AtomicWriteError::io(root, "inspect the write root", error))?;
         if linked.file_type().is_symlink() || !linked.is_dir() {
@@ -178,7 +195,8 @@ impl AtomicWriteRoot {
     ///
     /// The destination parent must already exist. The method rejects absolute
     /// paths, traversal, symlink parents and targets, non-regular targets, and
-    /// hard-linked targets on Unix. It creates a private temporary file in the
+    /// hard-linked targets. V1 currently enables replacement only on Unix. It
+    /// creates a private temporary file in the
     /// destination directory with `create_new`, writes and flushes all bytes,
     /// synchronizes the file, atomically renames it, and synchronizes the
     /// parent directory. Existing permissions are retained; a new file is
@@ -647,6 +665,7 @@ fn has_multiple_hard_links(_metadata: &fs::Metadata) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn creates_and_replaces_a_root_confined_file() {
         let root = tempfile::tempdir().expect("temporary root");
@@ -675,6 +694,7 @@ mod tests {
         }));
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejects_absolute_and_traversing_destinations() {
         let root = tempfile::tempdir().expect("temporary root");
@@ -768,6 +788,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn pending_temporary_file_cleanup_is_identity_bound() {
         let root = tempfile::tempdir().expect("temporary root");
@@ -775,9 +796,14 @@ mod tests {
             let pending = PendingTemp::create(root.path()).expect("create pending file");
             pending.path.clone()
         };
-        #[cfg(unix)]
         assert!(!path.exists());
-        #[cfg(not(unix))]
-        assert!(path.exists());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn atomic_replacement_fails_closed_on_unsupported_platforms() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let error = AtomicWriteRoot::new(root.path()).expect_err("platform rejected");
+        assert_eq!(error.code(), AtomicWriteErrorCode::UnsupportedPlatform);
     }
 }

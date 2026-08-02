@@ -44,6 +44,7 @@ class Fixture:
         self.record = b"canonical-candidate-v4\n"
         self.manifest = b"canonical-inner-manifest-v4\n"
         self.roster = b"canonical-real-roster-v2\n"
+        self.qualification_receipt = b"canonical-recursive-step-two-qualification-v4\n"
         write_private(self.candidate / stage.CANDIDATE_RECORD_NAME, self.record)
         write_private(self.candidate / stage.CANDIDATE_JSON_NAME, b'{"candidate":"view"}\n')
         write_private(
@@ -51,6 +52,10 @@ class Fixture:
             f"{hashlib.sha256(self.record).hexdigest()}\n".encode("ascii"),
         )
         write_private(self.candidate / stage.ROSTER_NAME, self.roster)
+        write_private(
+            self.candidate / stage.QUALIFICATION_RECEIPT_NAME,
+            self.qualification_receipt,
+        )
         self.artifact_payloads: dict[str, bytes] = {}
         for index, (_, name) in enumerate(stage.ARTIFACTS, start=1):
             payload = bytes([index]) * (64 + index)
@@ -122,14 +127,28 @@ class Fixture:
                     "payload_sha256": hashlib.sha256(f"payload-{index}".encode()).hexdigest(),
                 }
             )
+        candidate_record_sha256 = hashlib.sha256(self.record).hexdigest()
+        qualification_receipt_sha256 = hashlib.sha256(
+            self.qualification_receipt
+        ).hexdigest()
         return {
             "schema": stage.REPORT_SCHEMA,
-            "candidate_record_sha256": hashlib.sha256(self.record).hexdigest(),
+            "candidate_record_sha256": candidate_record_sha256,
             "candidate_manifest_sha256": hashlib.sha256(self.manifest).hexdigest(),
+            "qualification_receipt_file_name": stage.QUALIFICATION_RECEIPT_NAME,
+            "qualification_receipt_sha256": qualification_receipt_sha256,
+            "qualified_candidate_sha256": stage.qualified_candidate_sha256(
+                candidate_record_sha256,
+                qualification_receipt_sha256,
+            ),
             "source_commit": SOURCE.commit,
             "source_tree_sha256": SOURCE.tree_sha256,
             "source_repo_dirty": True,
             "generation": "candidate.test.v4",
+            "generation_memory_limit_bytes": 6 * 1024 * 1024 * 1024,
+            "generation_memory_enforcement_profile": (
+                stage.GENERATION_MEMORY_ENFORCEMENT_PROFILE
+            ),
             "bridge_abi_version": 21,
             "artifact_count": 8,
             "artifacts": artifacts,
@@ -182,6 +201,47 @@ class CandidateStagerTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_descriptor_relative_publication_rejects_a_swapped_parent(self) -> None:
+        parent = self.root / "publish-parent"
+        parent.mkdir(mode=0o700)
+        (parent / "staging").mkdir(mode=0o700)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        parent_fd = os.open(parent, flags)
+        try:
+            displaced = self.root / "displaced-parent"
+            parent.rename(displaced)
+            parent.mkdir(mode=0o700)
+            (parent / "staging").mkdir(mode=0o700)
+            sentinel = parent / "sentinel"
+            sentinel.write_bytes(b"attacker sentinel")
+
+            with self.assertRaisesRegex(stage.StageError, "parent changed"):
+                stage._publish_noreplace(parent_fd, parent, "staging", "published")
+
+            self.assertTrue((displaced / "staging").is_dir())
+            self.assertTrue((parent / "staging").is_dir())
+            self.assertEqual(sentinel.read_bytes(), b"attacker sentinel")
+            self.assertFalse((parent / "published").exists())
+        finally:
+            os.close(parent_fd)
+
+    def test_post_rename_fsync_failure_is_explicitly_uncertain(self) -> None:
+        parent = self.root / "uncertain-parent"
+        parent.mkdir(mode=0o700)
+        (parent / "staging").mkdir(mode=0o700)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        parent_fd = os.open(parent, flags)
+        try:
+            with (
+                mock.patch.object(stage.os, "fsync", side_effect=OSError("synthetic fsync fault")),
+                self.assertRaisesRegex(stage.StagePublicationUncertain, "reached its final name"),
+            ):
+                stage._publish_noreplace(parent_fd, parent, "staging", "published")
+            self.assertFalse((parent / "staging").exists())
+            self.assertTrue((parent / "published").is_dir())
+        finally:
+            os.close(parent_fd)
 
     def test_authority_build_gates_both_targets_without_dropping_evidence_lab(self) -> None:
         command = stage._authority_build_command(Path("/toolchain/cargo"))
@@ -271,6 +331,18 @@ class CandidateStagerTests(unittest.TestCase):
         assert isinstance(artifacts, list)
         artifacts[0], artifacts[1] = artifacts[1], artifacts[0]
         with self.assertRaisesRegex(stage.StageError, "order or role"):
+            stage.parse_validation_report(self.report_bytes())
+
+    def test_report_parser_rejects_v1_and_unbound_qualification(self) -> None:
+        self.fixture.report["schema"] = (
+            "iroha.kagemusha.recursive_spend.candidate_validation." + "v1"
+        )
+        with self.assertRaisesRegex(stage.StageError, "schema is unsupported"):
+            stage.parse_validation_report(self.report_bytes())
+        self.fixture.report["schema"] = stage.REPORT_SCHEMA
+
+        self.fixture.report["qualified_candidate_sha256"] = "f" * 64
+        with self.assertRaisesRegex(stage.StageError, "qualified-candidate identity"):
             stage.parse_validation_report(self.report_bytes())
 
     def test_report_parser_accepts_exact_artifact_limit_and_rejects_next_byte(self) -> None:
@@ -379,7 +451,8 @@ class CandidateStagerTests(unittest.TestCase):
                 root=output,
                 expected_sha256=output.name,
             )
-            self.assertEqual(parsed["entry_count"], 44)
+            self.assertEqual(parsed["version"], 2)
+            self.assertEqual(parsed["entry_count"], 45)
             self.assertEqual(parsed["scenario_entry_count"], 33)
             self.assertEqual(
                 (output / "evidence/candidate/candidate-v4.norito").read_bytes(),
@@ -388,6 +461,14 @@ class CandidateStagerTests(unittest.TestCase):
             self.assertEqual(
                 (output / "evidence/candidate/manifest-v4.norito").read_bytes(),
                 self.fixture.manifest,
+            )
+            self.assertEqual(
+                (
+                    output
+                    / "evidence/candidate"
+                    / stage.QUALIFICATION_RECEIPT_NAME
+                ).read_bytes(),
+                self.fixture.qualification_receipt,
             )
             self.assertEqual(
                 {path.name for path in (output / "evidence/candidate/artifacts").iterdir()},

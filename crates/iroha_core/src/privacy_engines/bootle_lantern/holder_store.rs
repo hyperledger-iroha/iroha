@@ -38,9 +38,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::{
-    codec::{
-        BLIND_ISSUANCE_REQUEST_BYTES_V1, BLIND_ISSUANCE_RESPONSE_BYTES_V1, PROOF_BYTES_V1,
-    },
+    codec::{BLIND_ISSUANCE_REQUEST_BYTES_V1, BLIND_ISSUANCE_RESPONSE_BYTES_V1, PROOF_BYTES_V1},
     issuer::{
         BootleLanternBlindIssuanceRequestV1, BootleLanternBlindIssuanceResponseV1,
         BootleLanternBlindIssuanceStateV1, BootleLanternCredentialV1,
@@ -85,10 +83,8 @@ const HOLDER_KEY_ID_MAX_BYTES_V1: usize = 255;
 const HOLDER_WRAPPED_DEK_MAX_BYTES_V1: usize = 4_096;
 const HOLDER_HARD_MAX_RECORDS_V1: usize = 4_096;
 const HOLDER_DEFAULT_MAX_RECORDS_V1: usize = 256;
-const HOLDER_ENVELOPE_AAD_DOMAIN_V1: &[u8] =
-    b"iroha.privacy.bootle-lantern.holder-envelope-aad.v1";
-const HOLDER_DEK_CONTEXT_DOMAIN_V1: &[u8] =
-    b"iroha.privacy.bootle-lantern.holder-dek-context.v1";
+const HOLDER_ENVELOPE_AAD_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.holder-envelope-aad.v1";
+const HOLDER_DEK_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.holder-dek-context.v1";
 const HOLDER_RESPONSE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.holder-response-digest.v1";
 const HOLDER_ENVELOPE_DIGEST_DOMAIN_V1: &[u8] =
@@ -97,24 +93,22 @@ const HOLDER_MANIFEST_REVISION_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.holder-manifest-revision.v1";
 
 /// Exact encrypted-holder-store profile committed by the first release.
-pub const BOOTLE_LANTERN_HOLDER_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"ILV1:XChaCha20-Poly1305+runtime-wrapped-random-DEK|secret-wires:ILP1-pending-73856,ILC1-response-cached-77032,ILF1-finalized-5352,ILX1-rejected-176|outer-header:276|key-id<=255|wrapped-DEK<=4096|max-envelope=81675|ILM1:sealed-monotonic-CAS-head,sorted-208-byte-entries,max4096,max852084|lifecycle:Pending-before-ILQ1-egress->ResponseCached-before-finalization->Finalized-or-Rejected|storage:immutable-content-addressed-create-new-0600+file-fsync+objects-dir-fsync-before-head-CAS+exact-readback|ownership:canonical-process-lease+unix-nonblocking-exclusive-flock+nofollow-single-link|rollback:sealed-head-authoritative+generation+predecessor+envelope-digest|secrets:no-public-state-or-credential-codec,zeroize-on-drop,proof-only-presentation";
+pub const BOOTLE_LANTERN_HOLDER_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"ILV1:XChaCha20-Poly1305+runtime-wrapped-random-DEK|secret-wires:ILP1-pending-73856,ILC1-response-cached-77032,ILF1-finalized-5352,ILX1-secret-free-terminal-176|outer-header:276|key-id<=255|wrapped-DEK<=4096|max-envelope=81675|ILM1:sealed-monotonic-CAS-head,sorted-208-byte-entries,max4096,max852084|lifecycle:Pending-before-ILQ1-egress->ResponseCached-before-finalization->Finalized;untrusted-invalid-response-durable-restore-to-Pending;holder-semantic-invalidity-only->Rejected|storage:immutable-content-addressed-create-new-0600+file-fsync+objects-dir-fsync-before-head-CAS+exact-decrypting-readback|ownership:effective-uid+exact-0700-dirs+0600-files+canonical-process-lease+unix-nonblocking-exclusive-flock+nofollow-single-link|rollback:sealed-head-authoritative-per-operation+generation+predecessor+envelope-digest|secrets:no-public-state-or-credential-codec,zeroize-on-drop,proof-only-presentation";
 
 /// Exact plaintext bytes in one pending holder object.
-pub const BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1: usize =
-    HOLDER_SECRET_HEADER_BYTES_V1
-        + HOLDER_BINDING_DIGESTS_V1 * 32
-        + BLIND_ISSUANCE_REQUEST_BYTES_V1
-        + HOLDER_RANDOMNESS_POLYNOMIALS_V1 * HOLDER_POLYNOMIAL_BYTES_V1
-        + HOLDER_ATTRIBUTES_BYTES_V1;
+pub const BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1: usize = HOLDER_SECRET_HEADER_BYTES_V1
+    + HOLDER_BINDING_DIGESTS_V1 * 32
+    + BLIND_ISSUANCE_REQUEST_BYTES_V1
+    + HOLDER_RANDOMNESS_POLYNOMIALS_V1 * HOLDER_POLYNOMIAL_BYTES_V1
+    + HOLDER_ATTRIBUTES_BYTES_V1;
 /// Exact plaintext bytes after the canonical issuer response is cached.
 pub const BOOTLE_LANTERN_HOLDER_CACHED_PLAINTEXT_BYTES_V1: usize =
     BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1 + BLIND_ISSUANCE_RESPONSE_BYTES_V1;
 /// Exact plaintext bytes in one finalized credential object.
-pub const BOOTLE_LANTERN_HOLDER_FINALIZED_PLAINTEXT_BYTES_V1: usize =
-    HOLDER_SECRET_HEADER_BYTES_V1
-        + HOLDER_BINDING_DIGESTS_V1 * 32
-        + HOLDER_CREDENTIAL_POLYNOMIALS_V1 * HOLDER_POLYNOMIAL_BYTES_V1
-        + HOLDER_ATTRIBUTES_BYTES_V1;
+pub const BOOTLE_LANTERN_HOLDER_FINALIZED_PLAINTEXT_BYTES_V1: usize = HOLDER_SECRET_HEADER_BYTES_V1
+    + HOLDER_BINDING_DIGESTS_V1 * 32
+    + HOLDER_CREDENTIAL_POLYNOMIALS_V1 * HOLDER_POLYNOMIAL_BYTES_V1
+    + HOLDER_ATTRIBUTES_BYTES_V1;
 /// Exact plaintext bytes in a secret-free terminal rejection object.
 pub const BOOTLE_LANTERN_HOLDER_REJECTED_PLAINTEXT_BYTES_V1: usize =
     HOLDER_SECRET_HEADER_BYTES_V1 + HOLDER_BINDING_DIGESTS_V1 * 32 + 8;
@@ -125,10 +119,10 @@ pub const BOOTLE_LANTERN_HOLDER_MAX_ENVELOPE_BYTES_V1: u64 = (HOLDER_ENVELOPE_HE
     + BOOTLE_LANTERN_HOLDER_CACHED_PLAINTEXT_BYTES_V1
     + HOLDER_AEAD_TAG_BYTES_V1) as u64;
 /// Largest canonical sealed manifest under the fixed record cap.
-pub const BOOTLE_LANTERN_HOLDER_MAX_MANIFEST_BYTES_V1: u64 =
-    (HOLDER_MANIFEST_HEADER_BYTES_V1
-        + HOLDER_HARD_MAX_RECORDS_V1 * HOLDER_MANIFEST_ENTRY_BYTES_V1
-        + HOLDER_MANIFEST_REVISION_BYTES_V1) as u64;
+pub const BOOTLE_LANTERN_HOLDER_MAX_MANIFEST_BYTES_V1: u64 = (HOLDER_MANIFEST_HEADER_BYTES_V1
+    + HOLDER_HARD_MAX_RECORDS_V1 * HOLDER_MANIFEST_ENTRY_BYTES_V1
+    + HOLDER_MANIFEST_REVISION_BYTES_V1)
+    as u64;
 
 /// Public lifecycle of one holder authorization record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -139,7 +133,8 @@ pub enum BootleLanternHolderPhaseV1 {
     ResponseCached,
     /// A reusable credential is durably available for local presentation.
     Finalized,
-    /// A correctly bound response failed credential validation terminally.
+    /// Holder-owned semantic state was deterministically invalid; no secret
+    /// material remains. Untrusted invalid responses never enter this phase.
     Rejected,
 }
 
@@ -454,7 +449,9 @@ impl HolderManifestV1 {
         Ok(next)
     }
 
-    fn sealed_head(&self) -> Result<BootleLanternHolderSealedHeadV1, BootleLanternHolderStoreErrorV1> {
+    fn sealed_head(
+        &self,
+    ) -> Result<BootleLanternHolderSealedHeadV1, BootleLanternHolderStoreErrorV1> {
         Ok(BootleLanternHolderSealedHeadV1 {
             generation: self.generation,
             revision: self.revision,
@@ -655,6 +652,7 @@ impl BootleLanternFileHolderStoreV1 {
             let temp_root = canonical_root.join(HOLDER_TEMP_DIRECTORY_V1);
             ensure_private_subdirectory_v1(&canonical_root, &objects_root)?;
             ensure_private_subdirectory_v1(&canonical_root, &temp_root)?;
+            validate_holder_root_namespace_v1(&canonical_root)?;
             clean_holder_temp_v1(&temp_root)?;
 
             let manifest = load_or_create_manifest_v1(
@@ -670,7 +668,7 @@ impl BootleLanternFileHolderStoreV1 {
                 sealed_heads.as_ref(),
                 sealed_head_qualification,
             )?;
-            Ok(Self {
+            let store = Self {
                 root: canonical_root,
                 objects_root,
                 temp_root,
@@ -688,7 +686,10 @@ impl BootleLanternFileHolderStoreV1 {
                 _writer_lock: writer_lock,
                 #[cfg(test)]
                 fail_next_write_stage: AtomicU8::new(0),
-            })
+            };
+            store.validate_active_secrets_v1()?;
+            drop(store.lock_healthy_state_v1()?);
+            Ok(store)
         }
     }
 
@@ -824,20 +825,23 @@ impl BootleLanternFileHolderStoreV1 {
             .ok_or(BootleLanternHolderStoreErrorV1::NotFound)?;
         if !matches!(
             entry.phase,
-            BootleLanternHolderPhaseV1::Pending
-                | BootleLanternHolderPhaseV1::ResponseCached
+            BootleLanternHolderPhaseV1::Pending | BootleLanternHolderPhaseV1::ResponseCached
         ) {
             return Err(BootleLanternHolderStoreErrorV1::InvalidState);
         }
-        Ok(self.load_pending_locked_v1(entry, &scope)?.request_bytes.clone())
+        Ok(self
+            .load_pending_locked_v1(entry, &scope)?
+            .request_bytes
+            .clone())
     }
 
-    /// Cache one exact `ILR1`, then finalize and durably retain its credential.
+    /// Cache one exact, correctly bound `ILR1` before attempting finalization.
     ///
-    /// If the process stops after caching but before credential publication,
-    /// [`Self::resume_cached_response_v1`] completes the transition after
-    /// reopen without another issuer response.
-    pub fn accept_issuer_response_v1(
+    /// Once this returns, process loss cannot require another issuer response:
+    /// [`Self::resume_cached_response_v1`] can complete the transition after
+    /// reopen. Canonical but substituted response bindings fail without
+    /// changing an existing pending record.
+    pub fn cache_issuer_response_v1(
         &self,
         handle: BootleLanternHolderHandleV1,
         context: &PrivacyStatementContextV1,
@@ -880,7 +884,7 @@ impl BootleLanternFileHolderStoreV1 {
                 return Err(BootleLanternHolderStoreErrorV1::BindingMismatch);
             }
             BootleLanternHolderPhaseV1::Rejected => {
-                return Err(BootleLanternHolderStoreErrorV1::CredentialRejected);
+                return Err(BootleLanternHolderStoreErrorV1::HolderStateTerminal);
             }
             BootleLanternHolderPhaseV1::ResponseCached => {
                 if existing.response_digest != response_digest {
@@ -917,17 +921,39 @@ impl BootleLanternFileHolderStoreV1 {
             }
         }
         drop(response);
-        self.finalize_cached_locked_v1(
-            &mut state,
+        self.ensure_manifest_authoritative_v1(&state.manifest)?;
+        drop(state);
+        self.revalidate_providers_v1()
+    }
+
+    /// Cache one exact `ILR1`, then finalize and durably retain its credential.
+    ///
+    /// The cache transition commits independently first, so a crash cannot
+    /// lose the response. Cryptographic rejection then durably discards only
+    /// that untrusted response and restores the original pending state.
+    pub fn accept_issuer_response_v1(
+        &self,
+        handle: BootleLanternHolderHandleV1,
+        context: &PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: &BootleLanternIssuerPolicyV1,
+        response_bytes: &[u8],
+    ) -> Result<(), BootleLanternHolderStoreErrorV1> {
+        self.cache_issuer_response_v1(
             handle,
             context,
             canonical_genesis_hash,
             policy,
-            &scope,
-        )
+            response_bytes,
+        )?;
+        self.resume_cached_response_v1(handle, context, canonical_genesis_hash, policy)
     }
 
     /// Finalize an already cached response after process restart.
+    ///
+    /// A correctly bound but cryptographically invalid untrusted response is
+    /// removed by a durable transition back to `Pending`; the original ILQ1
+    /// state remains usable with a later legitimate response.
     pub fn resume_cached_response_v1(
         &self,
         handle: BootleLanternHolderHandleV1,
@@ -959,12 +985,9 @@ impl BootleLanternFileHolderStoreV1 {
         rng: &mut R,
     ) -> Result<Vec<u8>, BootleLanternHolderStoreErrorV1> {
         self.revalidate_providers_v1()?;
-        let scope = BootleLanternCredentialScopeV1::new(
-            &statement.context,
-            canonical_genesis_hash,
-            policy,
-        )
-        .map_err(|_| BootleLanternHolderStoreErrorV1::BindingMismatch)?;
+        let scope =
+            BootleLanternCredentialScopeV1::new(&statement.context, canonical_genesis_hash, policy)
+                .map_err(|_| BootleLanternHolderStoreErrorV1::BindingMismatch)?;
         let state = self.lock_healthy_state_v1()?;
         let entry = state
             .manifest
@@ -1025,7 +1048,7 @@ impl BootleLanternFileHolderStoreV1 {
         match existing.phase {
             BootleLanternHolderPhaseV1::Finalized => return Ok(()),
             BootleLanternHolderPhaseV1::Rejected => {
-                return Err(BootleLanternHolderStoreErrorV1::CredentialRejected);
+                return Err(BootleLanternHolderStoreErrorV1::HolderStateTerminal);
             }
             BootleLanternHolderPhaseV1::Pending => {
                 return Err(BootleLanternHolderStoreErrorV1::InvalidState);
@@ -1064,6 +1087,27 @@ impl BootleLanternFileHolderStoreV1 {
             response,
         ) {
             Ok(credential) => credential,
+            Err(
+                BootleLanternIssuanceErrorV1::IssuanceResponseMismatch
+                | BootleLanternIssuanceErrorV1::CredentialValidationFailed,
+            ) => {
+                pending.response_digest = [0; 32];
+                let restored = encode_pending_secret_v1(&pending)?;
+                self.publish_secret_locked_v1(
+                    state,
+                    HolderPublishBindingV1 {
+                        phase: BootleLanternHolderPhaseV1::Pending,
+                        authorization_digest: existing.authorization_digest,
+                        request_digest: existing.request_digest,
+                        scope_digest: existing.scope_digest,
+                        policy_record_digest: existing.policy_record_digest,
+                        response_digest: [0; 32],
+                    },
+                    existing.envelope_digest,
+                    restored.as_slice(),
+                )?;
+                return Err(BootleLanternHolderStoreErrorV1::CredentialRejected);
+            }
             Err(_) => {
                 let rejected = encode_rejected_secret_v1(
                     existing.authorization_digest,
@@ -1086,7 +1130,7 @@ impl BootleLanternFileHolderStoreV1 {
                     existing.envelope_digest,
                     rejected.as_slice(),
                 )?;
-                return Err(BootleLanternHolderStoreErrorV1::CredentialRejected);
+                return Err(BootleLanternHolderStoreErrorV1::HolderStateTerminal);
             }
         };
         let finalized = FinalizedSecretV1 {
@@ -1136,6 +1180,35 @@ impl BootleLanternFileHolderStoreV1 {
         Ok(pending)
     }
 
+    fn validate_active_secrets_v1(&self) -> Result<(), BootleLanternHolderStoreErrorV1> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+        for entry in state.manifest.entries.values() {
+            let plaintext = self.load_plaintext_v1(entry)?;
+            match entry.phase {
+                BootleLanternHolderPhaseV1::Pending
+                | BootleLanternHolderPhaseV1::ResponseCached => {
+                    let pending = decode_pending_secret_v1(entry.phase, plaintext.as_slice())?;
+                    validate_pending_against_entry_v1(&pending, entry)?;
+                }
+                BootleLanternHolderPhaseV1::Finalized => {
+                    let finalized = decode_finalized_secret_v1(plaintext.as_slice())?;
+                    validate_finalized_against_entry_v1(&finalized, entry)?;
+                }
+                BootleLanternHolderPhaseV1::Rejected => {
+                    if decode_rejected_secret_v1(plaintext.as_slice())?
+                        != entry_binding_digests_v1(entry)
+                    {
+                        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn load_finalized_locked_v1(
         &self,
         entry: &HolderManifestEntryV1,
@@ -1150,14 +1223,7 @@ impl BootleLanternFileHolderStoreV1 {
         }
         let plaintext = self.load_plaintext_v1(entry)?;
         let finalized = decode_finalized_secret_v1(plaintext.as_slice())?;
-        if finalized.authorization_digest != entry.authorization_digest
-            || finalized.request_digest != entry.request_digest
-            || finalized.scope_digest != entry.scope_digest
-            || finalized.policy_record_digest != entry.policy_record_digest
-            || finalized.response_digest != entry.response_digest
-        {
-            return Err(BootleLanternHolderStoreErrorV1::Corrupt);
-        }
+        validate_finalized_against_entry_v1(&finalized, entry)?;
         Ok(finalized)
     }
 
@@ -1176,14 +1242,10 @@ impl BootleLanternFileHolderStoreV1 {
         if before != self.key_wrapper_qualification {
             return Err(BootleLanternHolderStoreErrorV1::ProviderDrift);
         }
-        let mut dek = self
+        let dek = self
             .key_wrapper
-            .unwrap_dek(
-                &envelope.wrapping_key_id,
-                context,
-                &envelope.wrapped_dek,
-            )
-            .map_err(map_external_provider_error_v1)?;
+            .unwrap_dek(&envelope.wrapping_key_id, context, &envelope.wrapped_dek)
+            .map_err(map_key_wrapper_operation_error_v1)?;
         let dek = Zeroizing::new(dek);
         if dek.iter().all(|byte| *byte == 0) {
             return Err(BootleLanternHolderStoreErrorV1::KeyWrapping);
@@ -1222,19 +1284,32 @@ impl BootleLanternFileHolderStoreV1 {
         plaintext: &[u8],
     ) -> Result<(), BootleLanternHolderStoreErrorV1> {
         ensure_state_healthy_v1(state)?;
-        self.revalidate_providers_v1()?;
-        self.ensure_manifest_authoritative_v1(&state.manifest)?;
+        validate_publish_plaintext_v1(binding, plaintext)?;
+        if let Err(error) = self.revalidate_providers_v1() {
+            poison_on_integrity_error_v1(state, &error);
+            return Err(error);
+        }
+        if let Err(error) = self.ensure_manifest_authoritative_v1(&state.manifest) {
+            poison_on_integrity_error_v1(state, &error);
+            return Err(error);
+        }
         let entry_generation = state
             .manifest
             .generation
             .checked_add(1)
             .ok_or(BootleLanternHolderStoreErrorV1::CapacityExceeded)?;
-        let envelope = self.encrypt_envelope_v1(
+        let envelope = match self.encrypt_envelope_v1(
             binding,
             predecessor_envelope_digest,
             entry_generation,
             plaintext,
-        )?;
+        ) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                poison_on_integrity_error_v1(state, &error);
+                return Err(error);
+            }
+        };
         let envelope_bytes = encode_envelope_v1(&envelope)?;
         let envelope_digest = envelope_digest_v1(&envelope_bytes);
         if let Err(error) = self.persist_immutable_object_v1(envelope_digest, &envelope_bytes) {
@@ -1253,14 +1328,29 @@ impl BootleLanternFileHolderStoreV1 {
             phase: binding.phase,
             envelope_digest,
         };
-        let readback = self.load_plaintext_v1(&entry)?;
+        let readback = match self.load_plaintext_v1(&entry) {
+            Ok(readback) => readback,
+            Err(error) => {
+                self.cleanup_superseded_object_v1(envelope_digest, &state.manifest);
+                poison_on_integrity_error_v1(state, &error);
+                return Err(error);
+            }
+        };
         if readback.as_slice() != plaintext {
+            self.cleanup_superseded_object_v1(envelope_digest, &state.manifest);
             state.poisoned = true;
             return Err(BootleLanternHolderStoreErrorV1::DurabilityUncertain);
         }
-        let next = state
+        let next = match state
             .manifest
-            .successor_with_entry(entry, self.config.max_records)?;
+            .successor_with_entry(entry, self.config.max_records)
+        {
+            Ok(next) => next,
+            Err(error) => {
+                self.cleanup_superseded_object_v1(envelope_digest, &state.manifest);
+                return Err(error);
+            }
+        };
         match publish_manifest_v1(
             self.vault_id,
             &state.manifest,
@@ -1270,6 +1360,7 @@ impl BootleLanternFileHolderStoreV1 {
         ) {
             Ok(()) => {
                 state.manifest = next;
+                self.cleanup_superseded_object_v1(predecessor_envelope_digest, &state.manifest);
                 Ok(())
             }
             Err(error @ BootleLanternHolderStoreErrorV1::DurabilityUncertain)
@@ -1278,7 +1369,10 @@ impl BootleLanternFileHolderStoreV1 {
                 state.poisoned = true;
                 Err(error)
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                self.cleanup_superseded_object_v1(envelope_digest, &state.manifest);
+                Err(error)
+            }
         }
     }
 
@@ -1319,8 +1413,7 @@ impl BootleLanternFileHolderStoreV1 {
             .map_err(|_| BootleLanternHolderStoreErrorV1::InternalInvariant)?;
         let ciphertext_len = plaintext_len
             .checked_add(
-                u32::try_from(HOLDER_AEAD_TAG_BYTES_V1)
-                    .expect("fixed AEAD tag length fits u32"),
+                u32::try_from(HOLDER_AEAD_TAG_BYTES_V1).expect("fixed AEAD tag length fits u32"),
             )
             .ok_or(BootleLanternHolderStoreErrorV1::InternalInvariant)?;
         let key_id_len = u16::try_from(key_id.len())
@@ -1345,7 +1438,7 @@ impl BootleLanternFileHolderStoreV1 {
         let wrapped_dek = self
             .key_wrapper
             .wrap_dek(context, &dek)
-            .map_err(map_external_provider_error_v1)?;
+            .map_err(map_key_wrapper_operation_error_v1)?;
         if wrapped_dek.is_empty() || wrapped_dek.len() > HOLDER_WRAPPED_DEK_MAX_BYTES_V1 {
             return Err(BootleLanternHolderStoreErrorV1::KeyWrapping);
         }
@@ -1399,8 +1492,8 @@ impl BootleLanternFileHolderStoreV1 {
         let temp = self
             .temp_root
             .join(format!("{file_name}{HOLDER_TEMP_EXTENSION_V1}"));
-        reject_existing_holder_path_v1(&target, true)?;
-        reject_existing_holder_path_v1(&temp, false)?;
+        reject_existing_holder_path_v1(&target)?;
+        reject_existing_holder_path_v1(&temp)?;
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -1444,6 +1537,21 @@ impl BootleLanternFileHolderStoreV1 {
             .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)
     }
 
+    fn cleanup_superseded_object_v1(&self, digest: [u8; 32], manifest: &HolderManifestV1) {
+        if digest == [0; 32]
+            || manifest
+                .entries
+                .values()
+                .any(|entry| entry.envelope_digest == digest)
+        {
+            return;
+        }
+        let path = self.objects_root.join(holder_object_file_name_v1(digest));
+        if fs::remove_file(path).is_ok() {
+            let _ = sync_directory_v1(&self.objects_root);
+        }
+    }
+
     fn lock_healthy_state_v1(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, HolderFileStateV1>, BootleLanternHolderStoreErrorV1> {
@@ -1470,19 +1578,13 @@ impl BootleLanternFileHolderStoreV1 {
         &self,
         manifest: &HolderManifestV1,
     ) -> Result<(), BootleLanternHolderStoreErrorV1> {
-        ensure_sealed_qualification_v1(
-            self.sealed_heads.as_ref(),
-            self.sealed_head_qualification,
-        )?;
+        ensure_sealed_qualification_v1(self.sealed_heads.as_ref(), self.sealed_head_qualification)?;
         let authoritative = self
             .sealed_heads
             .load_v1(self.vault_id)
             .map_err(map_external_provider_error_v1)?
             .ok_or(BootleLanternHolderStoreErrorV1::RollbackDetected)?;
-        ensure_sealed_qualification_v1(
-            self.sealed_heads.as_ref(),
-            self.sealed_head_qualification,
-        )?;
+        ensure_sealed_qualification_v1(self.sealed_heads.as_ref(), self.sealed_head_qualification)?;
         if authoritative != manifest.sealed_head()? {
             return Err(BootleLanternHolderStoreErrorV1::RollbackDetected);
         }
@@ -1520,7 +1622,7 @@ struct HolderPublishBindingV1 {
 }
 
 /// Failure in native encrypted holder custody.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum BootleLanternHolderStoreErrorV1 {
     /// A zero, empty, or otherwise invalid public input was supplied.
     #[error("Bootle/Lantern holder store input is invalid")]
@@ -1549,9 +1651,14 @@ pub enum BootleLanternHolderStoreErrorV1 {
     /// The supplied issuer response was not exact canonical `ILR1`.
     #[error("Bootle/Lantern holder response is invalid")]
     ResponseInvalid,
-    /// A correctly bound response could not produce a valid credential.
-    #[error("Bootle/Lantern holder credential was rejected")]
+    /// An untrusted response could not produce a valid credential; pending
+    /// holder state was durably restored so another response may be tried.
+    #[error("Bootle/Lantern holder response was rejected; pending state was retained")]
     CredentialRejected,
+    /// Holder-owned semantic state made finalization deterministically
+    /// impossible and was durably terminalized without retaining secrets.
+    #[error("Bootle/Lantern holder state is terminally invalid")]
+    HolderStateTerminal,
     /// Provider qualification was malformed or not production-ready.
     #[error("Bootle/Lantern holder runtime provider is unqualified")]
     ProviderUnqualified,
@@ -1826,6 +1933,18 @@ fn decode_envelope_v1(bytes: &[u8]) -> Result<HolderEnvelopeV1, BootleLanternHol
         return Err(BootleLanternHolderStoreErrorV1::Corrupt);
     }
     let (header, mut offset) = decode_envelope_header_v1(bytes)?;
+    let expected_len = HOLDER_ENVELOPE_HEADER_BYTES_V1
+        .checked_add(usize::from(header.key_id_len))
+        .and_then(|length| length.checked_add(usize::from(header.wrapped_dek_len)))
+        .and_then(|length| {
+            usize::try_from(header.ciphertext_len)
+                .ok()
+                .and_then(|ciphertext_len| length.checked_add(ciphertext_len))
+        })
+        .ok_or(BootleLanternHolderStoreErrorV1::Corrupt)?;
+    if bytes.len() != expected_len {
+        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+    }
     let key_end = offset
         .checked_add(usize::from(header.key_id_len))
         .ok_or(BootleLanternHolderStoreErrorV1::Corrupt)?;
@@ -2125,7 +2244,8 @@ fn decode_pending_secret_v1(
     let scope_digest = take_array_v1::<32>(bytes, &mut offset)?;
     let policy_record_digest = take_array_v1::<32>(bytes, &mut offset)?;
     let response_digest = take_array_v1::<32>(bytes, &mut offset)?;
-    let request_bytes = take_slice_v1(bytes, &mut offset, BLIND_ISSUANCE_REQUEST_BYTES_V1)?.to_vec();
+    let request_bytes =
+        take_slice_v1(bytes, &mut offset, BLIND_ISSUANCE_REQUEST_BYTES_V1)?.to_vec();
     let randomness = decode_polynomials_v1::<HOLDER_RANDOMNESS_POLYNOMIALS_V1>(bytes, &mut offset)?;
     let mut attributes = [[0_u8; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1];
     for attribute in &mut attributes {
@@ -2328,6 +2448,77 @@ fn encode_rejected_secret_v1(
     Ok(bytes)
 }
 
+fn validate_publish_plaintext_v1(
+    binding: HolderPublishBindingV1,
+    bytes: &[u8],
+) -> Result<(), BootleLanternHolderStoreErrorV1> {
+    let observed = match binding.phase {
+        BootleLanternHolderPhaseV1::Pending | BootleLanternHolderPhaseV1::ResponseCached => {
+            let secret = decode_pending_secret_v1(binding.phase, bytes)?;
+            [
+                secret.authorization_digest,
+                secret.request_digest,
+                secret.scope_digest,
+                secret.policy_record_digest,
+                secret.response_digest,
+            ]
+        }
+        BootleLanternHolderPhaseV1::Finalized => {
+            let secret = decode_finalized_secret_v1(bytes)?;
+            [
+                secret.authorization_digest,
+                secret.request_digest,
+                secret.scope_digest,
+                secret.policy_record_digest,
+                secret.response_digest,
+            ]
+        }
+        BootleLanternHolderPhaseV1::Rejected => decode_rejected_secret_v1(bytes)?,
+    };
+    if observed
+        != [
+            binding.authorization_digest,
+            binding.request_digest,
+            binding.scope_digest,
+            binding.policy_record_digest,
+            binding.response_digest,
+        ]
+    {
+        return Err(BootleLanternHolderStoreErrorV1::InternalInvariant);
+    }
+    Ok(())
+}
+
+fn decode_rejected_secret_v1(
+    bytes: &[u8],
+) -> Result<[[u8; 32]; HOLDER_BINDING_DIGESTS_V1], BootleLanternHolderStoreErrorV1> {
+    if bytes.len() != BOOTLE_LANTERN_HOLDER_REJECTED_PLAINTEXT_BYTES_V1 {
+        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+    }
+    let mut offset = 0;
+    if take_array_v1::<4>(bytes, &mut offset)? != HOLDER_REJECTED_MAGIC_V1
+        || take_u8_v1(bytes, &mut offset)? != HOLDER_VERSION_V1
+        || take_u8_v1(bytes, &mut offset)? != HOLDER_REJECTED_TAG_V1
+        || take_array_v1::<2>(bytes, &mut offset)? != [0; 2]
+    {
+        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+    }
+    let mut bindings = [[0_u8; 32]; HOLDER_BINDING_DIGESTS_V1];
+    for binding in &mut bindings {
+        *binding = take_array_v1::<32>(bytes, &mut offset)?;
+    }
+    let reason = take_u8_v1(bytes, &mut offset)?;
+    if offset.checked_add(7) != Some(bytes.len())
+        || take_array_v1::<7>(bytes, &mut offset)? != [0; 7]
+        || offset != bytes.len()
+        || reason == 0
+        || bindings.iter().any(|digest| *digest == [0; 32])
+    {
+        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+    }
+    Ok(bindings)
+}
+
 fn encode_polynomials_v1<const N: usize>(
     polynomials: &[ApplicationPolynomialV1; N],
     output: &mut Vec<u8>,
@@ -2379,6 +2570,35 @@ fn validate_pending_against_entry_v1(
     Ok(())
 }
 
+fn validate_finalized_against_entry_v1(
+    secret: &FinalizedSecretV1,
+    entry: &HolderManifestEntryV1,
+) -> Result<(), BootleLanternHolderStoreErrorV1> {
+    if [
+        secret.authorization_digest,
+        secret.request_digest,
+        secret.scope_digest,
+        secret.policy_record_digest,
+        secret.response_digest,
+    ] != entry_binding_digests_v1(entry)
+    {
+        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+    }
+    Ok(())
+}
+
+fn entry_binding_digests_v1(
+    entry: &HolderManifestEntryV1,
+) -> [[u8; 32]; HOLDER_BINDING_DIGESTS_V1] {
+    [
+        entry.authorization_digest,
+        entry.request_digest,
+        entry.scope_digest,
+        entry.policy_record_digest,
+        entry.response_digest,
+    ]
+}
+
 fn validate_envelope_against_entry_v1(
     envelope: &HolderEnvelopeV1,
     vault_id: [u8; 32],
@@ -2411,18 +2631,12 @@ fn validate_plaintext_length_v1(
 
 const fn plaintext_length_v1(phase: BootleLanternHolderPhaseV1) -> usize {
     match phase {
-        BootleLanternHolderPhaseV1::Pending => {
-            BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1
-        }
+        BootleLanternHolderPhaseV1::Pending => BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1,
         BootleLanternHolderPhaseV1::ResponseCached => {
             BOOTLE_LANTERN_HOLDER_CACHED_PLAINTEXT_BYTES_V1
         }
-        BootleLanternHolderPhaseV1::Finalized => {
-            BOOTLE_LANTERN_HOLDER_FINALIZED_PLAINTEXT_BYTES_V1
-        }
-        BootleLanternHolderPhaseV1::Rejected => {
-            BOOTLE_LANTERN_HOLDER_REJECTED_PLAINTEXT_BYTES_V1
-        }
+        BootleLanternHolderPhaseV1::Finalized => BOOTLE_LANTERN_HOLDER_FINALIZED_PLAINTEXT_BYTES_V1,
+        BootleLanternHolderPhaseV1::Rejected => BOOTLE_LANTERN_HOLDER_REJECTED_PLAINTEXT_BYTES_V1,
     }
 }
 
@@ -2432,7 +2646,9 @@ fn load_or_create_manifest_v1(
     store: &dyn BootleLanternHolderSealedHeadStoreV1,
     qualification: BootleLanternHolderProviderQualificationV1,
 ) -> Result<HolderManifestV1, BootleLanternHolderStoreErrorV1> {
-    let loaded = store.load_v1(vault_id).map_err(map_external_provider_error_v1)?;
+    let loaded = store
+        .load_v1(vault_id)
+        .map_err(map_external_provider_error_v1)?;
     ensure_sealed_qualification_v1(store, qualification)?;
     if let Some(head) = loaded {
         return validate_sealed_head_v1(head, vault_id, config.max_records);
@@ -2443,8 +2659,20 @@ fn load_or_create_manifest_v1(
         Ok(()) | Err(BootleLanternHolderExternalErrorV1::Ambiguous) => {
             let authoritative = store
                 .load_v1(vault_id)
-                .map_err(map_external_provider_error_v1)?
+                .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?
                 .ok_or(BootleLanternHolderStoreErrorV1::DurabilityUncertain)?;
+            ensure_sealed_qualification_v1(store, qualification)?;
+            let recovered = validate_sealed_head_v1(authoritative, vault_id, config.max_records)?;
+            if recovered != empty {
+                return Err(BootleLanternHolderStoreErrorV1::RollbackDetected);
+            }
+            Ok(recovered)
+        }
+        Err(BootleLanternHolderExternalErrorV1::Rejected) => {
+            let authoritative = store
+                .load_v1(vault_id)
+                .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?
+                .ok_or(BootleLanternHolderStoreErrorV1::RollbackDetected)?;
             ensure_sealed_qualification_v1(store, qualification)?;
             let recovered = validate_sealed_head_v1(authoritative, vault_id, config.max_records)?;
             if recovered != empty {
@@ -2475,7 +2703,7 @@ fn publish_manifest_v1(
         Ok(()) | Err(BootleLanternHolderExternalErrorV1::Ambiguous) => {
             let authoritative = store
                 .load_v1(vault_id)
-                .map_err(map_external_provider_error_v1)?
+                .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?
                 .ok_or(BootleLanternHolderStoreErrorV1::DurabilityUncertain)?;
             ensure_sealed_qualification_v1(store, qualification)?;
             if authoritative != next_head {
@@ -2486,7 +2714,7 @@ fn publish_manifest_v1(
         Err(BootleLanternHolderExternalErrorV1::Rejected) => {
             let authoritative = store
                 .load_v1(vault_id)
-                .map_err(map_external_provider_error_v1)?
+                .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?
                 .ok_or(BootleLanternHolderStoreErrorV1::RollbackDetected)?;
             ensure_sealed_qualification_v1(store, qualification)?;
             if authoritative == next_head {
@@ -2569,11 +2797,23 @@ fn map_external_provider_error_v1(
 ) -> BootleLanternHolderStoreErrorV1 {
     match error {
         BootleLanternHolderExternalErrorV1::Unavailable
-        | BootleLanternHolderExternalErrorV1::Rejected => {
+        | BootleLanternHolderExternalErrorV1::Rejected
+        | BootleLanternHolderExternalErrorV1::Ambiguous => {
             BootleLanternHolderStoreErrorV1::ProviderUnavailable
         }
-        BootleLanternHolderExternalErrorV1::Ambiguous => {
-            BootleLanternHolderStoreErrorV1::DurabilityUncertain
+    }
+}
+
+fn map_key_wrapper_operation_error_v1(
+    error: BootleLanternHolderExternalErrorV1,
+) -> BootleLanternHolderStoreErrorV1 {
+    match error {
+        BootleLanternHolderExternalErrorV1::Rejected => {
+            BootleLanternHolderStoreErrorV1::KeyWrapping
+        }
+        BootleLanternHolderExternalErrorV1::Unavailable
+        | BootleLanternHolderExternalErrorV1::Ambiguous => {
+            BootleLanternHolderStoreErrorV1::ProviderUnavailable
         }
     }
 }
@@ -2587,13 +2827,24 @@ fn ensure_state_healthy_v1(
     Ok(())
 }
 
+fn poison_on_integrity_error_v1(
+    state: &mut HolderFileStateV1,
+    error: &BootleLanternHolderStoreErrorV1,
+) {
+    if matches!(
+        error,
+        BootleLanternHolderStoreErrorV1::DurabilityUncertain
+            | BootleLanternHolderStoreErrorV1::ProviderDrift
+            | BootleLanternHolderStoreErrorV1::RollbackDetected
+    ) {
+        state.poisoned = true;
+    }
+}
+
 fn validate_runtime_handle_v1(value: &str) -> Result<(), BootleLanternHolderStoreErrorV1> {
     if value.is_empty()
         || value.len() > HOLDER_KEY_ID_MAX_BYTES_V1
-        || !value
-            .as_bytes()
-            .iter()
-            .all(|byte| byte.is_ascii_graphic())
+        || !value.as_bytes().iter().all(|byte| byte.is_ascii_graphic())
     {
         return Err(BootleLanternHolderStoreErrorV1::ProviderUnqualified);
     }
@@ -2675,19 +2926,40 @@ fn ensure_private_subdirectory_v1(
 }
 
 fn validate_private_directory_v1(path: &Path) -> Result<(), BootleLanternHolderStoreErrorV1> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
         return Err(BootleLanternHolderStoreErrorV1::Corrupt);
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        if metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.mode() & 0o777 != 0o700
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o777 != 0o700
         {
             return Err(BootleLanternHolderStoreErrorV1::Corrupt);
         }
+    }
+    Ok(())
+}
+
+fn validate_holder_root_namespace_v1(root: &Path) -> Result<(), BootleLanternHolderStoreErrorV1> {
+    let mut expected = BTreeSet::from([
+        HOLDER_OBJECTS_DIRECTORY_V1,
+        HOLDER_TEMP_DIRECTORY_V1,
+        HOLDER_WRITER_LOCK_FILE_V1,
+    ]);
+    for entry in fs::read_dir(root).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)? {
+        let entry = entry.map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| BootleLanternHolderStoreErrorV1::Corrupt)?;
+        if !expected.remove(name.as_str()) {
+            return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+        }
+    }
+    if !expected.is_empty() {
+        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
     }
     Ok(())
 }
@@ -2730,7 +3002,8 @@ fn clean_holder_temp_v1(path: &Path) -> Result<(), BootleLanternHolderStoreError
         removed = true;
     }
     if removed {
-        sync_directory_v1(path).map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?;
+        sync_directory_v1(path)
+            .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?;
     }
     Ok(())
 }
@@ -2782,10 +3055,8 @@ fn validate_object_namespace_v1(
                 return Err(BootleLanternHolderStoreErrorV1::Corrupt);
             }
         }
-        let bytes = read_regular_bounded_v1(
-            &entry.path(),
-            BOOTLE_LANTERN_HOLDER_MAX_ENVELOPE_BYTES_V1,
-        )?;
+        let bytes =
+            read_regular_bounded_v1(&entry.path(), BOOTLE_LANTERN_HOLDER_MAX_ENVELOPE_BYTES_V1)?;
         if envelope_digest_v1(&bytes) != digest {
             return Err(BootleLanternHolderStoreErrorV1::Corrupt);
         }
@@ -2797,7 +3068,8 @@ fn validate_object_namespace_v1(
             orphans.push(entry.path());
         }
     }
-    if observed.len() != active.len() || !observed.iter().all(|digest| active.contains_key(digest)) {
+    if observed.len() != active.len() || !observed.iter().all(|digest| active.contains_key(digest))
+    {
         return Err(BootleLanternHolderStoreErrorV1::RollbackDetected);
     }
     if !orphans.is_empty() {
@@ -2844,7 +3116,7 @@ fn read_regular_bounded_v1(
         {
             return Err(BootleLanternHolderStoreErrorV1::Corrupt);
         }
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
             .open(path)
@@ -2880,17 +3152,8 @@ fn read_regular_bounded_v1(
     }
 }
 
-fn reject_existing_holder_path_v1(
-    path: &Path,
-    allow_absent_or_exact_file: bool,
-) -> Result<(), BootleLanternHolderStoreErrorV1> {
+fn reject_existing_holder_path_v1(path: &Path) -> Result<(), BootleLanternHolderStoreErrorV1> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if allow_absent_or_exact_file => {
-            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                return Err(BootleLanternHolderStoreErrorV1::Corrupt);
-            }
-            Err(BootleLanternHolderStoreErrorV1::Corrupt)
-        }
         Ok(_) => Err(BootleLanternHolderStoreErrorV1::Corrupt),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err(BootleLanternHolderStoreErrorV1::Backend),
@@ -2946,9 +3209,7 @@ fn hex_nibble_v1(byte: u8) -> Result<u8, BootleLanternHolderStoreErrorV1> {
 }
 
 #[cfg(unix)]
-fn acquire_holder_writer_lock_v1(
-    root: &Path,
-) -> Result<File, BootleLanternHolderStoreErrorV1> {
+fn acquire_holder_writer_lock_v1(root: &Path) -> Result<File, BootleLanternHolderStoreErrorV1> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
     let path = root.join(HOLDER_WRITER_LOCK_FILE_V1);
     match fs::symlink_metadata(&path) {
@@ -2980,8 +3241,8 @@ fn acquire_holder_writer_lock_v1(
         fs::Permissions::from_mode(0o600)
     })
     .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
-    let path_metadata = fs::symlink_metadata(&path)
-        .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+    let path_metadata =
+        fs::symlink_metadata(&path).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
     let opened = file
         .metadata()
         .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
@@ -3005,9 +3266,7 @@ fn acquire_holder_writer_lock_v1(
 }
 
 #[cfg(not(unix))]
-fn acquire_holder_writer_lock_v1(
-    _root: &Path,
-) -> Result<File, BootleLanternHolderStoreErrorV1> {
+fn acquire_holder_writer_lock_v1(_root: &Path) -> Result<File, BootleLanternHolderStoreErrorV1> {
     Err(BootleLanternHolderStoreErrorV1::UnsupportedPlatform)
 }
 
@@ -3048,10 +3307,7 @@ fn take_array_v1<const N: usize>(
     Ok(value)
 }
 
-fn take_u8_v1(
-    bytes: &[u8],
-    offset: &mut usize,
-) -> Result<u8, BootleLanternHolderStoreErrorV1> {
+fn take_u8_v1(bytes: &[u8], offset: &mut usize) -> Result<u8, BootleLanternHolderStoreErrorV1> {
     Ok(take_array_v1::<1>(bytes, offset)?[0])
 }
 
@@ -3073,6 +3329,82 @@ fn take_slice_v1<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::privacy::{
+        BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
+        BootleLanternDisclosedAttributeV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
+        PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+    };
+    use rand_core_06::Error as RngError;
+
+    use super::super::issuer::{
+        BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
+        BootleLanternIssuerPolicyMetadataV1, issuer_authorize_blind_issuance_with_rng_v1,
+        issuer_blind_issue_once_encoded_with_rng_v1,
+    };
+
+    struct TestRng {
+        state: u64,
+    }
+
+    impl TestRng {
+        const fn healthy(seed: u64) -> Self {
+            Self { state: seed }
+        }
+    }
+
+    impl RngCore for TestRng {
+        fn next_u32(&mut self) -> u32 {
+            let mut bytes = [0_u8; 4];
+            self.fill_bytes(&mut bytes);
+            u32::from_le_bytes(bytes)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut bytes = [0_u8; 8];
+            self.fill_bytes(&mut bytes);
+            u64::from_le_bytes(bytes)
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            self.try_fill_bytes(destination)
+                .expect("infallible deterministic test RNG");
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            for byte in destination {
+                self.state ^= self.state << 13;
+                self.state ^= self.state >> 7;
+                self.state ^= self.state << 17;
+                *byte = self.state as u8;
+            }
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for TestRng {}
+
+    struct PanicRng;
+
+    impl RngCore for PanicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("idempotent holder recovery consumed RNG")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("idempotent holder recovery consumed RNG")
+        }
+
+        fn fill_bytes(&mut self, _: &mut [u8]) {
+            panic!("idempotent holder recovery consumed RNG")
+        }
+
+        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), RngError> {
+            panic!("idempotent holder recovery consumed RNG")
+        }
+    }
+
+    impl CryptoRng for PanicRng {}
 
     #[derive(Debug)]
     struct TestWrapper {
@@ -3089,6 +3421,13 @@ mod tests {
                 )),
                 key: [0x52; 32],
                 zero_unwrap: false,
+            }
+        }
+
+        fn zero_unwrap() -> Self {
+            Self {
+                zero_unwrap: true,
+                ..Self::exact()
             }
         }
     }
@@ -3114,10 +3453,9 @@ mod tests {
             context: [u8; 32],
             dek: &[u8; 32],
         ) -> Result<Vec<u8>, BootleLanternHolderExternalErrorV1> {
-            Ok(core::array::from_fn::<_, 32, _>(|index| {
-                dek[index] ^ context[index] ^ self.key[index]
-            })
-            .to_vec())
+            let wrapped: [u8; 32] =
+                core::array::from_fn(|index| dek[index] ^ context[index] ^ self.key[index]);
+            Ok(wrapped.to_vec())
         }
 
         fn unwrap_dek(
@@ -3143,6 +3481,9 @@ mod tests {
         qualification: Mutex<BootleLanternHolderProviderQualificationV1>,
         head: Mutex<Option<BootleLanternHolderSealedHeadV1>>,
         next_outcome: Mutex<Option<BootleLanternHolderExternalErrorV1>>,
+        ambiguous_without_commit: Mutex<bool>,
+        next_load_outcome: Mutex<Option<BootleLanternHolderExternalErrorV1>>,
+        post_cas_load_outcome: Mutex<Option<BootleLanternHolderExternalErrorV1>>,
     }
 
     impl TestHeads {
@@ -3153,11 +3494,24 @@ mod tests {
                 )),
                 head: Mutex::new(None),
                 next_outcome: Mutex::new(None),
+                ambiguous_without_commit: Mutex::new(false),
+                next_load_outcome: Mutex::new(None),
+                post_cas_load_outcome: Mutex::new(None),
             }
         }
 
         fn inject(&self, outcome: BootleLanternHolderExternalErrorV1) {
             *self.next_outcome.lock().unwrap() = Some(outcome);
+        }
+
+        fn inject_ambiguous_without_commit(&self) {
+            *self.next_outcome.lock().unwrap() =
+                Some(BootleLanternHolderExternalErrorV1::Ambiguous);
+            *self.ambiguous_without_commit.lock().unwrap() = true;
+        }
+
+        fn inject_post_cas_load_failure(&self, outcome: BootleLanternHolderExternalErrorV1) {
+            *self.post_cas_load_outcome.lock().unwrap() = Some(outcome);
         }
     }
 
@@ -3178,6 +3532,9 @@ mod tests {
             _vault_id: [u8; 32],
         ) -> Result<Option<BootleLanternHolderSealedHeadV1>, BootleLanternHolderExternalErrorV1>
         {
+            if let Some(outcome) = self.next_load_outcome.lock().unwrap().take() {
+                return Err(outcome);
+            }
             Ok(self.head.lock().unwrap().clone())
         }
 
@@ -3188,22 +3545,138 @@ mod tests {
             next: BootleLanternHolderSealedHeadV1,
         ) -> Result<(), BootleLanternHolderExternalErrorV1> {
             let outcome = self.next_outcome.lock().unwrap().take();
-            if outcome == Some(BootleLanternHolderExternalErrorV1::Unavailable) {
-                return Err(BootleLanternHolderExternalErrorV1::Unavailable);
+            if let Some(
+                outcome @ (BootleLanternHolderExternalErrorV1::Unavailable
+                | BootleLanternHolderExternalErrorV1::Rejected),
+            ) = outcome
+            {
+                return Err(outcome);
+            }
+            if outcome == Some(BootleLanternHolderExternalErrorV1::Ambiguous)
+                && core::mem::take(&mut *self.ambiguous_without_commit.lock().unwrap())
+            {
+                return Err(BootleLanternHolderExternalErrorV1::Ambiguous);
             }
             let mut head = self.head.lock().unwrap();
-            if head.as_ref().map(BootleLanternHolderSealedHeadV1::revision)
-                != expected_revision
-            {
+            if head.as_ref().map(BootleLanternHolderSealedHeadV1::revision) != expected_revision {
                 return Err(BootleLanternHolderExternalErrorV1::Rejected);
             }
             *head = Some(next);
+            if let Some(outcome) = self.post_cas_load_outcome.lock().unwrap().take() {
+                *self.next_load_outcome.lock().unwrap() = Some(outcome);
+            }
             outcome.map_or(Ok(()), Err)
         }
     }
 
     fn digest(value: u8) -> [u8; 32] {
         [value; 32]
+    }
+
+    fn statement_context_v1() -> PrivacyStatementContextV1 {
+        PrivacyStatementContextV1 {
+            chain_id: "bootle-lantern-holder-store-test"
+                .parse()
+                .expect("valid chain id"),
+            action_index: 3,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(digest(0x11)),
+            parameter_id: PrivacyParameterIdV1::new(digest(0x12)),
+            parameter_digest: PrivacyParameterDigestV1::new([0x31; 32]),
+            verifier_digest: PrivacyVerifierDigestV1::new(digest(0x14)),
+            statement_schema_digest: PrivacyStatementSchemaDigestV1::new(digest(0x15)),
+            engine_manifest_digest: PrivacyEngineManifestDigestV1::new(digest(0x16)),
+        }
+    }
+
+    fn policy_metadata_v1() -> BootleLanternIssuerPolicyMetadataV1 {
+        BootleLanternIssuerPolicyMetadataV1 {
+            issuer_id: PrivacyIssuerIdV1::new(digest(0x21)),
+            policy_id: PrivacyPolicyIdV1::new(digest(0x22)),
+            epoch: 1,
+            required_disclosure_bitmap: 0b0000_0010,
+            allowed_values: (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
+                .map(|index| BootleLanternAllowedAttributeValuesV1 {
+                    values: if index == 1 {
+                        vec![BootleLanternAttributeValueV1::new([1; 8])]
+                    } else {
+                        Vec::new()
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    fn attributes_v1() -> [[u8; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1] {
+        let mut attributes = [[0_u8; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1];
+        attributes[1] = [1; 8];
+        attributes
+    }
+
+    fn presentation_statement_v1(
+        context: PrivacyStatementContextV1,
+        policy: &BootleLanternIssuerPolicyV1,
+    ) -> IrohaBootleLanternAnoncredStatementV1 {
+        IrohaBootleLanternAnoncredStatementV1 {
+            context,
+            issuer_id: policy.issuer_id,
+            policy_id: policy.policy_id,
+            issuer_policy_epoch: policy.epoch,
+            issuer_policy_record_digest: policy.record_digest,
+            issuer_parameter_id: policy.issuer_parameter_id,
+            issuer_parameter_digest: policy.issuer_parameter_digest,
+            disclosures: vec![BootleLanternDisclosedAttributeV1 {
+                index: 1,
+                value: BootleLanternAttributeValueV1::new([1; 8]),
+            }],
+        }
+    }
+
+    fn open_test_store_v1(
+        root: &Path,
+        wrapper: Arc<TestWrapper>,
+        heads: Arc<TestHeads>,
+    ) -> Result<BootleLanternFileHolderStoreV1, BootleLanternHolderStoreErrorV1> {
+        BootleLanternFileHolderStoreV1::open(
+            root,
+            digest(0x91),
+            BootleLanternHolderStoreConfigV1::default(),
+            wrapper,
+            heads,
+        )
+    }
+
+    fn publish_rejected_test_record_v1(
+        store: &BootleLanternFileHolderStoreV1,
+        discriminator: u8,
+    ) -> Result<BootleLanternHolderHandleV1, BootleLanternHolderStoreErrorV1> {
+        let authorization_digest = digest(discriminator);
+        let request_digest = digest(discriminator.wrapping_add(1));
+        let scope_digest = digest(discriminator.wrapping_add(2));
+        let policy_record_digest = digest(discriminator.wrapping_add(3));
+        let response_digest = digest(discriminator.wrapping_add(4));
+        let plaintext = encode_rejected_secret_v1(
+            authorization_digest,
+            request_digest,
+            scope_digest,
+            policy_record_digest,
+            response_digest,
+            1,
+        )?;
+        let mut state = store.lock_healthy_state_v1()?;
+        store.publish_secret_locked_v1(
+            &mut state,
+            HolderPublishBindingV1 {
+                phase: BootleLanternHolderPhaseV1::Rejected,
+                authorization_digest,
+                request_digest,
+                scope_digest,
+                policy_record_digest,
+                response_digest,
+            },
+            [0; 32],
+            plaintext.as_slice(),
+        )?;
+        BootleLanternHolderHandleV1::new(authorization_digest)
     }
 
     fn synthetic_entry(phase: BootleLanternHolderPhaseV1) -> HolderManifestEntryV1 {
@@ -3236,6 +3709,219 @@ mod tests {
     }
 
     #[test]
+    fn canonical_holder_lifecycle_survives_cached_and_finalized_restarts() {
+        let mut keygen_rng = TestRng::healthy(0x6a09_e667_f3bc_c908);
+        let issuer = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
+            PrivacyParameterIdV1::new(digest(0x41)),
+            &mut keygen_rng,
+        )
+        .expect("native issuer key generation");
+        let policy = issuer
+            .active_policy_v1(policy_metadata_v1())
+            .expect("active issuer policy");
+        let context = statement_context_v1();
+        let genesis_hash = digest(0x42);
+        let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
+        let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
+        let authorization = issuer_authorize_blind_issuance_with_rng_v1(
+            &issuer,
+            &context,
+            genesis_hash,
+            &policy,
+            digest(0x43),
+            10,
+            20,
+            &issuance_store,
+            &mut authorization_rng,
+        )
+        .expect("holder authorization");
+
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let holder = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        let mut holder_rng = TestRng::healthy(0xbb67_ae85_84ca_a73b);
+        let prepared = holder
+            .prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
+                attributes_v1(),
+                &mut holder_rng,
+            )
+            .expect("durable pending holder state");
+        assert_eq!(
+            holder.phase_v1(prepared.handle()).unwrap(),
+            BootleLanternHolderPhaseV1::Pending
+        );
+        let mut panic_rng = PanicRng;
+        let recovered = holder
+            .prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
+                attributes_v1(),
+                &mut panic_rng,
+            )
+            .expect("idempotent pending recovery");
+        assert_eq!(recovered.request_bytes(), prepared.request_bytes());
+
+        let mut issuer_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
+        let response = issuer_blind_issue_once_encoded_with_rng_v1(
+            &issuer,
+            &context,
+            genesis_hash,
+            &policy,
+            &authorization,
+            prepared.request_bytes(),
+            11,
+            &issuance_store,
+            &mut issuer_rng,
+        )
+        .expect("canonical issuer response");
+        let response_bytes = response.encode().expect("canonical ILR1");
+        assert_eq!(
+            holder.cache_issuer_response_v1(
+                prepared.handle(),
+                &context,
+                genesis_hash,
+                &policy,
+                &response_bytes[..response_bytes.len() - 1],
+            ),
+            Err(BootleLanternHolderStoreErrorV1::ResponseInvalid)
+        );
+        let mut substituted = response_bytes.clone();
+        let request_binding_start = BLIND_ISSUANCE_RESPONSE_BYTES_V1 - 96;
+        substituted[request_binding_start] ^= 1;
+        if substituted[request_binding_start..request_binding_start + 32]
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            substituted[request_binding_start] = 2;
+        }
+        assert_eq!(
+            holder.cache_issuer_response_v1(
+                prepared.handle(),
+                &context,
+                genesis_hash,
+                &policy,
+                &substituted,
+            ),
+            Err(BootleLanternHolderStoreErrorV1::BindingMismatch)
+        );
+        assert_eq!(
+            holder.phase_v1(prepared.handle()).unwrap(),
+            BootleLanternHolderPhaseV1::Pending
+        );
+        let mut forged = response_bytes.clone();
+        let first_signature_coefficient = 8 + 8 * APPLICATION_RING_DEGREE_V1 * 2;
+        let coefficient = u16::from_be_bytes([
+            forged[first_signature_coefficient],
+            forged[first_signature_coefficient + 1],
+        ]);
+        let forged_coefficient = (coefficient + 1) % APPLICATION_MODULUS_V1;
+        forged[first_signature_coefficient..first_signature_coefficient + 2]
+            .copy_from_slice(&forged_coefficient.to_be_bytes());
+        holder
+            .cache_issuer_response_v1(prepared.handle(), &context, genesis_hash, &policy, &forged)
+            .expect("correctly bound forged response is cached before validation");
+        assert_eq!(
+            holder.phase_v1(prepared.handle()).unwrap(),
+            BootleLanternHolderPhaseV1::ResponseCached
+        );
+        drop(holder);
+
+        let holder = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        assert_eq!(
+            holder.resume_cached_response_v1(prepared.handle(), &context, genesis_hash, &policy,),
+            Err(BootleLanternHolderStoreErrorV1::CredentialRejected)
+        );
+        assert_eq!(
+            holder.phase_v1(prepared.handle()).unwrap(),
+            BootleLanternHolderPhaseV1::Pending
+        );
+        assert_eq!(fs::read_dir(&holder.objects_root).unwrap().count(), 1);
+        holder
+            .cache_issuer_response_v1(prepared.handle(), &context, genesis_hash, &policy, &forged)
+            .expect("repeated forged response cache");
+        assert_eq!(
+            holder.resume_cached_response_v1(prepared.handle(), &context, genesis_hash, &policy,),
+            Err(BootleLanternHolderStoreErrorV1::CredentialRejected)
+        );
+        assert_eq!(
+            holder.phase_v1(prepared.handle()).unwrap(),
+            BootleLanternHolderPhaseV1::Pending
+        );
+        assert_eq!(fs::read_dir(&holder.objects_root).unwrap().count(), 1);
+        holder
+            .cache_issuer_response_v1(
+                prepared.handle(),
+                &context,
+                genesis_hash,
+                &policy,
+                &response_bytes,
+            )
+            .expect("legitimate response remains consumable");
+        assert_eq!(
+            holder.phase_v1(prepared.handle()).unwrap(),
+            BootleLanternHolderPhaseV1::ResponseCached
+        );
+        drop(holder);
+
+        let holder = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        let recovered_request = holder
+            .pending_request_v1(prepared.handle(), &context, genesis_hash, &policy)
+            .unwrap();
+        assert_eq!(recovered_request.as_slice(), prepared.request_bytes());
+        holder
+            .resume_cached_response_v1(prepared.handle(), &context, genesis_hash, &policy)
+            .expect("restart finalization");
+        assert_eq!(
+            holder.phase_v1(prepared.handle()).unwrap(),
+            BootleLanternHolderPhaseV1::Finalized
+        );
+        drop(holder);
+
+        let holder = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        assert_eq!(
+            holder.phase_v1(prepared.handle()).unwrap(),
+            BootleLanternHolderPhaseV1::Finalized
+        );
+        holder
+            .accept_issuer_response_v1(
+                prepared.handle(),
+                &context,
+                genesis_hash,
+                &policy,
+                &response_bytes,
+            )
+            .expect("idempotent finalized response retry");
+        let statement = presentation_statement_v1(context.clone(), &policy);
+        let mut presentation_rng = TestRng::healthy(0x510e_527f_ade6_82d1);
+        let proof = holder
+            .prove_presentation_encoded_with_rng_v1(
+                prepared.handle(),
+                &statement,
+                &policy,
+                genesis_hash,
+                &mut presentation_rng,
+            )
+            .expect("proof-only credential use");
+        super::super::verify_bound_presentation_encoded_v1(
+            &statement,
+            &policy,
+            genesis_hash,
+            &proof,
+            u32::try_from(PROOF_BYTES_V1).unwrap(),
+        )
+        .expect("holder-produced presentation verifies");
+        assert_eq!(fs::read_dir(&holder.objects_root).unwrap().count(), 1);
+    }
+
+    #[test]
     fn manifest_roundtrip_rejects_every_truncation_and_trailing_byte() {
         let empty = HolderManifestV1::empty(digest(9)).unwrap();
         let manifest = empty
@@ -3259,9 +3945,7 @@ mod tests {
         }
         let mut trailing = bytes.clone();
         trailing.push(0);
-        assert!(
-            decode_manifest_v1(&trailing, digest(9), HOLDER_HARD_MAX_RECORDS_V1).is_err()
-        );
+        assert!(decode_manifest_v1(&trailing, digest(9), HOLDER_HARD_MAX_RECORDS_V1).is_err());
     }
 
     #[test]
@@ -3274,7 +3958,7 @@ mod tests {
             )
             .unwrap();
         let bytes = encode_manifest_v1(&manifest).unwrap();
-        for offset in [0, 4, 5, 6, 8, 40, 48, 80, 84, 116, bytes.len() - 1] {
+        for offset in 0..bytes.len() {
             let mut changed = bytes.clone();
             changed[offset] ^= 1;
             assert!(
@@ -3308,7 +3992,10 @@ mod tests {
             .unwrap();
         heads.inject(BootleLanternHolderExternalErrorV1::Ambiguous);
         publish_manifest_v1(digest(9), &manifest, &next, &heads, qualification).unwrap();
-        assert_eq!(heads.head.lock().unwrap().as_ref().unwrap().revision(), next.revision);
+        assert_eq!(
+            heads.head.lock().unwrap().as_ref().unwrap().revision(),
+            next.revision
+        );
     }
 
     #[test]
@@ -3328,6 +4015,11 @@ mod tests {
                 HOLDER_HARD_MAX_RECORDS_V1,
             )
             .unwrap();
+        *heads.head.lock().unwrap() = Some(next.sealed_head().unwrap());
+        assert_eq!(
+            publish_manifest_v1(digest(9), &manifest, &next, &heads, qualification),
+            Ok(())
+        );
         let mut fork = next.sealed_head().unwrap();
         fork.revision[0] ^= 1;
         *heads.head.lock().unwrap() = Some(fork);
@@ -3339,6 +4031,279 @@ mod tests {
             BootleLanternHolderProviderQualificationV1::new(2, digest(7));
         assert_eq!(
             ensure_sealed_qualification_v1(&heads, qualification),
+            Err(BootleLanternHolderStoreErrorV1::ProviderDrift)
+        );
+    }
+
+    #[test]
+    fn encrypted_object_commit_readback_and_restart_are_authoritative() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        let handle = publish_rejected_test_record_v1(&store, 0x51).unwrap();
+        assert_eq!(
+            store.phase_v1(handle).unwrap(),
+            BootleLanternHolderPhaseV1::Rejected
+        );
+        let generation = heads.head.lock().unwrap().as_ref().unwrap().generation();
+        assert_eq!(generation, 2);
+        drop(store);
+
+        let reopened = open_test_store_v1(&root, wrapper, heads).unwrap();
+        assert_eq!(
+            reopened.phase_v1(handle).unwrap(),
+            BootleLanternHolderPhaseV1::Rejected
+        );
+    }
+
+    #[test]
+    fn pre_rename_failure_is_retryable_but_post_rename_uncertainty_poisons() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        let handle = BootleLanternHolderHandleV1::new(digest(0x61)).unwrap();
+
+        store.inject_next_write_before_rename_failure_v1();
+        assert_eq!(
+            publish_rejected_test_record_v1(&store, 0x61),
+            Err(BootleLanternHolderStoreErrorV1::Backend)
+        );
+        assert_eq!(
+            store.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::NotFound)
+        );
+
+        store.inject_next_write_after_rename_failure_v1();
+        assert_eq!(
+            publish_rejected_test_record_v1(&store, 0x61),
+            Err(BootleLanternHolderStoreErrorV1::DurabilityUncertain)
+        );
+        assert_eq!(
+            store.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::DurabilityUncertain)
+        );
+        assert_eq!(heads.head.lock().unwrap().as_ref().unwrap().generation(), 1);
+        drop(store);
+
+        let reopened = open_test_store_v1(&root, wrapper, heads).unwrap();
+        assert_eq!(
+            reopened.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::NotFound)
+        );
+    }
+
+    #[test]
+    fn committed_cas_with_failed_readback_is_uncertain_until_exact_reopen() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        let handle = BootleLanternHolderHandleV1::new(digest(0x69)).unwrap();
+        heads.inject_post_cas_load_failure(BootleLanternHolderExternalErrorV1::Unavailable);
+        assert_eq!(
+            publish_rejected_test_record_v1(&store, 0x69),
+            Err(BootleLanternHolderStoreErrorV1::DurabilityUncertain)
+        );
+        assert_eq!(heads.head.lock().unwrap().as_ref().unwrap().generation(), 2);
+        assert_eq!(
+            store.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::DurabilityUncertain)
+        );
+        drop(store);
+
+        let reopened = open_test_store_v1(&root, wrapper, heads).unwrap();
+        assert_eq!(
+            reopened.phase_v1(handle).unwrap(),
+            BootleLanternHolderPhaseV1::Rejected
+        );
+    }
+
+    #[test]
+    fn ambiguous_cas_without_commit_fails_closed_and_restart_discards_orphan() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        let handle = BootleLanternHolderHandleV1::new(digest(0x71)).unwrap();
+        heads.inject_ambiguous_without_commit();
+        assert_eq!(
+            publish_rejected_test_record_v1(&store, 0x71),
+            Err(BootleLanternHolderStoreErrorV1::RollbackDetected)
+        );
+        assert_eq!(
+            store.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::DurabilityUncertain)
+        );
+        drop(store);
+
+        let reopened = open_test_store_v1(&root, wrapper, heads).unwrap();
+        assert_eq!(
+            reopened.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::NotFound)
+        );
+    }
+
+    #[test]
+    fn unavailable_cas_does_not_publish_and_is_retryable() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        let handle = BootleLanternHolderHandleV1::new(digest(0x79)).unwrap();
+        heads.inject(BootleLanternHolderExternalErrorV1::Unavailable);
+        assert_eq!(
+            publish_rejected_test_record_v1(&store, 0x79),
+            Err(BootleLanternHolderStoreErrorV1::ProviderUnavailable)
+        );
+        assert_eq!(
+            store.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::NotFound)
+        );
+        assert_eq!(heads.head.lock().unwrap().as_ref().unwrap().generation(), 1);
+        assert_eq!(publish_rejected_test_record_v1(&store, 0x79), Ok(handle));
+        assert_eq!(
+            store.phase_v1(handle).unwrap(),
+            BootleLanternHolderPhaseV1::Rejected
+        );
+        drop(store);
+
+        let reopened = open_test_store_v1(&root, wrapper, heads).unwrap();
+        assert_eq!(fs::read_dir(&reopened.objects_root).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn authoritative_head_rollback_poisons_live_store_even_if_head_is_restored() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, wrapper, Arc::clone(&heads)).unwrap();
+        let initial = heads.head.lock().unwrap().clone().unwrap();
+        let handle = publish_rejected_test_record_v1(&store, 0x81).unwrap();
+        let current = heads.head.lock().unwrap().clone().unwrap();
+        *heads.head.lock().unwrap() = Some(initial);
+        assert_eq!(
+            store.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::RollbackDetected)
+        );
+        *heads.head.lock().unwrap() = Some(current);
+        assert_eq!(
+            store.phase_v1(handle),
+            Err(BootleLanternHolderStoreErrorV1::DurabilityUncertain)
+        );
+    }
+
+    #[test]
+    fn unusable_wrapped_dek_never_advances_the_sealed_head() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::zero_unwrap());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, wrapper, Arc::clone(&heads)).unwrap();
+        assert_eq!(
+            publish_rejected_test_record_v1(&store, 0x91),
+            Err(BootleLanternHolderStoreErrorV1::KeyWrapping)
+        );
+        assert_eq!(heads.head.lock().unwrap().as_ref().unwrap().generation(), 1);
+        assert_eq!(fs::read_dir(&store.objects_root).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn restart_audits_every_active_dek_before_open_succeeds() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, wrapper, Arc::clone(&heads)).unwrap();
+        publish_rejected_test_record_v1(&store, 0x99).unwrap();
+        drop(store);
+
+        assert_eq!(
+            open_test_store_v1(&root, Arc::new(TestWrapper::zero_unwrap()), heads).unwrap_err(),
+            BootleLanternHolderStoreErrorV1::KeyWrapping
+        );
+    }
+
+    #[test]
+    fn active_object_substitution_and_permission_widening_fail_reopen() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        publish_rejected_test_record_v1(&store, 0xa1).unwrap();
+        let envelope_digest = store
+            .state
+            .lock()
+            .unwrap()
+            .manifest
+            .entries
+            .values()
+            .next()
+            .unwrap()
+            .envelope_digest;
+        let object = store
+            .objects_root
+            .join(holder_object_file_name_v1(envelope_digest));
+        drop(store);
+
+        let mut bytes = fs::read(&object).unwrap();
+        bytes[HOLDER_ENVELOPE_HEADER_BYTES_V1] ^= 1;
+        fs::write(&object, &bytes).unwrap();
+        assert_eq!(
+            open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap_err(),
+            BootleLanternHolderStoreErrorV1::Corrupt
+        );
+
+        bytes[HOLDER_ENVELOPE_HEADER_BYTES_V1] ^= 1;
+        fs::write(&object, &bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&object, fs::Permissions::from_mode(0o640)).unwrap();
+            assert_eq!(
+                open_test_store_v1(&root, wrapper, heads).unwrap_err(),
+                BootleLanternHolderStoreErrorV1::Corrupt
+            );
+        }
+    }
+
+    #[test]
+    fn sealed_head_constructor_and_provider_drift_reject_noncanonical_state() {
+        for (generation, revision, payload) in [
+            (0, digest(1), vec![1]),
+            (1, [0; 32], vec![1]),
+            (1, digest(1), Vec::new()),
+            (
+                1,
+                digest(1),
+                vec![0; BOOTLE_LANTERN_HOLDER_MAX_MANIFEST_BYTES_V1 as usize + 1],
+            ),
+        ] {
+            assert!(
+                BootleLanternHolderSealedHeadV1::from_canonical_parts_v1(
+                    generation, revision, payload
+                )
+                .is_err()
+            );
+        }
+
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), heads).unwrap();
+        *wrapper.qualification.lock().unwrap() =
+            BootleLanternHolderProviderQualificationV1::new(2, digest(0xee));
+        assert_eq!(
+            store.phase_v1(BootleLanternHolderHandleV1::new(digest(1)).unwrap()),
             Err(BootleLanternHolderStoreErrorV1::ProviderDrift)
         );
     }
@@ -3371,10 +4336,21 @@ mod tests {
         let encoded = encode_envelope_v1(&envelope).unwrap();
         assert_eq!(decode_envelope_v1(&encoded).unwrap(), envelope);
         let baseline = envelope_aad_v1(&envelope).unwrap();
+        for length in 0..encoded.len() {
+            assert!(
+                decode_envelope_v1(&encoded[..length]).is_err(),
+                "accepted envelope prefix {length}"
+            );
+        }
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(decode_envelope_v1(&trailing).is_err());
         for offset in 0..HOLDER_ENVELOPE_HEADER_BYTES_V1 {
-            let mut mutated = encode_envelope_header_v1(&envelope.header);
+            let mut mutated = encoded.clone();
             mutated[offset] ^= 1;
-            assert_ne!(mutated, encode_envelope_header_v1(&envelope.header));
+            if let Ok(decoded) = decode_envelope_v1(&mutated) {
+                assert_ne!(envelope_aad_v1(&decoded).unwrap(), baseline);
+            }
         }
         let mut changed = envelope.clone();
         changed.wrapped_dek[0] ^= 1;
@@ -3382,6 +4358,37 @@ mod tests {
         changed = envelope.clone();
         changed.wrapping_key_id = "key-2".to_owned();
         assert_ne!(envelope_aad_v1(&changed).unwrap(), baseline);
+    }
+
+    #[test]
+    fn rejected_secret_codec_rejects_every_truncation_trailing_and_mutation() {
+        let bytes =
+            encode_rejected_secret_v1(digest(1), digest(2), digest(3), digest(4), digest(5), 1)
+                .unwrap();
+        assert_eq!(
+            decode_rejected_secret_v1(bytes.as_slice()).unwrap(),
+            [digest(1), digest(2), digest(3), digest(4), digest(5)]
+        );
+        for length in 0..bytes.len() {
+            assert!(decode_rejected_secret_v1(&bytes[..length]).is_err());
+        }
+        let mut trailing = bytes.to_vec();
+        trailing.push(0);
+        assert!(decode_rejected_secret_v1(&trailing).is_err());
+        for offset in 0..bytes.len() {
+            let mut changed = bytes.to_vec();
+            changed[offset] ^= 1;
+            if (8..168).contains(&offset) {
+                // Binding bytes have no inner checksum; the authenticated
+                // envelope and manifest provide their integrity.
+                assert_ne!(
+                    decode_rejected_secret_v1(&changed).unwrap(),
+                    [digest(1), digest(2), digest(3), digest(4), digest(5),]
+                );
+            } else {
+                assert!(decode_rejected_secret_v1(&changed).is_err());
+            }
+        }
     }
 
     #[test]
@@ -3422,6 +4429,47 @@ mod tests {
                 Err(BootleLanternHolderStoreErrorV1::Corrupt)
             );
             assert_eq!(fs::read(outside).unwrap(), b"sentinel");
+        }
+    }
+
+    #[test]
+    fn vault_lease_writer_lock_and_root_identity_reject_aliasing() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        assert_eq!(
+            open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap_err(),
+            BootleLanternHolderStoreErrorV1::StoreAlreadyOpen
+        );
+        drop(store);
+
+        #[cfg(unix)]
+        {
+            let lock = root.join(HOLDER_WRITER_LOCK_FILE_V1);
+            let alias = parent.path().join("lock-alias");
+            fs::hard_link(&lock, &alias).unwrap();
+            assert_eq!(
+                open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap_err(),
+                BootleLanternHolderStoreErrorV1::Corrupt
+            );
+            fs::remove_file(alias).unwrap();
+
+            let unknown = root.join("unexpected");
+            fs::write(&unknown, b"unexpected root entry").unwrap();
+            assert_eq!(
+                open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap_err(),
+                BootleLanternHolderStoreErrorV1::Corrupt
+            );
+            fs::remove_file(unknown).unwrap();
+
+            let root_alias = parent.path().join("holder-alias");
+            std::os::unix::fs::symlink(&root, &root_alias).unwrap();
+            assert_eq!(
+                open_test_store_v1(&root_alias, wrapper, heads).unwrap_err(),
+                BootleLanternHolderStoreErrorV1::Corrupt
+            );
         }
     }
 

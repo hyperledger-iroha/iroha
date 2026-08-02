@@ -66,6 +66,7 @@ mod identifier_resolution;
 mod offline_commands;
 mod operator_auth;
 mod operator_signatures;
+pub mod privacy_issuance_api;
 #[doc(hidden)]
 pub mod profile_stats;
 #[cfg(feature = "push")]
@@ -1978,6 +1979,10 @@ struct AppState {
     transaction_batch_max_transactions: usize,
     transaction_batch_max_bytes: usize,
     state: Arc<CoreState>,
+    #[cfg(feature = "app_api")]
+    musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
+    bootle_lantern_issuance_runtime:
+        Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
     query_inflight: Arc<tokio::sync::Semaphore>,
@@ -10302,6 +10307,7 @@ async fn handler_transactions_visible_query(
         viewer_account_ids: viewer.account_ids,
         viewer_dataspace_id: viewer.dataspace_id,
         allow_dataspace_wide: viewer.is_mandatory_alias,
+        asset_definition_domains: asset_definition_domain_snapshot(&app),
     };
 
     routing::handle_v1_transactions_visible_query_with_policy(
@@ -10708,6 +10714,7 @@ async fn handler_transactions_history_get(
         viewer_account_ids: viewer.account_ids,
         viewer_dataspace_id: viewer.dataspace_id,
         allow_dataspace_wide: viewer.is_mandatory_alias,
+        asset_definition_domains: asset_definition_domain_snapshot(&app),
     };
 
     routing::handle_v1_transactions_history_get(
@@ -12474,9 +12481,10 @@ async fn handler_offline_operation_status(
 
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerAccountsQuery {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
     #[norito(default)]
     domain: Option<String>,
     #[norito(default)]
@@ -12485,9 +12493,10 @@ struct ExplorerAccountsQuery {
 
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerDomainsQuery {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
     #[norito(default)]
     owned_by: Option<String>,
 }
@@ -12510,20 +12519,44 @@ struct DefiOracleAttestationLatestQuery {
 
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerAssetDefinitionsQuery {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
     #[norito(default)]
-    domain: Option<String>,
+    owning_domain: Option<String>,
     #[norito(default)]
     owned_by: Option<String>,
 }
 
+#[cfg(all(test, feature = "app_api"))]
+mod explorer_asset_definitions_query_tests {
+    use super::ExplorerAssetDefinitionsQuery;
+
+    #[test]
+    fn owning_domain_is_the_only_asset_definition_domain_filter() {
+        let query: ExplorerAssetDefinitionsQuery =
+            norito::json::from_str(r#"{"owning_domain":"treasury.universal","limit":7}"#)
+                .expect("current ownership filter");
+        assert_eq!(query.owning_domain.as_deref(), Some("treasury.universal"));
+        assert_eq!(query.pagination.limit, 7);
+
+        assert!(
+            norito::json::from_str::<ExplorerAssetDefinitionsQuery>(
+                r#"{"domain":"treasury.universal"}"#,
+            )
+            .is_err(),
+            "legacy ?domain= input must be rejected, not silently ignored",
+        );
+    }
+}
+
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerAssetsQuery {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
     #[norito(default)]
     owned_by: Option<String>,
     #[norito(default)]
@@ -12534,9 +12567,10 @@ struct ExplorerAssetsQuery {
 
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerNftsQuery {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
     #[norito(default)]
     owned_by: Option<String>,
     #[norito(default)]
@@ -12545,9 +12579,10 @@ struct ExplorerNftsQuery {
 
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerRwasQuery {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
     #[norito(default)]
     owned_by: Option<String>,
     #[norito(default)]
@@ -13152,10 +13187,10 @@ async fn handler_explorer_asset_definitions_list(
     let remote_ip = remote.ip();
     let ExplorerAssetDefinitionsQuery {
         pagination,
-        domain,
+        owning_domain,
         owned_by,
     } = query;
-    let domain = match domain {
+    let owning_domain = match owning_domain {
         Some(raw) => Some(parse_domain_id(&raw)?),
         None => None,
     };
@@ -13178,8 +13213,13 @@ async fn handler_explorer_asset_definitions_list(
         )
         .await?;
     }
-    routing::handle_v1_explorer_asset_definitions(app.state.clone(), pagination, domain, owned_by)
-        .await
+    routing::handle_v1_explorer_asset_definitions(
+        app.state.clone(),
+        pagination,
+        owning_domain,
+        owned_by,
+    )
+    .await
 }
 
 #[cfg(feature = "app_api")]
@@ -15618,6 +15658,29 @@ async fn handler_privacy_capabilities(
     };
     let payload = crate::runtime::handle_privacy_capabilities(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
+}
+
+/// POST /v1/privacy/bootle-lantern/issuance/authorize — exact native ILA1 issuance.
+async fn handler_post_bootle_lantern_issuance_authorize(
+    State(app): State<SharedAppState>,
+    request: Request<Body>,
+) -> Response {
+    let Some(runtime) = app.bootle_lantern_issuance_runtime.clone() else {
+        return privacy_issuance_api::bootle_lantern_issuance_unavailable_response_v1();
+    };
+    privacy_issuance_api::handle_post_bootle_lantern_issuance_authorize(State(runtime), request)
+        .await
+}
+
+/// POST /v1/privacy/bootle-lantern/issuance/issue — exact native ILA1 || ILQ1 issuance.
+async fn handler_post_bootle_lantern_issuance_issue(
+    State(app): State<SharedAppState>,
+    request: Request<Body>,
+) -> Response {
+    let Some(runtime) = app.bootle_lantern_issuance_runtime.clone() else {
+        return privacy_issuance_api::bootle_lantern_issuance_unavailable_response_v1();
+    };
+    privacy_issuance_api::handle_post_bootle_lantern_issuance_issue(State(runtime), request).await
 }
 
 /// GET /v1/node/query/projection/checkpoint — wrapper enforcing access policy.
@@ -21630,26 +21693,33 @@ fn target_scope_singular_query(
 }
 
 fn target_asset_definition_scope(
-    asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    _asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
 ) -> Option<SignedQueryScope> {
-    asset_definition_id
-        .try_domain()
-        .cloned()
-        .map(SignedQueryScope::TargetDomain)
+    None
 }
 
 fn resolve_asset_definition_scope(
     app: &AppState,
     asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
 ) -> Option<SignedQueryScope> {
-    target_asset_definition_scope(asset_definition_id).or_else(|| {
-        app.state
-            .world_view()
-            .asset_definition(asset_definition_id)
-            .ok()
-            .and_then(|definition| definition.id.try_domain().cloned())
-            .map(SignedQueryScope::TargetDomain)
-    })
+    app.state
+        .world_view()
+        .asset_definition_domains()
+        .get(asset_definition_id)
+        .cloned()
+        .map(SignedQueryScope::TargetDomain)
+}
+
+#[cfg(feature = "app_api")]
+fn asset_definition_domain_snapshot(
+    app: &AppState,
+) -> BTreeMap<iroha_data_model::asset::AssetDefinitionId, iroha_data_model::domain::DomainId> {
+    app.state
+        .world_view()
+        .asset_definition_domains()
+        .iter()
+        .map(|(definition_id, domain_id)| (definition_id.clone(), domain_id.clone()))
+        .collect()
 }
 
 fn target_account_iterable_query(
@@ -21714,29 +21784,9 @@ fn target_account_iterable_query(
 }
 
 fn target_domain_iterable_query(
-    query: &iroha_data_model::query::QueryWithParams,
+    _query: &iroha_data_model::query::QueryWithParams,
 ) -> Option<iroha_data_model::domain::DomainId> {
-    use iroha_data_model::{
-        account::Account, prelude::FindAccountsWithAsset, query::iter_query_inner,
-    };
-
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<Account>(query_box)
-            && let Some(query) = decode_query_payload::<FindAccountsWithAsset>(erased.payload())
-        {
-            return query.asset_definition_id().try_domain().cloned();
-        }
-        return None;
-    }
-
-    query
-        .fast_dsl_parts()
-        .and_then(|(item_kind, _, _, payload)| {
-            (item_kind == iroha_data_model::query::QueryItemKind::Account)
-                .then(|| decode_query_payload::<FindAccountsWithAsset>(payload))
-                .flatten()
-                .and_then(|query| query.asset_definition_id().try_domain().cloned())
-        })
+    None
 }
 
 fn target_scope_singular_query_for_app(
@@ -23817,20 +23867,27 @@ fn asset_definition_home_dataspace_id(
     app: &AppState,
     definition_id: &AssetDefinitionId,
 ) -> Option<DataSpaceId> {
-    if let Some(domain) = definition_id.try_domain() {
-        return dataspace_id_for_alias_segment(app, domain.dataspace().as_ref());
-    }
+    let (dataspace_alias, is_global) = {
+        let state_view = app.state.view();
+        let world = state_view.world();
+        if let Some(domain) = world.asset_definition_domains().get(definition_id) {
+            (Some(domain.dataspace().as_ref().to_owned()), false)
+        } else {
+            let definition = world.asset_definition(definition_id).ok()?;
+            (
+                definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.dataspace_segment().to_owned()),
+                definition.balance_scope_policy() == AssetBalancePolicy::Global,
+            )
+        }
+    };
 
-    let state_view = app.state.view();
-    let definition = state_view.world().asset_definition(definition_id).ok()?;
-    if let Some(alias) = definition.alias().as_ref() {
-        return dataspace_id_for_alias_segment(app, alias.dataspace_segment());
-    }
-    if let Some(domain) = definition.id.try_domain() {
-        return dataspace_id_for_alias_segment(app, domain.dataspace().as_ref());
-    }
-    (definition.balance_scope_policy() == AssetBalancePolicy::Global)
-        .then_some(DataSpaceId::UNIVERSAL)
+    dataspace_alias
+        .as_deref()
+        .and_then(|alias| dataspace_id_for_alias_segment(app, alias))
+        .or_else(|| is_global.then_some(DataSpaceId::UNIVERSAL))
 }
 
 #[cfg(feature = "app_api")]
@@ -37138,14 +37195,49 @@ async fn handler_post_sorafs_por_vrf(
 }
 
 #[cfg(feature = "app_api")]
+fn por_response_encoding_error(context: &str, error: impl std::fmt::Display) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+        "failed to encode PoR {context}: {error}"
+    )))
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn por_response_encoding_failures_are_internal_server_errors() {
+    let Error::Query(failure) = por_response_encoding_error("status response", "synthetic") else {
+        panic!("PoR encoding failures must be query errors");
+    };
+    assert!(matches!(
+        failure,
+        iroha_data_model::ValidationFail::InternalError(_)
+    ));
+    assert_eq!(
+        Error::query_status_code(&failure),
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    );
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_get_sorafs_por_status(
     State(app): State<SharedAppState>,
     AxQuery(query): AxQuery<crate::routing::PorStatusQueryDto>,
 ) -> Result<AxResponse, Error> {
-    let statuses =
-        crate::routing::handle_get_sorafs_por_status(app.por_coordinator.clone(), query)?;
-    let body = norito::to_bytes(&statuses)
-        .map_err(|err| conversion_error(format!("failed to encode PoR status response: {err}")))?;
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let coordinator = app.por_coordinator.clone();
+    let (result, _admission) = tokio::task::spawn_blocking(move || {
+        let result =
+            crate::routing::handle_get_sorafs_por_status(coordinator, query).and_then(|page| {
+                norito::to_bytes(&page)
+                    .map_err(|err| por_response_encoding_error("status response", err))
+            });
+        (result, admission)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "sorafs_por_status_worker_failed",
+        message: error.to_string(),
+    })?;
+    let body = result?;
     let mut resp = AxResponse::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -37159,9 +37251,22 @@ async fn handler_get_sorafs_por_export(
     State(app): State<SharedAppState>,
     AxQuery(query): AxQuery<crate::routing::PorExportQueryDto>,
 ) -> Result<AxResponse, Error> {
-    let export = crate::routing::handle_get_sorafs_por_export(app.por_coordinator.clone(), query)?;
-    let body = norito::to_bytes(&export)
-        .map_err(|err| conversion_error(format!("failed to encode PoR export payload: {err}")))?;
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let coordinator = app.por_coordinator.clone();
+    let (result, _admission) = tokio::task::spawn_blocking(move || {
+        let result =
+            crate::routing::handle_get_sorafs_por_export(coordinator, query).and_then(|page| {
+                norito::to_bytes(&page)
+                    .map_err(|err| por_response_encoding_error("export payload", err))
+            });
+        (result, admission)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "sorafs_por_export_worker_failed",
+        message: error.to_string(),
+    })?;
+    let body = result?;
     let mut resp = AxResponse::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -37176,9 +37281,22 @@ async fn handler_get_sorafs_por_report(
     AxPath(week_label): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let cycle = crate::routing::parse_report_iso_week(&week_label)?;
-    let report = crate::routing::handle_get_sorafs_por_report(app.por_coordinator.clone(), cycle)?;
-    let body = norito::to_bytes(&report)
-        .map_err(|err| conversion_error(format!("failed to encode PoR weekly report: {err}")))?;
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let coordinator = app.por_coordinator.clone();
+    let (result, _admission) = tokio::task::spawn_blocking(move || {
+        let result =
+            crate::routing::handle_get_sorafs_por_report(coordinator, cycle).and_then(|report| {
+                norito::to_bytes(&report)
+                    .map_err(|err| por_response_encoding_error("weekly report", err))
+            });
+        (result, admission)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "sorafs_por_report_worker_failed",
+        message: error.to_string(),
+    })?;
+    let body = result?;
     let mut resp = AxResponse::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -45764,31 +45882,6 @@ fn validate_account_onboarding_readiness(
                 "create the configured onboarding domain before accepting sponsored onboarding",
             );
         }
-        match iroha_data_model::account::AccountDomainSelector::from_domain(domain) {
-            Ok(selector) => match world.domain_selectors().get(&selector) {
-                Some(bound) if bound == domain => {}
-                Some(bound) => blocked(
-                    "alias.onboarding.credential_domain_selector_conflict",
-                    Some(domain.to_string()),
-                    "torii.account_onboarding.credentials[].scope.domain",
-                    &format!(
-                        "repair the domain selector binding; it currently points to `{bound}`"
-                    ),
-                ),
-                None => blocked(
-                    "alias.onboarding.credential_domain_selector_missing",
-                    Some(domain.to_string()),
-                    "torii.account_onboarding.credentials[].scope.domain",
-                    "repair the missing derived domain selector before accepting onboarding",
-                ),
-            },
-            Err(error) => blocked(
-                "alias.onboarding.credential_domain_selector_invalid",
-                Some(domain.to_string()),
-                "torii.account_onboarding.credentials[].scope.domain",
-                &format!("correct the domain selector configuration: {error}"),
-            ),
-        }
         match iroha_core::sns::get_name_record(
             &world,
             &catalog,
@@ -47422,6 +47515,86 @@ const fn iso_bridge_body_limit(configured: u64, transaction_limit: usize) -> usi
     }
 }
 
+#[cfg(feature = "app_api")]
+fn rebuild_musubi_search_index(
+    state: &CoreState,
+    previous_projection_revision: Option<u64>,
+) -> core::result::Result<
+    iroha_core::musubi_search::MusubiSearchIndexV1,
+    iroha_core::musubi_search::MusubiSearchError,
+> {
+    use iroha_core::musubi_search::{MusubiSearchError, MusubiSearchIndexV1};
+    use iroha_data_model::musubi::{
+        MusubiPackageMetadataRecordV1, MusubiPackageRecordV1, MusubiSearchSnapshotV1,
+    };
+
+    let state_view = state.view();
+    let Some(finalized_block_hash) = state_view.block_hashes().last().map(|hash| *hash.as_ref())
+    else {
+        return Ok(MusubiSearchIndexV1::default());
+    };
+    let finalized_height = u64::try_from(state_view.block_hashes().len())
+        .map_err(|_| MusubiSearchError::InconsistentFinalizedEvent)?;
+    let world = state_view.world();
+    let projection_revision = match previous_projection_revision {
+        Some(revision) => revision
+            .checked_add(1)
+            .ok_or(MusubiSearchError::RevisionOverflow)?,
+        None => 1,
+    };
+    let packages = world
+        .musubi_packages()
+        .iter()
+        .map(|(_, package)| package.clone())
+        .collect::<Vec<_>>();
+    let metadata = world
+        .musubi_package_metadata()
+        .iter()
+        .map(|(_, metadata)| metadata.clone())
+        .collect::<Vec<_>>();
+    MusubiSearchIndexV1::rebuild_records(
+        &packages,
+        &metadata,
+        MusubiSearchSnapshotV1 {
+            finalized_height,
+            finalized_block_hash,
+            projection_revision,
+        },
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn select_initial_musubi_search_index(
+    rebuilt: core::result::Result<
+        iroha_core::musubi_search::MusubiSearchIndexV1,
+        iroha_core::musubi_search::MusubiSearchError,
+    >,
+) -> iroha_core::musubi_search::MusubiSearchIndexV1 {
+    match rebuilt {
+        Ok(index) => index,
+        Err(error) => {
+            // Rich discovery is rebuildable and deliberately non-authoritative. Keep exact
+            // resolver and registry routes available while the subscribed worker retries from
+            // finalized state; search itself returns its explicit unavailable response.
+            iroha_logger::error!(
+                %error,
+                "failed to initialize finalized Musubi search projection; search is unavailable until rebuild"
+            );
+            iroha_core::musubi_search::MusubiSearchIndexV1::default()
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn finalized_block_hash_at(state: &CoreState, height: u64) -> Option<[u8; 32]> {
+    let index = usize::try_from(height.checked_sub(1)?).ok()?;
+    state
+        .view()
+        .block_hashes()
+        .get(index)
+        .map(|hash| *hash.as_ref())
+}
+
 #[cfg(test)]
 mod iso_bridge_body_limit_tests {
     use super::iso_bridge_body_limit;
@@ -47431,6 +47604,37 @@ mod iso_bridge_body_limit_tests {
         assert_eq!(iso_bridge_body_limit(1024 * 1024, 64_000_000), 1024 * 1024);
         assert_eq!(iso_bridge_body_limit(128_000_000, 64_000_000), 64_000_000);
         assert_eq!(iso_bridge_body_limit(0, 64_000_000), 1);
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod musubi_search_initialization_tests {
+    use iroha_core::musubi_search::{MusubiSearchError, MusubiSearchIndexV1};
+    use iroha_data_model::musubi::{
+        MusubiPackageMetadataRecordV1, MusubiPackageRecordV1, MusubiSearchSnapshotV1,
+    };
+
+    use super::select_initial_musubi_search_index;
+
+    #[test]
+    fn inconsistent_discovery_projection_does_not_disable_registry_routes() {
+        let unavailable =
+            select_initial_musubi_search_index(Err(MusubiSearchError::InconsistentFinalizedEvent));
+        assert!(unavailable.snapshot().is_none());
+
+        let snapshot = MusubiSearchSnapshotV1 {
+            finalized_height: 7,
+            finalized_block_hash: [0x51; 32],
+            projection_revision: 3,
+        };
+        let rebuilt = MusubiSearchIndexV1::rebuild_records(
+            core::iter::empty::<&MusubiPackageRecordV1>(),
+            core::iter::empty::<&MusubiPackageMetadataRecordV1>(),
+            snapshot,
+        )
+        .expect("empty finalized search projection");
+        let available = select_initial_musubi_search_index(Ok(rebuilt));
+        assert_eq!(available.snapshot(), Some(snapshot));
     }
 }
 
@@ -47450,6 +47654,10 @@ pub struct Torii {
     ws_message_timeout: Duration,
     address: WithOrigin<SocketAddr>,
     state: Arc<CoreState>,
+    #[cfg(feature = "app_api")]
+    musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
+    bootle_lantern_issuance_runtime:
+        Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
     telemetry: routing::MaybeTelemetry,
     telemetry_profile: TelemetryProfile,
     online_peers: OnlinePeersProvider,
@@ -47653,6 +47861,9 @@ pub struct Torii {
 #[derive(Clone)]
 pub struct ToriiRuntimeDeps {
     telemetry: routing::MaybeTelemetry,
+    bootle_lantern_issuance_provider_registry: Option<
+        Arc<dyn privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1>,
+    >,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
@@ -47761,6 +47972,7 @@ impl ToriiRuntimeDeps {
     pub fn new(telemetry: routing::MaybeTelemetry) -> Self {
         Self {
             telemetry,
+            bootle_lantern_issuance_provider_registry: None,
             soracloud_runtime: None,
             soracloud_hf_config: None,
             sorafs_node: None,
@@ -47835,6 +48047,20 @@ impl ToriiRuntimeDeps {
             vpn_relay_trust: None,
             torii_proxy_bridge_signer: None,
         }
+    }
+
+    /// Attach the deployment-owned Bootle/Lantern issuance provider registry.
+    ///
+    /// The registry owns all issuer and authentication secrets. Torii accepts
+    /// it only when its handle, revision, policy digest, and governed issuer
+    /// bindings exactly match the public node configuration.
+    #[must_use]
+    pub fn with_bootle_lantern_issuance_provider_registry(
+        mut self,
+        registry: Arc<dyn privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1>,
+    ) -> Self {
+        self.bootle_lantern_issuance_provider_registry = Some(registry);
+        self
     }
 
     /// Attach the embedded Soracloud runtime-manager handle.
@@ -49165,6 +49391,152 @@ where
 }
 
 impl Torii {
+    #[cfg(feature = "app_api")]
+    fn spawn_musubi_search_projection_worker(&self, shutdown_signal: ShutdownSignal) {
+        use iroha_core::musubi_search::search_event_height;
+
+        let mut events = self.events.subscribe();
+        let state = self.state.clone();
+        let search = self.musubi_search.clone();
+        tokio::spawn(async move {
+            let mut ignore_through_height = 0_u64;
+
+            // The subscription is opened before this rebuild, so events committed
+            // concurrently are queued. `ignore_through_height` discards only the
+            // prefix already represented by the rebuilt finalized state.
+            let previous_revision = search
+                .read()
+                .await
+                .snapshot()
+                .map(|snapshot| snapshot.projection_revision);
+            match rebuild_musubi_search_index(state.as_ref(), previous_revision) {
+                Ok(rebuilt) => {
+                    ignore_through_height = rebuilt
+                        .snapshot()
+                        .map_or(0, |snapshot| snapshot.finalized_height);
+                    *search.write().await = rebuilt;
+                }
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        "failed to rebuild finalized Musubi search projection at worker startup"
+                    );
+                    *search.write().await =
+                        iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                }
+            }
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_signal.receive() => break,
+                    received = events.recv() => match received {
+                        Ok(EventBox::Data(data)) => {
+                            let DataEvent::Musubi(event) = data.as_ref() else {
+                                continue;
+                            };
+                            let Some(height) = search_event_height(event) else {
+                                continue;
+                            };
+                            if height <= ignore_through_height {
+                                continue;
+                            }
+                            if search.read().await.snapshot().is_none() {
+                                match rebuild_musubi_search_index(state.as_ref(), None) {
+                                    Ok(rebuilt) => {
+                                        ignore_through_height = rebuilt
+                                            .snapshot()
+                                            .map_or(0, |snapshot| snapshot.finalized_height);
+                                        *search.write().await = rebuilt;
+                                        if height <= ignore_through_height {
+                                            continue;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        iroha_logger::error!(
+                                            %error,
+                                            "finalized Musubi search projection remains unavailable"
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                            let Some(block_hash) = finalized_block_hash_at(state.as_ref(), height) else {
+                                iroha_logger::error!(
+                                    height,
+                                    "finalized Musubi search event has no matching block hash"
+                                );
+                                *search.write().await =
+                                    iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                                continue;
+                            };
+                            let result = search
+                                .write()
+                                .await
+                                .apply_finalized(event, height, block_hash);
+                            if let Err(error) = result {
+                                iroha_logger::error!(
+                                    %error,
+                                    height,
+                                    "failed to apply finalized Musubi search event; rebuilding projection"
+                                );
+                                let previous_revision = search
+                                    .read()
+                                    .await
+                                    .snapshot()
+                                    .map(|snapshot| snapshot.projection_revision);
+                                match rebuild_musubi_search_index(state.as_ref(), previous_revision) {
+                                    Ok(rebuilt) => {
+                                        ignore_through_height = rebuilt
+                                            .snapshot()
+                                            .map_or(0, |snapshot| snapshot.finalized_height);
+                                        *search.write().await = rebuilt;
+                                    }
+                                    Err(rebuild_error) => {
+                                        iroha_logger::error!(
+                                            %rebuild_error,
+                                            "failed to recover finalized Musubi search projection"
+                                        );
+                                        *search.write().await =
+                                            iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                                    }
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            iroha_logger::warn!(
+                                skipped,
+                                "Musubi search projection event stream lagged; rebuilding from finalized state"
+                            );
+                            let previous_revision = search
+                                .read()
+                                .await
+                                .snapshot()
+                                .map(|snapshot| snapshot.projection_revision);
+                            match rebuild_musubi_search_index(state.as_ref(), previous_revision) {
+                                Ok(rebuilt) => {
+                                    ignore_through_height = rebuilt
+                                        .snapshot()
+                                        .map_or(0, |snapshot| snapshot.finalized_height);
+                                    *search.write().await = rebuilt;
+                                }
+                                Err(error) => {
+                                    iroha_logger::error!(
+                                        %error,
+                                        "failed to rebuild lagged finalized Musubi search projection"
+                                    );
+                                    *search.write().await =
+                                        iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        });
+    }
+
     #[cfg(feature = "telemetry")]
     #[allow(clippy::unused_self)]
     fn add_telemetry_routes(&self, builder: &mut RouterBuilder) {
@@ -49976,6 +50348,10 @@ impl Torii {
             catalog_post(musubi::handler_find_archive_locations),
         );
         builder.route(
+            &route_catalog::musubi::ARCHIVE_RETENTION,
+            catalog_post(musubi::handler_find_archive_retention),
+        );
+        builder.route(
             &route_catalog::musubi::ALIAS,
             catalog_post(musubi::handler_find_alias),
         );
@@ -49986,6 +50362,10 @@ impl Torii {
         builder.route(
             &route_catalog::musubi::ORDERED_PREFIX,
             catalog_post(musubi::handler_find_ordered_prefix),
+        );
+        builder.route(
+            &route_catalog::musubi::SEARCH,
+            catalog_post(musubi::handler_search_packages),
         );
         builder.route(
             &route_catalog::musubi::NAMESPACE_BINDING_REGISTER,
@@ -50022,6 +50402,10 @@ impl Torii {
         builder.route(
             &route_catalog::musubi::PACKAGE_MEMBER_ACCEPT,
             catalog_post(musubi::handler_build_package_member_accept),
+        );
+        builder.route(
+            &route_catalog::musubi::PACKAGE_MEMBER_INVITATION_REVOKE,
+            catalog_post(musubi::handler_build_package_member_invitation_revoke),
         );
         builder.route(
             &route_catalog::musubi::PACKAGE_MEMBER_SET_ROLE,
@@ -51860,6 +52244,16 @@ impl Torii {
                 );
             };
         }
+        macro_rules! capacity_authenticated_post {
+            ($descriptor:ident, $handler:path) => {
+                builder.route(
+                    &route_catalog::sorafs::$descriptor,
+                    catalog_post($handler)
+                        .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                        .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+                );
+            };
+        }
         macro_rules! capacity_authenticated_get {
             ($descriptor:ident, $handler:path) => {
                 builder.route(
@@ -51963,11 +52357,11 @@ impl Torii {
             TRANSPARENCY_EXPLORER_UI,
             sorafs::api::handle_get_sorafs_transparency_explorer_ui
         );
-        capacity_post!(
+        capacity_authenticated_post!(
             TRANSPARENCY_PRIVACY_SOURCE_EVENT,
             sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_source_event
         );
-        capacity_post!(
+        capacity_authenticated_post!(
             TRANSPARENCY_PRIVACY_PUBLISH_DUE,
             sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_publish_due
         );
@@ -51975,7 +52369,7 @@ impl Torii {
             TRANSPARENCY_TOKENS,
             sorafs::api::handle_get_sorafs_transparency_token_issuances
         );
-        capacity_post!(
+        capacity_authenticated_post!(
             TRANSPARENCY_TOKEN_ISSUANCE,
             sorafs::api::handle_post_sorafs_transparency_token_issuance
         );
@@ -51987,7 +52381,7 @@ impl Torii {
             APPEAL_FINANCE_REPORTS_GET,
             sorafs::api::handle_get_sorafs_appeal_finance_reports
         );
-        capacity_post!(
+        capacity_authenticated_post!(
             APPEAL_FINANCE_REPORTS_POST,
             sorafs::api::handle_post_sorafs_appeal_finance_report
         );
@@ -51995,7 +52389,7 @@ impl Torii {
             APPEAL_FINANCE_WEEKLY_ROLLUPS_GET,
             sorafs::api::handle_get_sorafs_appeal_finance_weekly_rollups
         );
-        capacity_post!(
+        capacity_authenticated_post!(
             APPEAL_FINANCE_WEEKLY_ROLLUPS_POST,
             sorafs::api::handle_post_sorafs_appeal_finance_weekly_rollup
         );
@@ -52250,7 +52644,8 @@ impl Torii {
     fn add_content_routes(builder: &mut RouterBuilder) {
         builder.route(
             &route_catalog::content_directory::CONTENT,
-            catalog_get(content::handle_get_content),
+            catalog_get(content::handle_get_content)
+                .authenticated_in_handler(HandlerAuthentication::ManifestConditionalContent),
         );
     }
 
@@ -52313,6 +52708,20 @@ impl Torii {
         mount_get!(RUNTIME_METRICS, handler_runtime_metrics);
         mount_get!(NODE_CAPABILITIES, handler_node_capabilities);
         mount_get!(PRIVACY_CAPABILITIES, handler_privacy_capabilities);
+        builder.route(
+            &routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
+            catalog_post(handler_post_bootle_lantern_issuance_authorize)
+                .layer(DefaultBodyLimit::max(1))
+                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
+        builder.route(
+            &routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
+            catalog_post(handler_post_bootle_lantern_issuance_issue)
+                .layer(DefaultBodyLimit::max(
+                    privacy_issuance_api::BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1,
+                ))
+                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
         mount_get!(
             NODE_PROJECTION_CHECKPOINT,
             handler_node_query_projection_checkpoint
@@ -52559,6 +52968,28 @@ impl Torii {
             &runtime_deps,
         )
         .unwrap_or_else(|error| panic!("invalid SoraFS node runtime preflight: {error}"));
+        let bootle_lantern_issuance_provider_registry = runtime_deps
+            .bootle_lantern_issuance_provider_registry
+            .clone();
+        let bootle_lantern_issuance_runtime = match config.privacy_bootle_lantern_issuer.as_ref() {
+            Some(issuer_config) => Some(Arc::new(
+                privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1::open(
+                    privacy_issuance_api::BootleLanternIssuanceRuntimeConfigV1::from(issuer_config),
+                    Arc::clone(&state),
+                    bootle_lantern_issuance_provider_registry,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("invalid Bootle/Lantern issuance runtime preflight: {error}")
+                }),
+            )),
+            None => {
+                assert!(
+                    bootle_lantern_issuance_provider_registry.is_none(),
+                    "Bootle/Lantern issuance provider registry supplied while the runtime is disabled"
+                );
+                None
+            }
+        };
         let telemetry = runtime_deps.telemetry.clone();
         let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
@@ -53753,6 +54184,10 @@ impl Torii {
             Some(config.recipient_lookup.requests_per_minute),
             Some(config.recipient_lookup.requests_per_minute),
         );
+        #[cfg(feature = "app_api")]
+        let musubi_search = Arc::new(RwLock::new(select_initial_musubi_search_index(
+            rebuild_musubi_search_index(state.as_ref(), None),
+        )));
         Self {
             chain_id: Arc::new(chain_id),
             kiso,
@@ -53762,6 +54197,9 @@ impl Torii {
             query_service,
             kura,
             state,
+            #[cfg(feature = "app_api")]
+            musubi_search,
+            bootle_lantern_issuance_runtime,
             online_peers,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry_urls,
@@ -54242,6 +54680,9 @@ impl Torii {
                 .try_into()
                 .unwrap_or(usize::MAX),
             state: self.state.clone(),
+            #[cfg(feature = "app_api")]
+            musubi_search: self.musubi_search.clone(),
+            bootle_lantern_issuance_runtime: self.bootle_lantern_issuance_runtime.clone(),
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
             query_inflight,
@@ -54814,6 +55255,9 @@ impl Torii {
             }
         }
 
+        #[cfg(feature = "app_api")]
+        self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
+
         if let Some(runtime) = self.iso_bridge.clone() {
             let mut rx = self.events.subscribe();
             tokio::spawn(async move {
@@ -55291,34 +55735,6 @@ fn load_sorafs_admission(
 }
 
 #[cfg(feature = "app_api")]
-fn load_cdn_policy(
-    path: Option<&PathBuf>,
-) -> Option<iroha_data_model::sorafs::gar::GarCdnPolicyV1> {
-    let policy_path = path?;
-    match fs::read(policy_path) {
-        Ok(bytes) => match norito::json::from_slice(&bytes) {
-            Ok(policy) => Some(policy),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    path = ?policy_path,
-                    "failed to parse SoraFS CDN policy payload"
-                );
-                None
-            }
-        },
-        Err(err) => {
-            iroha_logger::warn!(
-                ?err,
-                path = ?policy_path,
-                "failed to read SoraFS CDN policy payload"
-            );
-            None
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct GatewaySecurityComponents {
     policy: Arc<sorafs::gateway::GatewayPolicy>,
@@ -55450,12 +55866,10 @@ fn build_sorafs_gateway_security(
         window: config.rate_limit.window,
         ban_duration: config.rate_limit.ban,
     };
-    let cdn_policy = load_cdn_policy(config.cdn_policy_path.as_ref());
     let policy_config = GatewayPolicyConfig {
         require_manifest_envelope: config.require_manifest_envelope,
         enforce_admission: config.enforce_admission,
         rate_limit: rate_limit.clone(),
-        cdn_policy,
     };
     let rate_limiter = GatewayRateLimiter::new(rate_limit);
     let policy = Arc::new(GatewayPolicy::new(policy_config, admission, rate_limiter));
@@ -56135,7 +56549,7 @@ fn build_por_components(
             iroha_logger::warn!(
                 ?err,
                 path = ?snapshot_path,
-                "failed to load PoR coordinator snapshot; continuing with in-memory history"
+                "failed to load PoR report-publication state while PoR is disabled; lifecycle reads remain unavailable"
             );
             Arc::new(sorafs::PorCoordinator::new())
         }
@@ -56152,6 +56566,22 @@ fn build_por_components(
         sorafs_node.is_enabled(),
         "torii.sorafs_por.enabled requires embedded SoraFS storage"
     );
+    let authoritative_snapshot =
+        sorafs_node
+            .por_status_authority_snapshot()
+            .unwrap_or_else(|err| {
+                panic!("failed to load authoritative PoR status checkpoint projection: {err}")
+            });
+    coordinator
+        .install_authoritative_projection(authoritative_snapshot)
+        .unwrap_or_else(|err| {
+            panic!("failed to install authoritative PoR status checkpoint projection: {err}")
+        });
+    coordinator
+        .retire_lifecycle_persistence()
+        .unwrap_or_else(|err| {
+            panic!("failed to retire duplicate PoR coordinator lifecycle state: {err}")
+        });
     let admission = admission.unwrap_or_else(|| {
         panic!("torii.sorafs_por.enabled requires the council-verified provider admission registry")
     });

@@ -28,7 +28,7 @@ fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId 
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
     let asset_name = Name::from_str(name).expect("default asset definition name");
-    AssetDefinitionId::new(domain_id, asset_name)
+    AssetDefinitionId::derive_from_components(domain_id, asset_name)
 }
 
 fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
@@ -102,15 +102,6 @@ pub mod crypto {
 
 /// Common configuration defaults shared across components.
 pub mod common {
-    /// Default dataspace-qualified domain used when configuration omits the AccountAddress
-    /// selector override.
-    pub fn default_account_domain_label() -> String {
-        format!(
-            "{}.universal",
-            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
-        )
-    }
-
     /// Default chain discriminant / I105 network prefix (Sora Nexus global).
     pub const CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
@@ -122,8 +113,6 @@ pub mod common {
 
 /// IVM- and banner-related defaults.
 pub mod ivm {
-    use super::Name;
-
     /// Startup banner settings.
     pub mod banner {
         /// Show startup banners by default.
@@ -140,11 +129,6 @@ pub mod ivm {
         pub const fn beep() -> bool {
             BEEP
         }
-    }
-
-    /// Default compute resource profile used to cap IVM guest stack budgets.
-    pub fn memory_budget_profile() -> Name {
-        super::compute::default_resource_profile()
     }
 }
 
@@ -2315,6 +2299,11 @@ pub mod torii {
         /// Default terminal-record retention after its authoritative horizon.
         pub const TERMINAL_RETENTION_BLOCKS: u64 = 4_096;
 
+        /// First-release concurrent native-issuance hard ceiling.
+        ///
+        /// There is deliberately no operational default: an enabled issuer
+        /// must choose its deployment-specific bound explicitly.
+        pub const MAX_INFLIGHT_HARD: usize = 64;
         /// First-release authorization lifetime hard ceiling.
         pub const AUTHORIZATION_LIFETIME_BLOCKS_MAX: u64 = 4_096;
         /// First-release durable store record-count hard ceiling.
@@ -3676,12 +3665,6 @@ pub mod concurrency {
     pub const SUMERAGI_STACK_BYTES_MIN: usize = 64 * 1024 * 1024;
     /// Maximum allowed Sumeragi helper-thread stack size.
     pub const SUMERAGI_STACK_BYTES_MAX: usize = 64 * 1024 * 1024;
-    /// Default guest stack size (bytes) for IVM instances.
-    pub const GUEST_STACK_BYTES: u64 = 4 * 1024 * 1024;
-    /// Maximum guest stack size (bytes) allowed by config (guard runaway reservations).
-    pub const GUEST_STACK_BYTES_MAX: u64 = 64 * 1024 * 1024;
-    /// Default gas→stack multiplier (bytes of stack available per unit of gas).
-    pub const GAS_TO_STACK_MULTIPLIER: u64 = 4;
 }
 
 /// Norito codec defaults.
@@ -3864,16 +3847,6 @@ pub mod zk {
         /// Soft byte-budget for pre-verification work (0 = unlimited).
         /// If non-zero and the proof size exceeds this budget, `PreverifyBudgetExceeded` is returned.
         pub const BUDGET_BYTES: u64 = 0;
-    }
-    /// Shielded ledger/state defaults.
-    pub mod ledger {
-        /// Maximum number of recent Merkle roots to keep for shielded assets.
-        /// Kept modest to bound memory while allowing lookback for typical proofs.
-        pub const ROOT_HISTORY_CAP: usize = 2048;
-        /// Whether to include an explicit empty-tree root in read APIs when an asset has no commitments.
-        pub const EMPTY_ROOT_ON_EMPTY: bool = false;
-        /// Default depth to use when computing the explicit empty-tree root.
-        pub const EMPTY_ROOT_DEPTH: u8 = 0;
     }
     /// ZK voting/election defaults.
     pub mod vote {
@@ -4187,11 +4160,7 @@ pub mod governance {
     }
 
     fn account_id_from_public_key(public_key: &str) -> AccountId {
-        let domain =
-            DomainId::parse_fully_qualified(&super::common::default_account_domain_label())
-                .expect("default governance account domain");
         let public_key = public_key.parse().expect("default governance public key");
-        let _ = domain;
         AccountId::new(public_key)
     }
 
@@ -4561,8 +4530,8 @@ pub mod confidential {
     pub const POLICY_TRANSITION_DELAY_BLOCKS: u64 = 100;
     /// Grace window around policy activation for conversions.
     pub const POLICY_TRANSITION_WINDOW_BLOCKS: u64 = 200;
-    /// Commitment tree root history length retained.
-    pub const TREE_ROOTS_HISTORY_LEN: u64 = 10_000;
+    /// Non-zero commitment tree root history length retained.
+    pub const TREE_ROOTS_HISTORY_LEN: NonZeroUsize = nonzero!(10_000_usize);
     /// Commitment tree frontier checkpoint interval.
     pub const TREE_FRONTIER_CHECKPOINT_INTERVAL: u64 = 100;
     /// Maximum verifier entries in registry.

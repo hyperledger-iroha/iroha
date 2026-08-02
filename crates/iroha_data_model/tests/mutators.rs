@@ -39,15 +39,22 @@ fn domain_metadata_mut_and_set_owned_by() {
 fn asset_definition_mutators_metadata_mintable_owner() {
     // Build an AssetDefinition and exercise mutators
     let _domain_id: DomainId = DomainId::try_new("land", "universal").expect("valid");
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("land", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("land", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
 
     // Create an owner account in the same domain
     let owner = checked_random_account_id();
 
-    let mut def = AssetDefinition::numeric(asset_def_id.clone()).build(&owner);
+    let mut def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose".to_owned(),
+        crate::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&owner);
 
     // metadata_mut: set a metadata entry and verify
     let key: Name = "color".parse().unwrap();

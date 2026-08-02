@@ -751,12 +751,26 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
     );
     let privacy_domain = DomainId::try_new("privacy", "universal")?;
     let (reserve_account, _) = gen_account_in("privacy");
-    let zk_asset = AssetDefinitionId::new(privacy_domain.clone(), "zk_ace_coin".parse::<Name>()?);
-    let pgc_asset = AssetDefinitionId::new(privacy_domain.clone(), "pgc_note".parse::<Name>()?);
-    let verange_asset =
-        AssetDefinitionId::new(privacy_domain.clone(), "verange_value".parse::<Name>()?);
-    let fcmp_asset = AssetDefinitionId::new(privacy_domain.clone(), "fcmp_note".parse::<Name>()?);
-    let ivm_asset = AssetDefinitionId::new(privacy_domain.clone(), "ivm_note".parse::<Name>()?);
+    let zk_asset = AssetDefinitionId::derive_from_components(
+        privacy_domain.clone(),
+        "zk_ace_coin".parse::<Name>()?,
+    );
+    let pgc_asset = AssetDefinitionId::derive_from_components(
+        privacy_domain.clone(),
+        "pgc_note".parse::<Name>()?,
+    );
+    let verange_asset = AssetDefinitionId::derive_from_components(
+        privacy_domain.clone(),
+        "verange_value".parse::<Name>()?,
+    );
+    let fcmp_asset = AssetDefinitionId::derive_from_components(
+        privacy_domain.clone(),
+        "fcmp_note".parse::<Name>()?,
+    );
+    let ivm_asset = AssetDefinitionId::derive_from_components(
+        privacy_domain.clone(),
+        "ivm_note".parse::<Name>()?,
+    );
     let zk_asset_at_alice = AssetId::new(zk_asset.clone(), ALICE_ID.clone());
     let zk_asset_at_reserve = AssetId::new(zk_asset.clone(), reserve_account.clone());
     let transaction_budget =
@@ -800,22 +814,36 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         )))
         .with_genesis_instruction(Register::domain(Domain::new(privacy_domain.clone())))
         .with_genesis_instruction(Register::account(Account::new(reserve_account.clone())))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(zk_asset.clone()).with_name(zk_asset.name().to_string()),
-        ))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(pgc_asset.clone()).with_name(pgc_asset.name().to_string()),
-        ))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(verange_asset.clone())
-                .with_name(verange_asset.name().to_string()),
-        ))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(fcmp_asset.clone()).with_name(fcmp_asset.name().to_string()),
-        ))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(ivm_asset.clone()).with_name(ivm_asset.name().to_string()),
-        ))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            zk_asset.clone(),
+            "zk_ace_coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            pgc_asset.clone(),
+            "pgc_note".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            verange_asset.clone(),
+            "verange_value".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            fcmp_asset.clone(),
+            "fcmp_note".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            ivm_asset.clone(),
+            "ivm_note".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
         .with_genesis_instruction(Mint::asset_quantity(100_u32, zk_asset_at_alice.clone()));
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());

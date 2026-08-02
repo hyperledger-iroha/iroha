@@ -114,55 +114,67 @@ const MUSUBI_V1_TOOL_DEFINITIONS: &[MusubiV1ToolDefinition] = &[
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.exact_package",
         description: "Fetch one exact structural Musubi V1 package record.",
-        path: "/v1/musubi/queries/exact-package",
+        path: route_catalog::musubi::EXACT_PACKAGE.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.exact_release",
         description: "Fetch one exact structural Musubi V1 release record.",
-        path: "/v1/musubi/queries/exact-release",
+        path: route_catalog::musubi::EXACT_RELEASE.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.resolver_index",
         description: "Fetch a finalized page from the universal Musubi V1 resolver index.",
-        path: "/v1/musubi/queries/resolver-index",
+        path: route_catalog::musubi::RESOLVER_INDEX.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.versions",
         description: "Fetch a finalized page of structured Musubi V1 versions.",
-        path: "/v1/musubi/queries/versions",
+        path: route_catalog::musubi::VERSIONS.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.maintainers",
-        description: "Fetch a finalized page of accepted Musubi V1 package members.",
-        path: "/v1/musubi/queries/maintainers",
+        description: "Fetch accepted Musubi V1 package members and pending maintainer invitations.",
+        path: route_catalog::musubi::MAINTAINERS.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.archive_locations",
         description: "Fetch a finalized page of renewable Musubi V1 archive locations.",
-        path: "/v1/musubi/queries/archive-locations",
+        path: route_catalog::musubi::ARCHIVE_LOCATIONS.path(),
+        effect: ToolEffect::Read,
+    },
+    MusubiV1ToolDefinition {
+        name: "iroha.musubi.queries.archive_retention",
+        description: "Classify a bounded exact batch of Musubi V1 archives for safe cache retention.",
+        path: route_catalog::musubi::ARCHIVE_RETENTION.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.alias",
         description: "Fetch one exact permanent Musubi V1 global alias record.",
-        path: "/v1/musubi/queries/alias",
+        path: route_catalog::musubi::ALIAS.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.alias_history",
         description: "Fetch a finalized page of permanent Musubi V1 alias history.",
-        path: "/v1/musubi/queries/alias-history",
+        path: route_catalog::musubi::ALIAS_HISTORY.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.ordered_prefix",
         description: "Fetch a finalized byte-ordered Musubi V1 package-prefix page.",
-        path: "/v1/musubi/queries/ordered-prefix",
+        path: route_catalog::musubi::ORDERED_PREFIX.path(),
+        effect: ToolEffect::Read,
+    },
+    MusubiV1ToolDefinition {
+        name: "iroha.musubi.queries.search",
+        description: "Search finalized Musubi V1 package metadata by exact normalized terms.",
+        path: route_catalog::musubi::SEARCH.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
@@ -217,6 +229,12 @@ const MUSUBI_V1_TOOL_DEFINITIONS: &[MusubiV1ToolDefinition] = &[
         name: "iroha.musubi.instructions.package_member_accept",
         description: "Build an unsigned Musubi V1 package-member invitation acceptance.",
         path: "/v1/musubi/instructions/package-member-accept",
+        effect: ToolEffect::BuildInstruction,
+    },
+    MusubiV1ToolDefinition {
+        name: "iroha.musubi.instructions.package_member_invitation_revoke",
+        description: "Build an unsigned Musubi V1 pending package-member invitation revocation.",
+        path: "/v1/musubi/instructions/package-member-invitation-revoke",
         effect: ToolEffect::BuildInstruction,
     },
     MusubiV1ToolDefinition {
@@ -12712,7 +12730,7 @@ fn iroha_assets_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.list".to_owned(),
         effect: manual_tool_effect_from_name("iroha.assets.list"),
-        description: "List explorer assets with optional flat query filters.".to_owned(),
+        description: "List a bounded seek page of explorer assets with optional flat filters. Reuse next_cursor only with the exact same filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/assets".to_owned(),
         input_schema: norito::json!({
@@ -12723,8 +12741,8 @@ fn iroha_assets_list_tool() -> ToolSpec {
                     "type": "object",
                     "additionalProperties": true
                 },
-                "page": { "type": "integer" },
-                "per_page": { "type": "integer" },
+                "cursor": { "type": "string", "maxLength": 1424, "pattern": "^[A-Za-z0-9_-]+$" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 },
                 "owned_by": { "type": "string" },
                 "definition": { "type": "string" },
                 "asset_id": { "type": "string" },
@@ -12779,7 +12797,7 @@ fn iroha_nfts_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.list".to_owned(),
         effect: manual_tool_effect_from_name("iroha.nfts.list"),
-        description: "List explorer NFTs with optional flat query filters.".to_owned(),
+        description: "List a bounded seek page of explorer NFTs with optional flat filters. Reuse next_cursor only with the exact same filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/nfts".to_owned(),
         input_schema: norito::json!({
@@ -12790,8 +12808,8 @@ fn iroha_nfts_list_tool() -> ToolSpec {
                     "type": "object",
                     "additionalProperties": true
                 },
-                "page": { "type": "integer" },
-                "per_page": { "type": "integer" },
+                "cursor": { "type": "string", "maxLength": 1424, "pattern": "^[A-Za-z0-9_-]+$" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 },
                 "owned_by": { "type": "string" },
                 "domain": { "type": "string" },
                 "headers": {
@@ -12903,7 +12921,7 @@ fn iroha_rwas_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.list".to_owned(),
         effect: manual_tool_effect_from_name("iroha.rwas.list"),
-        description: "List explorer RWA lots with optional flat query filters.".to_owned(),
+        description: "List a bounded seek page of explorer RWA lots with optional flat filters. Reuse next_cursor only with the exact same filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/rwas".to_owned(),
         input_schema: norito::json!({
@@ -12914,8 +12932,8 @@ fn iroha_rwas_list_tool() -> ToolSpec {
                     "type": "object",
                     "additionalProperties": true
                 },
-                "page": { "type": "integer" },
-                "per_page": { "type": "integer" },
+                "cursor": { "type": "string", "maxLength": 1424, "pattern": "^[A-Za-z0-9_-]+$" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 },
                 "owned_by": { "type": "string" },
                 "domain": { "type": "string" },
                 "headers": {
@@ -15086,6 +15104,266 @@ mod tests {
     }
 
     #[test]
+    fn musubi_mcp_guide_lists_the_exact_curated_tool_inventory() {
+        let guide = include_str!("../docs/mcp_api.md");
+        let section = guide
+            .split_once("### Musubi Package Registry Tools")
+            .expect("Musubi MCP guide section")
+            .1
+            .split_once("## Tool Result Contract")
+            .expect("Musubi MCP guide section boundary")
+            .0;
+        let documented = section
+            .lines()
+            .filter_map(|line| line.strip_prefix("- `"))
+            .filter_map(|line| line.strip_suffix('`'))
+            .filter(|name| name.starts_with("iroha.musubi."))
+            .collect::<Vec<_>>();
+        let documented_set = documented.iter().copied().collect::<BTreeSet<_>>();
+        let expected = MUSUBI_V1_TOOL_DEFINITIONS
+            .iter()
+            .map(|definition| definition.name)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            documented.len(),
+            documented_set.len(),
+            "the Musubi MCP guide must not list one curated tool more than once"
+        );
+        assert_eq!(
+            documented_set, expected,
+            "the Musubi MCP guide must list every curated V1 tool and no retired tool"
+        );
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture contract and cache-retention tooling route stay visible in one matrix"
+    )]
+    fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
+        let fixture: Value = json::from_str(include_str!("../../../fixtures/musubi/sdk_v1.json"))
+            .expect("Musubi SDK V1 fixture must parse");
+        let fixture_routes = fixture
+            .get("routes")
+            .and_then(Value::as_array)
+            .expect("Musubi SDK V1 fixture routes");
+        let expectations = [
+            (
+                "exact-package",
+                route_catalog::musubi::EXACT_PACKAGE,
+                "MusubiExactPackageQueryV1",
+                "MusubiPackageRecordV1",
+            ),
+            (
+                "exact-release",
+                route_catalog::musubi::EXACT_RELEASE,
+                "MusubiExactReleaseQueryV1",
+                "MusubiReleaseRecordV1",
+            ),
+            (
+                "resolver-index",
+                route_catalog::musubi::RESOLVER_INDEX,
+                "MusubiResolverIndexQueryV1",
+                "MusubiResolverIndexPageV1",
+            ),
+            (
+                "versions",
+                route_catalog::musubi::VERSIONS,
+                "MusubiPackagePageQueryV1",
+                "MusubiVersionPageV1",
+            ),
+            (
+                "maintainers",
+                route_catalog::musubi::MAINTAINERS,
+                "MusubiPackagePageQueryV1",
+                "MusubiMaintainerPageV1",
+            ),
+            (
+                "archive-locations",
+                route_catalog::musubi::ARCHIVE_LOCATIONS,
+                "MusubiArchiveLocationQueryV1",
+                "MusubiArchiveLocationPageV1",
+            ),
+            (
+                "archive-retention",
+                route_catalog::musubi::ARCHIVE_RETENTION,
+                "MusubiArchiveRetentionQueryV1",
+                "MusubiArchiveRetentionPageV1",
+            ),
+            (
+                "alias",
+                route_catalog::musubi::ALIAS,
+                "MusubiAliasQueryV1",
+                "MusubiAliasRecordV1",
+            ),
+            (
+                "alias-history",
+                route_catalog::musubi::ALIAS_HISTORY,
+                "MusubiAliasQueryV1",
+                "MusubiAliasHistoryPageV1",
+            ),
+            (
+                "ordered-prefix",
+                route_catalog::musubi::ORDERED_PREFIX,
+                "MusubiOrderedPrefixQueryV1",
+                "MusubiOrderedPackagePageV1",
+            ),
+            (
+                "search",
+                route_catalog::musubi::SEARCH,
+                "MusubiSearchQueryV1",
+                "MusubiSearchPageV1",
+            ),
+        ];
+        assert_eq!(fixture_routes.len(), expectations.len());
+
+        let openapi = openapi::generate_spec();
+        let openapi_paths = openapi
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::Operator;
+        cfg.expose_operator_routes = true;
+        let tools = build_tool_specs(&cfg);
+        let catalog = RouteCatalog::new(route_catalog::CATALOGED_ROUTES);
+        let enabled_features = EnabledFeatures::new(&["app_api"]);
+
+        for ((fixture_id, descriptor, request_type, response_type), fixture_route) in
+            expectations.iter().zip(fixture_routes)
+        {
+            let id = fixture_route
+                .get("id")
+                .and_then(Value::as_str)
+                .expect("fixture route id");
+            let path = fixture_route
+                .get("path")
+                .and_then(Value::as_str)
+                .expect("fixture route path");
+            assert_eq!(id, *fixture_id);
+            assert_eq!(path, descriptor.path());
+            assert!(fixture_route.get("request").is_some_and(Value::is_object));
+            assert!(fixture_route.get("response").is_some_and(Value::is_object));
+
+            let route_id = format!("musubi.v1.query.{}", fixture_id.replace('-', "_"));
+            assert_eq!(descriptor.stable_route_id(), route_id);
+            assert_eq!(descriptor.method(), CatalogHttpMethod::Post);
+            assert_eq!(descriptor.surface(), ApiSurface::Public);
+            assert!(descriptor.projections().openapi());
+            assert!(descriptor.projections().sdk());
+            assert!(descriptor.projections().mcp());
+            assert!(route_catalog::musubi::ROUTES.contains(descriptor));
+            for projection in [
+                CatalogProjection::Mounted,
+                CatalogProjection::OpenApi,
+                CatalogProjection::Sdk,
+                CatalogProjection::Mcp,
+            ] {
+                assert!(
+                    catalog
+                        .project(projection, enabled_features)
+                        .into_iter()
+                        .any(|route| route == descriptor),
+                    "{} is absent from the {projection:?} projection",
+                    descriptor.stable_route_id()
+                );
+            }
+
+            let path_item = openapi_paths
+                .get(path)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing Musubi OpenAPI path {path}"));
+            let operation = path_item
+                .get("post")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing Musubi OpenAPI POST operation {path}"));
+            assert_eq!(
+                operation
+                    .get("x-iroha-norito-request-type")
+                    .and_then(Value::as_str),
+                Some(*request_type),
+                "{path} request type"
+            );
+            assert_eq!(
+                operation
+                    .get("x-iroha-norito-response-type")
+                    .and_then(Value::as_str),
+                Some(*response_type),
+                "{path} response type"
+            );
+            assert_eq!(
+                operation
+                    .get(openapi::TOOL_EFFECT_EXTENSION)
+                    .and_then(Value::as_str),
+                Some("read"),
+                "{path} tool effect"
+            );
+
+            let tool_name = format!("iroha.musubi.queries.{}", fixture_id.replace('-', "_"));
+            let definition = musubi_v1_tool_definition(&tool_name)
+                .unwrap_or_else(|| panic!("missing Musubi MCP definition {tool_name}"));
+            assert_eq!(definition.path, path);
+            assert_eq!(definition.effect, ToolEffect::Read);
+            let matching_tools = tools
+                .iter()
+                .filter(|tool| tool.name == tool_name)
+                .collect::<Vec<_>>();
+            assert_eq!(matching_tools.len(), 1, "MCP tool {tool_name}");
+            let tool = matching_tools[0];
+            assert_eq!(tool.method, Method::POST);
+            assert_eq!(tool.path_template, path);
+            assert_eq!(tool.effect, ToolEffect::Read);
+            assert_eq!(
+                catalog_mcp_projection_decision(
+                    CATALOG_PROJECTION_GROUPS,
+                    &tool.method,
+                    tool.path_template.as_str(),
+                ),
+                Some(true)
+            );
+        }
+
+        let fixture_paths = fixture_routes
+            .iter()
+            .map(|route| {
+                route
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .expect("fixture route path")
+            })
+            .collect::<BTreeSet<_>>();
+        let openapi_query_paths = openapi_paths
+            .keys()
+            .map(String::as_str)
+            .filter(|path| path.starts_with("/v1/musubi/queries/"))
+            .collect::<BTreeSet<_>>();
+        let sdk_query_paths = catalog
+            .project(CatalogProjection::Sdk, enabled_features)
+            .into_iter()
+            .map(|route| route.path())
+            .filter(|path| path.starts_with("/v1/musubi/queries/"))
+            .collect::<BTreeSet<_>>();
+        let catalog_query_paths = route_catalog::musubi::ROUTES
+            .iter()
+            .map(|route| route.path())
+            .filter(|path| path.starts_with("/v1/musubi/queries/"))
+            .collect::<BTreeSet<_>>();
+        let tooling_paths = fixture_paths.clone();
+        assert_eq!(sdk_query_paths, fixture_paths);
+        assert_eq!(catalog_query_paths, tooling_paths);
+        assert_eq!(openapi_query_paths, tooling_paths);
+        assert_eq!(
+            MUSUBI_V1_TOOL_DEFINITIONS
+                .iter()
+                .filter(|definition| definition.effect == ToolEffect::Read)
+                .map(|definition| definition.path)
+                .collect::<BTreeSet<_>>(),
+            tooling_paths
+        );
+    }
+
+    #[test]
     fn offline_lifecycle_routes_are_available_to_operator_mcp_tools() {
         let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
         cfg.profile = ToriiMcpProfile::Operator;
@@ -17002,13 +17280,13 @@ mod tests {
     #[test]
     fn extract_contract_address_argument_accepts_top_level_shortcut() {
         let args = norito::json!({
-            "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         });
         let contract_address = extract_contract_address_argument(args.as_object().expect("object"))
             .expect("contract address");
         assert_eq!(
             contract_address,
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         );
     }
 

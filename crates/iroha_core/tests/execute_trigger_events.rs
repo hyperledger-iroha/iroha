@@ -21,21 +21,34 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let asset_definition =
-        AssetDefinition::new(asset_definition_id, NumericSpec::default()).build(&ALICE_ID);
+    let asset_definition = AssetDefinition::new(
+        asset_definition_id,
+        "rose".to_owned(),
+        NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     let stored_asset_definition_id = asset_definition.id().clone();
     let fee_domain_id =
         DomainId::parse_fully_qualified("universal.universal").expect("fee domain id");
     let fee_domain = Domain::new(fee_domain_id.clone()).build(&ALICE_ID);
     let fee_asset_definition_id =
-        iroha_data_model::asset::AssetDefinitionId::new(fee_domain_id, "xor".parse().unwrap());
-    let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-        .with_name("xor".to_owned())
-        .build(&ALICE_ID);
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            fee_domain_id,
+            "xor".parse().unwrap(),
+        );
+    let fee_asset_definition = AssetDefinition::numeric(
+        fee_asset_definition_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     let fee_asset = Asset::new(
         AssetId::new(fee_asset_definition_id, ALICE_ID.clone()),
         Quantity::from(100_000_u64),
@@ -207,9 +220,10 @@ fn assert_trigger_events(
                 }
             }
             EventBox::Data(shared) => {
-                if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                    AssetEvent::Added(changed),
-                ))) = shared.as_ref()
+                if let DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                    event: AssetEvent::Added(changed),
+                    ..
+                })) = shared.as_ref()
                     && changed.asset() == asset_id
                 {
                     saw_asset_added = true;

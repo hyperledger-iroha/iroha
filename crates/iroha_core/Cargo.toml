@@ -25,7 +25,7 @@ required-features = ["dev-tools"]
 [[bin]]
 name = "kagemusha_recursive_spend_v4_bundle"
 path = "src/bin/kagemusha_recursive_spend_v4_bundle.rs"
-required-features = ["dev-tools", "zk-halo2-ipa"]
+required-features = ["dev-tools", "zk-halo2-ipa", "kagemusha-candidate-evidence-lab"]
 
 [[bin]]
 name = "kagemusha_recursive_spend_v4_memory_benchmark"

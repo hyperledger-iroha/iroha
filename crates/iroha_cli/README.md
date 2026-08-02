@@ -173,7 +173,7 @@ The CLI provides helpers for app‑facing ZK endpoints. For example, to fetch a 
 iroha app zk vote tally --election-id demo-election-1
 ```
 
-This posts to `/v1/zk/vote/tally` and prints the JSON response, e.g. `{ "finalized": true, "tally": [42, 58] }`.
+This posts to `/v1/zk/vote/tally` and prints the snapshot-bound JSON response, e.g. `{ "evaluated_block_height": 42, "evaluated_block_hash": "<64 lowercase hex characters>", "finalized": true, "tally": [42, 58] }`. An unknown election is an HTTP `404`; it is never represented as an empty tally.
 
 ### Governance helpers (app API convenience)
 
@@ -183,7 +183,7 @@ Build governance transaction skeletons and query governance state via Torii app 
 
 ```bash
 iroha app gov deploy propose \
-  --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7 \
+  --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw \
   --code-hash 0123...ABCD --abi-hash 0123...ABCD \
   --abi-version v1 --window-lower 12345 --window-upper 12400 \
   --mode Plain
@@ -221,11 +221,11 @@ curl -sS -X POST -H 'Content-Type: application/json' \
 
 - Build governance metadata for protected-namespace admission:
 
-  iroha app gov deploy meta --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7
+  iroha app gov deploy meta --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw
 
 - Audit a governed contract binding by canonical address or alias:
 
-  iroha app gov deploy audit --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7
+  iroha app gov deploy audit --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw
 
 - Combined manifest command (prints or saves when --out is provided):
 

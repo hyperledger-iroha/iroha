@@ -23,7 +23,7 @@ public_address = "addr:127.0.0.1:1337#8F78"
 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
 file = "./genesis.signed.nrt"
 # Parser-only fixture trust anchor; tests that start a node render the exact block hash.
-expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
 [torii]
 address = "addr:127.0.0.1:8080#8942"

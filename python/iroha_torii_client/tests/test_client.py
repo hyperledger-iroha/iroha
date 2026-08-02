@@ -104,7 +104,7 @@ def _contract_operation_receipt(
     fee_payment: Optional[Dict[str, Any]] = None,
     contract_alias: Optional[str] = "router::universal",
     contract_address: Optional[str] = (
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     ),
 ) -> Dict[str, Any]:
     return {
@@ -141,7 +141,7 @@ def _contract_call_draft(
     entrypoint: str = "ping",
     contract_alias: Optional[str] = "router::universal",
     contract_address: Optional[str] = (
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     ),
     fee_payment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -3120,7 +3120,7 @@ def test_call_contract_rejects_ambiguous_selector() -> None:
     with pytest.raises(ValueError, match="exactly one of contract_address or contract_alias"):
         client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            contract_address="tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            contract_address="irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             contract_alias="router::universal",
             entrypoint="ping",
             fee_payment=_authority_fee_payment(1),
@@ -3134,7 +3134,7 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
     with pytest.raises(ValueError, match="prepare_contract_call\\.contract_address must not contain surrounding whitespace"):
         client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            contract_address=" tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            contract_address=" irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             entrypoint="ping",
             fee_payment=_authority_fee_payment(1),
         )
@@ -3156,7 +3156,7 @@ def test_get_governance_contract_parses_response() -> None:
         StubResponse(
             payload={
                 "found": True,
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 "dataspace": "universal",
                 "code_hash_hex": "22" * 32,
             },
@@ -3165,7 +3165,7 @@ def test_get_governance_contract_parses_response() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.get_governance_contract(
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     )
 
     assert isinstance(result, GovernanceContractResponse)
@@ -3173,7 +3173,7 @@ def test_get_governance_contract_parses_response() -> None:
     assert result.code_hash_hex == "22" * 32
     assert session.calls[0]["url"] == (
         "http://node.test/v1/gov/contracts/"
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     )
 
 
@@ -3685,7 +3685,7 @@ def test_get_node_capabilities_parses_snapshot() -> None:
 
 def test_contract_helpers_against_mock_server() -> None:
     server = ToriiMockServer().start()
-    contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     try:
         response = requests.post(
             f"{server.base_url.rstrip('/')}/__mock__/gov/config",

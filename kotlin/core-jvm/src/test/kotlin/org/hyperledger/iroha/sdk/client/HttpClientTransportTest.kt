@@ -523,7 +523,7 @@ class HttpClientTransportTest {
                   "items": [
                     {
                       "policy_id": "phone#retail",
-                      "owner": "sorau1NpOwner",
+                      "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
                       "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
@@ -565,8 +565,8 @@ class HttpClientTransportTest {
 
         val cases = listOf(
             "identifier policy list.items[0].owner" to canonical.replace(
-                "\"owner\": \"sorau1NpOwner\"",
-                "\"owner\": \" sorau1NpOwner\"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
+                "\"owner\": \" sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
             ),
             "identifier policy list.items[0].normalization" to canonical.replace(
                 "\"normalization\": \"phone_e164\"",
@@ -987,7 +987,7 @@ class HttpClientTransportTest {
                   "code_hash_hex": "${"44".repeat(32)}",
                   "abi_hash_hex": "${"55".repeat(32)}",
                   "creation_time_ms": 1712345678901,
-                  "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                  "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                   "entrypoint": "contribute",
                   "transaction_ttl_ms": 60000,
                   "entrypoint_hash_hex": "${"77".repeat(32)}",
@@ -1000,7 +1000,7 @@ class HttpClientTransportTest {
                     "transport": "torii",
                     "dataspace": "router",
                     "contract_alias": "router::universal",
-                    "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                    "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                     "code_hash_hex": "${"44".repeat(32)}",
                     "abi_hash_hex": "${"55".repeat(32)}",
                     "entrypoint": "contribute",
@@ -1467,7 +1467,7 @@ class HttpClientTransportTest {
             transport.prepareContractCall(
                 authority = "alice",
                 feePayment = testFeePayment(5_000L),
-                contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 contractAlias = "router::universal",
                 entrypoint = "contribute",
             )
@@ -1521,7 +1521,7 @@ class HttpClientTransportTest {
 
     @Test
     fun getGovernanceContractParsesResponse() {
-        val contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -1574,7 +1574,7 @@ class HttpClientTransportTest {
         assertEquals(1, response.items.size)
         val item = response.items.first()
         assertEquals("identifier_lookup_retail", item.programId)
-        assertEquals("sorau1NpOwner", item.owner)
+        assertEquals("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", item.owner)
         assertTrue(item.active)
         assertEquals(item.resolverPublicKey, item.outputOpeningPublicKey)
         assertEquals("signed", item.verificationMode)
@@ -1600,8 +1600,8 @@ class HttpClientTransportTest {
                 "\"program_id\": \" identifier_lookup_retail\"",
             ),
             "ram-lfe program policy list.items[0].owner" to canonical.replace(
-                "\"owner\": \"sorau1NpOwner\"",
-                "\"owner\": \"sorau1NpOwner \"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV \"",
             ),
             "ram-lfe program policy list.items[0].resolver_public_key" to canonical.replace(
                 "\"resolver_public_key\": \"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"",
@@ -1658,7 +1658,7 @@ class HttpClientTransportTest {
               "items": [
                 {
                   "program_id": "identifier_lookup_retail",
-                  "owner": "sorau1NpOwner",
+                  "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "active": true,
                   "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                   "backend": "bfv-programmed-sha3-256-v1",
@@ -1920,8 +1920,8 @@ class HttpClientTransportTest {
                   "mtu_bytes": 1280,
                   "display_billing_label": "standard XOR",
                   "fee_asset_id": "xor#universal.universal",
-                  "escrow_account_id": "sorauEscrow",
-                  "operator_account_id": "sorauOperator",
+                  "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                  "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
                   "lease_fee": "1000000.25",
                   "settlement_grace_secs": 120,
                   "flow_label_bits": 24,
@@ -1947,8 +1947,8 @@ class HttpClientTransportTest {
 
         assertTrue(profile.available)
         assertEquals("xor#universal.universal", profile.feeAssetId)
-        assertEquals("sorauEscrow", profile.escrowAccountId)
-        assertEquals("sorauOperator", profile.operatorAccountId)
+        assertEquals("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", profile.escrowAccountId)
+        assertEquals("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", profile.operatorAccountId)
         assertEquals("1000000.25", profile.leaseFee)
         assertEquals(60L, profile.dnsPushIntervalSecs)
         assertEquals(120L, profile.settlementGraceSecs)
@@ -3727,8 +3727,8 @@ class HttpClientTransportTest {
               "mtu_bytes": 1280,
               "display_billing_label": "standard XOR",
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "settlement_grace_secs": 120,
               "flow_label_bits": 24,
@@ -3755,8 +3755,8 @@ class HttpClientTransportTest {
               "lease_secs": 600,
               "quote_expires_at_ms": 1700000600000,
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "route_pushes": ["0.0.0.0/0"],
               "excluded_routes": [],
@@ -3803,8 +3803,8 @@ class HttpClientTransportTest {
               "payment_reference": "$sessionId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
@@ -3865,8 +3865,8 @@ class HttpClientTransportTest {
               "quote_id": "$sessionId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "earned_fee": "$earned",
               "refunded_fee": "$refunded",

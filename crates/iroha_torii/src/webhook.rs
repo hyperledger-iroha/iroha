@@ -1468,9 +1468,10 @@ fn event_filter_boxes_from_expr(
                             c.domain_set = parse_event_list(v, &|s| match s {
                                 "Created" => Some(df::DomainEventSet::Created),
                                 "Deleted" => Some(df::DomainEventSet::Deleted),
-                                "AssetDefinition" => Some(df::DomainEventSet::AnyAssetDefinition),
+                                "AssetDefinition" => Some(df::DomainEventSet::AssetDefinition),
+                                "Asset" => Some(df::DomainEventSet::Asset),
                                 "Nft" => Some(df::DomainEventSet::AnyNft),
-                                "Account" => Some(df::DomainEventSet::AnyAccount),
+                                "Account" => Some(df::DomainEventSet::Account),
                                 "MetadataInserted" => Some(df::DomainEventSet::MetadataInserted),
                                 "MetadataRemoved" => Some(df::DomainEventSet::MetadataRemoved),
                                 "OwnerChanged" => Some(df::DomainEventSet::OwnerChanged),
@@ -1481,7 +1482,6 @@ fn event_filter_boxes_from_expr(
                             c.account_set = parse_event_list(v, &|s| match s {
                                 "Created" => Some(df::AccountEventSet::Created),
                                 "Deleted" => Some(df::AccountEventSet::Deleted),
-                                "Asset" => Some(df::AccountEventSet::AnyAsset),
                                 "PermissionAdded" => Some(df::AccountEventSet::PermissionAdded),
                                 "PermissionRemoved" => Some(df::AccountEventSet::PermissionRemoved),
                                 "RoleGranted" => Some(df::AccountEventSet::RoleGranted),

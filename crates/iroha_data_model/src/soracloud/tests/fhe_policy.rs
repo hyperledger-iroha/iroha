@@ -116,8 +116,6 @@
             sample_full_bootstrap_release_audit_package_and_digest(&reviewer_keypair);
         let mut full_bootstrap_policy = sample_fhe_execution_policy();
         full_bootstrap_policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
-        full_bootstrap_policy.full_bootstrap_material_proof_statement_digest =
-            Some(sample_hash(93));
 
         let mut package_only_policy = full_bootstrap_policy.clone();
         package_only_policy.full_bootstrap_release_audit_package = Some(package.clone());
@@ -191,7 +189,6 @@
 
         let mut policy = sample_fhe_execution_policy();
         policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
-        policy.full_bootstrap_material_proof_statement_digest = Some(sample_hash(93));
         policy.full_bootstrap_release_audit_package = Some(package.clone());
         policy.full_bootstrap_release_audit_package_digest = Some(package_digest);
         policy.full_bootstrap_release_audit_trusted_reviewer_id =
@@ -503,12 +500,12 @@
     }
 
     #[test]
-    fn fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest() {
-        let mut missing_digest = sample_fhe_execution_policy();
-        missing_digest.bootstrap_key_zero_refresh_proof_statement_digest = None;
-        let error = missing_digest
+    fn fhe_execution_policy_validate_requires_exactly_one_bootstrap_mode() {
+        let mut missing_mode = sample_fhe_execution_policy();
+        missing_mode.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        let error = missing_mode
             .validate()
-            .expect_err("bootstrap-capable policies must bind bootstrap proof statement digest");
+            .expect_err("bootstrap-capable policies must select a governed bootstrap mode");
         assert!(matches!(
             error,
             SoracloudManifestError::InvalidField {
@@ -517,54 +514,47 @@
             }
         ));
 
-        missing_digest.max_bootstrap_count = 0;
-        missing_digest
+        missing_mode.max_bootstrap_count = 0;
+        missing_mode
             .validate()
-            .expect("policies without bootstrap budget need no bootstrap proof statement");
+            .expect("policies without bootstrap budget need no bootstrap mode");
 
-        let mut full_bootstrap_statement = sample_fhe_execution_policy();
-        full_bootstrap_statement.bootstrap_key_zero_refresh_proof_statement_digest = None;
-        full_bootstrap_statement.full_bootstrap_material_proof_statement_digest =
-            Some(sample_hash(93));
-        full_bootstrap_statement.validate().expect(
-            "full-bootstrap material proof statement can satisfy bootstrap-capable policy binding",
-        );
-
-        let mut ambiguous_statement = sample_fhe_execution_policy();
-        ambiguous_statement.full_bootstrap_material_proof_statement_digest = Some(sample_hash(93));
-        let error = ambiguous_statement
+        let reviewer_keypair = sample_ed25519_keypair(0x5A);
+        let (package, package_digest) =
+            sample_full_bootstrap_release_audit_package_and_digest(&reviewer_keypair);
+        let mut full_bootstrap = sample_fhe_execution_policy();
+        full_bootstrap.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        full_bootstrap.full_bootstrap_release_audit_package = Some(package);
+        full_bootstrap.full_bootstrap_release_audit_package_digest = Some(package_digest);
+        full_bootstrap.full_bootstrap_release_audit_trusted_reviewer_id =
+            Some(SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID.to_string());
+        full_bootstrap.full_bootstrap_release_audit_trusted_reviewer_public_key =
+            Some(reviewer_keypair.public_key().clone());
+        full_bootstrap
             .validate()
-            .expect_err("policies must not bind both bootstrap statement classes");
+            .expect("governed release-audited material is the full-bootstrap mode");
+
+        let mut ambiguous = full_bootstrap.clone();
+        ambiguous.bootstrap_key_zero_refresh_proof_statement_digest = Some(sample_hash(92));
+        let error = ambiguous
+            .validate()
+            .expect_err("policies must not select both bootstrap modes");
         assert!(matches!(
             error,
             SoracloudManifestError::InvalidField {
-                field: "full_bootstrap_material_proof_statement_digest",
+                field: "full_bootstrap_release_audit_package",
                 ..
             }
         ));
 
-        let mut stale_digest = sample_fhe_execution_policy();
-        stale_digest.max_bootstrap_count = 0;
-        let error = stale_digest
+        full_bootstrap.max_bootstrap_count = 0;
+        let error = full_bootstrap
             .validate()
-            .expect_err("policies without bootstrap budget must reject stale proof statements");
+            .expect_err("policies without bootstrap budget must reject governed material");
         assert!(matches!(
             error,
             SoracloudManifestError::InvalidField {
-                field: "bootstrap_key_zero_refresh_proof_statement_digest",
-                ..
-            }
-        ));
-
-        let mut stale_full_digest = full_bootstrap_statement;
-        stale_full_digest.max_bootstrap_count = 0;
-        let error = stale_full_digest.validate().expect_err(
-            "policies without bootstrap budget must reject stale full-bootstrap proof statements",
-        );
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "full_bootstrap_material_proof_statement_digest",
+                field: "full_bootstrap_release_audit_package",
                 ..
             }
         ));
@@ -584,22 +574,6 @@
             error,
             SoracloudManifestError::InvalidField {
                 field: "bootstrap_key_zero_refresh_proof_statement_digest",
-                ..
-            }
-        ));
-        assert!(error.to_string().contains("zero prehash sentinel"));
-
-        let mut full_bootstrap_statement = sample_fhe_execution_policy();
-        full_bootstrap_statement.bootstrap_key_zero_refresh_proof_statement_digest = None;
-        full_bootstrap_statement.full_bootstrap_material_proof_statement_digest =
-            Some(zero_statement);
-        let error = full_bootstrap_statement
-            .validate()
-            .expect_err("full-bootstrap material statement placeholder must fail admission");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "full_bootstrap_material_proof_statement_digest",
                 ..
             }
         ));
@@ -1010,186 +984,6 @@
             error,
             SoracloudManifestError::InvalidField {
                 field: "bootstrap_transcript",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "digest binding test keeps adversarial cases inline"
-    )]
-    fn bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest() {
-        let params = ram_lfe_bfv_parameters_v1();
-        let (_, public_key, relinearization_key) = iroha_crypto::fhe_bfv::keygen_from_seed(
-            &params,
-            b"soracloud-full-bootstrap-proof-keygen",
-        )
-        .expect("keygen");
-        let refresh_key = iroha_crypto::fhe_bfv::bootstrap_key_with_max_refresh_rounds_from_seed(
-            &params,
-            &public_key,
-            "soracloud-full-bootstrap-proof",
-            1,
-            b"soracloud-full-bootstrap-proof-refresh",
-        )
-        .expect("bootstrap key");
-        let full_bootstrap_key = iroha_crypto::fhe_bfv::full_bootstrap_key_from_material_v1(
-            &params,
-            &public_key,
-            "soracloud-full-bootstrap-proof",
-            sample_full_bootstrap_material(&params),
-        )
-        .expect("full-bootstrap key");
-        let evaluation_keys = BfvEvaluationKeyBundle {
-            relinearization_key: relinearization_key.clone(),
-            rotation_keys: Vec::new(),
-            galois_keys: Vec::new(),
-            bootstrap_key: Some(full_bootstrap_key.clone()),
-        };
-        let transcript = BfvEvaluationKeyRefreshTranscriptV1 {
-            public_key: public_key.clone(),
-            rotation_transcripts: Vec::new(),
-            bootstrap_transcript: None,
-        };
-
-        let derived = transcript
-            .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
-                &params,
-                &evaluation_keys,
-            )
-            .expect("derive full-bootstrap proof statement")
-            .expect("full-bootstrap statement is present");
-        let expected = evaluation_keys
-            .full_bootstrap_material_proof_statement_digest(&params, &public_key)
-            .expect("crypto full-bootstrap proof statement")
-            .expect("full-bootstrap statement is present");
-        assert_eq!(derived, expected);
-        assert_eq!(
-            transcript
-                .digest_for_evaluation_keys(&params, &evaluation_keys)
-                .expect("derive full-bootstrap refresh transcript digest"),
-            evaluation_keys
-                .refresh_transcript_digest(&params, &public_key, &[], None)
-                .expect("crypto full-bootstrap refresh transcript digest")
-        );
-        let (_, other_public_key, _) = iroha_crypto::fhe_bfv::keygen_from_seed(
-            &params,
-            b"soracloud-full-bootstrap-proof-other-public-key",
-        )
-        .expect("other keygen");
-        let wrong_public_key_transcript = BfvEvaluationKeyRefreshTranscriptV1 {
-            public_key: other_public_key,
-            ..transcript.clone()
-        };
-        let error = wrong_public_key_transcript
-            .digest_for_evaluation_keys(&params, &evaluation_keys)
-            .expect_err("full-bootstrap refresh transcript digest must reject wrong public keys");
-        let SoracloudManifestError::InvalidField { field, reason, .. } = error else {
-            panic!("unexpected error: {error}");
-        };
-        assert_eq!(field, "refresh_transcript");
-        assert!(
-            reason.contains("public-key digest"),
-            "unexpected reason: {reason}"
-        );
-        let error = wrong_public_key_transcript
-            .digest_for_evaluation_keys_with_mode(
-                &params,
-                &evaluation_keys,
-                BfvRefreshTranscriptModeV1::BoundedNoise,
-            )
-            .expect_err(
-                "bounded full-bootstrap refresh transcript digest must reject wrong public keys",
-            );
-        let SoracloudManifestError::InvalidField { field, reason, .. } = error else {
-            panic!("unexpected error: {error}");
-        };
-        assert_eq!(field, "refresh_transcript");
-        assert!(
-            reason.contains("public-key digest"),
-            "unexpected reason: {reason}"
-        );
-
-        let refresh_only_keys = BfvEvaluationKeyBundle {
-            relinearization_key: relinearization_key.clone(),
-            rotation_keys: Vec::new(),
-            galois_keys: Vec::new(),
-            bootstrap_key: Some(refresh_key),
-        };
-        assert_eq!(
-            transcript
-                .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
-                    &params,
-                    &refresh_only_keys,
-                )
-                .expect("refresh-only full-bootstrap statement lookup validates"),
-            None,
-            "refresh-only bootstrap keys must not derive a full-bootstrap statement"
-        );
-
-        let mut drifted_material_keys = evaluation_keys.clone();
-        drifted_material_keys
-            .bootstrap_key
-            .as_mut()
-            .expect("bootstrap key")
-            .full_bootstrap_material
-            .as_mut()
-            .expect("full-bootstrap material")
-            .accumulator_digest = Hash::new(b"soracloud-full-bootstrap-proof-drifted-material");
-        let drifted = transcript
-            .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
-                &params,
-                &drifted_material_keys,
-            )
-            .expect("derive drifted full-bootstrap proof statement")
-            .expect("full-bootstrap statement is present");
-        assert_ne!(
-            derived, drifted,
-            "statement digest must bind the full-bootstrap material digest"
-        );
-
-        let mut drifted_proof_commitment_keys = evaluation_keys.clone();
-        drifted_proof_commitment_keys
-            .bootstrap_key
-            .as_mut()
-            .expect("bootstrap key")
-            .full_bootstrap_material
-            .as_mut()
-            .expect("full-bootstrap material")
-            .verifier_key_material_commitment =
-            Hash::new(b"soracloud-full-bootstrap-proof-drifted-verifier-commitment");
-        let drifted_proof_commitment = transcript
-            .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
-                &params,
-                &drifted_proof_commitment_keys,
-            )
-            .expect("derive drifted proof commitment full-bootstrap proof statement")
-            .expect("full-bootstrap statement is present");
-        assert_ne!(
-            derived, drifted_proof_commitment,
-            "statement digest must bind the full-bootstrap proof-key material commitments"
-        );
-
-        let mut missing_material_key = full_bootstrap_key;
-        missing_material_key.full_bootstrap_material = None;
-        let missing_material_keys = BfvEvaluationKeyBundle {
-            relinearization_key,
-            rotation_keys: Vec::new(),
-            galois_keys: Vec::new(),
-            bootstrap_key: Some(missing_material_key),
-        };
-        let error = transcript
-            .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
-                &params,
-                &missing_material_keys,
-            )
-            .expect_err("full-bootstrap mode without material must fail");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "full_bootstrap_material_proof_statement_digest",
                 ..
             }
         ));
@@ -2262,3 +2056,224 @@
         ));
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn sample_governed_fhe_material_for_lifecycle(
+        version: NonZeroU32,
+    ) -> SoracloudFheGovernedMaterialV1 {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-governed-material-lifecycle")
+                .expect("deterministic governed-material key generation");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+        let evaluation_key_refresh_transcript = BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key,
+            rotation_transcripts: Vec::new(),
+            bootstrap_transcript: None,
+        };
+        let evaluation_key_digest = evaluation_keys
+            .digest(&params)
+            .expect("governed evaluation-key digest");
+        let evaluation_key_refresh_transcript_digest = evaluation_key_refresh_transcript
+            .digest_for_evaluation_keys_with_mode(
+                &params,
+                &evaluation_keys,
+                BfvRefreshTranscriptModeV1::ExactLift,
+            )
+            .expect("governed refresh-transcript digest");
+        let public_key_proof_statement_digest = evaluation_key_refresh_transcript
+            .public_key_proof_statement_digest_with_mode(
+                &params,
+                BfvRefreshTranscriptModeV1::ExactLift,
+            )
+            .expect("governed public-key proof statement");
+        let param_set = FheParamSetV1 {
+            schema_version: FHE_PARAM_SET_VERSION_V1,
+            param_set: sample_name("bfv_governed_v1"),
+            version: NonZeroU32::new(1).expect("nonzero"),
+            backend: REGISTERED_SORACLOUD_BFV_BACKEND_V1.to_string(),
+            scheme: FheSchemeV1::Bfv,
+            ciphertext_modulus_bits: vec![
+                NonZeroU16::new(53).expect("nonzero"),
+                NonZeroU16::new(52).expect("nonzero"),
+            ],
+            plaintext_modulus_bits: NonZeroU16::new(9).expect("nonzero"),
+            polynomial_modulus_degree: NonZeroU32::new(u32::from(params.polynomial_degree))
+                .expect("nonzero"),
+            slot_count: NonZeroU32::new(u32::from(params.polynomial_degree)).expect("nonzero"),
+            security_level_bits: NonZeroU16::new(128).expect("nonzero"),
+            max_multiplicative_depth: NonZeroU16::new(1).expect("nonzero"),
+            lifecycle: FheParamLifecycleV1::Active,
+            activation_height: Some(1),
+            deprecation_height: None,
+            withdraw_height: None,
+            parameter_digest: iroha_crypto::fhe_bfv::registered_bfv_parameter_digest(&params)
+                .expect("registered parameter digest"),
+            rns_modulus_chain_digest:
+                iroha_crypto::fhe_bfv::registered_bfv_rns_modulus_chain_digest(&params)
+                    .expect("registered RNS digest"),
+            key_switch_decomposition_chain_digest:
+                iroha_crypto::fhe_bfv::registered_bfv_key_switch_decomposition_chain_digest(
+                    &params,
+                )
+                .expect("registered decomposition digest"),
+        };
+        let policy_name = sample_name("governed_analytics");
+        let policy = FheExecutionPolicyV1 {
+            schema_version: FHE_EXECUTION_POLICY_VERSION_V1,
+            policy_name: policy_name.clone(),
+            param_set: param_set.param_set.clone(),
+            param_set_version: param_set.version,
+            evaluation_key_digest,
+            evaluation_key_refresh_transcript_digest,
+            refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
+            public_key_proof_statement_digest: Some(public_key_proof_statement_digest),
+            bootstrap_key_zero_refresh_proof_statement_digest: None,
+            full_bootstrap_release_audit_package: None,
+            full_bootstrap_release_audit_package_digest: None,
+            full_bootstrap_release_audit_trusted_reviewer_id: None,
+            full_bootstrap_release_audit_trusted_reviewer_public_key: None,
+            max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
+            max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
+            max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
+            max_output_ciphertexts: NonZeroU16::new(1).expect("nonzero"),
+            max_multiplication_depth: NonZeroU16::new(1).expect("nonzero"),
+            max_rotation_count: NonZeroU32::new(1).expect("nonzero"),
+            max_bootstrap_count: 0,
+            rounding_mode: FheDeterministicRoundingModeV1::NearestTiesToEven,
+        };
+        let mut material = SoracloudFheGovernedMaterialV1 {
+            schema_version: SORACLOUD_FHE_GOVERNED_MATERIAL_VERSION_V1,
+            service_name: sample_name("governed_service"),
+            policy_name,
+            version,
+            governance_bundle: FheGovernanceBundleV1 {
+                schema_version: FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+                param_set,
+                execution_policy: policy,
+            },
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            full_bootstrap_circuit_artifacts: None,
+            material_digest: Hash::new(b"pending governed material digest"),
+        };
+        material.material_digest = material
+            .computed_material_digest()
+            .expect("compute governed material digest");
+        material
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn governed_fhe_material_and_policy_history_enforce_exact_monotonic_lifecycle() {
+        let material_v1 = sample_governed_fhe_material_for_lifecycle(
+            NonZeroU32::new(1).expect("nonzero"),
+        );
+        material_v1
+            .validate()
+            .expect("canonical governed material must validate");
+        let reference_v1 = material_v1.policy_reference();
+        reference_v1
+            .validate()
+            .expect("canonical governed material reference must validate");
+        assert_eq!(reference_v1.material_digest, material_v1.material_digest);
+
+        let scope = SoracloudFheGovernancePermissionScopeV1 {
+            schema_version: SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1,
+            service_name: material_v1.service_name.clone(),
+            policy_name: material_v1.policy_name.clone(),
+        };
+        scope.validate().expect("canonical permission scope");
+        let mut wrong_scope_version = scope;
+        wrong_scope_version.schema_version = 0;
+        assert!(matches!(
+            wrong_scope_version
+                .validate()
+                .expect_err("permission scope version drift must fail"),
+            SoracloudManifestError::UnsupportedVersion { .. }
+        ));
+
+        let admitted_v1 = Hash::new(b"governed material admission v1");
+        let mut record = SoracloudFhePolicyRecordV1 {
+            schema_version: SORACLOUD_FHE_POLICY_RECORD_VERSION_V1,
+            service_name: material_v1.service_name.clone(),
+            policy_name: material_v1.policy_name.clone(),
+            active_version: Some(material_v1.version),
+            versions: BTreeMap::from([(
+                material_v1.version,
+                SoracloudFhePolicyVersionStateV1 {
+                    material: material_v1.clone(),
+                    admitted_by_transaction_hash: admitted_v1,
+                    lifecycle: SoracloudFhePolicyVersionLifecycleV1::Active,
+                    deactivated_by_transaction_hash: None,
+                },
+            )]),
+        };
+        record.validate().expect("first active policy version");
+
+        let material_v2 = sample_governed_fhe_material_for_lifecycle(
+            NonZeroU32::new(2).expect("nonzero"),
+        );
+        let rotated_by = Hash::new(b"governed material rotation v2");
+        let old = record
+            .versions
+            .get_mut(&material_v1.version)
+            .expect("version one");
+        old.lifecycle = SoracloudFhePolicyVersionLifecycleV1::Superseded;
+        old.deactivated_by_transaction_hash = Some(rotated_by);
+        record.versions.insert(
+            material_v2.version,
+            SoracloudFhePolicyVersionStateV1 {
+                material: material_v2.clone(),
+                admitted_by_transaction_hash: rotated_by,
+                lifecycle: SoracloudFhePolicyVersionLifecycleV1::Active,
+                deactivated_by_transaction_hash: None,
+            },
+        );
+        record.active_version = Some(material_v2.version);
+        record.validate().expect("exact next policy version");
+
+        let mut skipped_version = record.clone();
+        let active = skipped_version
+            .versions
+            .remove(&material_v2.version)
+            .expect("active version two");
+        let version_three = NonZeroU32::new(3).expect("nonzero");
+        skipped_version.versions.insert(version_three, active);
+        skipped_version.active_version = Some(version_three);
+        assert!(matches!(
+            skipped_version
+                .validate()
+                .expect_err("version gaps must fail"),
+            SoracloudManifestError::InvalidField {
+                field: "versions",
+                ..
+            }
+        ));
+
+        let revoked_by = Hash::new(b"governed material revocation v2");
+        let active = record
+            .versions
+            .get_mut(&material_v2.version)
+            .expect("version two");
+        active.lifecycle = SoracloudFhePolicyVersionLifecycleV1::Revoked;
+        active.deactivated_by_transaction_hash = Some(revoked_by);
+        record.active_version = None;
+        record.validate().expect("permanently revoked policy history");
+
+        let mut digest_tamper = material_v2;
+        digest_tamper.material_digest = Hash::new(b"attacker-selected governed material digest");
+        assert!(matches!(
+            digest_tamper
+                .validate()
+                .expect_err("material digest substitution must fail"),
+            SoracloudManifestError::InvalidField {
+                field: "material_digest",
+                ..
+            }
+        ));
+    }

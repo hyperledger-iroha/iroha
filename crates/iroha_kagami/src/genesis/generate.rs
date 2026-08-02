@@ -438,10 +438,15 @@ fn append_public_xor_binding(
         builder = builder.append_instruction(Register::domain(Domain::new(public_xor_domain)));
     }
     if !has_asset_definition {
-        let definition = AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
-            .with_name("xor".to_owned())
-            .confidential_policy(AssetConfidentialPolicy::convertible())
-            .with_metadata(Metadata::default());
+        let definition = AssetDefinition::new(
+            asset_definition_id.clone(),
+            "xor".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(AssetConfidentialPolicy::convertible())
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
     }
     if !alias_bound {
@@ -649,9 +654,11 @@ pub fn generate_default(
         universal_dataspace.as_ref(),
     )?;
     let rose_asset_definition_id =
-        AssetDefinitionId::new(wonderland_domain.clone(), "rose".parse()?);
-    let cabbage_asset_definition_id =
-        AssetDefinitionId::new(garden_of_live_flowers_domain.clone(), "cabbage".parse()?);
+        AssetDefinitionId::derive_from_components(wonderland_domain.clone(), "rose".parse()?);
+    let cabbage_asset_definition_id = AssetDefinitionId::derive_from_components(
+        garden_of_live_flowers_domain.clone(),
+        "cabbage".parse()?,
+    );
 
     let mut wonderland = builder.domain_with_metadata(wonderland_domain.clone(), meta.clone());
     if genesis_account_id != *ALICE_ID {
@@ -987,12 +994,16 @@ fn generate_synthetic(
         for asset_definition in 0..asset_definitions_per_domain {
             let asset_name_literal = format!("asset_{asset_definition}");
             let asset_name: Name = asset_name_literal.parse()?;
-            let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+            let asset_definition_id =
+                AssetDefinitionId::derive_from_components(domain_id.clone(), asset_name);
             synthetic_asset_definitions.push(asset_definition_id.clone());
-            builder = builder.append_instruction(Register::asset_definition(
-                AssetDefinition::new(asset_definition_id, NumericSpec::default())
-                    .with_name(asset_name_literal),
-            ));
+            builder = builder.append_instruction(Register::asset_definition(AssetDefinition::new(
+                asset_definition_id,
+                asset_name_literal,
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )));
         }
 
         for _ in 0..accounts_per_domain {

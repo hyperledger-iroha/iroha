@@ -18,8 +18,12 @@ use crate::{
     kotodama::{
         ast::{Expr, FixtureAction, FixtureDecl, FunctionKind, Item, Program, SourceUnitKind},
         compiler::{CompileReport, CompilerMode, CompilerOptions},
+        linker::{
+            ImportBinding, MAX_LOGICAL_SOURCE_PATH_BYTES, MAX_MODULE_GRAPH_SOURCE_BYTES,
+            ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit, SourcePackageUnit,
+        },
         parser,
-        session::{CompilerSession, TestSourceUnit},
+        session::{CompilerSession, TestCompileOutput, TestSourceUnit},
         source::read_source_file,
     },
 };
@@ -31,7 +35,7 @@ use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::{AssetBalanceScope, AssetId},
     nexus::DataSpaceId,
-    smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
+    smart_contract::ContractAddress,
 };
 #[cfg(test)]
 use iroha_primitives::numeric_abi::QuantityValueV1;
@@ -168,6 +172,381 @@ struct TestRunResult {
     failure: Option<String>,
     trace_pcs: Vec<u64>,
     delta_trace: Vec<crate::zk::DeltaEntry>,
+}
+
+/// One deterministic request for the non-printing Kotodama V1 test runner.
+///
+/// The runner never writes to stdout or stderr. Frontends retain sole ownership
+/// of rendering, which lets them produce one structured output document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KotoTestRunRequestV1 {
+    /// Target contract or standalone test module to discover and run.
+    pub target: PathBuf,
+    /// Optional test-name substring (or exact name when [`Self::exact`] is set).
+    pub filter: Option<String>,
+    /// Require [`Self::filter`] to match the complete test name.
+    pub exact: bool,
+    /// Maximum number of independent test workers.
+    pub jobs: usize,
+    /// Deterministic ordering seed; zero requests canonical name order.
+    pub seed: u64,
+    /// Account-address chain discriminant used while compiling and executing.
+    pub chain_discriminant: u16,
+    /// Enable the Kotodama ZK compilation surface.
+    pub zk_enabled: bool,
+}
+
+impl KotoTestRunRequestV1 {
+    /// Construct a canonical single-worker request for `target`.
+    #[must_use]
+    pub fn new(target: impl Into<PathBuf>, chain_discriminant: u16) -> Self {
+        Self {
+            target: target.into(),
+            filter: None,
+            exact: false,
+            jobs: 1,
+            seed: 0,
+            chain_discriminant,
+            zk_enabled: false,
+        }
+    }
+}
+
+/// Exact external module graph visible to one declared Kotodama test root.
+///
+/// Import aliases are parent-local and every package identity must be the exact
+/// immutable identity selected by the caller's lock graph. Filesystem module
+/// discovery is disabled when this graph is used.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KotoTestModuleGraphV1 {
+    /// Direct aliases visible to the declared test root.
+    pub imports: Vec<ImportBinding>,
+    /// Complete locked package graph, including transitive modules.
+    pub packages: Vec<SourcePackageUnit>,
+}
+
+/// Stable stage at which a structured Kotodama test request failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KotoTestRunPhaseV1 {
+    /// Request fields were inconsistent or outside their V1 bounds.
+    Request,
+    /// Target and standalone test discovery failed.
+    Discovery,
+    /// The canonical Kotodama compiler rejected the discovered suite.
+    Compilation,
+    /// VM preparation or test execution failed before a case outcome existed.
+    Execution,
+}
+
+/// Structured failure returned by the non-printing Kotodama test runner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KotoTestRunErrorV1 {
+    /// Stable failure stage.
+    pub phase: KotoTestRunPhaseV1,
+    /// Human-readable diagnostic detail suitable for a frontend error record.
+    pub message: String,
+}
+
+impl KotoTestRunErrorV1 {
+    fn new(phase: KotoTestRunPhaseV1, message: impl Into<String>) -> Self {
+        Self {
+            phase,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for KotoTestRunErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for KotoTestRunErrorV1 {}
+
+/// Deterministic logical outcome of one Kotodama test case.
+///
+/// Wall-clock timing and VM trace data are intentionally absent: neither is a
+/// consensus-stable test result, and frontends can measure an entire invocation
+/// separately when operational timing is useful.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KotoTestCaseOutcomeV1 {
+    /// Unique test function name.
+    pub name: String,
+    /// One-based source line of the test declaration.
+    pub line: u32,
+    /// Whether VM execution completed successfully.
+    pub passed: bool,
+    /// Stable rendered VM diagnostic for a failed case.
+    pub failure: Option<String>,
+}
+
+/// One complete, deterministically ordered Kotodama test report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KotoTestRunReportV1 {
+    /// Canonical target path selected during discovery.
+    pub target: PathBuf,
+    /// Ordering seed copied from the request.
+    pub seed: u64,
+    /// Case outcomes in deterministic execution order.
+    pub cases: Vec<KotoTestCaseOutcomeV1>,
+}
+
+impl KotoTestRunReportV1 {
+    /// Return the number of successful cases.
+    #[must_use]
+    pub fn passed(&self) -> usize {
+        self.cases.iter().filter(|case| case.passed).count()
+    }
+
+    /// Return the number of failed cases.
+    #[must_use]
+    pub fn failed(&self) -> usize {
+        self.cases.len().saturating_sub(self.passed())
+    }
+
+    /// Return whether every selected case passed.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.failed() == 0
+    }
+}
+
+/// Discover, compile, and run one Kotodama V1 test suite without writing output.
+///
+/// Case failures are successful report values with `passed = false`. Only an
+/// invalid request or a discovery/compiler/runner infrastructure failure is
+/// returned as [`KotoTestRunErrorV1`]. Case order is independent of filesystem
+/// enumeration and worker scheduling.
+///
+/// # Errors
+///
+/// Returns a structured stage-tagged error when request validation, discovery,
+/// compilation, or VM execution setup fails.
+pub fn run_tests_structured_v1(
+    request: &KotoTestRunRequestV1,
+) -> Result<KotoTestRunReportV1, KotoTestRunErrorV1> {
+    validate_structured_request(request)?;
+    let suite = discover_suite(&request.target)
+        .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
+    run_discovered_suite_structured(request, suite, None)
+}
+
+/// Run one explicitly declared test root against an exact locked module graph.
+///
+/// Unlike [`run_tests_structured_v1`], this entry point performs no sibling or
+/// recursive test discovery. The supplied root, aliases, and immutable package
+/// modules are the complete compilation authority.
+///
+/// # Errors
+///
+/// Returns a structured stage-tagged error when request validation, isolated
+/// root discovery, exact typed linking, compilation, or VM execution fails.
+pub fn run_tests_structured_with_modules_v1(
+    request: &KotoTestRunRequestV1,
+    modules: &KotoTestModuleGraphV1,
+) -> Result<KotoTestRunReportV1, KotoTestRunErrorV1> {
+    validate_structured_request(request)?;
+    let suite = discover_declared_suite(&request.target)
+        .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
+    run_discovered_suite_structured(request, suite, Some(modules))
+}
+
+/// Run one caller-supplied test root against an exact locked module graph.
+///
+/// This is the structured source-set boundary for package managers and other
+/// authenticated callers. The source text is never reopened from
+/// [`KotoTestRunRequestV1::target`], and no sibling or recursive filesystem
+/// discovery occurs. The request target must exactly equal the source unit's
+/// portable diagnostic name.
+///
+/// # Errors
+///
+/// Returns a structured stage-tagged error when the request/source binding is
+/// invalid, the supplied root cannot be parsed as a direct test root, exact
+/// typed linking fails, or VM execution setup fails.
+pub fn run_tests_structured_source_with_modules_v1(
+    request: &KotoTestRunRequestV1,
+    root: &SourceModuleUnit,
+    modules: &KotoTestModuleGraphV1,
+) -> Result<KotoTestRunReportV1, KotoTestRunErrorV1> {
+    validate_structured_request(request)?;
+    validate_structured_source_request(request, root)?;
+    let suite = discover_declared_suite_from_source(root)
+        .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
+    run_discovered_suite_structured(request, suite, Some(modules))
+}
+
+/// Discover test names from one explicitly declared root without ambient files.
+///
+/// # Errors
+///
+/// Returns an error when the path cannot be resolved or read, the source is not
+/// a direct test root, parsing fails, or no `#[test]` function is declared.
+pub fn discover_declared_test_names_v1(path: &Path) -> Result<Vec<String>, String> {
+    let suite = discover_declared_suite(path)?;
+    Ok(suite.tests.into_iter().map(|test| test.name).collect())
+}
+
+/// Discover test names from one explicitly supplied direct root.
+///
+/// No path is opened and no ambient source is discovered. The source name is
+/// retained only as a bounded portable diagnostic identity.
+///
+/// # Errors
+///
+/// Returns an error when the source identity or text exceeds the typed-module
+/// graph bounds, parsing fails, the root is indirect, or no test is declared.
+pub fn discover_declared_test_names_source_v1(
+    root: &SourceModuleUnit,
+) -> Result<Vec<String>, String> {
+    validate_structured_source(root)?;
+    let suite = discover_declared_suite_from_source(root)?;
+    Ok(suite.tests.into_iter().map(|test| test.name).collect())
+}
+
+fn run_discovered_suite_structured(
+    request: &KotoTestRunRequestV1,
+    mut suite: DiscoveredSuite,
+    modules: Option<&KotoTestModuleGraphV1>,
+) -> Result<KotoTestRunReportV1, KotoTestRunErrorV1> {
+    filter_and_order_structured_tests(&mut suite.tests, request);
+    if suite.tests.is_empty() {
+        return Err(KotoTestRunErrorV1::new(
+            KotoTestRunPhaseV1::Discovery,
+            "no Kotodama tests matched the requested filter",
+        ));
+    }
+    let compiled = match modules {
+        Some(modules) => compile_suite_with_modules_for_chain(
+            &suite,
+            modules,
+            request.zk_enabled,
+            request.chain_discriminant,
+        ),
+        None => compile_suite_for_chain(&suite, request.zk_enabled, request.chain_discriminant),
+    }
+    .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Compilation, error))?;
+    let results = execute_suite_for_chain(
+        &compiled,
+        TraceMode::Off,
+        request.jobs,
+        request.chain_discriminant,
+    )
+    .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Execution, error))?;
+    let cases = results
+        .into_iter()
+        .map(|result| {
+            let line = u32::try_from(result.line).map_err(|_| {
+                KotoTestRunErrorV1::new(
+                    KotoTestRunPhaseV1::Execution,
+                    format!("test `{}` source line exceeds the V1 bound", result.name),
+                )
+            })?;
+            Ok(KotoTestCaseOutcomeV1 {
+                name: result.name,
+                line,
+                passed: result.passed,
+                failure: result.failure,
+            })
+        })
+        .collect::<Result<Vec<_>, KotoTestRunErrorV1>>()?;
+    Ok(KotoTestRunReportV1 {
+        target: suite.target_path,
+        seed: request.seed,
+        cases,
+    })
+}
+
+fn validate_structured_request(request: &KotoTestRunRequestV1) -> Result<(), KotoTestRunErrorV1> {
+    if request.jobs == 0 {
+        return Err(KotoTestRunErrorV1::new(
+            KotoTestRunPhaseV1::Request,
+            "Kotodama test worker count must be greater than zero",
+        ));
+    }
+    if request.chain_discriminant == 0 {
+        return Err(KotoTestRunErrorV1::new(
+            KotoTestRunPhaseV1::Request,
+            "Kotodama test chain discriminant must be in 1..=65535",
+        ));
+    }
+    if request.exact && request.filter.is_none() {
+        return Err(KotoTestRunErrorV1::new(
+            KotoTestRunPhaseV1::Request,
+            "exact Kotodama test selection requires a filter",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_structured_source_request(
+    request: &KotoTestRunRequestV1,
+    root: &SourceModuleUnit,
+) -> Result<(), KotoTestRunErrorV1> {
+    validate_structured_source(root)
+        .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Request, error))?;
+    if request.target != PathBuf::from(&root.source_name) {
+        return Err(KotoTestRunErrorV1::new(
+            KotoTestRunPhaseV1::Request,
+            "Kotodama test request target must equal the supplied source name",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_structured_source(root: &SourceModuleUnit) -> Result<(), String> {
+    if root.source_name.is_empty()
+        || root.source_name.len() > MAX_LOGICAL_SOURCE_PATH_BYTES
+        || root.source.is_empty()
+        || root.source.len() > MAX_MODULE_GRAPH_SOURCE_BYTES
+    {
+        return Err(format!(
+            "supplied Kotodama test root must have a nonempty bounded source name and at most {MAX_MODULE_GRAPH_SOURCE_BYTES} UTF-8 source bytes"
+        ));
+    }
+    ModuleBuildGraph::fingerprint(&SourceLinkRequest {
+        root: root.clone(),
+        imports: Vec::new(),
+        packages: Vec::new(),
+    })
+    .map_err(|error| error.to_string())?;
+    if root.source_name.contains('\\')
+        || root
+            .source_name
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(
+            "supplied Kotodama test root source name must use its canonical logical spelling"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn filter_and_order_structured_tests(tests: &mut Vec<TestCase>, request: &KotoTestRunRequestV1) {
+    if let Some(filter) = request.filter.as_deref() {
+        tests.retain(|test| {
+            if request.exact {
+                test.name == filter
+            } else {
+                test.name.contains(filter)
+            }
+        });
+    }
+    tests.sort_by(|left, right| {
+        if request.seed == 0 {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.line.cmp(&right.line))
+        } else {
+            seeded_test_key(request.seed, &left.name)
+                .cmp(&seeded_test_key(request.seed, &right.name))
+                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.line.cmp(&right.line))
+        }
+    });
 }
 
 struct KotoTestHost {
@@ -407,6 +786,37 @@ fn discover_suite(path: &Path) -> Result<DiscoveredSuite, String> {
     } else {
         discover_suite_from_target(&input_path, input_source, input_program)
     }
+}
+
+fn discover_declared_suite(path: &Path) -> Result<DiscoveredSuite, String> {
+    let input_path = fs::canonicalize(path)
+        .map_err(|err| format!("failed to resolve {}: {err}", path.display()))?;
+    let (source, program) = parse_program_file(&input_path)?;
+    if program.test_target.is_some() {
+        return Err(format!(
+            "{} is an indirect koto_test module; exact module graphs require a directly declared test root",
+            input_path.display()
+        ));
+    }
+    finalize_suite(input_path, source, program, Vec::new())
+}
+
+fn discover_declared_suite_from_source(root: &SourceModuleUnit) -> Result<DiscoveredSuite, String> {
+    validate_structured_source(root)?;
+    let program =
+        parser::parse(&root.source).map_err(|error| format!("{}: {error}", root.source_name))?;
+    if program.test_target.is_some() {
+        return Err(format!(
+            "{} is an indirect koto_test module; exact module graphs require a directly declared test root",
+            root.source_name
+        ));
+    }
+    finalize_suite(
+        PathBuf::from(&root.source_name),
+        root.source.clone(),
+        program,
+        Vec::new(),
+    )
 }
 
 fn discover_suite_from_target(
@@ -706,6 +1116,47 @@ fn compile_suite_for_chain(
     let outputs = CompilerSession::new(test_opts)
         .build_test_sources(&target, &test_modules)
         .map_err(|diagnostics| diagnostics.render_human())?;
+    prepare_compiled_suite(suite, outputs)
+}
+
+fn compile_suite_with_modules_for_chain(
+    suite: &DiscoveredSuite,
+    modules: &KotoTestModuleGraphV1,
+    zk_enabled: bool,
+    chain_discriminant: u16,
+) -> Result<CompiledSuite, String> {
+    if !suite.test_modules.is_empty() {
+        return Err(
+            "exact module-graph test compilation accepts one directly declared root".to_owned(),
+        );
+    }
+    let source_name = suite.target_path.display().to_string();
+    let outputs = ModuleBuildGraph::default()
+        .build_test_project(
+            SourceLinkRequest {
+                root: SourceModuleUnit {
+                    source_name: source_name.clone(),
+                    source: suite.target_source.clone(),
+                },
+                imports: modules.imports.clone(),
+                packages: modules.packages.clone(),
+            },
+            CompilerOptions {
+                force_zk: zk_enabled,
+                chain_discriminant,
+                mode: CompilerMode::Test,
+                ..CompilerOptions::default()
+            },
+            &source_name,
+        )
+        .map_err(|diagnostics| diagnostics.render_human())?;
+    prepare_compiled_suite(suite, outputs)
+}
+
+fn prepare_compiled_suite(
+    suite: &DiscoveredSuite,
+    outputs: TestCompileOutput,
+) -> Result<CompiledSuite, String> {
     let test_output = outputs.suite;
     let test_contract_interface = test_output.contract_interface().clone();
     let test_report = test_output.report;
@@ -1233,7 +1684,7 @@ impl KotoTestHost {
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
         let contract_address = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &inner.caller_subject(),
             0,
             DataSpaceId::UNIVERSAL,
@@ -2079,7 +2530,7 @@ fn parse_account_literal(raw: &str) -> Result<AccountId, String> {
 }
 
 fn default_caller_account() -> Result<AccountId, String> {
-    let _chain_discriminant = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT_MAINNET);
+    let _chain_discriminant = ChainDiscriminantGuard::enter(753);
     parse_account_literal(DEFAULT_CALLER)
 }
 
@@ -3094,6 +3545,202 @@ mod tests {
     }
 
     #[test]
+    fn structured_request_validation_is_stage_tagged() {
+        let mut request = KotoTestRunRequestV1::new("demo.ko", 753);
+        request.jobs = 0;
+        let error = validate_structured_request(&request).expect_err("zero workers must fail");
+        assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
+        assert!(error.message.contains("worker count"));
+
+        request.jobs = 1;
+        request.exact = true;
+        let error = validate_structured_request(&request).expect_err("exact needs a filter");
+        assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
+        assert!(error.message.contains("requires a filter"));
+
+        request.exact = false;
+        request.chain_discriminant = 0;
+        let error = validate_structured_request(&request).expect_err("zero chain must fail");
+        assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
+        assert!(error.message.contains("1..=65535"));
+    }
+
+    #[test]
+    fn structured_filter_order_is_independent_of_discovery_order() {
+        let request = KotoTestRunRequestV1 {
+            target: PathBuf::from("demo.ko"),
+            filter: Some("case".to_owned()),
+            exact: false,
+            jobs: 1,
+            seed: 17,
+            chain_discriminant: 753,
+            zk_enabled: false,
+        };
+        let case = |name: &str, line| TestCase {
+            name: name.to_owned(),
+            fixture: None,
+            line,
+        };
+        let mut forward = vec![case("case_z", 3), case("ignored", 2), case("case_a", 1)];
+        let mut reverse = forward.iter().cloned().rev().collect::<Vec<_>>();
+        filter_and_order_structured_tests(&mut forward, &request);
+        filter_and_order_structured_tests(&mut reverse, &request);
+        assert_eq!(
+            forward
+                .iter()
+                .map(|test| test.name.as_str())
+                .collect::<Vec<_>>(),
+            reverse
+                .iter()
+                .map(|test| test.name.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(forward.len(), 2);
+    }
+
+    #[test]
+    fn structured_runner_returns_ordered_logical_outcomes_without_timing() {
+        let temp = TestTempDir::new();
+        let target = temp.write(
+            "structured.ko",
+            r#"
+            seiyaku Structured {
+                #[test]
+                fn z_passes() { test::assert(true); }
+
+                #[test]
+                fn a_fails() { test::assert(false); }
+            }
+            "#,
+        );
+        let mut request = KotoTestRunRequestV1::new(&target, 753);
+        request.jobs = 2;
+        let first = run_tests_structured_v1(&request).expect("run structured suite");
+        let repeated = run_tests_structured_v1(&request).expect("repeat structured suite");
+
+        assert_eq!(first, repeated);
+        assert_eq!(
+            first.target,
+            fs::canonicalize(target).expect("canonical target")
+        );
+        assert_eq!(
+            first
+                .cases
+                .iter()
+                .map(|case| case.name.as_str())
+                .collect::<Vec<_>>(),
+            ["a_fails", "z_passes"]
+        );
+        assert_eq!(first.passed(), 1);
+        assert_eq!(first.failed(), 1);
+        assert!(!first.is_success());
+        assert!(first.cases[0].failure.is_some());
+        assert!(first.cases[1].failure.is_none());
+    }
+
+    #[test]
+    fn structured_module_graph_executes_exact_dependency_and_ignores_ambient_tests() {
+        let temp = TestTempDir::new();
+        let target = temp.write(
+            "tests/unit.ko",
+            r#"
+            seiyaku ExactGraph {
+                view fn current() -> int { return calc::value(); }
+
+                #[test]
+                fn dependency_is_exact() {
+                    test::assert(calc::value() == 7);
+                }
+            }
+            "#,
+        );
+        temp.write(
+            "tests/ambient.test.ko",
+            r#"
+            module Ambient {
+                koto_test { target: "unit.ko" }
+                #[test]
+                fn must_not_run() { test::assert(false); }
+            }
+            "#,
+        );
+        let dependency = "std/math@1.0.0".to_owned();
+        let modules = KotoTestModuleGraphV1 {
+            imports: vec![ImportBinding {
+                alias: "calc".to_owned(),
+                package: dependency.clone(),
+            }],
+            packages: vec![SourcePackageUnit {
+                identity: dependency,
+                modules: vec![SourceModuleUnit {
+                    source_name: "src/lib.ko".to_owned(),
+                    source: "module Math { fn value() -> int { return 7; } }".to_owned(),
+                }],
+                exports: BTreeSet::from(["value".to_owned()]),
+                imports: Vec::new(),
+            }],
+        };
+
+        assert_eq!(
+            discover_declared_test_names_v1(&target).expect("declared names"),
+            ["dependency_is_exact"]
+        );
+        let report = run_tests_structured_with_modules_v1(
+            &KotoTestRunRequestV1::new(&target, 753),
+            &modules,
+        )
+        .expect("run exact module graph");
+        assert_eq!(report.cases.len(), 1);
+        assert!(report.is_success());
+    }
+
+    #[test]
+    fn structured_source_root_is_bound_and_never_reopened_from_the_target_path() {
+        let source_name = "tests/in-memory-supplied.ko".to_owned();
+        let root = SourceModuleUnit {
+            source_name: source_name.clone(),
+            source: "seiyaku Supplied { #[test] fn supplied_only() { test::assert(true); } }"
+                .to_owned(),
+        };
+        assert_eq!(
+            discover_declared_test_names_source_v1(&root).expect("supplied names"),
+            ["supplied_only"]
+        );
+        let report = run_tests_structured_source_with_modules_v1(
+            &KotoTestRunRequestV1::new(&source_name, 753),
+            &root,
+            &KotoTestModuleGraphV1::default(),
+        )
+        .expect("run supplied source root");
+        assert_eq!(report.target, PathBuf::from(source_name));
+        assert_eq!(report.cases.len(), 1);
+        assert_eq!(report.cases[0].name, "supplied_only");
+        assert!(report.is_success());
+
+        let error = run_tests_structured_source_with_modules_v1(
+            &KotoTestRunRequestV1::new("tests/other.ko", 753),
+            &root,
+            &KotoTestModuleGraphV1::default(),
+        )
+        .expect_err("request/source substitution must fail");
+        assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
+        assert!(error.message.contains("must equal"));
+
+        let noncanonical = SourceModuleUnit {
+            source_name: "tests/./in-memory-supplied.ko".to_owned(),
+            source: root.source.clone(),
+        };
+        let error = run_tests_structured_source_with_modules_v1(
+            &KotoTestRunRequestV1::new(&noncanonical.source_name, 753),
+            &noncanonical,
+            &KotoTestModuleGraphV1::default(),
+        )
+        .expect_err("noncanonical source identities must fail before compilation");
+        assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
+        assert!(error.message.contains("canonical logical spelling"));
+    }
+
+    #[test]
     fn machine_reports_preserve_failure_details() {
         let results = vec![TestRunResult {
             name: "rejects_bad_input".to_owned(),
@@ -3705,7 +4352,7 @@ mod tests {
 
     #[test]
     fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("effects", "universal").expect("asset domain"),
             "unit".parse().expect("asset name"),
         )
@@ -4118,7 +4765,7 @@ mod tests {
         );
         host.register_actor("app".to_owned(), caller.clone())
             .expect("register app actor");
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("effects", "universal").expect("domain"),
             "unit".parse().expect("asset name"),
         );
@@ -4153,7 +4800,7 @@ mod tests {
                 .public_key()
                 .clone(),
         );
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("currency", "sbp").expect("asset domain"),
             "pkr".parse().expect("asset name"),
         );
@@ -4522,7 +5169,8 @@ mod tests {
     #[test]
     fn parse_permission_helpers_cover_targeted_and_json_forms() {
         let domain = DomainId::try_new("wonderland", "universal").expect("domain");
-        let asset = AssetDefinitionId::new(domain, "rose".parse().expect("name"));
+        let asset =
+            AssetDefinitionId::derive_from_components(domain, "rose".parse().expect("name"));
         let token = parse_permission_token_name(&format!("mint_asset:{asset}"))
             .expect("parse mint asset token");
         assert!(matches!(token, PermissionToken::MintAsset(id) if id == asset));

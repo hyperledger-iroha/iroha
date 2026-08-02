@@ -87,16 +87,26 @@ pub const MUSUBI_MAX_PACKAGE_MAINTAINERS_V1: usize = 256;
 /// Maximum accepted package members, including owners and non-owner maintainers.
 pub const MUSUBI_MAX_PACKAGE_MEMBERS_V1: usize =
     MUSUBI_MAX_PACKAGE_OWNERS_V1 + MUSUBI_MAX_PACKAGE_MAINTAINERS_V1;
+/// Maximum simultaneously pending invitations for one package.
+pub const MUSUBI_MAX_PENDING_INVITATIONS_V1: usize = 256;
 /// Maximum package keywords.
 pub const MUSUBI_MAX_KEYWORDS_V1: usize = 32;
 /// Default registry page size.
 pub const MUSUBI_DEFAULT_PAGE_SIZE_V1: u32 = 50;
 /// Consensus maximum registry page size.
 pub const MUSUBI_MAX_PAGE_SIZE_V1: usize = 100;
+/// Maximum exact archive identities in one authoritative cache-retention request.
+pub const MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1: usize = MUSUBI_MAX_PAGE_SIZE_V1;
 /// Maximum global alias length.
 pub const MUSUBI_MAX_ALIAS_BYTES_V1: usize = 32;
 /// Maximum query cursor key length.
 pub const MUSUBI_MAX_CURSOR_KEY_BYTES_V1: usize = 512;
+/// Maximum UTF-8 byte length accepted by rich package discovery.
+pub const MUSUBI_MAX_SEARCH_QUERY_BYTES_V1: usize = 256;
+/// Maximum distinct normalized terms accepted by rich package discovery.
+pub const MUSUBI_MAX_SEARCH_QUERY_TERMS_V1: usize = 16;
+/// Maximum UTF-8 byte length of one normalized discovery term.
+pub const MUSUBI_MAX_SEARCH_TERM_BYTES_V1: usize = 64;
 
 /// Domain used to derive an [`ArchiveId`] from canonical Norito bytes.
 pub const MUSUBI_ARCHIVE_ID_DOMAIN_V1: &[u8] = b"iroha.musubi.archive-id.v1";
@@ -276,7 +286,10 @@ impl fmt::Display for MusubiNamespaceV1 {
 /// Structural package scope within the stable home dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiPackageScopeV1 {
     /// Package belongs to the dataspace root.
     DataspaceRoot,
@@ -389,6 +402,7 @@ impl fmt::Display for MusubiPackageNameV1 {
 /// Stable structural package identifier; namespace aliases are not embedded.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiPackageIdV1 {
     /// Stable home dataspace.
     pub home_dataspace: DataSpaceId,
@@ -480,7 +494,10 @@ impl fmt::Display for MusubiPackageSelectorV1 {
 /// One canonical SemVer prerelease identifier.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiPrereleaseIdentifierV1 {
     /// Numeric identifier without leading zeroes.
     Numeric(u64),
@@ -561,6 +578,7 @@ impl fmt::Display for MusubiPrereleaseIdentifierV1 {
 /// Structured canonical semantic version. Build metadata is forbidden in V1.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiVersionV1 {
     /// Major component.
     pub major: u64,
@@ -762,6 +780,13 @@ impl MusubiVersionReqV1 {
                 if comparators.is_empty()
                     || comparators.len() > MUSUBI_MAX_VERSION_COMPARATORS_V1
                     || comparators.windows(2).any(|pair| pair[0] >= pair[1])
+                    || matches!(
+                        comparators.as_slice(),
+                        [MusubiVersionComparatorV1 {
+                            op: MusubiComparatorOpV1::Equal,
+                            ..
+                        }]
+                    )
                 {
                     return Err(ParseError::new(
                         "Musubi comparator list is empty, oversized, or noncanonical",
@@ -794,12 +819,8 @@ impl MusubiVersionReqV1 {
         }
         match self {
             Self::Any => true,
-            Self::Caret(base) => {
-                version >= base && caret_upper_bound(base).is_none_or(|upper| version < &upper)
-            }
-            Self::Tilde(base) => {
-                version >= base && tilde_upper_bound(base).is_none_or(|upper| version < &upper)
-            }
+            Self::Caret(base) => version >= base && caret_core_is_compatible(base, version),
+            Self::Tilde(base) => version >= base && tilde_core_is_compatible(base, version),
             Self::MajorWildcard(major) => version.major == *major,
             Self::MinorWildcard(wildcard) => {
                 version.major == wildcard.major && version.minor == wildcard.minor
@@ -837,7 +858,6 @@ impl FromStr for MusubiVersionReqV1 {
     type Err = ParseError;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let raw = raw.trim();
         parse_clean(
             raw,
             "Musubi version requirement must not be empty",
@@ -854,11 +874,20 @@ impl FromStr for MusubiVersionReqV1 {
         if raw.contains(',') || starts_comparator(raw) {
             let mut comparators = raw
                 .split(',')
-                .map(str::trim)
+                .map(|item| item.trim_matches(' '))
                 .map(parse_comparator)
                 .collect::<Result<Vec<_>, _>>()?;
             comparators.sort();
             comparators.dedup();
+            if let [
+                MusubiVersionComparatorV1 {
+                    op: MusubiComparatorOpV1::Equal,
+                    version,
+                },
+            ] = comparators.as_slice()
+            {
+                return Ok(Self::Exact(version.clone()));
+            }
             let requirement = Self::Comparators(comparators);
             requirement.validate()?;
             return Ok(requirement);
@@ -944,23 +973,21 @@ fn parse_comparator(raw: &str) -> Result<MusubiVersionComparatorV1, ParseError> 
     })
 }
 
-fn caret_upper_bound(base: &MusubiVersionV1) -> Option<MusubiVersionV1> {
-    let core = if base.major > 0 {
-        (base.major.checked_add(1)?, 0, 0)
-    } else if base.minor > 0 {
-        (0, base.minor.checked_add(1)?, 0)
+fn caret_core_is_compatible(base: &MusubiVersionV1, candidate: &MusubiVersionV1) -> bool {
+    if base.major > 0 {
+        candidate.major == base.major
     } else {
-        (0, 0, base.patch.checked_add(1)?)
-    };
-    MusubiVersionV1::new(core.0, core.1, core.2, Vec::new()).ok()
+        candidate.major == 0
+            && if base.minor > 0 {
+                candidate.minor == base.minor
+            } else {
+                candidate.minor == 0 && candidate.patch == base.patch
+            }
+    }
 }
 
-fn tilde_upper_bound(base: &MusubiVersionV1) -> Option<MusubiVersionV1> {
-    let (major, minor) = base
-        .minor
-        .checked_add(1)
-        .map_or((base.major.checked_add(1)?, 0), |minor| (base.major, minor));
-    MusubiVersionV1::new(major, minor, 0, Vec::new()).ok()
+fn tilde_core_is_compatible(base: &MusubiVersionV1, candidate: &MusubiVersionV1) -> bool {
+    candidate.major == base.major && candidate.minor == base.minor
 }
 
 macro_rules! digest_type {
@@ -1411,6 +1438,7 @@ impl MusubiArchiveLocationV1 {
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.location_id.is_zero()
             || self.archive_id.is_zero()
+            || digest_is_zero(self.pin_manifest.as_bytes())
             || self.providers.is_empty()
             || self.providers.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
             || self.provider_attestations.len() != self.providers.len()
@@ -1469,7 +1497,10 @@ impl MusubiArchiveLocationV1 {
 /// Fresh-selection availability distinct from yank and Parliament takedown state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiStorageAvailabilityV1 {
     /// Archive has finalized replication quorum and is fresh-selectable.
     Selectable,
@@ -1482,6 +1513,7 @@ pub enum MusubiStorageAvailabilityV1 {
 /// Finalized aggregate availability projection for an archive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiArchiveAvailabilityV1 {
     /// Archive identity.
     pub archive_id: ArchiveId,
@@ -1503,8 +1535,13 @@ pub struct MusubiArchiveAvailabilityV1 {
 impl MusubiArchiveAvailabilityV1 {
     /// Validate aggregate consistency and first-release bounds.
     pub fn validate(&self) -> Result<(), ParseError> {
+        let healthy_capacity = usize::from(self.active_locations)
+            .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
+            .expect("bounded Musubi location capacity cannot overflow usize");
         if self.archive_id.is_zero()
             || usize::from(self.active_locations) > MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
+            || usize::from(self.healthy_replicas) > healthy_capacity
+            || self.finalized_height == 0
             || self.index_revision == 0
             || digest_is_zero(&self.finalized_block_hash)
         {
@@ -1512,11 +1549,16 @@ impl MusubiArchiveAvailabilityV1 {
                 "Musubi archive availability record is invalid",
             ));
         }
-        if matches!(self.availability, MusubiStorageAvailabilityV1::Selectable)
-            && self.healthy_replicas < MUSUBI_MIN_HEALTHY_REPLICAS_V1
-        {
+        let expected = if self.healthy_replicas >= MUSUBI_MIN_HEALTHY_REPLICAS_V1 {
+            MusubiStorageAvailabilityV1::Selectable
+        } else if self.active_locations > 0 && self.healthy_replicas > 0 {
+            MusubiStorageAvailabilityV1::BelowQuorum
+        } else {
+            MusubiStorageAvailabilityV1::Unavailable
+        };
+        if self.availability != expected {
             return Err(ParseError::new(
-                "Musubi selectable archive is below replication quorum",
+                "Musubi archive availability classification is inconsistent with its counts",
             ));
         }
         Ok(())
@@ -1553,6 +1595,7 @@ impl MusubiArchiveReverseReferencesV1 {
 /// Exact structural release identifier.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiReleaseIdV1 {
     /// Stable package identity.
     pub package: MusubiPackageIdV1,
@@ -1798,6 +1841,7 @@ impl MusubiReleaseMetadataV1 {
 /// Finalized universal registry snapshot used by a resolution graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiRegistrySnapshotV1 {
     /// Finalized block height.
     pub finalized_height: u64,
@@ -2970,6 +3014,7 @@ impl MusubiPackageMemberV1 {
 
     /// Validate role and revision.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
         if self.accepted_at_height == 0
             || self.governance_revision == 0
             || matches!(self.role, MusubiPackageRoleV1::Maintainer(role) if role.is_empty())
@@ -3009,7 +3054,10 @@ pub struct MusubiMaintainerInvitationV1 {
     pub invited_account: AccountId,
     /// Offered role.
     pub role: MusubiPackageRoleV1,
-    /// Expected governance revision for compare-and-set.
+    /// Current package governance revision for compare-and-set.
+    ///
+    /// Every package-governance advance atomically rebases a still-pending,
+    /// unexpired invitation to the successor revision.
     pub expected_governance_revision: u64,
     /// Final block height at which acceptance is valid.
     pub expires_at_height: u64,
@@ -3020,6 +3068,7 @@ pub struct MusubiMaintainerInvitationV1 {
 impl MusubiMaintainerInvitationV1 {
     /// Validate identity, role, and compare-and-set bounds.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
         if self.invite_id.is_zero()
             || self.expected_governance_revision == 0
             || self.expires_at_height == 0
@@ -3028,6 +3077,119 @@ impl MusubiMaintainerInvitationV1 {
             return Err(ParseError::new("Musubi package invitation is invalid"));
         }
         Ok(())
+    }
+}
+
+/// Canonical package/account/invitation key for the maintainer directory.
+///
+/// Accepted members use `invitation = None`; pending invitations use their
+/// globally unique invitation identity. This orders an accepted member before
+/// any pending invitations for the same account without requiring a scan.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiMaintainerDirectoryKeyV1 {
+    /// Stable package identity.
+    pub package: MusubiPackageIdV1,
+    /// Accepted or invited account; absent only in a transient package-range lower bound.
+    pub account: Option<AccountId>,
+    /// Pending invitation identity; absent only for an accepted member.
+    pub invitation: Option<MusubiInviteIdV1>,
+}
+
+impl MusubiMaintainerDirectoryKeyV1 {
+    /// Construct the accepted-member directory key.
+    #[must_use]
+    pub const fn accepted(package: MusubiPackageIdV1, account: AccountId) -> Self {
+        Self {
+            package,
+            account: Some(account),
+            invitation: None,
+        }
+    }
+
+    /// Construct a pending-invitation directory key.
+    #[must_use]
+    pub const fn pending(
+        package: MusubiPackageIdV1,
+        account: AccountId,
+        invitation: MusubiInviteIdV1,
+    ) -> Self {
+        Self {
+            package,
+            account: Some(account),
+            invitation: Some(invitation),
+        }
+    }
+
+    /// Construct a transient lower bound for an exact package-prefix range.
+    #[must_use]
+    pub const fn package_start(package: MusubiPackageIdV1) -> Self {
+        Self {
+            package,
+            account: None,
+            invitation: None,
+        }
+    }
+
+    /// Validate the structural package and any invitation identity.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        if self.account.is_none()
+            || self
+                .invitation
+                .as_ref()
+                .is_some_and(MusubiInviteIdV1::is_zero)
+        {
+            return Err(ParseError::new(
+                "Musubi maintainer directory invitation identity is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Accepted member or pending package-governance invitation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum MusubiMaintainerDirectoryEntryV1 {
+    /// Accepted owner or maintainer with current authority.
+    Accepted(MusubiPackageMemberV1),
+    /// Invitation that has not created authority yet.
+    PendingInvitation(MusubiMaintainerInvitationV1),
+}
+
+impl MusubiMaintainerDirectoryEntryV1 {
+    /// Return the canonical package/account/invitation ordering key.
+    #[must_use]
+    pub fn key(&self) -> MusubiMaintainerDirectoryKeyV1 {
+        match self {
+            Self::Accepted(member) => MusubiMaintainerDirectoryKeyV1::accepted(
+                member.package.clone(),
+                member.account.clone(),
+            ),
+            Self::PendingInvitation(invitation) => MusubiMaintainerDirectoryKeyV1::pending(
+                invitation.package.clone(),
+                invitation.invited_account.clone(),
+                invitation.invite_id,
+            ),
+        }
+    }
+
+    /// Validate the record and require invitations to remain pending.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        match self {
+            Self::Accepted(member) => member.validate(),
+            Self::PendingInvitation(invitation) => {
+                invitation.validate()?;
+                if invitation.state != MusubiInvitationStateV1::Pending {
+                    return Err(ParseError::new(
+                        "Musubi maintainer directory contains a non-pending invitation",
+                    ));
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -3050,6 +3212,7 @@ pub struct MusubiPackageMetadataRecordV1 {
 impl MusubiPackageMetadataRecordV1 {
     /// Validate metadata and revision.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
         self.metadata.validate()?;
         if self.revision == 0 || self.changed_at_height == 0 {
             return Err(ParseError::new("Musubi package metadata record is invalid"));
@@ -3061,6 +3224,7 @@ impl MusubiPackageMetadataRecordV1 {
 /// Reversible release-yank state, separate from immutable release content.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiReleaseYankV1 {
     /// Exact release.
     pub release: MusubiReleaseIdV1,
@@ -3079,6 +3243,8 @@ pub struct MusubiReleaseYankV1 {
 impl MusubiReleaseYankV1 {
     /// Validate transition anchor and revision.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.release.validate()?;
+        self.reason.validate()?;
         if self.changed_at_height == 0 || self.revision == 0 {
             return Err(ParseError::new("Musubi release yank record is invalid"));
         }
@@ -3086,22 +3252,26 @@ impl MusubiReleaseYankV1 {
     }
 }
 
-/// Payload of an enacted artifact takedown.
+/// Persisted outcome of an applied artifact takedown.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiArtifactTakedownV1 {
     /// Enacted action digest.
     pub action_digest: MusubiGovernanceActionDigestV1,
     /// Public bounded reason.
     pub reason: MusubiReasonV1,
-    /// Finalized enactment height.
-    pub enacted_at_height: u64,
+    /// Finalized height where the delayed action was applied.
+    pub applied_at_height: u64,
 }
 
 /// Governed artifact availability, independent of yank and replication health.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiArtifactGovernanceStateV1 {
     /// No enacted takedown applies.
     Available,
@@ -3112,12 +3282,13 @@ pub enum MusubiArtifactGovernanceStateV1 {
 impl MusubiArtifactGovernanceStateV1 {
     /// Validate any governed takedown binding.
     pub fn validate(&self) -> Result<(), ParseError> {
-        if let Self::TakenDown(takedown) = self
-            && (takedown.action_digest.is_zero() || takedown.enacted_at_height == 0)
-        {
-            return Err(ParseError::new(
-                "Musubi artifact takedown record is invalid",
-            ));
+        if let Self::TakenDown(takedown) = self {
+            takedown.reason.validate()?;
+            if takedown.action_digest.is_zero() || takedown.applied_at_height == 0 {
+                return Err(ParseError::new(
+                    "Musubi artifact takedown record is invalid",
+                ));
+            }
         }
         Ok(())
     }
@@ -3126,6 +3297,7 @@ impl MusubiArtifactGovernanceStateV1 {
 /// Complete resolver selection state for one exact release.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiReleaseSelectionStateV1 {
     /// Reversible yank state.
     pub yank: MusubiReleaseYankV1,
@@ -3155,6 +3327,7 @@ impl MusubiReleaseSelectionStateV1 {
 /// Independent compare-and-set revisions for mutable release projections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiReleaseRevisionsV1 {
     /// Reversible yank-state revision.
     pub yank: u64,
@@ -3175,6 +3348,7 @@ impl MusubiReleaseRevisionsV1 {
 /// Authoritative release record; storage health remains a separate universal projection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiReleaseRecordV1 {
     /// Immutable semantic manifest.
     pub manifest: MusubiReleaseManifestV1,
@@ -3252,6 +3426,7 @@ impl fmt::Display for MusubiAliasNameV1 {
 /// Prospective global-alias price policy denominated in whole XOR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiAliasPricingPolicyV1 {
     /// Monotonic pricing revision.
     pub revision: u64,
@@ -3429,9 +3604,10 @@ impl MusubiAliasHistoryEntryV1 {
     }
 }
 
-/// Enacted Parliament decision binding an exact recovery action.
+/// Enacted Parliament decision binding one exact Musubi action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiGovernanceDecisionV1 {
     /// Unique enacted decision identifier for replay protection.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -3458,9 +3634,46 @@ impl MusubiGovernanceDecisionV1 {
     }
 }
 
+/// Persisted proof that an enacted Parliament decision was consumed on-chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiGovernanceDecisionConsumptionV1 {
+    /// Exact enacted decision supplied by the governance instruction.
+    pub decision: MusubiGovernanceDecisionV1,
+    /// Minimum enactment delay enforced by the runtime that consumed the decision.
+    pub minimum_enactment_delay: u64,
+    /// Block height observed by the runtime when it consumed the decision.
+    pub consumed_at_height: u64,
+}
+
+impl MusubiGovernanceDecisionConsumptionV1 {
+    /// Validate the nested decision and its server-observed execution boundary.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.decision.validate()?;
+        let minimum_execution_height = self
+            .decision
+            .enacted_at_height
+            .checked_add(self.minimum_enactment_delay)
+            .ok_or_else(|| ParseError::new("Musubi governance enactment delay overflows"))?;
+        if self.decision.execute_after_height < minimum_execution_height {
+            return Err(ParseError::new(
+                "Musubi governance decision has a shorter than enforced enactment delay",
+            ));
+        }
+        if self.consumed_at_height < self.decision.execute_after_height {
+            return Err(ParseError::new(
+                "Musubi governance decision was consumed before its execution boundary",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Payload for Parliament package-owner recovery.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiRecoverPackageOwnersV1 {
     /// Package being recovered.
     pub package: MusubiPackageIdV1,
@@ -3473,6 +3686,7 @@ pub struct MusubiRecoverPackageOwnersV1 {
 /// Payload for Parliament alias recovery.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiRetargetAliasV1 {
     /// Alias being recovered.
     pub alias: MusubiAliasNameV1,
@@ -3485,6 +3699,7 @@ pub struct MusubiRetargetAliasV1 {
 /// Payload for Parliament artifact takedown.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiTakedownArtifactActionV1 {
     /// Exact release.
     pub release: MusubiReleaseIdV1,
@@ -3497,6 +3712,7 @@ pub struct MusubiTakedownArtifactActionV1 {
 /// Payload for an enacted Musubi registry-policy replacement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiSetRegistryPolicyActionV1 {
     /// Complete replacement policy.
     pub policy: MusubiRegistryPolicyV1,
@@ -3504,10 +3720,13 @@ pub struct MusubiSetRegistryPolicyActionV1 {
     pub expected_revision: u64,
 }
 
-/// Parliament-only package/alias/artifact recovery action.
+/// Closed Parliament-only Musubi recovery and policy-replacement action.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiParliamentActionV1 {
     /// Replace package owners while preserving the last-owner invariant.
     RecoverPackageOwners(MusubiRecoverPackageOwnersV1),
@@ -3524,6 +3743,7 @@ impl MusubiParliamentActionV1 {
     pub fn validate(&self) -> Result<(), ParseError> {
         match self {
             Self::RecoverPackageOwners(recovery) => {
+                recovery.package.validate()?;
                 if recovery.owners.is_empty()
                     || recovery.owners.len() > MUSUBI_MAX_PACKAGE_OWNERS_V1
                     || recovery.owners.windows(2).any(|pair| pair[0] >= pair[1])
@@ -3534,10 +3754,14 @@ impl MusubiParliamentActionV1 {
                     ));
                 }
             }
-            Self::RetargetAlias(recovery) if recovery.expected_revision == 0 => {
-                return Err(ParseError::new(
-                    "Musubi Parliament alias retarget revision is invalid",
-                ));
+            Self::RetargetAlias(recovery) => {
+                recovery.alias.validate()?;
+                recovery.target.validate()?;
+                if recovery.expected_revision == 0 {
+                    return Err(ParseError::new(
+                        "Musubi Parliament alias retarget revision is invalid",
+                    ));
+                }
             }
             Self::SetRegistryPolicy(replacement) => {
                 replacement.policy.validate()?;
@@ -3559,7 +3783,6 @@ impl MusubiParliamentActionV1 {
                     ));
                 }
             }
-            Self::RetargetAlias(_) => {}
         }
         Ok(())
     }
@@ -3577,7 +3800,10 @@ impl MusubiParliamentActionV1 {
 /// Admission mode for new archives, releases, and aliases.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiRegistryAdmissionModeV1 {
     /// Reject new archives, releases, and aliases.
     Closed,
@@ -3590,6 +3816,7 @@ pub enum MusubiRegistryAdmissionModeV1 {
 /// Versioned first-release Musubi registry policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiRegistryPolicyV1 {
     /// Must equal one.
     pub version: u8,
@@ -3635,11 +3862,52 @@ impl MusubiRegistryPolicyV1 {
         }
         Ok(())
     }
+
+    /// Validate a strict first-release transition from `current`.
+    pub fn validate_successor(&self, current: &Self) -> Result<(), ParseError> {
+        current.validate()?;
+        self.validate()?;
+
+        let expected_revision = current
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| ParseError::new("Musubi registry policy revision overflow"))?;
+        if self.revision != expected_revision {
+            return Err(ParseError::new(
+                "Musubi replacement policy revision must be the exact successor",
+            ));
+        }
+
+        let prices_changed = self.alias_pricing.length_1_xor != current.alias_pricing.length_1_xor
+            || self.alias_pricing.length_2_xor != current.alias_pricing.length_2_xor
+            || self.alias_pricing.length_3_xor != current.alias_pricing.length_3_xor
+            || self.alias_pricing.length_4_xor != current.alias_pricing.length_4_xor
+            || self.alias_pricing.length_5_to_32_xor != current.alias_pricing.length_5_to_32_xor;
+        if prices_changed {
+            let expected_pricing_revision = current
+                .alias_pricing
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| ParseError::new("Musubi alias pricing revision overflow"))?;
+            if self.alias_pricing.revision != expected_pricing_revision {
+                return Err(ParseError::new(
+                    "changed Musubi alias prices require the exact successor pricing revision",
+                ));
+            }
+        } else if self.alias_pricing != current.alias_pricing {
+            return Err(ParseError::new(
+                "unchanged Musubi alias prices must retain the current pricing policy",
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 /// Compact universal sparse-index row used by exact resolution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiResolverReleaseRowV1 {
     /// Exact release identity.
     pub release: MusubiReleaseIdV1,
@@ -3735,7 +4003,7 @@ pub enum MusubiCursorFailureV1 {
 }
 
 macro_rules! musubi_page_type {
-    ($name:ident, $item:ty, $doc:literal) => {
+    ($name:ident, $item:ty, $doc:literal, $noncanonical_order:expr) => {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
         #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3752,9 +4020,14 @@ macro_rules! musubi_page_type {
             /// Validate page size, snapshot, and cursor.
             pub fn validate(&self) -> Result<(), ParseError> {
                 self.snapshot.validate()?;
-                if self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1 {
-                    return Err(ParseError::new("Musubi query page exceeds its item bound"));
+                if self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1
+                    || self.items.windows(2).any($noncanonical_order)
+                {
+                    return Err(ParseError::new(
+                        "Musubi query page exceeds its item bound or is not strictly ordered",
+                    ));
                 }
+                self.items.iter().try_for_each(<$item>::validate)?;
                 if let Some(cursor) = &self.next_cursor {
                     cursor.validate()?;
                     if cursor.snapshot != self.snapshot {
@@ -3772,32 +4045,291 @@ macro_rules! musubi_page_type {
 musubi_page_type!(
     MusubiPackagePageV1,
     MusubiPackageRecordV1,
-    "Ordered page of exact package records."
+    "Ordered page of exact package records.",
+    |pair: &[MusubiPackageRecordV1]| pair[0].package >= pair[1].package
 );
 musubi_page_type!(
     MusubiReleasePageV1,
     MusubiReleaseRecordV1,
-    "Ordered page of release records with yank, takedown, and revision projections."
+    "Ordered page of release records with yank, takedown, and revision projections.",
+    |pair: &[MusubiReleaseRecordV1]| pair[0].manifest.release >= pair[1].manifest.release
 );
 musubi_page_type!(
     MusubiVersionPageV1,
     MusubiVersionV1,
-    "Ordered page of structured package versions."
+    "Ordered page of structured package versions.",
+    |pair: &[MusubiVersionV1]| pair[0] >= pair[1]
 );
 musubi_page_type!(
     MusubiMaintainerPageV1,
-    MusubiPackageMemberV1,
-    "Ordered page of accepted package members."
+    MusubiMaintainerDirectoryEntryV1,
+    "Ordered page of accepted package members and pending invitations.",
+    |pair: &[MusubiMaintainerDirectoryEntryV1]| pair[0].key() >= pair[1].key()
 );
-musubi_page_type!(
-    MusubiArchiveLocationPageV1,
-    MusubiArchiveLocationV1,
-    "Ordered page of renewable archive locations."
-);
+/// Ordered renewable locations plus their authoritative immutable archive commitment.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiArchiveLocationPageV1 {
+    /// Deployment-selected chain identity used by locks and archive admission.
+    pub chain_id: ChainId,
+    /// Hash of the first finalized block used as the genesis identity.
+    pub genesis_hash: [u8; 32],
+    /// Authoritative immutable archive registration and full source commitment.
+    pub archive: MusubiArchiveRecordV1,
+    /// Ordered current non-retired locations for the archive.
+    pub items: Vec<MusubiArchiveLocationV1>,
+    /// Cursor for the next page, absent at the end.
+    pub next_cursor: Option<MusubiFinalizedCursorV1>,
+    /// Finalized snapshot shared by the archive and every location.
+    pub snapshot: MusubiRegistrySnapshotV1,
+}
+
+/// Authoritative cache-retention classification for one exact archive identity.
+///
+/// An identity unknown to the queried registry is retained fail-closed because
+/// the user cache is content-addressed but not chain-scoped. Replication health
+/// never makes a published archive prunable: locked consumers may still need a
+/// cached below-quorum or unavailable archive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
+pub enum MusubiArchiveRetentionDispositionV1 {
+    /// This registry does not know the archive, so it cannot authorize deletion.
+    RetainUnknown,
+    /// At least one governance-available active or yanked release references the archive.
+    RetainReferenced,
+    /// The registered archive has no published release references.
+    PruneUnreferenced,
+    /// Every published release reference has an enacted Parliament takedown.
+    PruneGovernedTakedown,
+}
+
+impl MusubiArchiveRetentionDispositionV1 {
+    /// Whether this finalized classification requires the local cache entry to remain.
+    #[must_use]
+    pub const fn must_retain(self) -> bool {
+        matches!(self, Self::RetainUnknown | Self::RetainReferenced)
+    }
+}
+
+/// One exact finalized cache-retention decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiArchiveRetentionDecisionV1 {
+    /// Exact content-addressed archive identity.
+    pub archive_id: ArchiveId,
+    /// Fail-closed retention or explicit prune classification.
+    pub disposition: MusubiArchiveRetentionDispositionV1,
+    /// Governance-available, non-yanked release references.
+    pub active_releases: u16,
+    /// Governance-available, yanked release references.
+    pub yanked_releases: u16,
+    /// Parliament-taken-down release references.
+    pub taken_down_releases: u16,
+    /// Authoritative storage projection, absent only for an unknown archive.
+    pub storage: Option<MusubiArchiveAvailabilityV1>,
+}
+
+impl MusubiArchiveRetentionDecisionV1 {
+    /// Return whether this exact finalized decision requires retention.
+    #[must_use]
+    pub const fn must_retain(&self) -> bool {
+        self.disposition.must_retain()
+    }
+
+    /// Validate identity, bounded counts, storage binding, and disposition semantics.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.archive_id.is_zero() {
+            return Err(ParseError::new(
+                "Musubi archive retention decision uses the zero archive identity",
+            ));
+        }
+        let referenced = usize::from(self.active_releases)
+            .checked_add(usize::from(self.yanked_releases))
+            .and_then(|count| count.checked_add(usize::from(self.taken_down_releases)))
+            .ok_or_else(|| ParseError::new("Musubi archive retention count overflow"))?;
+        if referenced > MUSUBI_MAX_RESOLUTION_NODES_V1 {
+            return Err(ParseError::new(
+                "Musubi archive retention decision exceeds the release-reference bound",
+            ));
+        }
+        if let Some(storage) = &self.storage {
+            storage.validate()?;
+            if storage.archive_id != self.archive_id {
+                return Err(ParseError::new(
+                    "Musubi archive retention storage projection has a different identity",
+                ));
+            }
+        }
+
+        let available = usize::from(self.active_releases)
+            .checked_add(usize::from(self.yanked_releases))
+            .expect("two u16 Musubi release counts fit usize");
+        let canonical = match self.disposition {
+            MusubiArchiveRetentionDispositionV1::RetainUnknown => {
+                referenced == 0 && self.storage.is_none()
+            }
+            MusubiArchiveRetentionDispositionV1::RetainReferenced => {
+                available > 0 && self.storage.is_some()
+            }
+            MusubiArchiveRetentionDispositionV1::PruneUnreferenced => {
+                referenced == 0 && self.storage.is_some()
+            }
+            MusubiArchiveRetentionDispositionV1::PruneGovernedTakedown => {
+                available == 0 && self.taken_down_releases > 0 && self.storage.is_some()
+            }
+        };
+        if !canonical {
+            return Err(ParseError::new(
+                "Musubi archive retention decision is internally inconsistent",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Bounded exact finalized cache-retention request.
+///
+/// `expected_snapshot` is absent on the first batch and binds every later batch
+/// in the same prune operation. A node must reject a mismatching anchor instead
+/// of combining decisions from different finalized registry states.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiArchiveRetentionQueryV1 {
+    /// Sorted, distinct, non-zero exact archive identities.
+    pub archive_ids: Vec<ArchiveId>,
+    /// Exact finalized snapshot established by the first batch, when present.
+    pub expected_snapshot: Option<MusubiRegistrySnapshotV1>,
+}
+
+impl MusubiArchiveRetentionQueryV1 {
+    /// Validate the exact batch bound, order, identities, and optional snapshot.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.archive_ids.is_empty()
+            || self.archive_ids.len() > MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1
+            || self.archive_ids.iter().any(ArchiveId::is_zero)
+            || self.archive_ids.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ParseError::new(
+                "Musubi archive retention batch is empty, oversized, or noncanonical",
+            ));
+        }
+        self.expected_snapshot
+            .as_ref()
+            .map_or(Ok(()), MusubiRegistrySnapshotV1::validate)
+    }
+}
+
+/// Exact finalized cache-retention decisions for one bounded request batch.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiArchiveRetentionPageV1 {
+    /// Deployment-selected chain identity queried for these decisions.
+    pub chain_id: ChainId,
+    /// Hash of the first finalized block for the queried registry.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub genesis_hash: [u8; 32],
+    /// Decisions in the exact order of the canonical request identities.
+    pub items: Vec<MusubiArchiveRetentionDecisionV1>,
+    /// Finalized universal registry snapshot shared by every decision.
+    pub snapshot: MusubiRegistrySnapshotV1,
+}
+
+impl MusubiArchiveRetentionPageV1 {
+    /// Validate deployment identity, bounded strict order, decisions, and snapshot.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.snapshot.validate()?;
+        if self.chain_id.as_str().is_empty()
+            || self.genesis_hash.iter().all(|byte| *byte == 0)
+            || self.items.is_empty()
+            || self.items.len() > MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1
+            || self
+                .items
+                .windows(2)
+                .any(|pair| pair[0].archive_id >= pair[1].archive_id)
+            || self.items.iter().any(|decision| {
+                decision.storage.is_some_and(|storage| {
+                    storage.finalized_height > self.snapshot.finalized_height
+                        || storage.index_revision > self.snapshot.index_revision
+                        || (storage.finalized_height == self.snapshot.finalized_height
+                            && storage.finalized_block_hash != self.snapshot.finalized_block_hash)
+                })
+            })
+        {
+            return Err(ParseError::new(
+                "Musubi archive retention page has an invalid deployment or item bound",
+            ));
+        }
+        self.items
+            .iter()
+            .try_for_each(MusubiArchiveRetentionDecisionV1::validate)
+    }
+}
+
+impl MusubiArchiveLocationPageV1 {
+    /// Validate deployment identity, archive commitment, items, snapshot, and cursor.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.archive.validate()?;
+        self.snapshot.validate()?;
+        if self.chain_id.as_str().is_empty()
+            || self.genesis_hash.iter().all(|byte| *byte == 0)
+            || self.archive.staging_receipt.payload.binding.chain_id != self.chain_id
+            || self
+                .archive
+                .staging_receipt
+                .payload
+                .binding
+                .genesis_block_hash
+                != self.genesis_hash
+            || self.archive.registered_at_height > self.snapshot.finalized_height
+            || self.items.len() > MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
+            || self
+                .items
+                .windows(2)
+                .any(|pair| pair[0].location_id >= pair[1].location_id)
+        {
+            return Err(ParseError::new(
+                "Musubi archive-location page has an inconsistent deployment or item bound",
+            ));
+        }
+        for location in &self.items {
+            location.validate()?;
+            if location.archive_id != self.archive.archive_id
+                || self
+                    .archive
+                    .location_ids
+                    .binary_search(&location.location_id)
+                    .is_err()
+                || location.state == MusubiArchiveLocationStateV1::Retired
+            {
+                return Err(ParseError::new(
+                    "Musubi archive-location page item is not a current archive location",
+                ));
+            }
+        }
+        if let Some(cursor) = &self.next_cursor {
+            cursor.validate()?;
+            if cursor.snapshot != self.snapshot {
+                return Err(ParseError::new(
+                    "Musubi archive-location page cursor uses a different finalized snapshot",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
 musubi_page_type!(
     MusubiAliasHistoryPageV1,
     MusubiAliasHistoryEntryV1,
-    "Ordered page of permanent alias history."
+    "Ordered page of permanent alias history.",
+    |pair: &[MusubiAliasHistoryEntryV1]| pair[0].key() >= pair[1].key()
 );
 /// Ordered page of universal resolver-index rows with authoritative lock identity.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -3822,11 +4354,18 @@ impl MusubiResolverIndexPageV1 {
         if self.chain_id.as_str().is_empty()
             || self.genesis_hash.iter().all(|byte| *byte == 0)
             || self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1
+            || self
+                .items
+                .windows(2)
+                .any(|pair| pair[0].release >= pair[1].release)
         {
             return Err(ParseError::new(
                 "Musubi resolver page has an invalid chain identity or item bound",
             ));
         }
+        self.items
+            .iter()
+            .try_for_each(MusubiResolverReleaseRowV1::validate)?;
         self.snapshot.validate()?;
         if let Some(cursor) = &self.next_cursor {
             cursor.validate()?;
@@ -3881,6 +4420,8 @@ pub struct MusubiOrderedPackagePageV1 {
     pub chain_id: ChainId,
     /// Hash of the first finalized block used as the genesis identity.
     pub genesis_hash: [u8; 32],
+    /// Authoritative immutable namespace binding, present even when no package matches.
+    pub namespace_binding: MusubiNamespaceBindingV1,
     /// Ordered public-directory entries.
     pub items: Vec<MusubiOrderedPackageEntryV1>,
     /// Cursor for the next page, absent at the end.
@@ -3892,13 +4433,30 @@ pub struct MusubiOrderedPackagePageV1 {
 impl MusubiOrderedPackagePageV1 {
     /// Validate lock identity, page size, snapshot, and cursor binding.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.namespace_binding.validate()?;
         if self.chain_id.as_str().is_empty()
             || self.genesis_hash.iter().all(|byte| *byte == 0)
             || self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1
+            || self
+                .items
+                .windows(2)
+                .any(|pair| pair[0].selector >= pair[1].selector)
         {
             return Err(ParseError::new(
                 "Musubi directory page has an invalid chain identity or item bound",
             ));
+        }
+        for item in &self.items {
+            item.validate()?;
+            if item.selector.namespace != self.namespace_binding.namespace
+                || item.package.home_dataspace != self.namespace_binding.home_dataspace
+                || item.package.scope != self.namespace_binding.scope
+                || item.package.name != item.selector.name
+            {
+                return Err(ParseError::new(
+                    "Musubi directory page item disagrees with its namespace binding",
+                ));
+            }
         }
         self.snapshot.validate()?;
         if let Some(cursor) = &self.next_cursor {
@@ -3987,8 +4545,15 @@ impl MusubiPageRequestV1 {
             .min(MUSUBI_MAX_PAGE_SIZE_V1)
     }
 
-    /// Validate a supplied cursor.
+    /// Validate the requested bound and any supplied cursor.
     pub fn validate(&self) -> Result<(), ParseError> {
+        if self.limit != 0
+            && usize::try_from(self.limit).map_or(true, |limit| limit > MUSUBI_MAX_PAGE_SIZE_V1)
+        {
+            return Err(ParseError::new(
+                "Musubi query page limit exceeds the consensus maximum",
+            ));
+        }
         self.cursor
             .as_ref()
             .map_or(Ok(()), MusubiFinalizedCursorV1::validate)
@@ -4050,6 +4615,261 @@ pub struct MusubiOrderedPrefixQueryV1 {
     pub prefix: MusubiOrderedPrefixV1,
     /// Page controls.
     pub page: MusubiPageRequestV1,
+}
+
+/// Snapshot of the process-local finalized-event package-search projection.
+///
+/// This anchor is deliberately distinct from [`MusubiRegistrySnapshotV1`]. Search
+/// projection revisions are not resolver-index revisions and must never be used to
+/// select a dependency release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiSearchSnapshotV1 {
+    /// Finalized height through which the search projection has been applied.
+    pub finalized_height: u64,
+    /// Finalized block hash at `finalized_height`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub finalized_block_hash: [u8; 32],
+    /// Process-local projection revision, changed on every visible rebuild/update.
+    pub projection_revision: u64,
+}
+
+impl MusubiSearchSnapshotV1 {
+    /// Validate a non-inert finalized search anchor.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.finalized_height == 0
+            || digest_is_zero(&self.finalized_block_hash)
+            || self.projection_revision == 0
+        {
+            return Err(ParseError::new("Musubi search snapshot is invalid"));
+        }
+        Ok(())
+    }
+}
+
+/// Continuation cursor for the rebuildable package-search projection.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiSearchCursorV1 {
+    /// Exact finalized search projection used by the preceding page.
+    pub snapshot: MusubiSearchSnapshotV1,
+    /// Domain-separated hash of canonical search parameters excluding this cursor.
+    pub query_hash: MusubiQueryHashV1,
+    /// Last structural package returned by the preceding page.
+    pub last_package: MusubiPackageIdV1,
+}
+
+impl MusubiSearchCursorV1 {
+    /// Validate every cursor binding.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.snapshot.validate()?;
+        self.last_package.validate()?;
+        if self.query_hash.is_zero() {
+            return Err(ParseError::new(
+                "Musubi search cursor query hash is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Page controls for rich package discovery.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiSearchPageRequestV1 {
+    /// Requested count; zero selects [`MUSUBI_DEFAULT_PAGE_SIZE_V1`].
+    pub limit: u32,
+    /// Continuation cursor returned by the same normalized search.
+    pub cursor: Option<MusubiSearchCursorV1>,
+}
+
+impl MusubiSearchPageRequestV1 {
+    /// Effective page size capped by the public V1 maximum.
+    #[must_use]
+    pub fn effective_limit(&self) -> usize {
+        let requested = if self.limit == 0 {
+            MUSUBI_DEFAULT_PAGE_SIZE_V1
+        } else {
+            self.limit
+        };
+        usize::try_from(requested)
+            .unwrap_or(usize::MAX)
+            .min(MUSUBI_MAX_PAGE_SIZE_V1)
+    }
+
+    /// Validate the page bound and continuation cursor.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.limit != 0
+            && usize::try_from(self.limit).map_or(true, |limit| limit > MUSUBI_MAX_PAGE_SIZE_V1)
+        {
+            return Err(ParseError::new(
+                "Musubi search page limit exceeds the public V1 maximum",
+            ));
+        }
+        self.cursor
+            .as_ref()
+            .map_or(Ok(()), MusubiSearchCursorV1::validate)
+    }
+}
+
+/// Bounded exact-token query for the rebuildable package discovery projection.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiSearchQueryV1 {
+    /// Description, keyword, namespace, or package-name terms joined by whitespace.
+    pub query: String,
+    /// Search-specific page controls and cursor.
+    pub page: MusubiSearchPageRequestV1,
+}
+
+impl MusubiSearchQueryV1 {
+    /// Return sorted, distinct, Unicode-lowercased exact search terms.
+    ///
+    /// Hyphenated ASCII components contribute both their complete spelling and
+    /// their alphanumeric words. No prefix, edit-distance, or fuzzy expansion is
+    /// performed.
+    pub fn normalized_terms(&self) -> Result<Vec<String>, ParseError> {
+        if self.query.is_empty()
+            || self.query.len() > MUSUBI_MAX_SEARCH_QUERY_BYTES_V1
+            || self.query.trim() != self.query
+            || self.query.chars().any(char::is_control)
+        {
+            return Err(ParseError::new(
+                "Musubi search query is empty, noncanonical, or exceeds its byte bound",
+            ));
+        }
+        let mut terms = BTreeSet::new();
+        for component in self.query.split_whitespace() {
+            if component.len() <= MUSUBI_MAX_SEARCH_TERM_BYTES_V1
+                && component
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                terms.insert(component.to_ascii_lowercase());
+            }
+            for word in component.split(|character: char| !character.is_alphanumeric()) {
+                if word.is_empty() {
+                    continue;
+                }
+                let normalized = word
+                    .chars()
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>();
+                if normalized.len() > MUSUBI_MAX_SEARCH_TERM_BYTES_V1 {
+                    return Err(ParseError::new(
+                        "Musubi search term exceeds its UTF-8 byte bound",
+                    ));
+                }
+                terms.insert(normalized);
+                if terms.len() > MUSUBI_MAX_SEARCH_QUERY_TERMS_V1 {
+                    return Err(ParseError::new(
+                        "Musubi search query exceeds its normalized term bound",
+                    ));
+                }
+            }
+        }
+        if terms.is_empty() || terms.len() > MUSUBI_MAX_SEARCH_QUERY_TERMS_V1 {
+            return Err(ParseError::new(
+                "Musubi search query has no bounded normalized terms",
+            ));
+        }
+        Ok(terms.into_iter().collect())
+    }
+
+    /// Validate query normalization and page controls.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.normalized_terms()?;
+        self.page.validate()
+    }
+}
+
+/// One deterministic rich package-discovery result.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiSearchHitV1 {
+    /// Stable structural package identity.
+    pub package: MusubiPackageIdV1,
+    /// Immutable namespace used for the first package claim.
+    pub claimed_namespace: MusubiNamespaceV1,
+    /// Current mutable package description.
+    pub description: Option<MusubiDescriptionV1>,
+    /// Current sorted package keywords.
+    pub keywords: Vec<MusubiKeywordV1>,
+    /// Current mutable-metadata revision.
+    pub metadata_revision: u64,
+}
+
+impl MusubiSearchHitV1 {
+    /// Validate structural identity, namespace scope, metadata, and revision.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        self.claimed_namespace.validate()?;
+        let namespace_scope_matches =
+            match (&self.package.scope, self.claimed_namespace.domain_segment()) {
+                (MusubiPackageScopeV1::DataspaceRoot, None) => true,
+                (MusubiPackageScopeV1::Domain(domain), Some(text)) => domain.as_ref() == text,
+                _ => false,
+            };
+        let metadata = MusubiReleaseMetadataV1 {
+            description: self.description.clone(),
+            keywords: self.keywords.clone(),
+            ..MusubiReleaseMetadataV1::default()
+        };
+        metadata.validate()?;
+        if !namespace_scope_matches || self.metadata_revision == 0 {
+            return Err(ParseError::new("Musubi search hit is invalid"));
+        }
+        Ok(())
+    }
+}
+
+/// One deterministic page from the rebuildable package discovery projection.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiSearchPageV1 {
+    /// Results ordered by structural package identity.
+    pub items: Vec<MusubiSearchHitV1>,
+    /// Continuation cursor, absent at the end of the result set.
+    pub next_cursor: Option<MusubiSearchCursorV1>,
+    /// Finalized search projection shared by every result.
+    pub snapshot: MusubiSearchSnapshotV1,
+}
+
+impl MusubiSearchPageV1 {
+    /// Validate page bounds, strict ordering, and cursor binding.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.snapshot.validate()?;
+        if self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1
+            || self
+                .items
+                .windows(2)
+                .any(|pair| pair[0].package >= pair[1].package)
+        {
+            return Err(ParseError::new(
+                "Musubi search page exceeds its item bound or is not strictly ordered",
+            ));
+        }
+        self.items
+            .iter()
+            .try_for_each(MusubiSearchHitV1::validate)?;
+        if let Some(cursor) = &self.next_cursor {
+            cursor.validate()?;
+            if cursor.snapshot != self.snapshot
+                || self.items.last().map(|hit| &hit.package) != Some(&cursor.last_package)
+            {
+                return Err(ParseError::new(
+                    "Musubi search page cursor does not bind its final result",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -4374,6 +5194,28 @@ mod tests {
         )
         .expect("provider attestation Norito roundtrip");
         assert_eq!(decoded, attestation);
+
+        let mut location = MusubiArchiveLocationV1 {
+            location_id: MusubiArchiveLocationIdV1::new([0x31; 32]),
+            archive_id: binding.archive_id,
+            pin_manifest: ManifestDigest::new([0x32; 32]),
+            replication_order: binding.replication_order,
+            providers: vec![binding.provider_id],
+            provider_attestations: vec![attestation],
+            renew_after_epoch: 10,
+            expires_at_epoch: 20,
+            finalized_height: 30,
+            revision: 1,
+            state: MusubiArchiveLocationStateV1::Healthy,
+        };
+        location.validate().expect("valid archive location");
+        location.pin_manifest = ManifestDigest::new([0; 32]);
+        let decoded = MusubiArchiveLocationV1::decode_all(&mut location.encode().as_slice())
+            .expect("zero pin digest remains representable on the wire");
+        assert!(
+            decoded.validate().is_err(),
+            "decoded archive location must reject a zero pin manifest"
+        );
     }
 
     #[test]
@@ -4413,14 +5255,40 @@ mod tests {
             MusubiVersionReqV1::Exact(_)
         ));
 
-        let ordered: MusubiVersionReqV1 = " <2.0.0, >=1.0.0,>=1.0.0 ".parse().expect("range");
+        let ordered: MusubiVersionReqV1 = "<2.0.0, >=1.0.0,>=1.0.0".parse().expect("range");
         assert_eq!(ordered.to_string(), ">=1.0.0,<2.0.0");
+        assert!(" ^1.2.3 ".parse::<MusubiVersionReqV1>().is_err());
 
         assert!(
             ">=1.0.0,=1.0.0,=1.1.0"
                 .parse::<MusubiVersionReqV1>()
                 .is_err()
         );
+
+        let duplicate_exact: MusubiVersionReqV1 = "=1.2.3,=1.2.3".parse().expect("duplicate exact");
+        assert!(matches!(duplicate_exact, MusubiVersionReqV1::Exact(_)));
+        assert_eq!(duplicate_exact.to_string(), "=1.2.3");
+
+        for raw in [
+            "*",
+            "1.2.3",
+            "^0.2.3-alpha.1",
+            "~1.2.3",
+            "1.*",
+            "1.2.*",
+            "=1.2.3,=1.2.3",
+            ">=1.2.3,<2.0.0,>=1.2.3",
+        ] {
+            let requirement: MusubiVersionReqV1 = raw.parse().expect("valid requirement");
+            assert_eq!(
+                requirement
+                    .to_string()
+                    .parse::<MusubiVersionReqV1>()
+                    .expect("canonical display reparses"),
+                requirement,
+                "requirement display must be a canonical AST fixed point for {raw}",
+            );
+        }
     }
 
     #[test]
@@ -4453,6 +5321,52 @@ mod tests {
     }
 
     #[test]
+    fn requirements_keep_cargo_upper_bounds_at_u64_component_limits() {
+        let maximum = u64::MAX;
+        let zero_major: MusubiVersionReqV1 = format!("^0.{maximum}.0")
+            .parse()
+            .expect("zero-major caret at the minor limit");
+        assert!(
+            zero_major.matches(
+                &format!("0.{maximum}.1")
+                    .parse()
+                    .expect("same compatible minor"),
+            )
+        );
+        assert!(!zero_major.matches(&"1.0.0".parse().expect("next major")));
+
+        let zero_minor: MusubiVersionReqV1 = format!("^0.0.{maximum}")
+            .parse()
+            .expect("zero-minor caret at the patch limit");
+        assert!(
+            zero_minor.matches(
+                &format!("0.0.{maximum}")
+                    .parse()
+                    .expect("exact maximum patch"),
+            )
+        );
+        assert!(!zero_minor.matches(&"0.1.0".parse().expect("next minor")));
+        assert!(!zero_minor.matches(&"1.0.0".parse().expect("next major")));
+
+        let tilde: MusubiVersionReqV1 = format!("~0.{maximum}.0")
+            .parse()
+            .expect("tilde at the minor limit");
+        assert!(tilde.matches(&format!("0.{maximum}.1").parse().expect("same tilde minor"),));
+        assert!(!tilde.matches(&"1.0.0".parse().expect("next tilde major")));
+
+        let maximum_major: MusubiVersionReqV1 = format!("^{maximum}.0.0")
+            .parse()
+            .expect("caret at the major limit");
+        assert!(
+            maximum_major.matches(
+                &format!("{maximum}.{maximum}.{maximum}")
+                    .parse()
+                    .expect("same maximum major"),
+            )
+        );
+    }
+
+    #[test]
     fn requirement_validation_recurses_into_decoded_fields() {
         let invalid = MusubiVersionReqV1::Caret(MusubiVersionV1 {
             major: 1,
@@ -4461,6 +5375,15 @@ mod tests {
             prerelease: vec![MusubiPrereleaseIdentifierV1::AlphaNumeric("01".to_owned())],
         });
         assert!(invalid.validate().is_err());
+
+        let noncanonical_exact = MusubiVersionReqV1::Comparators(vec![MusubiVersionComparatorV1 {
+            op: MusubiComparatorOpV1::Equal,
+            version: "1.0.0".parse().expect("exact comparator version"),
+        }]);
+        assert!(
+            noncanonical_exact.validate().is_err(),
+            "decoded singleton equality comparators must use the Exact variant",
+        );
     }
 
     #[test]
@@ -4647,6 +5570,569 @@ mod tests {
     }
 
     #[test]
+    fn release_yank_validation_recurses_into_decoded_release_and_reason() {
+        let valid = MusubiReleaseYankV1 {
+            release: release("validation", "1.0.0"),
+            yanked: true,
+            reason: "security response".parse().expect("reason"),
+            changed_by: account(8),
+            changed_at_height: 42,
+            revision: 2,
+        };
+        valid.validate().expect("valid yank record");
+
+        for raw in [String::new(), "x".repeat(1_025)] {
+            let malformed = MusubiReleaseYankV1 {
+                reason: MusubiReasonV1(raw),
+                ..valid.clone()
+            };
+            let decoded = MusubiReleaseYankV1::decode_all(&mut malformed.encode().as_slice())
+                .expect("malformed reason remains representable on the wire");
+            assert!(
+                decoded.validate().is_err(),
+                "decoded empty or oversized yank reason must fail closed"
+            );
+        }
+
+        let mut malformed = valid;
+        malformed.release.package.name = MusubiPackageNameV1("Upper".to_owned());
+        let decoded = MusubiReleaseYankV1::decode_all(&mut malformed.encode().as_slice())
+            .expect("malformed release remains representable on the wire");
+        assert!(
+            decoded.validate().is_err(),
+            "decoded yank release identity must be recursively validated"
+        );
+    }
+
+    #[test]
+    fn persisted_records_recursively_validate_decoded_packages_and_takedown_reasons() {
+        let mut malformed_package = package("nested");
+        malformed_package.name = MusubiPackageNameV1("Upper".to_owned());
+        let member = MusubiPackageMemberV1 {
+            package: malformed_package.clone(),
+            account: account(10),
+            role: MusubiPackageRoleV1::Owner,
+            accepted_at_height: 1,
+            governance_revision: 1,
+        };
+        let invitation = MusubiMaintainerInvitationV1 {
+            invite_id: MusubiInviteIdV1::new([0x41; 32]),
+            package: malformed_package.clone(),
+            invited_by: account(11),
+            invited_account: account(12),
+            role: MusubiPackageRoleV1::Owner,
+            expected_governance_revision: 1,
+            expires_at_height: 10,
+            state: MusubiInvitationStateV1::Pending,
+        };
+        let metadata = MusubiPackageMetadataRecordV1 {
+            package: malformed_package,
+            metadata: MusubiReleaseMetadataV1::default(),
+            revision: 1,
+            changed_by: account(13),
+            changed_at_height: 1,
+        };
+        let decoded_member =
+            MusubiPackageMemberV1::decode_all(&mut member.encode().as_slice()).expect("member");
+        let decoded_invitation =
+            MusubiMaintainerInvitationV1::decode_all(&mut invitation.encode().as_slice())
+                .expect("invitation");
+        let decoded_metadata =
+            MusubiPackageMetadataRecordV1::decode_all(&mut metadata.encode().as_slice())
+                .expect("metadata");
+        assert!(decoded_member.validate().is_err());
+        assert!(decoded_invitation.validate().is_err());
+        assert!(decoded_metadata.validate().is_err());
+
+        for raw in [String::new(), "x".repeat(1_025)] {
+            let governance = MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
+                action_digest: MusubiGovernanceActionDigestV1::new([0x42; 32]),
+                reason: MusubiReasonV1(raw),
+                applied_at_height: 2,
+            });
+            let decoded =
+                MusubiArtifactGovernanceStateV1::decode_all(&mut governance.encode().as_slice())
+                    .expect("malformed takedown remains representable on the wire");
+            assert!(
+                decoded.validate().is_err(),
+                "decoded takedown reason must be recursively validated"
+            );
+
+            let manifest = release_manifest();
+            let record = MusubiReleaseRecordV1 {
+                release_digest: manifest.release_digest(),
+                yank: MusubiReleaseYankV1 {
+                    release: manifest.release.clone(),
+                    yanked: false,
+                    reason: "initial publication".parse().expect("reason"),
+                    changed_by: account(14),
+                    changed_at_height: 1,
+                    revision: 1,
+                },
+                artifact_governance: decoded,
+                revisions: MusubiReleaseRevisionsV1 {
+                    yank: 1,
+                    artifact_governance: 2,
+                },
+                manifest,
+                published_by: account(14),
+                published_at_height: 1,
+            };
+            assert!(
+                record.validate().is_err(),
+                "authoritative release record must reject its malformed takedown"
+            );
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn governed_takedown_json_is_closed_and_uses_applied_height() {
+        let manifest = release_manifest();
+        let release = manifest.release.clone();
+        let archive_id = manifest.archive_id;
+        let publisher = account(15);
+        let yank = MusubiReleaseYankV1 {
+            release: release.clone(),
+            yanked: false,
+            reason: "initial publication".parse().expect("reason"),
+            changed_by: publisher.clone(),
+            changed_at_height: 42,
+            revision: 1,
+        };
+        let governance = MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
+            action_digest: MusubiGovernanceActionDigestV1::new([0x51; 32]),
+            reason: "governed security response".parse().expect("reason"),
+            applied_at_height: 50,
+        });
+        let record = MusubiReleaseRecordV1 {
+            release_digest: manifest.release_digest(),
+            yank: yank.clone(),
+            artifact_governance: governance.clone(),
+            revisions: MusubiReleaseRevisionsV1 {
+                yank: 1,
+                artifact_governance: 2,
+            },
+            manifest: manifest.clone(),
+            published_by: publisher,
+            published_at_height: 42,
+        };
+        record.validate().expect("canonical governed release");
+        let row = MusubiResolverReleaseRowV1 {
+            release,
+            release_digest: manifest.release_digest(),
+            archive_id,
+            source_digest: MusubiContentDigestV1::new([0x52; 32]),
+            interface_digest: manifest.interface_digest,
+            abi: manifest.abi,
+            dependencies: manifest.dependencies,
+            selection: MusubiReleaseSelectionStateV1 {
+                yank,
+                storage: MusubiArchiveAvailabilityV1 {
+                    archive_id,
+                    availability: MusubiStorageAvailabilityV1::Selectable,
+                    healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    active_locations: 1,
+                    finalized_height: 50,
+                    finalized_block_hash: [0x53; 32],
+                    index_revision: 2,
+                },
+                governance: governance.clone(),
+            },
+            index_revision: 2,
+        };
+        row.validate().expect("canonical governed resolver row");
+
+        let governance_json = norito::json::to_json(&governance).expect("governance JSON encodes");
+        assert!(governance_json.contains("\"applied_at_height\":50"));
+        assert!(!governance_json.contains("enacted_at_height"));
+        assert_eq!(
+            norito::json::from_json::<MusubiArtifactGovernanceStateV1>(&governance_json)
+                .expect("canonical governance JSON decodes"),
+            governance
+        );
+        let legacy_height =
+            governance_json.replace("\"applied_at_height\"", "\"enacted_at_height\"");
+        assert!(
+            norito::json::from_json::<MusubiArtifactGovernanceStateV1>(&legacy_height).is_err(),
+            "the retired enactment-height spelling must not be accepted"
+        );
+        for (prefix, depth) in [
+            ("{", "the governance envelope"),
+            ("\"value\":{", "the takedown payload"),
+        ] {
+            let hostile = governance_json.replacen(prefix, &format!("{prefix}\"legacy\":true,"), 1);
+            assert!(
+                norito::json::from_json::<MusubiArtifactGovernanceStateV1>(&hostile).is_err(),
+                "governance JSON must reject an unknown field at {depth}"
+            );
+        }
+
+        let record_json = norito::json::to_json(&record).expect("release record JSON encodes");
+        for (prefix, depth) in [
+            ("{", "the release record"),
+            ("\"yank\":{", "the yank projection"),
+            ("\"revisions\":{", "the release revisions"),
+        ] {
+            let hostile = record_json.replacen(prefix, &format!("{prefix}\"legacy\":true,"), 1);
+            assert!(
+                norito::json::from_json::<MusubiReleaseRecordV1>(&hostile).is_err(),
+                "release JSON must reject an unknown field at {depth}"
+            );
+        }
+
+        let row_json = norito::json::to_json(&row).expect("resolver row JSON encodes");
+        for (prefix, depth) in [
+            ("{", "the resolver row"),
+            ("\"selection\":{", "the selection projection"),
+        ] {
+            let hostile = row_json.replacen(prefix, &format!("{prefix}\"legacy\":true,"), 1);
+            assert!(
+                norito::json::from_json::<MusubiResolverReleaseRowV1>(&hostile).is_err(),
+                "resolver JSON must reject an unknown field at {depth}"
+            );
+        }
+    }
+
+    #[test]
+    fn archive_availability_requires_exact_runtime_classification_and_capacity() {
+        let availability =
+            |state, healthy_replicas, active_locations| MusubiArchiveAvailabilityV1 {
+                archive_id: ArchiveId::new([0xA7; 32]),
+                availability: state,
+                healthy_replicas,
+                active_locations,
+                finalized_height: 9,
+                finalized_block_hash: [0xB7; 32],
+                index_revision: 3,
+            };
+
+        for record in [
+            availability(MusubiStorageAvailabilityV1::Unavailable, 0, 0),
+            availability(MusubiStorageAvailabilityV1::Unavailable, 0, 2),
+            availability(MusubiStorageAvailabilityV1::BelowQuorum, 1, 1),
+            availability(MusubiStorageAvailabilityV1::BelowQuorum, 2, 1),
+            availability(MusubiStorageAvailabilityV1::Selectable, 3, 1),
+        ] {
+            record
+                .validate()
+                .expect("canonical availability projection");
+        }
+
+        let mut zero_height = availability(MusubiStorageAvailabilityV1::Unavailable, 0, 0);
+        zero_height.finalized_height = 0;
+        let invalid = [
+            zero_height,
+            availability(MusubiStorageAvailabilityV1::Selectable, 3, 0),
+            availability(MusubiStorageAvailabilityV1::Selectable, 2, 1),
+            availability(MusubiStorageAvailabilityV1::BelowQuorum, 0, 1),
+            availability(MusubiStorageAvailabilityV1::BelowQuorum, 3, 1),
+            availability(MusubiStorageAvailabilityV1::Unavailable, 1, 1),
+            availability(MusubiStorageAvailabilityV1::Selectable, 65, 1),
+        ];
+        for record in invalid {
+            assert!(
+                record.validate().is_err(),
+                "noncanonical availability projection must fail: {record:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn archive_retention_decisions_are_bounded_and_fail_closed() {
+        let archive_id = ArchiveId::new([0xC7; 32]);
+        let storage = MusubiArchiveAvailabilityV1 {
+            archive_id,
+            availability: MusubiStorageAvailabilityV1::Unavailable,
+            healthy_replicas: 0,
+            active_locations: 0,
+            finalized_height: 9,
+            finalized_block_hash: [0xD7; 32],
+            index_revision: 3,
+        };
+        let referenced = MusubiArchiveRetentionDecisionV1 {
+            archive_id,
+            disposition: MusubiArchiveRetentionDispositionV1::RetainReferenced,
+            active_releases: 1,
+            yanked_releases: 2,
+            taken_down_releases: 3,
+            storage: Some(storage),
+        };
+        referenced
+            .validate()
+            .expect("published archives remain retained even without a healthy location");
+        assert!(referenced.must_retain());
+        let page = MusubiArchiveRetentionPageV1 {
+            chain_id: ChainId::from("retention-model-test"),
+            genesis_hash: [0xE7; 32],
+            items: vec![referenced],
+            snapshot: snapshot(),
+        };
+        page.validate()
+            .expect("storage changes before the query anchor are valid");
+        let mut future_storage = page;
+        future_storage.items[0]
+            .storage
+            .as_mut()
+            .expect("referenced storage")
+            .finalized_height = 43;
+        assert!(future_storage.validate().is_err());
+
+        let unknown = MusubiArchiveRetentionDecisionV1 {
+            archive_id: ArchiveId::new([0xC8; 32]),
+            disposition: MusubiArchiveRetentionDispositionV1::RetainUnknown,
+            active_releases: 0,
+            yanked_releases: 0,
+            taken_down_releases: 0,
+            storage: None,
+        };
+        unknown
+            .validate()
+            .expect("unknown archives retain fail-closed");
+        assert!(unknown.must_retain());
+
+        let mut inconsistent = referenced.clone();
+        inconsistent.disposition = MusubiArchiveRetentionDispositionV1::PruneGovernedTakedown;
+        assert!(inconsistent.validate().is_err());
+
+        let request = MusubiArchiveRetentionQueryV1 {
+            archive_ids: vec![archive_id, ArchiveId::new([0xC8; 32])],
+            expected_snapshot: Some(snapshot()),
+        };
+        request.validate().expect("canonical exact retention batch");
+        let mut duplicate = request.clone();
+        duplicate.archive_ids[1] = duplicate.archive_ids[0];
+        assert!(duplicate.validate().is_err());
+        let mut oversized = request;
+        oversized.archive_ids = (1..=MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1 + 1)
+            .map(|index| {
+                let mut bytes = [0_u8; 32];
+                bytes[..8].copy_from_slice(
+                    &u64::try_from(index)
+                        .expect("bounded fixture index")
+                        .to_be_bytes(),
+                );
+                ArchiveId::new(bytes)
+            })
+            .collect();
+        assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn parliament_actions_validate_decoded_nested_identifiers() {
+        let owner_recovery =
+            MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
+                package: package("recovery"),
+                owners: vec![account(9)],
+                expected_revision: 1,
+            });
+        owner_recovery.validate().expect("valid owner recovery");
+        let alias_recovery = MusubiParliamentActionV1::RetargetAlias(MusubiRetargetAliasV1 {
+            alias: "stable".parse().expect("alias"),
+            target: package("replacement"),
+            expected_revision: 1,
+        });
+        alias_recovery.validate().expect("valid alias recovery");
+
+        let mut malformed_owner = owner_recovery;
+        let MusubiParliamentActionV1::RecoverPackageOwners(recovery) = &mut malformed_owner else {
+            unreachable!("owner recovery fixture")
+        };
+        recovery.package.name = MusubiPackageNameV1("Upper".to_owned());
+
+        let mut malformed_alias = alias_recovery.clone();
+        let MusubiParliamentActionV1::RetargetAlias(recovery) = &mut malformed_alias else {
+            unreachable!("alias recovery fixture")
+        };
+        recovery.alias = MusubiAliasNameV1("Upper".to_owned());
+
+        let mut malformed_target = alias_recovery;
+        let MusubiParliamentActionV1::RetargetAlias(recovery) = &mut malformed_target else {
+            unreachable!("alias recovery fixture")
+        };
+        recovery.target.name = MusubiPackageNameV1("Upper".to_owned());
+
+        for action in [malformed_owner, malformed_alias, malformed_target] {
+            let decoded = MusubiParliamentActionV1::decode_all(&mut action.encode().as_slice())
+                .expect("malformed nested identity remains representable on the wire");
+            assert!(
+                decoded.validate().is_err(),
+                "decoded Parliament action must validate every nested identity"
+            );
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn parliament_action_json_rejects_unknown_fields_recursively() {
+        macro_rules! assert_unknown_rejected {
+            ($canonical:expr, $prefix:literal, $depth:literal) => {{
+                let canonical: &str = $canonical;
+                let replacement = format!("{}\"legacy\":true,", $prefix);
+                let hostile = canonical.replacen($prefix, &replacement, 1);
+                assert_ne!(
+                    hostile, canonical,
+                    "canonical Parliament action JSON must contain {}",
+                    $depth
+                );
+                assert!(
+                    norito::json::from_json::<MusubiParliamentActionV1>(&hostile).is_err(),
+                    "Parliament action JSON must reject an unknown field at {}",
+                    $depth
+                );
+            }};
+        }
+
+        let owner_recovery =
+            MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
+                package: package("closed-owner-recovery"),
+                owners: vec![account(9)],
+                expected_revision: 1,
+            });
+        let alias_retarget = MusubiParliamentActionV1::RetargetAlias(MusubiRetargetAliasV1 {
+            alias: "closed-alias".parse().expect("alias"),
+            target: package("closed-alias-target"),
+            expected_revision: 1,
+        });
+        let takedown = MusubiParliamentActionV1::TakedownArtifact(MusubiTakedownArtifactActionV1 {
+            release: MusubiReleaseIdV1::new(
+                package("closed-takedown"),
+                "1.2.3-alpha".parse().expect("release version"),
+            ),
+            reason: MusubiReasonV1::new("hostile JSON regression test").expect("bounded reason"),
+            expected_artifact_governance_revision: 1,
+        });
+        let set_policy =
+            MusubiParliamentActionV1::SetRegistryPolicy(MusubiSetRegistryPolicyActionV1 {
+                policy: MusubiRegistryPolicyV1::default(),
+                expected_revision: 1,
+            });
+
+        for action in [&owner_recovery, &alias_retarget, &takedown, &set_policy] {
+            let canonical =
+                norito::json::to_json(action).expect("canonical Parliament action JSON encodes");
+            assert_eq!(
+                norito::json::from_json::<MusubiParliamentActionV1>(&canonical)
+                    .expect("canonical Parliament action JSON decodes"),
+                *action
+            );
+            assert_unknown_rejected!(canonical.as_str(), "{", "the tagged action envelope");
+            assert_unknown_rejected!(canonical.as_str(), "\"value\":{", "the action payload");
+        }
+
+        let owner_json = norito::json::to_json(&owner_recovery).expect("owner action encodes");
+        assert_unknown_rejected!(owner_json.as_str(), "\"package\":{", "the package identity");
+        assert_unknown_rejected!(owner_json.as_str(), "\"scope\":{", "the package scope");
+
+        let takedown_json = norito::json::to_json(&takedown).expect("takedown action encodes");
+        assert_unknown_rejected!(
+            takedown_json.as_str(),
+            "\"release\":{",
+            "the release identity"
+        );
+        assert_unknown_rejected!(
+            takedown_json.as_str(),
+            "\"version\":{",
+            "the structured version"
+        );
+        assert_unknown_rejected!(
+            takedown_json.as_str(),
+            "\"prerelease\":[{",
+            "the prerelease identifier envelope"
+        );
+
+        let policy_json = norito::json::to_json(&set_policy).expect("policy action encodes");
+        assert_unknown_rejected!(policy_json.as_str(), "\"policy\":{", "the registry policy");
+        assert_unknown_rejected!(policy_json.as_str(), "\"mode\":{", "the admission mode");
+        assert_unknown_rejected!(
+            policy_json.as_str(),
+            "\"alias_pricing\":{",
+            "the alias pricing policy"
+        );
+    }
+
+    #[test]
+    fn governance_decision_consumption_binds_execution_boundary_and_roundtrips() {
+        let consumption = MusubiGovernanceDecisionConsumptionV1 {
+            decision: MusubiGovernanceDecisionV1 {
+                decision_id: [0x31; 32],
+                action_digest: MusubiGovernanceActionDigestV1::new([0x42; 32]),
+                enacted_at_height: 10,
+                execute_after_height: 20,
+            },
+            minimum_enactment_delay: 10,
+            consumed_at_height: 20,
+        };
+        consumption
+            .validate()
+            .expect("execution exactly at the decision boundary is valid");
+
+        let decoded =
+            MusubiGovernanceDecisionConsumptionV1::decode_all(&mut consumption.encode().as_slice())
+                .expect("decision consumption Norito roundtrip");
+        assert_eq!(decoded, consumption);
+        decoded
+            .validate()
+            .expect("roundtripped consumption validates");
+
+        let mut premature = consumption;
+        premature.consumed_at_height = 19;
+        assert!(premature.validate().is_err());
+
+        let mut shortened_delay = consumption;
+        shortened_delay.minimum_enactment_delay = 11;
+        assert!(shortened_delay.validate().is_err());
+
+        let mut malformed = consumption;
+        malformed.decision.decision_id = [0; 32];
+        assert!(malformed.validate().is_err());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn governance_decision_consumption_json_rejects_bare_and_unknown_forms() {
+        let consumption = MusubiGovernanceDecisionConsumptionV1 {
+            decision: MusubiGovernanceDecisionV1 {
+                decision_id: [0x31; 32],
+                action_digest: MusubiGovernanceActionDigestV1::new([0x42; 32]),
+                enacted_at_height: 10,
+                execute_after_height: 20,
+            },
+            minimum_enactment_delay: 10,
+            consumed_at_height: 20,
+        };
+        let canonical = norito::json::to_json(&consumption)
+            .expect("canonical decision consumption JSON encodes");
+        assert_eq!(
+            norito::json::from_json::<MusubiGovernanceDecisionConsumptionV1>(&canonical)
+                .expect("canonical decision consumption JSON decodes"),
+            consumption
+        );
+
+        let bare = norito::json::to_json(&consumption.decision)
+            .expect("bare decision JSON remains representable as its own public type");
+        assert!(
+            norito::json::from_json::<MusubiGovernanceDecisionConsumptionV1>(&bare).is_err(),
+            "the persisted consumption store must not accept the old bare-decision shape"
+        );
+
+        let unknown = canonical.replacen('{', "{\"legacy\":true,", 1);
+        assert!(
+            norito::json::from_json::<MusubiGovernanceDecisionConsumptionV1>(&unknown).is_err(),
+            "the first-release consumption shape must reject unknown fields"
+        );
+
+        let nested_unknown =
+            canonical.replacen("\"decision\":{", "\"decision\":{\"legacy\":true,", 1);
+        assert_ne!(nested_unknown, canonical, "decision JSON field is present");
+        assert!(
+            norito::json::from_json::<MusubiGovernanceDecisionConsumptionV1>(&nested_unknown)
+                .is_err(),
+            "the nested first-release decision shape must reject unknown fields"
+        );
+    }
+
+    #[test]
     fn alias_names_and_genesis_prices_are_exact() {
         for (alias, expected) in [
             ("a", 1_000),
@@ -4667,7 +6153,144 @@ mod tests {
     }
 
     #[test]
+    fn registry_policy_successors_bind_price_changes_to_pricing_revisions() {
+        let current = MusubiRegistryPolicyV1::default();
+
+        let mut mode_only = current.clone();
+        mode_only.revision += 1;
+        mode_only.mode = MusubiRegistryAdmissionModeV1::Closed;
+        mode_only
+            .validate_successor(&current)
+            .expect("non-price policy changes retain the exact pricing policy");
+
+        let mut unchanged_with_new_pricing_revision = mode_only.clone();
+        unchanged_with_new_pricing_revision.alias_pricing.revision += 1;
+        assert!(
+            unchanged_with_new_pricing_revision
+                .validate_successor(&current)
+                .is_err(),
+            "pricing revision must not advance when prices are unchanged"
+        );
+
+        let mut changed_without_new_pricing_revision = mode_only.clone();
+        changed_without_new_pricing_revision
+            .alias_pricing
+            .length_5_to_32_xor += 1;
+        assert!(
+            changed_without_new_pricing_revision
+                .validate_successor(&current)
+                .is_err(),
+            "changed prices must advance the pricing revision"
+        );
+
+        let mut changed = changed_without_new_pricing_revision;
+        changed.alias_pricing.revision += 1;
+        changed
+            .validate_successor(&current)
+            .expect("changed prices with the exact successor revision are canonical");
+
+        let mut skipped_pricing_revision = changed.clone();
+        skipped_pricing_revision.alias_pricing.revision += 1;
+        assert!(
+            skipped_pricing_revision
+                .validate_successor(&current)
+                .is_err(),
+            "changed prices must not skip a pricing revision"
+        );
+
+        let mut skipped = mode_only;
+        skipped.revision += 1;
+        assert!(
+            skipped.validate_successor(&current).is_err(),
+            "registry policy revisions must not skip"
+        );
+
+        let mut exhausted_policy = current.clone();
+        exhausted_policy.revision = u64::MAX;
+        assert!(
+            current.validate_successor(&exhausted_policy).is_err(),
+            "an exhausted registry revision cannot have a successor"
+        );
+
+        let mut exhausted_pricing = current.clone();
+        exhausted_pricing.alias_pricing.revision = u64::MAX;
+        let mut changed_after_exhausted_pricing = exhausted_pricing.clone();
+        changed_after_exhausted_pricing.revision += 1;
+        changed_after_exhausted_pricing
+            .alias_pricing
+            .length_5_to_32_xor += 1;
+        assert!(
+            changed_after_exhausted_pricing
+                .validate_successor(&exhausted_pricing)
+                .is_err(),
+            "an exhausted pricing revision cannot describe changed prices"
+        );
+    }
+
+    #[test]
     fn page_and_cursor_bounds_are_enforced() {
+        for limit in [
+            0,
+            u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("page maximum fits u32"),
+        ] {
+            MusubiPageRequestV1 {
+                limit,
+                cursor: None,
+            }
+            .validate()
+            .expect("default and exact-maximum page limits are canonical");
+        }
+        for limit in [
+            u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1 + 1).expect("page overflow fixture fits u32"),
+            u32::MAX,
+        ] {
+            assert!(
+                MusubiPageRequestV1 {
+                    limit,
+                    cursor: None,
+                }
+                .validate()
+                .is_err(),
+                "oversized page limit {limit} must be rejected instead of clamped"
+            );
+        }
+
+        let ordered = MusubiVersionPageV1 {
+            items: vec![
+                "1.0.0".parse().expect("version"),
+                "2.0.0".parse().expect("version"),
+            ],
+            next_cursor: None,
+            snapshot: snapshot(),
+        };
+        ordered.validate().expect("strictly ordered version page");
+        let mut reversed = ordered.clone();
+        reversed.items.reverse();
+        assert!(reversed.validate().is_err());
+        let mut duplicate = ordered.clone();
+        duplicate.items[1] = duplicate.items[0].clone();
+        assert!(duplicate.validate().is_err());
+        let malformed = MusubiVersionV1 {
+            major: 1,
+            minor: 0,
+            patch: 0,
+            prerelease: vec![MusubiPrereleaseIdentifierV1::AlphaNumeric(String::new())],
+        };
+        let decoded = MusubiVersionPageV1::decode_all(
+            &mut MusubiVersionPageV1 {
+                items: vec![malformed],
+                next_cursor: None,
+                snapshot: snapshot(),
+            }
+            .encode()
+            .as_slice(),
+        )
+        .expect("malformed page item remains representable on the wire");
+        assert!(
+            decoded.validate().is_err(),
+            "page validation must recurse into decoded items"
+        );
+
         let page = MusubiVersionPageV1 {
             items: vec!["1.0.0".parse().expect("version"); MUSUBI_MAX_PAGE_SIZE_V1 + 1],
             next_cursor: None,
@@ -4705,6 +6328,12 @@ mod tests {
         let directory_page = MusubiOrderedPackagePageV1 {
             chain_id: ChainId::from("musubi-test-chain"),
             genesis_hash: [9; 32],
+            namespace_binding: MusubiNamespaceBindingV1 {
+                namespace: "sora".parse().expect("namespace"),
+                home_dataspace: DataSpaceId::new(7),
+                scope: MusubiPackageScopeV1::DataspaceRoot,
+                generation: 1,
+            },
             items: Vec::new(),
             next_cursor: None,
             snapshot: snapshot(),
@@ -4817,10 +6446,27 @@ mod tests {
             }
         );
         assert_closed_json!(
+            MusubiArchiveRetentionQueryV1,
+            MusubiArchiveRetentionQueryV1 {
+                archive_ids: vec![archive_commitment().archive_id()],
+                expected_snapshot: Some(snapshot()),
+            }
+        );
+        assert_closed_json!(
             MusubiAliasQueryV1,
             MusubiAliasQueryV1 {
                 alias: "query-contract".parse().expect("query alias"),
                 page: page.clone(),
+            }
+        );
+        assert_closed_json!(
+            MusubiSearchQueryV1,
+            MusubiSearchQueryV1 {
+                query: "zero-knowledge verifier".to_owned(),
+                page: MusubiSearchPageRequestV1 {
+                    limit: MUSUBI_DEFAULT_PAGE_SIZE_V1,
+                    cursor: None,
+                },
             }
         );
         assert_closed_json!(
@@ -4830,5 +6476,127 @@ mod tests {
                 page,
             }
         );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn archive_retention_json_rejects_unknown_fields_recursively() {
+        macro_rules! assert_unknown_rejected {
+            ($type:ty, $canonical:expr, $prefix:literal, $depth:literal) => {{
+                let canonical: &str = $canonical;
+                let replacement = format!("{}\"legacy\":true,", $prefix);
+                let hostile = canonical.replacen($prefix, &replacement, 1);
+                assert_ne!(
+                    hostile, canonical,
+                    "canonical archive-retention JSON must contain {}",
+                    $depth
+                );
+                assert!(
+                    norito::json::from_json::<$type>(&hostile).is_err(),
+                    "archive-retention JSON must reject an unknown field at {}",
+                    $depth
+                );
+            }};
+        }
+
+        let snapshot = snapshot();
+        let snapshot_json =
+            norito::json::to_json(&snapshot).expect("registry snapshot JSON encodes");
+        assert_unknown_rejected!(
+            MusubiRegistrySnapshotV1,
+            snapshot_json.as_str(),
+            "{",
+            "the registry snapshot"
+        );
+
+        let storage = MusubiArchiveAvailabilityV1 {
+            archive_id: archive_commitment().archive_id(),
+            availability: MusubiStorageAvailabilityV1::Selectable,
+            healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+            active_locations: 1,
+            finalized_height: snapshot.finalized_height,
+            finalized_block_hash: snapshot.finalized_block_hash,
+            index_revision: snapshot.index_revision,
+        };
+        storage.validate().expect("canonical availability fixture");
+        let storage_json =
+            norito::json::to_json(&storage).expect("archive availability JSON encodes");
+        assert_unknown_rejected!(
+            MusubiArchiveAvailabilityV1,
+            storage_json.as_str(),
+            "{",
+            "the availability projection"
+        );
+        assert_unknown_rejected!(
+            MusubiArchiveAvailabilityV1,
+            storage_json.as_str(),
+            "\"availability\":{",
+            "the storage-availability envelope"
+        );
+
+        let request = MusubiArchiveRetentionQueryV1 {
+            archive_ids: vec![storage.archive_id],
+            expected_snapshot: Some(snapshot),
+        };
+        let request_json =
+            norito::json::to_json(&request).expect("archive-retention request JSON encodes");
+        assert_unknown_rejected!(
+            MusubiArchiveRetentionQueryV1,
+            request_json.as_str(),
+            "\"expected_snapshot\":{",
+            "the request snapshot"
+        );
+
+        let decision = MusubiArchiveRetentionDecisionV1 {
+            archive_id: storage.archive_id,
+            disposition: MusubiArchiveRetentionDispositionV1::RetainReferenced,
+            active_releases: 1,
+            yanked_releases: 0,
+            taken_down_releases: 0,
+            storage: Some(storage),
+        };
+        decision.validate().expect("canonical retention decision");
+        let decision_json =
+            norito::json::to_json(&decision).expect("archive-retention decision JSON encodes");
+        assert_unknown_rejected!(
+            MusubiArchiveRetentionDecisionV1,
+            decision_json.as_str(),
+            "\"disposition\":{",
+            "the retention-disposition envelope"
+        );
+        assert_unknown_rejected!(
+            MusubiArchiveRetentionDecisionV1,
+            decision_json.as_str(),
+            "\"storage\":{",
+            "the nested availability projection"
+        );
+    }
+
+    #[test]
+    fn search_terms_are_bounded_exact_and_canonical() {
+        let request = MusubiSearchQueryV1 {
+            query: "Zero-Knowledge verifier verifier".to_owned(),
+            page: MusubiSearchPageRequestV1 {
+                limit: 0,
+                cursor: None,
+            },
+        };
+        assert_eq!(
+            request.normalized_terms().expect("normalized terms"),
+            vec![
+                "knowledge".to_owned(),
+                "verifier".to_owned(),
+                "zero".to_owned(),
+                "zero-knowledge".to_owned(),
+            ]
+        );
+        assert_eq!(request.page.effective_limit(), 50);
+
+        let mut too_many = request;
+        too_many.query = (0..=MUSUBI_MAX_SEARCH_QUERY_TERMS_V1)
+            .map(|index| format!("term{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(too_many.validate().is_err());
     }
 }

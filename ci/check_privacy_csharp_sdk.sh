@@ -15,13 +15,21 @@ if [[ ! "${DOTNET_VERSION}" =~ ^8\.0\.[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-for filter in \
-  "FullyQualifiedName~PrivacyNativeTests" \
-  "FullyQualifiedName~PrivacyExact12FixtureCodecV1Tests" \
-  "FullyQualifiedName~VerifyingKeyBackendTagTests"
+PRIVACY_DOTNET_BIN_PATH="$(command -v "${DOTNET_BIN}")"
+PRIVACY_DOTNET_ROOT_CANDIDATE="$(
+  cd "$(dirname "${PRIVACY_DOTNET_BIN_PATH}")" && pwd -P
+)"
+if [[ -z "${DOTNET_ROOT:-}" && -d "${PRIVACY_DOTNET_ROOT_CANDIDATE}/host/fxr" ]]; then
+  export DOTNET_ROOT="${PRIVACY_DOTNET_ROOT_CANDIDATE}"
+fi
+
+for test_class in \
+  "Hyperledger.Iroha.Sdk.Tests.PrivacyNativeTests" \
+  "Hyperledger.Iroha.Sdk.Tests.PrivacyExact12FixtureCodecV1Tests" \
+  "Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests"
 do
   "${DOTNET_BIN}" test \
     csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
-    --filter "${filter}" \
-    --logger "console;verbosity=minimal"
+    -- \
+    --filter-class "${test_class}"
 done

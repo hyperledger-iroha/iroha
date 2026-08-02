@@ -340,7 +340,7 @@ mod tests {
     fn asset(label: &str) -> AssetDefinitionId {
         let name = Name::from_str(label).expect("valid asset name");
         let domain = DomainId::try_new("wonderland", "universal").expect("valid domain id");
-        AssetDefinitionId::new(domain, name)
+        AssetDefinitionId::derive_from_components(domain, name)
     }
 
     fn quantity<T: Into<BigInt>>(mantissa: T, scale: u32) -> Quantity {

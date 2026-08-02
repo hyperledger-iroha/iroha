@@ -69,7 +69,7 @@ impl ConcurrentWSV {
             return false;
         }
         self.asset_definitions
-            .insert(id, AssetDefinition::new(mintable))
+            .insert(id, AssetDefinition::new(mintable, None))
             .is_none()
     }
 
@@ -181,7 +181,8 @@ fn bench_massive_wsv(c: &mut Criterion) {
                     let idx = u64::from_le_bytes(tx.code[..8].try_into().unwrap());
                     let asset_name =
                         Name::try_from(format!("asset{idx}")).expect("valid asset name");
-                    let asset_id = AssetDefinitionId::new(domain_ref.clone(), asset_name);
+                    let asset_id =
+                        AssetDefinitionId::derive_from_components(domain_ref.clone(), asset_name);
                     wsv_ref.register_asset_definition(asset_id.clone(), Mintable::Infinitely);
                     assert!(wsv_ref.mint(
                         accounts_ref[0].clone(),

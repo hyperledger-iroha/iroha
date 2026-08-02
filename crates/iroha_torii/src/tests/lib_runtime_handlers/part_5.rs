@@ -1072,7 +1072,7 @@ async fn trusted_internal_account_handler_rejects_credentials_from_untrusted_sou
         0x2a,
         "derive trusted internal account authorization fixture key",
     );
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "rose".parse().expect("asset name"),
     );
@@ -1296,7 +1296,7 @@ fn trusted_internal_path_literals_must_be_exactly_canonical() {
         "hash whitespace normalization is forbidden",
     );
 
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "rose".parse().expect("asset name"),
     );
@@ -1428,9 +1428,8 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let asset_definition_id =
-        AssetDefinitionId::new(domain_id, "rose".parse().expect("asset name"));
-    let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-        .with_name("rose".to_owned())
+        AssetDefinitionId::derive_from_components(domain_id, "rose".parse().expect("asset name"));
+    let asset_definition = AssetDefinition::numeric(asset_definition_id.clone(), "rose".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
         .build(&authority);
     let asset_id = AssetId::with_scope(
         asset_definition_id.clone(),

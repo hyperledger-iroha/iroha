@@ -38,6 +38,7 @@ VALIDATOR_PROGRESS_SAMPLES="${VALIDATOR_PROGRESS_SAMPLES:-3}"
 VALIDATOR_PROGRESS_DELAY_SECONDS="${VALIDATOR_PROGRESS_DELAY_SECONDS:-2}"
 VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-10}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
+EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT="${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT:-}"
 EXPECTED_TAIRA_CHAIN_ID=""
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
@@ -69,7 +70,9 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--curl-connect-timeout-seconds N]
                             [--curl-max-time-seconds N]
                             [--expected-chain-id UUID]
-                            [--expected-git-sha 7_TO_40_HEX_SHA] [--skip-write-canary]
+                            [--expected-git-sha 7_TO_40_HEX_SHA]
+                            [--expected-dpn-validator-release-commit 40_HEX_COMMIT]
+                            [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
 For a single public-node devex check, prefer the first-class CLI:
@@ -332,6 +335,14 @@ while [[ $# -gt 0 ]]; do
       EXPECTED_TAIRA_GIT_SHA="$2"
       shift 2
       ;;
+    --expected-dpn-validator-release-commit)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --expected-dpn-validator-release-commit" >&2
+        exit 1
+      }
+      EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT="$2"
+      shift 2
+      ;;
     --expected-chain-id)
       [[ $# -ge 2 ]] || {
         echo "missing value for --expected-chain-id" >&2
@@ -420,6 +431,11 @@ if [[ -n "$EXPECTED_TAIRA_GIT_SHA" ]]; then
     exit 1
   fi
   EXPECTED_TAIRA_GIT_SHA="$(printf '%s' "$EXPECTED_TAIRA_GIT_SHA" | tr 'A-F' 'a-f')"
+fi
+if [[ -n "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" \
+  && ! "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "--expected-dpn-validator-release-commit must be one exact lowercase 40-character commit" >&2
+  exit 1
 fi
 
 if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 1 ]]; then
@@ -603,6 +619,10 @@ if [[ $SKIP_PUBLIC -eq 0 ]]; then
   fi
   if [[ ! "$EXPECTED_TAIRA_GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
     echo "public Taira rollout requires --expected-git-sha with the exact full 40-character commit" >&2
+    exit 1
+  fi
+  if [[ ! "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "public Taira rollout requires --expected-dpn-validator-release-commit with the exact full 40-character commit" >&2
     exit 1
   fi
   if [[ $VALIDATOR_PROGRESS_SAMPLES -lt 3 ]]; then
@@ -1053,7 +1073,7 @@ check_status_snapshot() {
     sed -n '1,20p' "$last_headers" >&2 || true
     exit 1
   fi
-  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" <<'PY'
+  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" <<'PY'
 import json
 import re
 import sys
@@ -1062,6 +1082,7 @@ label = sys.argv[1]
 path = sys.argv[2]
 expected_git_sha = sys.argv[5].strip()
 require_exact_git_sha = sys.argv[6] == "1"
+expected_dpn_commit = sys.argv[7].strip()
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
@@ -1111,6 +1132,24 @@ if expected_git_sha:
         print(
             f"{label}: /status build git SHA {build_git_sha} does not match "
             f"expected {expected_git_sha}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+if expected_dpn_commit:
+    published_dpn_commit = build.get("dpn_validator_release_commit") if isinstance(build, dict) else None
+    if (
+        not isinstance(published_dpn_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", published_dpn_commit) is None
+    ):
+        print(
+            f"{label}: /status did not publish one exact build.dpn_validator_release_commit",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if published_dpn_commit != expected_dpn_commit:
+        print(
+            f"{label}: /status DPN validator release commit {published_dpn_commit} "
+            f"does not exactly match {expected_dpn_commit}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1601,12 +1640,12 @@ capture_validator_fleet_sample() {
       return 1
     fi
 
-    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$dataspace_summary" >>"$records_file" <<'PY'
+    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$dataspace_summary" "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" >>"$records_file" <<'PY'
 import json
 import re
 import sys
 
-label, status_path, sumeragi_path, expected_sha, require_exact_raw, dataspace_summary_raw = sys.argv[1:]
+label, status_path, sumeragi_path, expected_sha, require_exact_raw, dataspace_summary_raw, expected_dpn_commit = sys.argv[1:]
 require_exact_sha = require_exact_raw == "1"
 with open(status_path, "r", encoding="utf-8") as handle:
     node_status = json.load(handle)
@@ -1695,6 +1734,21 @@ if expected_sha:
         raise SystemExit(
             f"validator {label}: build git SHA {published} does not match {expected_sha}"
         )
+build = node_status.get("build") or {}
+published_dpn_commit = build.get("dpn_validator_release_commit")
+if expected_dpn_commit:
+    if (
+        not isinstance(published_dpn_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", published_dpn_commit) is None
+    ):
+        raise SystemExit(
+            f"validator {label}: /status omitted one exact DPN validator release commit"
+        )
+    if published_dpn_commit != expected_dpn_commit:
+        raise SystemExit(
+            f"validator {label}: DPN validator release commit {published_dpn_commit} "
+            f"does not exactly match {expected_dpn_commit}"
+        )
 
 def canonical(value):
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -1717,6 +1771,7 @@ record = {
     "committed_subject": canonical(status.get("last_committed_subject")),
     "commit_qc": canonical(status.get("last_commit_qc")),
     "dataspace_catalog": canonical(dataspace_summary),
+    "dpn_validator_release_commit": published_dpn_commit,
 }
 print(json.dumps(record, ensure_ascii=True, sort_keys=True))
 PY
@@ -1755,6 +1810,7 @@ for record in records[1:]:
         "quorum",
         "status_blocks",
         "dataspace_catalog",
+        "dpn_validator_release_commit",
         "committed_height",
         "committed_block_hash",
         "committed_subject",
@@ -1781,6 +1837,7 @@ summary = {
     "committed_subject": baseline["committed_subject"],
     "commit_qc": baseline["commit_qc"],
     "dataspace_catalog": baseline["dataspace_catalog"],
+    "dpn_validator_release_commit": baseline["dpn_validator_release_commit"],
     "nodes": sorted(nodes),
 }
 print(json.dumps(summary, ensure_ascii=True, sort_keys=True))

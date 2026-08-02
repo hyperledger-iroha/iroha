@@ -17,7 +17,7 @@ import org.junit.Test;
 /** Admission checks performed while authoring transaction payloads. */
 public final class TransactionPayloadTests {
   private static final String CONTRACT_ADDRESS =
-      "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
+      "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
   private static final String TAIRA_CHAIN_ID =
       "fc56984b-2be7-431d-840e-21514d1883f0";
   private static final String AUTHORITY = sampleAuthority();

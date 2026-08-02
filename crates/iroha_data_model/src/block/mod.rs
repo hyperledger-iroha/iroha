@@ -3315,10 +3315,11 @@ mod tests {
         let domain: DomainId = DomainId::try_new("test", "universal").expect("domain id");
         let from = fixture_account(&domain);
         let to = fixture_account(&domain);
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("test", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("test", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
 
         let delta = TransferDeltaTranscript {
             from_account: from,
@@ -3473,10 +3474,11 @@ mod tests {
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("chain", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("chain", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let delta = TransferDeltaTranscript {
             from_account: authority.clone(),
             to_account: authority,

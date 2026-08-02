@@ -3952,7 +3952,7 @@ mod tests {
             ManifestVersion, UniversalAccountId,
         },
         peer::PeerId,
-        smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress, ContractAlias},
+        smart_contract::{ContractAddress, ContractAlias},
         transaction::TransactionBuilder,
     };
     use nonzero_ext::nonzero;
@@ -5513,13 +5513,17 @@ mod tests {
             records.commit();
         }
 
-        let definition_id = AssetDefinitionId::new(
+        let definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
             "restart_asset".parse().expect("asset name"),
         );
-        let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("restart asset".to_owned())
-            .build(&owner);
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "restart asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner);
         let definition_alias: AssetDefinitionAlias =
             "restart_asset#universal".parse().expect("asset alias");
         let definition_binding = AssetDefinitionAliasBindingRecord {
@@ -5548,7 +5552,7 @@ mod tests {
         }
 
         let contract_address = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &owner,
             17,
             DataSpaceId::UNIVERSAL,

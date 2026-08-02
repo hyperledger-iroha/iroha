@@ -10,21 +10,11 @@
 //! * **Input** – read-only buffer beginning at `0x0020_0000` (64 KB).
 //! * **Output** – read/write buffer beginning at `0x0021_0000`.
 //! * **Stack** – 4&nbsp;MB region starting at `0x0030_0000`.
-use std::{
-    collections::HashSet,
-    convert::TryInto,
-    num::NonZeroU64,
-    sync::{
-        LazyLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Instant,
-};
+use std::{collections::HashSet, convert::TryInto, num::NonZeroU64, time::Instant};
 
 use iroha_crypto::{
     CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
 };
-use iroha_telemetry::metrics::record_stack_budget_hit;
 use likely_stable::{likely, unlikely};
 use parking_lot::Mutex;
 
@@ -32,6 +22,7 @@ use crate::{
     byte_merkle_tree::ByteMerkleTree,
     error::{Perm, VMError},
     merkle_utils::compute_memory_leaf_digest,
+    stack_policy::IvmStackPolicy,
 };
 
 #[cfg(test)]
@@ -116,15 +107,9 @@ pub(crate) struct MemoryTemplateMismatch {
     pub(crate) template: MemoryGeometry,
 }
 
-// Default stack limit applied to new memory instances (mutable via setters).
-static DEFAULT_STACK_LIMIT: LazyLock<AtomicU64> =
-    LazyLock::new(|| AtomicU64::new(Memory::STACK_SIZE));
-// Maximum budget cap applied to new memory instances (mutable via setters).
-static STACK_BUDGET_LIMIT: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(u64::MAX));
-
 impl Memory {
-    /// Alignment enforced for the guest stack top and effective stack budgets.
-    pub const STACK_ALIGNMENT: u64 = 16;
+    /// Alignment enforced for the ABI V1 guest stack top.
+    pub const STACK_ALIGNMENT: u64 = IvmStackPolicy::V1.stack_alignment_bytes();
     /// Define static addresses for memory regions
     pub const HEAP_START: u64 = 0x0010_0000;
     /// Maximum heap size allowed (from HEAP_START up to INPUT_START).
@@ -143,36 +128,16 @@ impl Memory {
     pub const OUTPUT_SIZE: u64 = 0x0000_8000; // 32 KB output
 
     pub const STACK_START: u64 = 0x0030_0000;
-    /// Logical stack size for guest programs (4 MiB default; hosts override via `ivm::apply_stack_sizes`).
-    pub const STACK_SIZE: u64 = 0x0040_0000; // 4 MB stack
+    /// Maximum logical stack size for ABI V1 guest programs.
+    pub const STACK_SIZE: u64 = IvmStackPolicy::V1.maximum_stack_bytes();
     /// Extra slop beyond the nominal stack end (kept zero to trap exactly at the limit).
     pub const STACK_SLOP: u64 = 0;
-
-    /// Default stack limit (bytes) applied to new memory instances.
-    pub fn default_stack_limit() -> u64 {
-        DEFAULT_STACK_LIMIT.load(Ordering::Relaxed)
-    }
 
     /// Align a stack byte count to the VM guest-stack boundary.
     #[must_use]
     pub fn align_stack_bytes(bytes: u64) -> u64 {
         let bytes = bytes.max(Self::STACK_ALIGNMENT);
         bytes - (bytes % Self::STACK_ALIGNMENT)
-    }
-
-    /// Override the default stack limit (bytes) applied to new memory instances.
-    pub fn set_default_stack_limit(bytes: u64) {
-        DEFAULT_STACK_LIMIT.store(Self::align_stack_bytes(bytes), Ordering::Relaxed);
-    }
-
-    /// Global budget cap applied to stack limits for new memory instances.
-    pub fn stack_budget_limit() -> u64 {
-        STACK_BUDGET_LIMIT.load(Ordering::Relaxed)
-    }
-
-    /// Override the global budget cap applied to stack limits for new memory instances.
-    pub fn set_stack_budget_limit(bytes: u64) {
-        STACK_BUDGET_LIMIT.store(Self::align_stack_bytes(bytes), Ordering::Relaxed);
     }
 
     /// Current stack limit (bytes) enforced for this memory instance.
@@ -373,21 +338,20 @@ impl Memory {
 
     /// Initialize memory with given code size. Other regions (heap, stack) are also configured.
     pub fn new(code_size: u64) -> Self {
-        Self::new_with_stack_limit(code_size, Self::default_stack_limit())
+        Self::new_with_stack_limit(code_size, IvmStackPolicy::V1.maximum_stack_bytes())
     }
 
     /// Initialize memory with an explicit stack limit (bytes).
+    ///
+    /// This low-level constructor is used for runtime templates and focused
+    /// memory tests. Production VMs derive its argument exclusively from the
+    /// immutable ABI stack policy in `IvmConfig`.
     pub fn new_with_stack_limit(code_size: u64, stack_limit: u64) -> Self {
-        let requested_stack = Self::align_stack_bytes(stack_limit);
-        let budget = Self::align_stack_bytes(STACK_BUDGET_LIMIT.load(Ordering::Relaxed));
-        let effective_stack = requested_stack.min(budget);
-        if effective_stack < requested_stack {
-            record_stack_budget_hit();
-        }
-        let total_size = Memory::STACK_START + effective_stack + Memory::STACK_SLOP;
+        let stack_limit = Self::align_stack_bytes(stack_limit);
+        let total_size = Memory::STACK_START + stack_limit + Memory::STACK_SLOP;
         let mut mem = Memory {
             data: vec![0u8; total_size as usize],
-            stack_limit: effective_stack,
+            stack_limit,
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
             heap_max_limit: Memory::HEAP_MAX_SIZE,
@@ -1426,14 +1390,12 @@ mod tests {
     }
 
     #[test]
-    fn stack_limit_override_enforced() {
-        Memory::set_default_stack_limit(0x2000);
-        Memory::set_stack_budget_limit(0x2000);
+    fn canonical_stack_limit_boundary_is_enforced() {
         let mut mem = Memory::new(0);
-        assert_eq!(mem.stack_limit(), 0x2000);
-        let ok_addr = Memory::STACK_START + mem.stack_limit() - 8;
-        mem.store_u64(ok_addr, 1).expect("write within limit");
-        let err = mem.store_u64(mem.stack_top(), 1);
+        assert_eq!(mem.stack_limit(), IvmStackPolicy::V1.maximum_stack_bytes());
+        let ok_addr = mem.stack_top() - 1;
+        mem.store_u8(ok_addr, 1).expect("write within limit");
+        let err = mem.store_u8(mem.stack_top(), 1);
         assert!(matches!(
             err,
             Err(VMError::MemoryAccessViolation {
@@ -1441,25 +1403,15 @@ mod tests {
                 ..
             })
         ));
-        Memory::set_default_stack_limit(Memory::STACK_SIZE);
-        Memory::set_stack_budget_limit(u64::MAX);
     }
 
     #[test]
-    fn unaligned_stack_limits_are_normalized_before_stack_top_is_exposed() {
-        let prev_default = Memory::default_stack_limit();
-        let prev_budget = Memory::stack_budget_limit();
-        Memory::set_default_stack_limit(0x60a04);
-        Memory::set_stack_budget_limit(0x60a04);
-
-        let mut mem = Memory::new(0);
+    fn explicit_unaligned_stack_limit_is_normalized_before_exposure() {
+        let mut mem = Memory::new_with_stack_limit(0, 0x60a04);
         assert_eq!(mem.stack_limit() % Memory::STACK_ALIGNMENT, 0);
         assert_eq!(mem.stack_top() % Memory::STACK_ALIGNMENT, 0);
         mem.store_u64(mem.stack_top() - 8, 7)
             .expect("aligned stack top must accept 64-bit stores");
-
-        Memory::set_default_stack_limit(prev_default);
-        Memory::set_stack_budget_limit(prev_budget);
     }
 
     #[test]

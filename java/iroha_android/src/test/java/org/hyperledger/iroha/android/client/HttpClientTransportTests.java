@@ -2609,8 +2609,8 @@ public final class HttpClientTransportTests {
             + "\"mtu_bytes\":1280,"
             + "\"display_billing_label\":\"standard XOR\","
             + "\"fee_asset_id\":\"xor#universal.universal\","
-            + "\"escrow_account_id\":\"sorauEscrow\","
-            + "\"operator_account_id\":\"sorauOperator\","
+            + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+            + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
             + "\"lease_fee\":\"1000000.25\","
             + "\"settlement_grace_secs\":120,"
             + "\"flow_label_bits\":24,"
@@ -2643,8 +2643,8 @@ public final class HttpClientTransportTests {
 
     assert profile.available() : "VPN profile should be available";
     assert "xor#universal.universal".equals(profile.feeAssetId()) : "VPN fee asset mismatch";
-    assert "sorauEscrow".equals(profile.escrowAccountId()) : "VPN escrow account mismatch";
-    assert "sorauOperator".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
+    assert "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".equals(profile.escrowAccountId()) : "VPN escrow account mismatch";
+    assert "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
     assert "1000000.25".equals(profile.leaseFee()) : "VPN lease fee mismatch";
     assert profile.dnsPushIntervalSecs() == 60L : "VPN DNS push interval mismatch";
     assert profile.settlementGraceSecs() == 120L : "VPN settlement grace mismatch";
@@ -3801,7 +3801,7 @@ public final class HttpClientTransportTests {
 
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     final String signingMessageB64 = Base64.getEncoder().encodeToString(new byte[32]);
     final StubResponseExecutor executor =
         new StubResponseExecutor(
@@ -4336,7 +4336,7 @@ public final class HttpClientTransportTests {
       transport.prepareContractCall(
           "alice",
           feePayment(5000L),
-          "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           "router::universal",
           "contribute",
           null);
@@ -4379,7 +4379,7 @@ public final class HttpClientTransportTests {
 
   private static void governanceContractRequestParsesResponse() {
     final String contractAddress =
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
@@ -6607,8 +6607,8 @@ public final class HttpClientTransportTests {
         + "\"mtu_bytes\":1280,"
         + "\"display_billing_label\":\"standard XOR\","
         + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"settlement_grace_secs\":120,"
         + "\"flow_label_bits\":24,"
@@ -6648,8 +6648,8 @@ public final class HttpClientTransportTests {
         + "\"lease_secs\":600,"
         + "\"quote_expires_at_ms\":1700000600000,"
         + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"route_pushes\":[\"0.0.0.0/0\"],"
         + "\"excluded_routes\":[],"
@@ -6703,8 +6703,8 @@ public final class HttpClientTransportTests {
         + "\",\"payment_tx_hash\":\""
         + paymentTxHash
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
@@ -6773,8 +6773,8 @@ public final class HttpClientTransportTests {
         + "\",\"payment_tx_hash\":\""
         + paymentTxHash
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"earned_fee\":\""
         + earned

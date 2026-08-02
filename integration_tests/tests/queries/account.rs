@@ -21,14 +21,18 @@ fn find_accounts_with_asset() -> Result<()> {
 
     let result: Result<()> = (|| {
         // Registering new asset definition
-        let definition_id = AssetDefinitionId::new(
+        let definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("Valid"),
             "test_coin".parse().expect("Valid"),
         );
         let asset_definition = {
             let __asset_definition_id = definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "test_coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         };
         test_client.submit_blocking(
             Register::asset_definition(asset_definition.clone()),

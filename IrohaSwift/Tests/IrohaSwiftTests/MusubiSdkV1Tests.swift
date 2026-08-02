@@ -59,11 +59,77 @@ final class MusubiSdkV1Tests: XCTestCase {
             let requirement = try MusubiVersionReqV1.parse(try XCTUnwrap(item["text"] as? String))
             try assertWireEqual(item["wire"], requirement)
         }
+        for raw in try array(canonical["requirement_aliases"]) {
+            let item = try object(raw)
+            let requirement = try MusubiVersionReqV1.parse(
+                try XCTUnwrap(item["input"] as? String)
+            )
+            XCTAssertEqual(requirement.canonicalText, item["canonical"] as? String)
+            try assertWireEqual(item["wire"], requirement)
+        }
+        for raw in try array(canonical["requirement_matches"]) {
+            let item = try object(raw)
+            let requirement = try MusubiVersionReqV1.parse(
+                try XCTUnwrap(item["requirement"] as? String)
+            )
+            let candidate = try MusubiVersionV1.parse(
+                try XCTUnwrap(item["candidate"] as? String)
+            )
+            XCTAssertEqual(
+                requirement.matches(candidate),
+                try XCTUnwrap(item["matches"] as? Bool)
+            )
+        }
+    }
+
+    func testDecodedComparatorRequirementsRejectNoncanonicalExactForms() throws {
+        let first = MusubiVersionComparatorV1(
+            op: .equal,
+            version: try MusubiVersionV1.parse("1.0.0")
+        )
+        let second = MusubiVersionComparatorV1(
+            op: .equal,
+            version: try MusubiVersionV1.parse("2.0.0")
+        )
+        XCTAssertThrowsError(
+            try JSONEncoder().encode(MusubiVersionReqV1.comparators([first]))
+        )
+        XCTAssertThrowsError(
+            try JSONEncoder().encode(MusubiVersionReqV1.comparators([first, second]))
+        )
+
+        let singletonWire: [String: Any] = [
+            "kind": "Comparators",
+            "value": [[
+                "op": ["kind": "Equal", "value": NSNull()],
+                "version": ["major": 1, "minor": 0, "patch": 0, "prerelease": []],
+            ]],
+        ]
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiVersionReqV1.self,
+                from: JSONSerialization.data(withJSONObject: singletonWire)
+            )
+        )
+    }
+
+    func testNameBackedFieldsRejectEveryUnicodeBidiControl() throws {
+        let controls = [
+            "\u{061C}", "\u{200E}", "\u{200F}",
+            "\u{202A}", "\u{202B}", "\u{202C}", "\u{202D}", "\u{202E}",
+            "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}",
+        ]
+        for control in controls {
+            XCTAssertThrowsError(try MusubiNamespaceV1("domain\(control).dataspace"))
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(MusubiPackageScopeV1.domain("domain\(control)"))
+            )
+        }
     }
 
     func testEveryTypedRouteRoundTripsExactRequestAndResponseJSON() throws {
         let routes = try fixtureRoutes()
-        XCTAssertEqual(routes.count, 9)
+        XCTAssertEqual(routes.count, 11)
         XCTAssertEqual(Set(try routes.map { try path($0) }), expectedPaths)
         for route in routes {
             let routePath = try path(route)
@@ -78,6 +144,74 @@ final class MusubiSdkV1Tests: XCTestCase {
                 try jsonObject(response)
             )
         }
+    }
+
+    func testArchiveRetentionIsBoundedTypedAndBindsTheExactRequest() throws {
+        let fixtureRoute = try route(MusubiToriiClientV1.archiveRetentionPath)
+        let decoder = JSONDecoder()
+        let request = try decoder.decode(
+            MusubiArchiveRetentionQueryV1.self,
+            from: jsonData(fixtureRoute["request"])
+        )
+        let page = try decoder.decode(
+            MusubiArchiveRetentionPageV1.self,
+            from: jsonData(fixtureRoute["response"])
+        )
+        try page.requireMatches(request)
+        XCTAssertEqual(page.items.count, 4)
+        XCTAssertEqual(page.items.map(\.mustRetain), [true, true, false, false])
+
+        var mismatched = try object(deepMutableCopy(fixtureRoute["response"]))
+        var items = try array(mismatched["items"])
+        var first = try object(items[0])
+        first["archive_id"] = [Array(repeating: 17, count: 32)]
+        items[0] = first
+        mismatched["items"] = items
+        let mismatchedPage = try decoder.decode(
+            MusubiArchiveRetentionPageV1.self,
+            from: jsonData(mismatched)
+        )
+        XCTAssertThrowsError(try mismatchedPage.requireMatches(request))
+    }
+
+    func testMaintainerDirectoryDecodesAcceptedAndPendingInvitationVariants() throws {
+        let fixtureRoute = try route(MusubiToriiClientV1.maintainersPath)
+        let page = try JSONDecoder().decode(
+            MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+            from: jsonData(fixtureRoute["response"])
+        )
+        XCTAssertEqual(page.items.count, 2)
+
+        guard case .accepted(let member) = page.items[0] else {
+            return XCTFail("First maintainer-directory entry must be accepted.")
+        }
+        XCTAssertEqual(member.roleKind, "Owner")
+        XCTAssertEqual(member.acceptedAtHeight, 42)
+
+        guard case .pendingInvitation(let invitation) = page.items[1] else {
+            return XCTFail("Second maintainer-directory entry must be a pending invitation.")
+        }
+        XCTAssertEqual(invitation.roleKind, "Maintainer")
+        XCTAssertEqual(invitation.stateKind, "Pending")
+        XCTAssertEqual(invitation.expectedGovernanceRevision, 2)
+        XCTAssertEqual(invitation.inviteId.bytes, Array(repeating: 13, count: 32))
+
+        var malformed = try object(deepMutableCopy(fixtureRoute["response"]))
+        var items = try array(malformed["items"])
+        var pending = try object(items[1])
+        var pendingValue = try object(pending["value"])
+        var state = try object(pendingValue["state"])
+        state["kind"] = "Accepted"
+        pendingValue["state"] = state
+        pending["value"] = pendingValue
+        items[1] = pending
+        malformed["items"] = items
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(malformed)
+            )
+        )
     }
 
     func testReadOnlyClientPostsEachTypedQueryToExactV1Route() async throws {
@@ -109,10 +243,74 @@ final class MusubiSdkV1Tests: XCTestCase {
             XCTAssertEqual(captured.httpMethod, "POST")
             XCTAssertEqual(captured.url?.path, routePath)
             XCTAssertEqual(
-                try jsonObject(try XCTUnwrap(captured.httpBody)),
+                try jsonObject(try requestBody(captured)),
                 try jsonObject(expectedRequest)
             )
         }
+    }
+
+    private func requestBody(_ request: URLRequest) throws -> Data {
+        if let body = request.httpBody {
+            return body
+        }
+        let stream = try XCTUnwrap(request.httpBodyStream)
+        stream.open()
+        defer { stream.close() }
+
+        var body = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 {
+                throw try XCTUnwrap(stream.streamError)
+            }
+            if count == 0 {
+                return body
+            }
+            body.append(contentsOf: buffer.prefix(count))
+        }
+    }
+
+    func testGovernedTakedownRequiresOnlyAppliedHeight() throws {
+        let exactRelease = try route(MusubiToriiClientV1.exactReleasePath)
+        var canonical = try object(deepMutableCopy(exactRelease["response"]))
+        let actionDigest = try XCTUnwrap(canonical["release_digest"])
+        canonical["artifact_governance"] = [
+            "kind": "TakenDown",
+            "value": [
+                "action_digest": actionDigest,
+                "reason": ["security response"],
+                "applied_at_height": 50
+            ]
+        ]
+        var revisions = try object(canonical["revisions"])
+        revisions["artifact_governance"] = 2
+        canonical["revisions"] = revisions
+        XCTAssertNoThrow(
+            try JSONDecoder().decode(MusubiReleaseRecordV1.self, from: jsonData(canonical))
+        )
+
+        var legacy = try object(deepMutableCopy(canonical))
+        var legacyGovernance = try object(legacy["artifact_governance"])
+        var legacyPayload = try object(legacyGovernance["value"])
+        legacyPayload["enacted_at_height"] = legacyPayload.removeValue(
+            forKey: "applied_at_height"
+        )
+        legacyGovernance["value"] = legacyPayload
+        legacy["artifact_governance"] = legacyGovernance
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(MusubiReleaseRecordV1.self, from: jsonData(legacy))
+        )
+
+        var zeroHeight = try object(deepMutableCopy(canonical))
+        var zeroGovernance = try object(zeroHeight["artifact_governance"])
+        var zeroPayload = try object(zeroGovernance["value"])
+        zeroPayload["applied_at_height"] = 0
+        zeroGovernance["value"] = zeroPayload
+        zeroHeight["artifact_governance"] = zeroGovernance
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(MusubiReleaseRecordV1.self, from: jsonData(zeroHeight))
+        )
     }
 
     func testRejectsNoncanonicalInputsUnknownFieldsAndUnknownABIVersions() throws {
@@ -153,6 +351,22 @@ final class MusubiSdkV1Tests: XCTestCase {
                 from: jsonData(releaseResponse)
             )
         )
+
+        let archiveRoute = try route(MusubiToriiClientV1.archiveLocationsPath)
+        var archiveResponse = try object(deepMutableCopy(archiveRoute["response"]))
+        var archive = try object(archiveResponse["archive"])
+        var receipt = try object(archive["staging_receipt"])
+        var payload = try object(receipt["payload"])
+        payload["version"] = 2
+        receipt["payload"] = payload
+        archive["staging_receipt"] = receipt
+        archiveResponse["archive"] = archive
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiArchiveLocationPageV1.self,
+                from: jsonData(archiveResponse)
+            )
+        )
     }
 
     private func invoke(
@@ -186,6 +400,10 @@ final class MusubiSdkV1Tests: XCTestCase {
             _ = try await client.findArchiveLocations(
                 decoder.decode(MusubiArchiveLocationQueryV1.self, from: request)
             )
+        case MusubiToriiClientV1.archiveRetentionPath:
+            _ = try await client.findArchiveRetention(
+                decoder.decode(MusubiArchiveRetentionQueryV1.self, from: request)
+            )
         case MusubiToriiClientV1.aliasPath:
             _ = try await client.findAlias(
                 decoder.decode(MusubiAliasQueryV1.self, from: request)
@@ -197,6 +415,10 @@ final class MusubiSdkV1Tests: XCTestCase {
         case MusubiToriiClientV1.orderedPrefixPath:
             _ = try await client.findOrderedPrefix(
                 decoder.decode(MusubiOrderedPrefixQueryV1.self, from: request)
+            )
+        case MusubiToriiClientV1.searchPath:
+            _ = try await client.search(
+                decoder.decode(MusubiSearchQueryV1.self, from: request)
             )
         default:
             XCTFail("Unhandled Musubi fixture path \(path)")
@@ -216,10 +438,16 @@ final class MusubiSdkV1Tests: XCTestCase {
             return try encodedObject(decoder.decode(MusubiPackagePageQueryV1.self, from: data))
         case MusubiToriiClientV1.archiveLocationsPath:
             return try encodedObject(decoder.decode(MusubiArchiveLocationQueryV1.self, from: data))
+        case MusubiToriiClientV1.archiveRetentionPath:
+            return try encodedObject(
+                decoder.decode(MusubiArchiveRetentionQueryV1.self, from: data)
+            )
         case MusubiToriiClientV1.aliasPath, MusubiToriiClientV1.aliasHistoryPath:
             return try encodedObject(decoder.decode(MusubiAliasQueryV1.self, from: data))
         case MusubiToriiClientV1.orderedPrefixPath:
             return try encodedObject(decoder.decode(MusubiOrderedPrefixQueryV1.self, from: data))
+        case MusubiToriiClientV1.searchPath:
+            return try encodedObject(decoder.decode(MusubiSearchQueryV1.self, from: data))
         default:
             throw MusubiV1Error.invalidValue("Unhandled Musubi fixture path \(path).")
         }
@@ -240,11 +468,15 @@ final class MusubiSdkV1Tests: XCTestCase {
             )
         case MusubiToriiClientV1.maintainersPath:
             return try encodedObject(
-                decoder.decode(MusubiPageV1<MusubiPackageMemberV1>.self, from: data)
+                decoder.decode(MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self, from: data)
             )
         case MusubiToriiClientV1.archiveLocationsPath:
             return try encodedObject(
-                decoder.decode(MusubiPageV1<MusubiArchiveLocationV1>.self, from: data)
+                decoder.decode(MusubiArchiveLocationPageV1.self, from: data)
+            )
+        case MusubiToriiClientV1.archiveRetentionPath:
+            return try encodedObject(
+                decoder.decode(MusubiArchiveRetentionPageV1.self, from: data)
             )
         case MusubiToriiClientV1.aliasPath:
             return try encodedObject(decoder.decode(MusubiAliasRecordV1.self, from: data))
@@ -256,6 +488,8 @@ final class MusubiSdkV1Tests: XCTestCase {
             return try encodedObject(
                 decoder.decode(MusubiOrderedPrefixPageV1.self, from: data)
             )
+        case MusubiToriiClientV1.searchPath:
+            return try encodedObject(decoder.decode(MusubiSearchPageV1.self, from: data))
         default:
             throw MusubiV1Error.invalidValue("Unhandled Musubi fixture path \(path).")
         }
@@ -328,9 +562,11 @@ final class MusubiSdkV1Tests: XCTestCase {
             MusubiToriiClientV1.versionsPath,
             MusubiToriiClientV1.maintainersPath,
             MusubiToriiClientV1.archiveLocationsPath,
+            MusubiToriiClientV1.archiveRetentionPath,
             MusubiToriiClientV1.aliasPath,
             MusubiToriiClientV1.aliasHistoryPath,
             MusubiToriiClientV1.orderedPrefixPath,
+            MusubiToriiClientV1.searchPath,
         ]
     }
 }

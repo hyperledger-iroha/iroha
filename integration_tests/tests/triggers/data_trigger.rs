@@ -89,7 +89,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
 
     run_or_skip(stringify!(two_non_intersecting_execution_paths), || async {
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );

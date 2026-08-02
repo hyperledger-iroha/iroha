@@ -1276,19 +1276,13 @@ pub mod isi {
     ) -> Option<DataSpaceId> {
         let dataspace_alias = state_transaction
             .world
-            .asset_definition_alias_bindings
+            .asset_definition_domains
             .get(definition.id())
-            .map(|binding| binding.alias.dataspace_segment().to_owned())
+            .map(|domain| domain.dataspace().as_ref().to_owned())
             .or_else(|| {
                 definition
-                    .alias()
+                    .owning_domain()
                     .as_ref()
-                    .map(|alias| alias.dataspace_segment().to_owned())
-            })
-            .or_else(|| {
-                definition
-                    .id()
-                    .try_domain()
                     .map(|domain| domain.dataspace().as_ref().to_owned())
             });
 
@@ -2211,10 +2205,10 @@ pub mod isi {
         }
         state_transaction
             .world
-            .emit_events(Some(AssetEvent::Removed(AssetChanged {
+            .emit_asset_event(AssetEvent::Removed(AssetChanged {
                 asset: source_id,
                 amount,
-            })));
+            }));
         Ok(())
     }
 
@@ -4344,20 +4338,34 @@ pub mod isi {
         destination: AssetId,
         amount: Quantity,
     ) {
+        let domain = state_transaction
+            .world
+            .asset_definition_domains
+            .get(source.definition())
+            .cloned();
         state_transaction.world.emit_events([
-            AssetEvent::Removed(AssetChanged {
-                asset: source.clone(),
-                amount: amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: destination.clone(),
-                amount: amount.clone(),
-            }),
-            AssetEvent::Transferred(AssetTransferred {
-                source,
-                destination,
-                amount,
-            }),
+            DataEvent::asset(
+                AssetEvent::Removed(AssetChanged {
+                    asset: source.clone(),
+                    amount: amount.clone(),
+                }),
+                domain.clone(),
+            ),
+            DataEvent::asset(
+                AssetEvent::Added(AssetChanged {
+                    asset: destination.clone(),
+                    amount: amount.clone(),
+                }),
+                domain.clone(),
+            ),
+            DataEvent::asset(
+                AssetEvent::Transferred(AssetTransferred {
+                    source,
+                    destination,
+                    amount,
+                }),
+                domain,
+            ),
         ]);
     }
 
@@ -4696,10 +4704,10 @@ pub mod isi {
         }
         world.withdraw_numeric_asset(&source_id, &amount)?;
         world.decrease_asset_total_amount(source_id.definition(), &amount)?;
-        world.emit_events(Some(AssetEvent::Removed(AssetChanged {
+        world.emit_asset_event(AssetEvent::Removed(AssetChanged {
             asset: source_id,
             amount,
-        })));
+        }));
         Ok(())
     }
 
@@ -4825,13 +4833,13 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AssetEvent::Added(AssetChanged {
+                .emit_asset_event(AssetEvent::Added(AssetChanged {
                     asset: asset_id.clone(),
                     amount: quantity.clone(),
-                })));
+                }));
 
             if flipped {
-                state_transaction.world.emit_events([DataEvent::from(
+                state_transaction.world.emit_asset_definition_event(
                     AssetDefinitionEvent::MintabilityChangedDetailed(
                         AssetDefinitionMintabilityChanged {
                             asset_definition: asset_id.definition().clone(),
@@ -4839,7 +4847,7 @@ pub mod isi {
                             authority: authority.clone(),
                         },
                     ),
-                )]);
+                );
             }
 
             Ok(())
@@ -4897,10 +4905,10 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AssetEvent::Removed(AssetChanged {
+                .emit_asset_event(AssetEvent::Removed(AssetChanged {
                     asset: asset_id.clone(),
                     amount: quantity,
-                })));
+                }));
 
             Ok(())
         }
@@ -5386,7 +5394,7 @@ pub mod isi {
                     state_transaction.record_batch_transfer_outcome(outcome.clone());
                     state_transaction
                         .world
-                        .emit_events(Some(AssetEvent::BatchTransferOutcome(outcome)));
+                        .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
                 }
                 return Ok(());
             }
@@ -5444,7 +5452,7 @@ pub mod isi {
                         state_transaction.record_batch_transfer_outcome(outcome.clone());
                         state_transaction
                             .world
-                            .emit_events(Some(AssetEvent::BatchTransferOutcome(outcome)));
+                            .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
                         continue;
                     }
                     Err(error) => return Err(error),
@@ -5478,7 +5486,7 @@ pub mod isi {
                 state_transaction.record_batch_transfer_outcome(outcome.clone());
                 state_transaction
                     .world
-                    .emit_events(Some(AssetEvent::BatchTransferOutcome(outcome)));
+                    .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
             }
             state_transaction.record_transfer_transcripts(authority, deltas)?;
             Ok(())
@@ -5539,13 +5547,11 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AccountEvent::Asset(AssetEvent::MetadataInserted(
-                    MetadataChanged {
-                        target: asset,
-                        key,
-                        value,
-                    },
-                ))));
+                .emit_asset_event(AssetEvent::MetadataInserted(MetadataChanged {
+                    target: asset,
+                    key,
+                    value,
+                }));
 
             Ok(())
         }
@@ -5566,13 +5572,11 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AccountEvent::Asset(AssetEvent::MetadataRemoved(
-                    MetadataChanged {
-                        target: asset,
-                        key,
-                        value: removed,
-                    },
-                ))));
+                .emit_asset_event(AssetEvent::MetadataRemoved(MetadataChanged {
+                    target: asset,
+                    key,
+                    value: removed,
+                }));
 
             Ok(())
         }
@@ -5745,9 +5749,6 @@ pub mod query {
                     if let Ok(asset_id) = raw.parse::<AssetId>() {
                         self.subjects.insert(asset_id.account().subject_id());
                         self.definitions.insert(asset_id.definition().clone());
-                        if let Some(domain_id) = asset_id.definition().try_domain() {
-                            self.domains.insert(domain_id.clone());
-                        }
                         self.ids.insert(asset_id);
                     }
                 }
@@ -5809,7 +5810,7 @@ pub mod query {
             AssetQueryPlan::Full
         }
 
-        fn matches(&self, asset: &Asset) -> bool {
+        fn matches(&self, world: &impl WorldReadOnly, asset: &Asset) -> bool {
             if !self.ids.is_empty() && !self.ids.contains(asset.id()) {
                 return false;
             }
@@ -5822,11 +5823,8 @@ pub mod query {
                 return false;
             }
             if !self.domains.is_empty()
-                && !asset
-                    .id()
-                    .definition()
-                    .try_domain()
-                    .is_some_and(|domain| self.domains.contains(domain))
+                && !asset_definition_domain(world, asset.id().definition())
+                    .is_some_and(|domain| self.domains.contains(&domain))
             {
                 return false;
             }
@@ -5881,9 +5879,6 @@ pub mod query {
                 | "asset_definition_id"
                 | "definition_id" => {
                     if let Ok(definition_id) = raw.parse::<AssetDefinitionId>() {
-                        if let Some(domain_id) = definition_id.try_domain() {
-                            self.domains.insert(domain_id.clone());
-                        }
                         self.ids.insert(definition_id);
                     }
                 }
@@ -5968,7 +5963,14 @@ pub mod query {
             .or_else(|| DomainId::try_new(raw, "universal").ok())
     }
 
-    fn asset_alias_values(asset: &Asset, field: &str) -> Vec<String> {
+    fn asset_definition_domain(
+        world: &impl WorldReadOnly,
+        definition_id: &AssetDefinitionId,
+    ) -> Option<DomainId> {
+        world.asset_definition_domains().get(definition_id).cloned()
+    }
+
+    fn asset_alias_values(world: &impl WorldReadOnly, asset: &Asset, field: &str) -> Vec<String> {
         match field {
             "id" => vec![asset.id().to_string()],
             "account" | "account_id" | "owner" | "id.account" => {
@@ -5979,20 +5981,19 @@ pub mod query {
             | "asset_definition_id"
             | "definition_id"
             | "id.definition" => vec![asset.id().definition().to_string()],
-            "domain" | "definition.domain" | "id.definition.domain" => asset
-                .id()
-                .definition()
-                .try_domain()
-                .map(|domain| {
-                    let canonical = domain.to_string();
-                    let shorthand = domain.name().to_string();
-                    if canonical == shorthand {
-                        vec![canonical]
-                    } else {
-                        vec![canonical, shorthand]
-                    }
-                })
-                .unwrap_or_default(),
+            "domain" | "definition.domain" | "id.definition.domain" => {
+                asset_definition_domain(world, asset.id().definition())
+                    .map(|domain| {
+                        let canonical = domain.to_string();
+                        let shorthand = domain.name().to_string();
+                        if canonical == shorthand {
+                            vec![canonical]
+                        } else {
+                            vec![canonical, shorthand]
+                        }
+                    })
+                    .unwrap_or_default()
+            }
             _ => Vec::new(),
         }
     }
@@ -6136,11 +6137,15 @@ pub mod query {
         total_assets != 0 && selected_asset_count.saturating_mul(8) >= total_assets
     }
 
-    fn predicate_matches_asset(predicate: &PredicateJson, asset: &Asset) -> bool {
+    fn predicate_matches_asset(
+        world: &impl WorldReadOnly,
+        predicate: &PredicateJson,
+        asset: &Asset,
+    ) -> bool {
         let mut asset_json = None;
 
         for cond in &predicate.equals {
-            let aliases = asset_alias_values(asset, &cond.field);
+            let aliases = asset_alias_values(world, asset, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
                     .iter()
@@ -6162,7 +6167,7 @@ pub mod query {
         }
 
         for cond in &predicate.r#in {
-            let aliases = asset_alias_values(asset, &cond.field);
+            let aliases = asset_alias_values(world, asset, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
                     .iter()
@@ -6184,7 +6189,7 @@ pub mod query {
         }
 
         for field in &predicate.exists {
-            if !asset_alias_values(asset, field).is_empty() {
+            if !asset_alias_values(world, asset, field).is_empty() {
                 continue;
             }
             let Some(value) = asset_json_value(&mut asset_json, asset) else {
@@ -6202,6 +6207,7 @@ pub mod query {
     }
 
     fn asset_definition_alias_values(
+        world: &impl WorldReadOnly,
         asset_definition: &AssetDefinition,
         field: &str,
     ) -> Vec<String> {
@@ -6212,9 +6218,7 @@ pub mod query {
             "owner" | "owned_by" | "account" | "account_id" => {
                 vec![asset_definition.owned_by().to_string()]
             }
-            "domain" | "id.domain" => asset_definition
-                .id()
-                .try_domain()
+            "domain" | "id.domain" => asset_definition_domain(world, asset_definition.id())
                 .map(|domain| {
                     let canonical = domain.to_string();
                     let shorthand = domain.name().to_string();
@@ -6240,13 +6244,14 @@ pub mod query {
     }
 
     fn predicate_matches_asset_definition(
+        world: &impl WorldReadOnly,
         predicate: &PredicateJson,
         asset_definition: &AssetDefinition,
     ) -> bool {
         let mut definition_json = None;
 
         for cond in &predicate.equals {
-            let aliases = asset_definition_alias_values(asset_definition, &cond.field);
+            let aliases = asset_definition_alias_values(world, asset_definition, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
                     .iter()
@@ -6269,7 +6274,7 @@ pub mod query {
         }
 
         for cond in &predicate.r#in {
-            let aliases = asset_definition_alias_values(asset_definition, &cond.field);
+            let aliases = asset_definition_alias_values(world, asset_definition, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
                     .iter()
@@ -6292,7 +6297,7 @@ pub mod query {
         }
 
         for field in &predicate.exists {
-            if !asset_definition_alias_values(asset_definition, field).is_empty() {
+            if !asset_definition_alias_values(world, asset_definition, field).is_empty() {
                 continue;
             }
             let Some(value) = asset_definition_json_value(&mut definition_json, asset_definition)
@@ -6391,11 +6396,8 @@ pub mod query {
                                 world
                                     .assets_iter()
                                     .filter(move |entry| {
-                                        entry
-                                            .id()
-                                            .definition()
-                                            .try_domain()
-                                            .is_some_and(|domain| domains.contains(domain))
+                                        asset_definition_domain(world, entry.id().definition())
+                                            .is_some_and(|domain| domains.contains(&domain))
                                     })
                                     .map(entry_to_asset),
                             )
@@ -6454,9 +6456,8 @@ pub mod query {
                                 definitions
                                     .iter()
                                     .filter(|definition| {
-                                        definition
-                                            .try_domain()
-                                            .is_some_and(|domain| domains.contains(domain))
+                                        asset_definition_domain(world, definition)
+                                            .is_some_and(|domain| domains.contains(&domain))
                                     })
                                     .cloned()
                                     .collect::<BTreeSet<_>>(),
@@ -6484,11 +6485,8 @@ pub mod query {
                                 .assets_in_account_iter(&subject)
                                 .filter(move |entry| {
                                     domains.as_ref().is_none_or(|domains| {
-                                        entry
-                                            .id()
-                                            .definition()
-                                            .try_domain()
-                                            .is_some_and(|domain| domains.contains(domain))
+                                        asset_definition_domain(world, entry.id().definition())
+                                            .is_some_and(|domain| domains.contains(&domain))
                                     })
                                 })
                                 .map(|entry| entry.id().clone())
@@ -6508,9 +6506,8 @@ pub mod query {
                         Some(definitions) => definitions
                             .into_iter()
                             .filter(|definition| {
-                                definition
-                                    .try_domain()
-                                    .is_some_and(|domain| domains.contains(domain))
+                                asset_definition_domain(world, definition)
+                                    .is_some_and(|domain| domains.contains(&domain))
                             })
                             .collect(),
                         None => {
@@ -6546,11 +6543,11 @@ pub mod query {
             };
 
             let iter: Box<dyn Iterator<Item = Asset> + '_> = Box::new(iter.filter(move |asset| {
-                if !predicate_view.matches(asset) {
+                if !predicate_view.matches(world, asset) {
                     return false;
                 }
                 if let Some(predicate) = predicate_json.as_ref() {
-                    return predicate_matches_asset(predicate, asset);
+                    return predicate_matches_asset(world, predicate, asset);
                 }
                 filter.applies(asset)
             }));
@@ -6573,15 +6570,24 @@ pub mod query {
             }
 
             let account_id = self.account_id().clone();
-            state_ro.world().account(&account_id)?;
+            let world = state_ro.world();
+            world.account(&account_id)?;
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str(raw).ok())
+                .and_then(AssetPredicateView::parse_predicate_value);
 
-            Ok(state_ro
-                .world()
+            Ok(world
                 .assets_in_account_iter(&account_id)
                 .collect::<Vec<_>>()
                 .into_iter()
                 .map(entry_to_asset)
-                .filter(move |asset| filter.applies(asset)))
+                .filter(move |asset| {
+                    predicate_json.as_ref().map_or_else(
+                        || filter.applies(asset),
+                        |predicate| predicate_matches_asset(world, predicate, asset),
+                    )
+                }))
         }
     }
 
@@ -6636,9 +6642,8 @@ pub mod query {
                             .flat_map(BTreeSet::iter)
                             .filter(move |definition_id| {
                                 domains.as_ref().is_none_or(|domains| {
-                                    definition_id
-                                        .try_domain()
-                                        .is_some_and(|domain| domains.contains(domain))
+                                    asset_definition_domain(world, definition_id)
+                                        .is_some_and(|domain| domains.contains(&domain))
                                 })
                             })
                             .filter_map(|definition_id| world.asset_definition(definition_id).ok())
@@ -6666,7 +6671,7 @@ pub mod query {
 
             Ok(iter.filter(move |asset_definition| {
                 if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_asset_definition(predicate, asset_definition)
+                    predicate_matches_asset_definition(world, predicate, asset_definition)
                 } else {
                     filter.applies(asset_definition)
                 }
@@ -6717,12 +6722,16 @@ pub mod query {
 
         fn build_numeric_asset_definition(
             asset_definition_id: &AssetDefinitionId,
+            name: &str,
             owner: &AccountId,
         ) -> AssetDefinition {
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-                .build(owner)
+            AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                name.to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(owner)
         }
 
         fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
@@ -6862,9 +6871,11 @@ pub mod query {
             drop(custody_key);
             let domain_id = DomainId::try_new("fees", "universal").expect("fee domain");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let definition_id =
-                AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-            let definition = build_numeric_asset_definition(&definition_id, &ALICE_ID);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id,
+                "xor".parse().expect("asset name"),
+            );
+            let definition = build_numeric_asset_definition(&definition_id, "xor", &ALICE_ID);
             let source_id = AssetId::new(definition_id.clone(), custody.clone());
             let world = World::with_assets(
                 [domain],
@@ -6925,9 +6936,10 @@ pub mod query {
             );
             assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
                 event.as_ref(),
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                    AssetEvent::Transferred(transfer)
-                ))) if transfer.source() == &source_id
+                DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                    event: AssetEvent::Transferred(transfer),
+                    ..
+                })) if transfer.source() == &source_id
                     && transfer.destination() == &destination_id
                     && transfer.amount() == &Quantity::from(4_u32)
             )));
@@ -6973,9 +6985,10 @@ pub mod query {
             assert!(
                 stx.world.internal_event_buf.iter().all(|event| !matches!(
                     event.as_ref(),
-                    DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                        AssetEvent::Transferred(_)
-                    )))
+                    DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                        event: AssetEvent::Transferred(_),
+                        ..
+                    }))
                 )),
                 "burn must never be represented as an account-to-account transfer"
             );
@@ -6990,11 +7003,12 @@ pub mod query {
             let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_definition_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "rose".parse().unwrap(),
                 );
-            let asset_definition = build_numeric_asset_definition(&asset_definition_id, &ALICE_ID);
+            let asset_definition =
+                build_numeric_asset_definition(&asset_definition_id, "rose", &ALICE_ID);
             let source_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(source_balance));
 
@@ -7183,12 +7197,18 @@ pub mod query {
         fn zero_mint_rejects_before_account_admission_and_preserves_once_budget() {
             let domain_id = DomainId::try_new("mint_budget", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let definition_id =
-                AssetDefinitionId::new(domain_id, "voucher".parse().expect("asset name"));
-            let definition = AssetDefinition::numeric(definition_id.clone())
-                .with_name("voucher".to_owned())
-                .mintable_once()
-                .build(&ALICE_ID);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id,
+                "voucher".parse().expect("asset name"),
+            );
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "voucher".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .mintable_once()
+            .build(&ALICE_ID);
             let world = World::with(
                 [domain],
                 [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
@@ -7253,12 +7273,17 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let alice_definition_id =
-                AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-            let bob_definition_id =
-                AssetDefinitionId::new(domain_id.clone(), "tea".parse().unwrap());
-            let alice_definition = build_numeric_asset_definition(&alice_definition_id, &ALICE_ID);
-            let bob_definition = build_numeric_asset_definition(&bob_definition_id, &BOB_ID);
+            let alice_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "rose".parse().unwrap(),
+            );
+            let bob_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "tea".parse().unwrap(),
+            );
+            let alice_definition =
+                build_numeric_asset_definition(&alice_definition_id, "rose", &ALICE_ID);
+            let bob_definition = build_numeric_asset_definition(&bob_definition_id, "tea", &BOB_ID);
             let world = World::with_assets(
                 [domain],
                 [alice_account, bob_account],
@@ -7329,14 +7354,19 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -7366,14 +7396,19 @@ pub mod query {
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
             let bob_account = build_account_in_domain(&bob_id, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -7411,14 +7446,19 @@ pub mod query {
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
             let bob_account = build_account_in_domain(&bob_id, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -7466,10 +7506,11 @@ pub mod query {
                 "id.account should seed subject plan"
             );
 
-            let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let definition_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let definition_filter = CompoundPredicate::<Asset>::build(|p| {
                 p.equals("id.definition", definition_id.clone())
             });
@@ -7516,14 +7557,19 @@ pub mod query {
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
             let bob_account = build_account_in_domain(&bob_id, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -7562,14 +7608,19 @@ pub mod query {
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
             let bob_account = build_account_in_domain(&bob_id, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                domain_id.clone(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    domain_id.clone(),
+                    "rose".parse().unwrap(),
+                );
             let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -7616,25 +7667,33 @@ pub mod query {
             let bob_account = build_account_in_domain(&bob_id, &primary_domain_id);
 
             let primary_asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     primary_domain_id.clone(),
                     "rose".parse().unwrap(),
                 );
             let secondary_asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     secondary_domain_id.clone(),
                     "lily".parse().unwrap(),
                 );
             let primary_asset_def = {
                 let __asset_definition_id = primary_asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let secondary_asset_def = {
                 let __asset_definition_id = secondary_asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "lily".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
 
@@ -7693,14 +7752,19 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
@@ -7741,11 +7805,11 @@ pub mod query {
             let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let definition_id = AssetDefinitionId::new(
+            let definition_id = AssetDefinitionId::derive_from_components(
                 domain_id,
                 "rose".parse().expect("asset definition name parses"),
             );
-            let definition = build_numeric_asset_definition(&definition_id, &ALICE_ID);
+            let definition = build_numeric_asset_definition(&definition_id, "rose", &ALICE_ID);
             let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
             let asset = Asset::new(asset_id.clone(), Quantity::one());
             let world = World::with_assets([domain], [alice_account], [definition], [asset], []);
@@ -7810,9 +7874,10 @@ pub mod query {
             );
             assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
                 event.as_ref(),
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                    AssetEvent::Transferred(transfer)
-                ))) if transfer.source() == &asset_id
+                DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                    event: AssetEvent::Transferred(transfer),
+                    ..
+                })) if transfer.source() == &asset_id
                     && transfer.destination() == &asset_id
                     && transfer.amount() == &Quantity::one()
             )));
@@ -7935,9 +8000,12 @@ pub mod query {
             let hbl_other = Account::new(hbl_other_id.clone()).build(&ALICE_ID);
             let ubl_sbp = Account::new(ubl_sbp_id.clone()).build(&ALICE_ID);
             let unlabeled = Account::new(unlabeled_id.clone()).build(&ALICE_ID);
-            let asset_definition_id =
-                AssetDefinitionId::new(domain_id, "pkr".parse().expect("asset definition name"));
-            let asset_definition = build_numeric_asset_definition(&asset_definition_id, &ALICE_ID);
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id,
+                "pkr".parse().expect("asset definition name"),
+            );
+            let asset_definition =
+                build_numeric_asset_definition(&asset_definition_id, "pkr", &ALICE_ID);
             let account_domain = AccountAliasDomain::new("hbl".parse().expect("HBL domain"));
             let account_dataspace = DataSpaceId::new(10);
             let mut world = World::with_assets(
@@ -8172,9 +8240,10 @@ pub mod query {
             assert!(
                 !stx.world.internal_event_buf.iter().any(|event| matches!(
                     event.as_ref(),
-                    DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                        AssetEvent::Transferred(_)
-                    )))
+                    DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                        event: AssetEvent::Transferred(_),
+                        ..
+                    }))
                 )),
                 "mint and burn must not emit the transfer-specific event"
             );
@@ -8746,14 +8815,19 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -8807,10 +8881,11 @@ pub mod query {
             let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
                 &chain_id,
                 &asset_def_id,
@@ -8820,8 +8895,12 @@ pub mod query {
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&ALICE_ID);
             let escrow_asset_id = AssetId::new(asset_def_id.clone(), escrow_account.clone());
@@ -8879,25 +8958,35 @@ pub mod query {
                 build_account_in_domain(&ALICE_ID, &domain_id),
                 build_account_in_domain(&bob_id, &domain_id),
             ];
-            let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let tulip_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "tulip".parse().unwrap(),
-            );
+            let rose_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let tulip_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "tulip".parse().unwrap(),
+                );
             let definitions = [
                 {
                     let __asset_definition_id = rose_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "rose".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&ALICE_ID),
                 {
                     let __asset_definition_id = tulip_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "tulip".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&ALICE_ID),
             ];
@@ -8962,25 +9051,35 @@ pub mod query {
                 build_account_in_domain(&ALICE_ID, &domain_id),
                 build_account_in_domain(&bob_id, &domain_id),
             ];
-            let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let tulip_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "tulip".parse().unwrap(),
-            );
+            let rose_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let tulip_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "tulip".parse().unwrap(),
+                );
             let definitions = [
                 {
                     let __asset_definition_id = rose_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "rose".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&ALICE_ID),
                 {
                     let __asset_definition_id = tulip_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "tulip".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&ALICE_ID),
             ];
@@ -9037,25 +9136,35 @@ pub mod query {
                 build_account_in_domain(&bob_id, &wonderland_id),
                 build_account_in_domain(&dune_id, &oasis_id),
             ];
-            let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let spice_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("oasis", "universal").unwrap(),
-                "spice".parse().unwrap(),
-            );
+            let rose_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let spice_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("oasis", "universal").unwrap(),
+                    "spice".parse().unwrap(),
+                );
             let definitions = [
                 {
                     let __asset_definition_id = rose_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "rose".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&ALICE_ID),
                 {
                     let __asset_definition_id = spice_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "spice".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&ALICE_ID),
             ];
@@ -9096,7 +9205,7 @@ pub mod query {
 
             assert_eq!(assets.len(), 2);
             for asset in &assets {
-                assert_eq!(asset.id().definition().domain(), &wonderland_id);
+                assert_eq!(asset.id().definition(), &rose_def_id);
             }
             let mut ids: Vec<_> = assets.into_iter().map(|asset| asset.id().clone()).collect();
             ids.sort();
@@ -9124,25 +9233,35 @@ pub mod query {
                 build_account_in_domain(&bob_id, &wonderland_id),
                 build_account_in_domain(&dune_id, &oasis_id),
             ];
-            let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let spice_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("oasis", "universal").unwrap(),
-                "spice".parse().unwrap(),
-            );
+            let rose_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let spice_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("oasis", "universal").unwrap(),
+                    "spice".parse().unwrap(),
+                );
             let definitions = [
                 {
                     let __asset_definition_id = rose_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "rose".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&ALICE_ID),
                 {
                     let __asset_definition_id = spice_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(
+                        __asset_definition_id.clone(),
+                        "spice".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&ALICE_ID),
             ];
@@ -9152,7 +9271,7 @@ pub mod query {
                     Quantity::from(5_u32),
                 ),
                 Asset::new(
-                    AssetId::new(rose_def_id, bob_id.clone()),
+                    AssetId::new(rose_def_id.clone(), bob_id.clone()),
                     Quantity::from(11_u32),
                 ),
                 Asset::new(
@@ -9178,7 +9297,7 @@ pub mod query {
             assert!(
                 assets
                     .iter()
-                    .all(|asset| asset.id().definition().domain() == &wonderland_id)
+                    .all(|asset| asset.id().definition() == &rose_def_id)
             );
         }
 
@@ -9230,13 +9349,17 @@ pub mod query {
             let domain_id = DomainId::try_new("integer_assets", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let definition_id =
-                AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id,
+                "coin".parse().expect("asset name"),
+            );
             let definition = AssetDefinition::new(
                 definition_id.clone(),
+                "coin".to_owned(),
                 iroha_primitives::numeric::NumericSpec::integer(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
             )
-            .with_name("coin".to_owned())
             .build(&ALICE_ID);
             let world = World::with([domain], [alice_account], [definition]);
             let state = State::new(
@@ -9288,20 +9411,18 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-
             let world = World::with([domain], [account], [asset_def]);
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
@@ -9343,20 +9464,18 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-
             let world = World::with([domain], [account], [asset_def]);
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
@@ -9403,20 +9522,18 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-
             let world = World::with([domain], [account], [asset_def]);
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
@@ -9454,18 +9571,18 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-
             let world = World::with([domain], [account], [asset_def]);
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
@@ -9500,18 +9617,18 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-
             let world = World::with([domain], [account], [asset_def]);
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
@@ -9549,18 +9666,18 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-
             let world = World::with([domain], [account], [asset_def]);
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
@@ -9599,18 +9716,18 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-
             let world = World::with([domain], [alice_account, bob_account], [asset_def]);
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
@@ -9649,18 +9766,19 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let source_asset_id = Asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
 
             let world = World::with_assets(
@@ -9711,18 +9829,19 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let source_asset_id = Asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
 
             let world =
@@ -9772,18 +9891,19 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
+            let source_asset_id = Asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
 
             let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
@@ -9824,18 +9944,18 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-
             let mut world = World::with([domain], [account], [asset_def]);
             let alias: iroha_data_model::asset::AssetDefinitionAlias =
                 "xor#paynet".parse().expect("asset alias");
@@ -9894,20 +10014,19 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset = Asset::new(
+            let source_asset = Asset = Asset::new(
                 AssetId::with_scope(
                     asset_def_id.clone(),
                     ALICE_ID.clone(),
@@ -9961,20 +10080,19 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::with_scope(
+            let source_asset_id = Asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
@@ -10050,20 +10168,19 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::with_scope(
+            let source_asset_id = Asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
@@ -10162,20 +10279,19 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::with_scope(
+            let source_asset_id = Asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
@@ -10250,20 +10366,19 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let mut asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let issuer_policy = AssetIssuerUsagePolicyV1 {
+            let issuer_policy = AssetIssuerUsagePolicy = AssetIssuerUsagePolicyV1 {
                 require_subject_binding: true,
                 subject_bindings: BTreeMap::from([
                     (
@@ -10439,17 +10554,18 @@ pub mod query {
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(domain_id, "rose".parse().unwrap());
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    domain_id.clone(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::with_scope(
+            let source_asset_id = Asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
@@ -10559,20 +10675,19 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::with_scope(
+            let source_asset_id = Asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -10663,20 +10778,19 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::with_scope(
+            let source_asset_id = Asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
@@ -10781,20 +10895,19 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = AssetId::with_scope(
+            let source_asset_id = Asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(first_source_dataspace),
@@ -10876,15 +10989,17 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let mut asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
             let issuer_policy = AssetIssuerUsagePolicyV1 {
                 require_subject_binding: true,
@@ -10933,10 +11048,11 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let allowed_domain_id: DomainId =
                 DomainId::try_new("oasis", "universal").expect("domain id");
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                denied_domain_id.clone(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    denied_domain_id.clone(),
+                    "rose".parse().unwrap(),
+                );
 
             let mut denied_domain_metadata = Metadata::default();
             denied_domain_metadata.insert(
@@ -10967,11 +11083,12 @@ pub mod query {
             );
             let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
 
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
+            let mut asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
             let binding = AssetSubjectBindingV1 {
                 allowed_domains: BTreeSet::from([
@@ -11035,10 +11152,11 @@ pub mod query {
         fn transfer_rejects_when_bound_domain_policy_denies_asset() {
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             let mut domain_metadata = Metadata::default();
             let domain_policy = DomainAssetUsagePolicyV1 {
                 allowed_assets: BTreeSet::new(),
@@ -11067,11 +11185,12 @@ pub mod query {
             );
             let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
 
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
+            let mut asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
             let binding = AssetSubjectBindingV1 {
                 allowed_domains: BTreeSet::from([domain_id.clone()]),
@@ -11139,17 +11258,16 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let mut asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let binding = AssetSubjectBindingV1 {

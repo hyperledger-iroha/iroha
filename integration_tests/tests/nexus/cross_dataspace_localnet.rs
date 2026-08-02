@@ -201,7 +201,7 @@ enum CorridorRunMode {
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
@@ -212,7 +212,7 @@ fn stake_asset_id_literal() -> String {
 }
 
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
@@ -572,11 +572,11 @@ fn npos_multilane_genesis_post_topology_transactions(
     let ds2_domain: DomainId = DomainId::try_new("ds2", "universal").expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
-    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
     );
-    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds2coin".parse().expect("asset definition name"),
     );
@@ -587,26 +587,42 @@ fn npos_multilane_genesis_post_topology_transactions(
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = fee_asset_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = ds1_asset_def.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "ds1coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = ds2_asset_def.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "ds2coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Mint::asset_quantity(
@@ -6049,11 +6065,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             ds2_progress.commit_qc_signer_count,
         );
     }
-    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition"),
         "ds1coin".parse().expect("asset definition"),
     );
-    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition"),
         "ds2coin".parse().expect("asset definition"),
     );

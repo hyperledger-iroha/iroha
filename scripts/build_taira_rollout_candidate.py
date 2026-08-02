@@ -25,9 +25,10 @@ import sys
 import tarfile
 import tempfile
 import time
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Mapping, NoReturn, Sequence
+from typing import NoReturn
 
 try:
     from . import deploy_taira_v21_reset as deploy
@@ -35,8 +36,8 @@ try:
     from .release_artifact_contract import (
         ReleaseArtifactError,
         StableFile,
-        canonical_relative_path,
         canonical_json_bytes,
+        canonical_relative_path,
         create_fresh_directory,
         exclusive_output_fd,
         exclusive_write_bytes,
@@ -59,8 +60,8 @@ except ImportError:
     from release_artifact_contract import (
         ReleaseArtifactError,
         StableFile,
-        canonical_relative_path,
         canonical_json_bytes,
+        canonical_relative_path,
         create_fresh_directory,
         exclusive_output_fd,
         exclusive_write_bytes,
@@ -90,6 +91,10 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 
 class TairaCandidateBuildError(RuntimeError):
     """The proposed candidate is incomplete, mutable, or unauthenticated."""
+
+
+def _sealed_controller_manifest_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "authority-controller-v1.json"
 
 
 @dataclass(frozen=True)
@@ -185,70 +190,68 @@ def _write_tar(
     output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         with exclusive_output_fd(output, mode=0o600) as descriptor:
-            with os.fdopen(os.dup(descriptor), "wb") as raw:
-                with gzip.GzipFile(
+            with (
+                os.fdopen(os.dup(descriptor), "wb") as raw,
+                gzip.GzipFile(
                     filename="", mode="wb", fileobj=raw, mtime=source_date_epoch
-                ) as compressed:
-                    with tarfile.open(
-                        fileobj=compressed,
-                        mode="w",
-                        format=tarfile.GNU_FORMAT,
-                    ) as archive:
-                        file_rows = {row.archive_relative: row for row in member_list}
-                        extra_rows = dict(extras)
-                        for relative in names:
-                            pure = PurePosixPath(relative)
-                            if (
-                                pure.is_absolute()
-                                or ".." in pure.parts
-                                or not pure.parts
-                            ):
-                                _fail(f"unsafe archive member path: {relative!r}")
-                            arcname = f"{canonical_prefix}/{relative}"
-                            if relative in directory_set:
-                                info = tarfile.TarInfo(arcname)
-                                info.type = tarfile.DIRTYPE
-                                info.size = 0
-                                info.mode = 0o700
-                                info.uid = 0
-                                info.gid = 0
-                                info.uname = ""
-                                info.gname = ""
-                                info.mtime = source_date_epoch
-                                archive.addfile(info)
-                                continue
-                            if relative in extra_rows:
-                                payload = extra_rows[relative]
-                                info = tarfile.TarInfo(arcname)
-                                info.size = len(payload)
-                                info.mode = 0o600
-                                info.uid = 0
-                                info.gid = 0
-                                info.uname = ""
-                                info.gname = ""
-                                info.mtime = source_date_epoch
-                                import io
+                ) as compressed,
+                tarfile.open(
+                    fileobj=compressed,
+                    mode="w",
+                    format=tarfile.GNU_FORMAT,
+                ) as archive,
+            ):
+                file_rows = {row.archive_relative: row for row in member_list}
+                extra_rows = dict(extras)
+                for relative in names:
+                    pure = PurePosixPath(relative)
+                    if pure.is_absolute() or ".." in pure.parts or not pure.parts:
+                        _fail(f"unsafe archive member path: {relative!r}")
+                    arcname = f"{canonical_prefix}/{relative}"
+                    if relative in directory_set:
+                        info = tarfile.TarInfo(arcname)
+                        info.type = tarfile.DIRTYPE
+                        info.size = 0
+                        info.mode = 0o700
+                        info.uid = 0
+                        info.gid = 0
+                        info.uname = ""
+                        info.gname = ""
+                        info.mtime = source_date_epoch
+                        archive.addfile(info)
+                        continue
+                    if relative in extra_rows:
+                        payload = extra_rows[relative]
+                        info = tarfile.TarInfo(arcname)
+                        info.size = len(payload)
+                        info.mode = 0o600
+                        info.uid = 0
+                        info.gid = 0
+                        info.uname = ""
+                        info.gname = ""
+                        info.mtime = source_date_epoch
+                        import io
 
-                                archive.addfile(info, io.BytesIO(payload))
-                                continue
-                            row = file_rows[relative]
-                            info = tarfile.TarInfo(arcname)
-                            info.size = row.info.size
-                            info.mode = row.mode
-                            info.uid = 0
-                            info.gid = 0
-                            info.uname = ""
-                            info.gname = ""
-                            info.mtime = source_date_epoch
-                            with stable_open_relative(
-                                row.source_root,
-                                row.source_relative,
-                                expected=row.info,
-                            ) as source_descriptor:
-                                with os.fdopen(
-                                    os.dup(source_descriptor), "rb"
-                                ) as source:
-                                    archive.addfile(info, source)
+                        archive.addfile(info, io.BytesIO(payload))
+                        continue
+                    row = file_rows[relative]
+                    info = tarfile.TarInfo(arcname)
+                    info.size = row.info.size
+                    info.mode = row.mode
+                    info.uid = 0
+                    info.gid = 0
+                    info.uname = ""
+                    info.gname = ""
+                    info.mtime = source_date_epoch
+                    with (
+                        stable_open_relative(
+                            row.source_root,
+                            row.source_relative,
+                            expected=row.info,
+                        ) as source_descriptor,
+                        os.fdopen(os.dup(source_descriptor), "rb") as source,
+                    ):
+                        archive.addfile(info, source)
             os.fsync(descriptor)
     except BaseException:
         output.unlink(missing_ok=True)
@@ -320,6 +323,10 @@ def _final_manifest(
 def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
     source = admission.SourceIdentity(
         _commit(args.source_commit, "source commit"),
+        _commit(
+            args.dpn_validator_release_commit,
+            "DPN validator release commit",
+        ),
         _sha256(args.cargo_lock_sha256, "Cargo.lock digest"),
         _sha256(args.workspace_source_manifest_sha256, "workspace source digest"),
     )
@@ -331,6 +338,25 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
         "trusted release-manifest verifier digest",
     )
     receipt_id = _sha256(args.expected_receipt_id, "expected receipt ID")
+    controller_digest = _sha256(
+        args.controller_digest, "sealed macOS controller digest"
+    )
+    controller_manifest = _canonical_path(
+        args.controller_manifest, "sealed macOS controller manifest"
+    )
+    expected_controller_manifest = _sealed_controller_manifest_path()
+    if controller_manifest != expected_controller_manifest:
+        _fail(
+            "controller manifest is not the sibling of the sealed candidate controller"
+        )
+    controller_info, controller_payload = stable_read_path(
+        controller_manifest, max_size=admission.MAX_JSON_BYTES
+    )
+    admission._validate_controller_manifest(
+        controller_payload,
+        expected_digest=controller_digest,
+        expected_source_commit=source.commit,
+    )
     linux_archive = _canonical_path(args.linux_archive, "Linux rollout archive")
     if not linux_archive.name.endswith(".tar.gz"):
         _fail("Linux rollout archive must use .tar.gz")
@@ -376,29 +402,33 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
             for row in authority_rows:
                 destination = verify_root / row.archive_relative
                 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                with stable_open_relative(
-                    row.source_root, row.source_relative, expected=row.info
-                ) as source_descriptor:
-                    with exclusive_output_fd(destination, mode=0o600) as target:
-                        while chunk := os.read(source_descriptor, 1024 * 1024):
-                            view = memoryview(chunk)
-                            while view:
-                                written = os.write(target, view)
-                                if written <= 0:
-                                    _fail("short write staging Linux authority")
-                                view = view[written:]
-            staged_linux = verify_root / "linux" / linux_archive.name
-            with stable_open_relative(
-                linux_archive.parent, linux_archive.name, expected=linux_info
-            ) as source_descriptor:
-                with exclusive_output_fd(staged_linux, mode=0o600) as target:
+                with (
+                    stable_open_relative(
+                        row.source_root, row.source_relative, expected=row.info
+                    ) as source_descriptor,
+                    exclusive_output_fd(destination, mode=0o600) as target,
+                ):
                     while chunk := os.read(source_descriptor, 1024 * 1024):
                         view = memoryview(chunk)
                         while view:
                             written = os.write(target, view)
                             if written <= 0:
-                                _fail("short write staging Linux archive")
+                                _fail("short write staging Linux authority")
                             view = view[written:]
+            staged_linux = verify_root / "linux" / linux_archive.name
+            with (
+                stable_open_relative(
+                    linux_archive.parent, linux_archive.name, expected=linux_info
+                ) as source_descriptor,
+                exclusive_output_fd(staged_linux, mode=0o600) as target,
+            ):
+                while chunk := os.read(source_descriptor, 1024 * 1024):
+                    view = memoryview(chunk)
+                    while view:
+                        written = os.write(target, view)
+                        if written <= 0:
+                            _fail("short write staging Linux archive")
+                        view = view[written:]
             nested_manifest_sha = stable_hash_relative(
                 staged_authority, "release_manifest.json"
             ).sha256
@@ -432,6 +462,13 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
                 0o600,
             ),
             PayloadMember(
+                controller_manifest.parent,
+                controller_manifest.name,
+                admission.CONTROLLER_MANIFEST_PATH,
+                controller_info,
+                0o600,
+            ),
+            PayloadMember(
                 receipt_path.parent,
                 receipt_path.name,
                 receipt_relative,
@@ -449,6 +486,12 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
         ]
         admission_manifest = canonical_json_bytes(
             {
+                "controller": {
+                    "digest": controller_digest,
+                    "manifest_path": admission.CONTROLLER_MANIFEST_PATH,
+                    "platform": "macos",
+                    "source_commit": source.commit,
+                },
                 "inventory": inventory,
                 "linux_arm64": {
                     "arch": "aarch64",
@@ -544,12 +587,15 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
             "authority_dir": str(authority_dir),
             "authority_manifest_sha256": signing["manifest_sha256"],
             "receipt_id": receipt_object["receipt_id"],
+            "controller_digest": controller_digest,
             "source": source.as_dict(),
             "verified": verified["verified"],
         }
-    except BaseException:
+    except Exception as exc:
         # The output directory is fresh and exclusively owned by this command.
-        # Leave it in place for forensic inspection; never return a candidate.
+        # Leave it in place for forensic inspection and make that explicit to
+        # an operator without changing the original exception type.
+        exc.add_note(f"partial candidate retained for inspection: {output}")
         raise
 
 
@@ -604,6 +650,10 @@ def _scan_deploy_tree(root: Path) -> tuple[list[PayloadMember], list[str]]:
 def pack_deploy_payload(args: argparse.Namespace) -> dict[str, object]:
     source = admission.SourceIdentity(
         _commit(args.source_commit, "source commit"),
+        _commit(
+            args.dpn_validator_release_commit,
+            "DPN validator release commit",
+        ),
         _sha256(args.cargo_lock_sha256, "Cargo.lock digest"),
         _sha256(args.workspace_source_manifest_sha256, "workspace source digest"),
     )
@@ -640,6 +690,9 @@ def pack_deploy_payload(args: argparse.Namespace) -> dict[str, object]:
             expected_reset_manifest_sha256=reset_manifest.sha256,
             expected_binary_sha256=binary_info.sha256,
             expected_source_commit=source.commit,
+            expected_dpn_validator_release_commit=(
+                source.dpn_validator_release_commit
+            ),
             minimum_free_bytes=0,
             maximum_fsync_latency_ms=10_000,
         )
@@ -730,6 +783,7 @@ def pack_deploy_payload(args: argparse.Namespace) -> dict[str, object]:
 
 def _source_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--dpn-validator-release-commit", required=True)
     parser.add_argument("--cargo-lock-sha256", required=True)
     parser.add_argument("--workspace-source-manifest-sha256", required=True)
     parser.add_argument("--source-date-epoch", type=int, required=True)
@@ -745,6 +799,8 @@ def _build_parser() -> argparse.ArgumentParser:
     assemble.add_argument("--linux-authority-dir", type=Path, required=True)
     assemble.add_argument("--macos-receipt", type=Path, required=True)
     assemble.add_argument("--expected-receipt-id", required=True)
+    assemble.add_argument("--controller-manifest", type=Path, required=True)
+    assemble.add_argument("--controller-digest", required=True)
     assemble.add_argument("--trusted-signing-fingerprint", required=True)
     assemble.add_argument("--release-manifest-verifier", type=Path, required=True)
     assemble.add_argument("--trusted-release-manifest-verifier-sha256", required=True)

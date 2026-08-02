@@ -177,12 +177,53 @@ seiyaku TypedCoreQueryPager {
         .expect("compile typed core-query pager program")
 }
 
-fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value {
+fn typed_core_query_page_payload_literals(offset: &str, limit: &str) -> norito::json::Value {
     norito::json::object([
-        ("offset", norito::json::Value::from(offset.to_string())),
-        ("limit", norito::json::Value::from(limit.to_string())),
+        ("offset", norito::json::Value::from(offset.to_owned())),
+        ("limit", norito::json::Value::from(limit.to_owned())),
     ])
     .expect("serialize typed core-query page arguments")
+}
+
+fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value {
+    typed_core_query_page_payload_literals(&offset.to_string(), &limit.to_string())
+}
+
+async fn post_typed_core_query_page(
+    http: &reqwest::Client,
+    torii_url: &reqwest::Url,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: &str,
+    payload: norito::json::Value,
+) -> Result<(StatusCode, norito::json::Value)> {
+    let request = norito::json::object([
+        (
+            "authority",
+            norito::json::Value::from(iroha_test_samples::ALICE_ID.to_string()),
+        ),
+        (
+            "contract_address",
+            norito::json::to_value(contract_address)?,
+        ),
+        (
+            "entrypoint",
+            norito::json::Value::from(entrypoint.to_owned()),
+        ),
+        ("payload", payload),
+        ("gas_limit", norito::json::Value::from(1_000_000_u64)),
+    ])?;
+    let response = http
+        .post(torii_url.join("v1/contracts/view")?)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(norito::json::to_vec(&request)?)
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.bytes().await?;
+    let body = norito::json::from_slice(&body)
+        .map_err(|error| eyre!("contract view returned {status} with invalid JSON: {error}"))?;
+    Ok((status, body))
 }
 
 async fn invoke_typed_core_query_page(
@@ -727,7 +768,7 @@ pub(super) fn deploy_contract_locally_signed(
         .transpose()?
         .unwrap_or(0);
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
+        &client.chain,
         &client.account,
         deploy_nonce,
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -1221,8 +1262,10 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     }
     for index in 0_u64..6 {
         let domain_id = DomainId::try_new(format!("typed-query-{index}"), "universal")?;
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), format!("coin{index}").parse()?);
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            format!("coin{index}").parse()?,
+        );
         let asset_id = AssetId::new(
             asset_definition_id.clone(),
             iroha_test_samples::ALICE_ID.clone(),
@@ -1230,10 +1273,12 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         let nft_id = NftId::new(domain_id.clone(), format!("item{index}").parse()?);
         builder = builder
             .with_genesis_instruction(Register::domain(Domain::new(domain_id)))
-            .with_genesis_instruction(Register::asset_definition(
-                AssetDefinition::numeric(asset_definition_id.clone())
-                    .with_name(format!("Typed query asset {index}")),
-            ))
+            .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                format!("Typed query asset {index}"),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )))
             .with_genesis_instruction(Mint::asset_quantity(index + 1, asset_id))
             .with_genesis_instruction(Register::nft(Nft::new(nft_id, Metadata::default())));
     }
@@ -1487,36 +1532,142 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         assert_typed_query_projection(all_page, view_name, expected_fields)?;
     }
 
-    const INVALID_PAGINATION_BOUNDS: [(&str, i64, i64); 5] = [
-        ("negative offset", -1, 1),
-        ("negative limit", 0, -1),
-        ("offset-plus-limit overflow", i64::MAX - 1, 2),
-        ("zero limit", 0, 0),
-        ("limit above the maximum", 0, 65),
+    const INVALID_PAGINATION_BOUNDS: [(&str, &str, &str, &str, &str); 7] = [
+        (
+            "negative offset",
+            "-1",
+            "1",
+            "DecodeError",
+            "instruction decode error",
+        ),
+        (
+            "negative limit",
+            "0",
+            "-1",
+            "AssertionFailed",
+            "assertion failed (constraint violation)",
+        ),
+        (
+            "offset-plus-limit overflow",
+            "9223372036854775807",
+            "1",
+            "DecodeError",
+            "instruction decode error",
+        ),
+        (
+            "zero limit",
+            "0",
+            "0",
+            "DecodeError",
+            "instruction decode error",
+        ),
+        (
+            "limit above the maximum",
+            "0",
+            "65",
+            "DecodeError",
+            "instruction decode error",
+        ),
+        (
+            "offset above the signed host range",
+            "9223372036854775808",
+            "1",
+            "AssertionFailed",
+            "assertion failed (constraint violation)",
+        ),
+        (
+            "limit above the unsigned host range",
+            "0",
+            "18446744073709551616",
+            "AssertionFailed",
+            "assertion failed (constraint violation)",
+        ),
     ];
     for (entrypoint, _, _, _) in &families {
         let entrypoint = *entrypoint;
-        for (bound_class, offset, limit) in INVALID_PAGINATION_BOUNDS {
-            let rejected = tokio::task::spawn_blocking({
-                let client = network.peers()[0].client();
-                let contract_address = contract_address.clone();
-                let payload = typed_core_query_page_payload(offset, limit);
-                move || {
-                    client.post_contract_view_json(
-                        &iroha_test_samples::ALICE_ID,
-                        Some(&contract_address),
-                        None,
-                        entrypoint,
-                        Some(&payload),
-                        1_000_000,
-                    )
-                }
-            })
-            .await?;
+        for &(bound_class, offset, limit, expected_trap, expected_message) in
+            &INVALID_PAGINATION_BOUNDS
+        {
+            let mut peer_rejections = Vec::with_capacity(network.peers().len());
+            for peer in network.peers() {
+                let peer_client = peer.client();
+                let torii_url = peer_client.torii_url.clone();
+                let (status, body) = post_typed_core_query_page(
+                    &http,
+                    &torii_url,
+                    &contract_address,
+                    entrypoint,
+                    typed_core_query_page_payload_literals(offset, limit),
+                )
+                .await?;
+                assert_eq!(
+                    status,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "{entrypoint} {bound_class} must be a semantic rejection on every peer: \
+                     offset={offset}, limit={limit}, body={body:?}"
+                );
+                assert_eq!(
+                    body.get("ok").and_then(norito::json::Value::as_bool),
+                    Some(false),
+                    "{entrypoint} {bound_class} rejection must set ok=false: {body:?}"
+                );
+                let actual_entrypoint = body
+                    .get("entrypoint")
+                    .and_then(norito::json::Value::as_str)
+                    .ok_or_else(|| {
+                        eyre!("{entrypoint} {bound_class} rejection has no entrypoint: {body:?}")
+                    })?
+                    .to_owned();
+                assert_eq!(actual_entrypoint, entrypoint);
+                let actual_error = body
+                    .get("error")
+                    .and_then(norito::json::Value::as_str)
+                    .ok_or_else(|| {
+                        eyre!("{entrypoint} {bound_class} rejection has no error: {body:?}")
+                    })?
+                    .to_owned();
+                assert_eq!(
+                    actual_error,
+                    format!("contract view execution failed: {expected_message}"),
+                    "{entrypoint} {bound_class} returned the wrong semantic fault"
+                );
+                let diagnostic = body
+                    .get("vm_diagnostic")
+                    .and_then(norito::json::Value::as_object)
+                    .ok_or_else(|| {
+                        eyre!("{entrypoint} {bound_class} rejection has no VM diagnostic: {body:?}")
+                    })?;
+                let actual_trap = diagnostic
+                    .get("trap_kind")
+                    .and_then(norito::json::Value::as_str)
+                    .ok_or_else(|| {
+                        eyre!("{entrypoint} {bound_class} rejection has no trap kind: {body:?}")
+                    })?
+                    .to_owned();
+                let actual_message = diagnostic
+                    .get("message")
+                    .and_then(norito::json::Value::as_str)
+                    .ok_or_else(|| {
+                        eyre!(
+                            "{entrypoint} {bound_class} rejection has no diagnostic message: \
+                             {body:?}"
+                        )
+                    })?
+                    .to_owned();
+                assert_eq!(actual_trap, expected_trap);
+                assert_eq!(actual_message, expected_message);
+                peer_rejections.push((
+                    status.as_u16(),
+                    actual_entrypoint,
+                    actual_error,
+                    actual_trap,
+                    actual_message,
+                ));
+            }
             assert!(
-                rejected.is_err(),
-                "{entrypoint} must reject the {bound_class} bound class: \
-                 offset={offset}, limit={limit}"
+                peer_rejections.windows(2).all(|pair| pair[0] == pair[1]),
+                "{entrypoint} {bound_class} semantic rejection differs across voting peers: \
+                 {peer_rejections:?}"
             );
         }
     }

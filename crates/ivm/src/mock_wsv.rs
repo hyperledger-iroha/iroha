@@ -758,15 +758,17 @@ impl MockWorldStateView {
         true
     }
 
-    /// Unshield: consume nullifiers, append private change commitments, and credit public balance.
+    /// Unshield: consume nullifiers and credit the public balance.
+    ///
     /// Merkle root binding and full proof public-input semantics are not modelled in this mock.
+    /// Consequently, the mock cannot derive private change commitments from the proof and must not
+    /// accept them from the caller.
     pub fn unshield(
         &mut self,
         to: &AccountId,
         asset: &AssetDefinitionId,
         public_amount: Quantity,
         inputs: &[[u8; 32]],
-        outputs: &[[u8; 32]],
         proof: &ProofAttachment,
     ) -> bool {
         if !self.account_is_linked(to) {
@@ -804,18 +806,8 @@ impl MockWorldStateView {
             }
         }
         st.nullifiers.extend(new_nullifiers);
-        let mut output_events = Vec::with_capacity(outputs.len());
-        for c in outputs {
-            let root = st.push_commitment(*c);
-            output_events.push(ZkEvent::CommitmentAdded {
-                asset: asset.clone(),
-                commitment: *c,
-                new_root: *root.as_ref(),
-            });
-        }
         // Credit public balance
         self.balances.insert(key, next);
-        self.zk_events.extend(output_events);
         // Emit an unshield event (no new root)
         self.zk_events.push(ZkEvent::Unshielded {
             asset: asset.clone(),
@@ -832,20 +824,21 @@ impl MockWorldStateView {
         max: usize,
     ) -> ([u8; 32], Vec<[u8; 32]>, u32) {
         if let Some(st) = self.zk_assets.get(asset) {
-            let latest = st
-                .root_history
-                .last()
-                .map(|h| *h.as_ref())
-                .unwrap_or([0u8; 32]);
-            let list: Vec<[u8; 32]> = if max == 0 || st.root_history.len() <= max {
-                st.root_history.iter().map(|h| *h.as_ref()).collect()
+            let all_roots = if st.root_history.is_empty() {
+                vec![iroha_data_model::zk::CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT]
             } else {
-                st.root_history[st.root_history.len() - max..]
-                    .iter()
-                    .map(|h| *h.as_ref())
-                    .collect()
+                st.root_history.iter().map(|h| *h.as_ref()).collect()
             };
-            (latest, list, st.root_history.len() as u32)
+            let latest = *all_roots
+                .last()
+                .expect("registered ZK assets always expose at least the profile empty root");
+            let list = if max == 0 || all_roots.len() <= max {
+                all_roots
+            } else {
+                all_roots[all_roots.len() - max..].to_vec()
+            };
+            let height = u32::try_from(st.commitments.len()).unwrap_or(u32::MAX);
+            (latest, list, height)
         } else {
             ([0u8; 32], Vec::new(), 0)
         }
@@ -1260,7 +1253,7 @@ impl MockWorldStateView {
             wsv.accounts.entry(subject.clone()).or_default();
             wsv.asset_definitions
                 .entry(asset.clone())
-                .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely));
+                .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely, None));
             wsv.balances
                 .insert((subject, asset.clone()), amount.clone());
             if let Some(def) = wsv.asset_definitions.get_mut(asset) {
@@ -1342,8 +1335,8 @@ impl MockWorldStateView {
             .is_some_and(|subjects| !subjects.is_empty());
         let has_assets = self
             .asset_definitions
-            .keys()
-            .any(|ad| ad.try_domain() == Some(id));
+            .values()
+            .any(|definition| definition.owning_domain().as_ref() == Some(id));
         let has_nfts = self.nfts.keys().any(|nft_id| nft_id.domain() == id);
         if has_accounts || has_assets || has_nfts {
             return false;
@@ -1418,7 +1411,7 @@ impl MockWorldStateView {
             return false;
         }
         self.asset_definitions
-            .insert(id, AssetDefinition::new(mintable))
+            .insert(id, AssetDefinition::new(mintable, None))
             .is_none()
     }
 
@@ -4328,7 +4321,6 @@ impl IVMHost for WsvHost {
                             instr.asset(),
                             amount,
                             instr.inputs().as_slice(),
-                            instr.outputs().as_slice(),
                             instr.proof(),
                         ) {
                             Ok(instruction_gas)
@@ -4359,26 +4351,7 @@ impl IVMHost for WsvHost {
                 let req: crate::zk_verify::RootsGetRequest = decode_canonical_norito(tlv.payload)?;
                 let asset: AssetDefinitionId =
                     req.asset_id.parse().map_err(|_| VMError::NoritoInvalid)?;
-                let (latest, roots, height) = if let Some(state) = self.wsv.zk_assets.get(&asset) {
-                    let latest = state
-                        .root_history
-                        .last()
-                        .map(|root| *root.as_ref())
-                        .unwrap_or([0u8; 32]);
-                    let max = req.max as usize;
-                    let sl = &state.root_history;
-                    let list: Vec<[u8; 32]> = if max == 0 || sl.len() <= max {
-                        sl.iter().map(|root| *root.as_ref()).collect()
-                    } else {
-                        sl[sl.len() - max..]
-                            .iter()
-                            .map(|root| *root.as_ref())
-                            .collect()
-                    };
-                    (latest, list, sl.len() as u32)
-                } else {
-                    ([0u8; 32], Vec::new(), 0)
-                };
+                let (latest, roots, height) = self.wsv.get_roots(&asset, req.max as usize);
                 let resp = crate::zk_verify::RootsGetResponse {
                     latest,
                     roots,
@@ -6127,10 +6100,11 @@ mod tests_zk_asset_bindings {
             "domain",
         );
         let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("domain", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("domain", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let mut wsv = MockWorldStateView::new();
         wsv.add_account_unchecked(caller.clone());
         wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
@@ -6161,15 +6135,16 @@ mod tests_zk_asset_bindings {
     }
 
     #[test]
-    fn unshield_appends_private_change_outputs_and_rejects_duplicate_inputs_without_mutation() {
+    fn unshield_consumes_nullifiers_without_guest_supplied_outputs() {
         let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("domain", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("domain", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let mut wsv = MockWorldStateView::with_balances(&[(
             (caller.clone(), asset.clone()),
             Quantity::from(10_u64),
@@ -6193,44 +6168,29 @@ mod tests_zk_asset_bindings {
             iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
         );
         let inputs = [[1u8; 32], [2u8; 32]];
-        let outputs = [[9u8; 32], [10u8; 32]];
-        assert!(wsv.unshield(
-            &caller,
-            &asset,
-            Quantity::from(4_u64),
-            &inputs,
-            &outputs,
-            &proof,
-        ));
+        assert!(wsv.unshield(&caller, &asset, Quantity::from(4_u64), &inputs, &proof,));
         assert_eq!(
             wsv.balance(caller.clone(), asset.clone()),
             Quantity::from(14_u64)
         );
         let (latest_root, roots, depth) = wsv.get_roots(&asset, 8);
-        assert_eq!(depth, 2);
-        assert_eq!(roots.len(), 2);
-        assert_eq!(latest_root, roots[1]);
+        assert_eq!(depth, 0);
+        let empty_root = iroha_data_model::zk::CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT;
+        assert_eq!(latest_root, empty_root);
+        assert_eq!(
+            hex::encode(latest_root),
+            "ce4066b230f348190183f90dd35871c13823a358bb37c2ce8b43526ae7197c3c"
+        );
+        assert_eq!(roots, vec![empty_root]);
 
         let events = wsv.drain_zk_events();
         assert_eq!(
             events,
-            vec![
-                ZkEvent::CommitmentAdded {
-                    asset: asset.clone(),
-                    commitment: outputs[0],
-                    new_root: roots[0],
-                },
-                ZkEvent::CommitmentAdded {
-                    asset: asset.clone(),
-                    commitment: outputs[1],
-                    new_root: roots[1],
-                },
-                ZkEvent::Unshielded {
-                    asset: asset.clone(),
-                    to: caller.clone(),
-                    public_amount: Quantity::from(4_u64),
-                },
-            ]
+            vec![ZkEvent::Unshielded {
+                asset: asset.clone(),
+                to: caller.clone(),
+                public_amount: Quantity::from(4_u64),
+            }]
         );
 
         let duplicate_inputs = [[3u8; 32], [3u8; 32]];
@@ -6239,7 +6199,6 @@ mod tests_zk_asset_bindings {
             &asset,
             Quantity::from(1_u64),
             &duplicate_inputs,
-            &[[11u8; 32]],
             &proof,
         ));
         assert_eq!(
@@ -6248,7 +6207,7 @@ mod tests_zk_asset_bindings {
         );
         let (latest_after_failure, roots_after_failure, depth_after_failure) =
             wsv.get_roots(&asset, 8);
-        assert_eq!(depth_after_failure, 2);
+        assert_eq!(depth_after_failure, 0);
         assert_eq!(roots_after_failure, roots);
         assert_eq!(latest_after_failure, latest_root);
         assert!(wsv.drain_zk_events().is_empty());
@@ -6260,10 +6219,11 @@ mod tests_zk_asset_bindings {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonder", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonder", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
             &norito::to_bytes(&asset).expect("encode asset definition"),
         )
@@ -6290,7 +6250,7 @@ mod tests_zk_asset_bindings {
             "domain",
         );
         let domain: DomainId = DomainId::try_new("wonder", "universal").unwrap();
-        let projected = iroha_data_model::asset::AssetDefinitionId::new(
+        let projected = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             domain.clone(),
             "rose".parse().unwrap(),
         );
@@ -6584,7 +6544,7 @@ mod tests_null_decode {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
@@ -6640,7 +6600,7 @@ mod tests_null_decode {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
@@ -6716,7 +6676,7 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let asset_id = AssetDefinitionId::new(
+        let asset_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
@@ -7321,7 +7281,7 @@ mod tests_null_decode {
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
             "wonderland",
         );
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
@@ -7415,7 +7375,7 @@ mod tests_null_decode {
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
                 "app",
             );
-            let asset = AssetDefinitionId::new(
+            let asset = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("currency", "sbp").expect("asset domain"),
                 "pkr".parse().expect("asset name"),
             );

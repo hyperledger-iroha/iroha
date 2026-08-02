@@ -5898,16 +5898,20 @@ pub mod tests {
         allow_unshield: bool,
     ) -> (World, AccountId, AssetDefinitionId) {
         let (mut world, authority_id, _) = world_with_authority("wonderland");
-        let asset_def_id = AssetDefinitionId::new(
+        let asset_def_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "zkpolicy".parse().expect("asset name"),
         );
-        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-            .with_name(asset_def_id.name().to_string())
-            .confidential_policy(
-                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-            )
-            .build(&authority_id);
+        let asset_definition = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "zkpolicy".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+        )
+        .build(&authority_id);
         world
             .asset_definitions
             .insert(asset_def_id.clone(), asset_definition);
@@ -6499,7 +6503,7 @@ pub mod tests {
         let deployer_keypair = checked_random_tx_keypair();
         let deployer = AccountId::new(deployer_keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &deployer,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -7623,7 +7627,7 @@ pub mod tests {
     fn decoded_versioned_signed_transaction_normalizes_adaptive_payload_metadata() {
         let chain: ChainId = "decoded-versioned-adaptive-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let asset_def_id = AssetDefinitionId::new(
+        let asset_def_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "adaptivezk".parse().expect("asset name"),
         );
@@ -8061,7 +8065,7 @@ pub mod tests {
                 proof: vec![0xAA, 0xBB, 0xCC],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
@@ -8415,14 +8419,14 @@ pub mod tests {
         let agreement_id: iroha_data_model::repo::RepoAgreementId =
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1u32.into(),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
@@ -8487,7 +8491,7 @@ pub mod tests {
         let dvp = iroha_data_model::isi::settlement::DvpIsi::new(
             settlement_id.clone(),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
@@ -8496,7 +8500,7 @@ pub mod tests {
                 authority.clone(),
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
@@ -8512,7 +8516,7 @@ pub mod tests {
         let pvp = iroha_data_model::isi::settlement::PvpIsi::new(
             settlement_id,
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
@@ -8521,7 +8525,7 @@ pub mod tests {
                 authority.clone(),
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
@@ -10471,7 +10475,7 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(Executable::ContractCall(ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"admission-contract-code"),
@@ -10505,7 +10509,7 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let call = ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"batch-admission-contract-code"),
@@ -11949,7 +11953,7 @@ pub mod tests {
             .insert(Name::from_str("apps").expect("namespace"));
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11992,14 +11996,14 @@ pub mod tests {
             .insert(Name::from_str("apps").expect("namespace"));
 
         let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("old contract address");
         let new_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -12103,7 +12107,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -12520,7 +12524,7 @@ pub mod tests {
         state.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             TestDataSpaceId::UNIVERSAL,
@@ -13327,7 +13331,7 @@ pub mod tests {
         LazyLock::new(|| DomainId::try_new(DOMAIN_STR, "universal").unwrap());
     /// Pre-parsed asset definition identifier for the sandbox asset.
     pub static ASSET: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DOMAIN.clone(),
             ASSET_STR.parse().expect("sandbox asset name is valid"),
         )
@@ -13527,20 +13531,14 @@ pub mod tests {
         fn from_data_event(event: &'a data::DataEvent) -> Option<Self> {
             match event {
                 data::DataEvent::Domain(domain_event) => Self::from_domain_event(domain_event),
+                data::DataEvent::Asset(event) => Self::from_asset_event(event),
                 _ => None,
             }
         }
 
         fn from_domain_event(event: &'a DomainEvent) -> Option<Self> {
             match event {
-                DomainEvent::Account(account_event) => Self::from_account_event(account_event),
-                _ => None,
-            }
-        }
-
-        fn from_account_event(event: &'a AccountEvent) -> Option<Self> {
-            match event {
-                AccountEvent::Asset(asset_event) => Self::from_asset_event(asset_event),
+                DomainEvent::Asset(event) => Self::from_asset_event(&event.event),
                 _ => None,
             }
         }
@@ -13573,12 +13571,8 @@ pub mod tests {
             || format!("{}@{}", account.expect_single_signatory(), DOMAIN_STR),
             |alias| format!("{alias}@{DOMAIN_STR}"),
         );
-        if asset_id.definition().try_domain() == Some(&*DOMAIN) {
-            let name = asset_id
-                .definition()
-                .try_name()
-                .expect("matching domain projection must include a name");
-            format!("{name}##{account_str}")
+        if asset_id.definition() == &*ASSET {
+            format!("{ASSET_STR}##{account_str}")
         } else {
             format!("{}#{}", asset_id.definition(), account_str)
         }
@@ -13704,8 +13698,13 @@ pub mod tests {
                 let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
                 let asset_def = {
                     let __asset_definition_id = ASSET.clone();
-                    AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::new(
+                        __asset_definition_id.clone(),
+                        "rose".to_owned(),
+                        NumericSpec::default(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                 }
                 .build(&GENESIS_ACCOUNT.id);
                 let accounts = ACCOUNT

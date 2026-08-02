@@ -1203,10 +1203,12 @@ mod tests {
                 dataspace: Some(dataspace),
                 program: Some("cbdc.transfer".parse().expect("program id")),
                 method: Some(sample_name("transfer")),
-                asset: Some(iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("centralbank", "universal").unwrap(),
-                    "CBDC".parse().unwrap(),
-                )),
+                asset: Some(
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("centralbank", "universal").unwrap(),
+                        "CBDC".parse().unwrap(),
+                    ),
+                ),
                 role: Some(AmxRole::Initiator),
             },
             effect: ManifestEffect::Allow(allowance),

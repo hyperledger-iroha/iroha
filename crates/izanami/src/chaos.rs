@@ -9221,7 +9221,7 @@ mod tests {
             uaid: None,
         };
         let asset = AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::parse_fully_qualified("chaosnet.universal").expect("domain id"),
                 "chaos_coin".parse().expect("asset name"),
             ),

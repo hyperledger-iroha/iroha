@@ -64,7 +64,7 @@ export PATH="${JAVA_HOME}/bin:${PATH}"
 java -version
 
 cd "${ROOT_DIR}/kotlin"
-./gradlew --no-daemon -q :core-jvm:test \
+./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
@@ -79,12 +79,25 @@ cd "${ROOT_DIR}/java/iroha_android"
   --tests org.hyperledger.iroha.android.norito.ProofAttachmentNoritoTests
 
 cd "${ROOT_DIR}"
+PRIVACY_CORE_JVM_VERSION="$(
+  awk -F= '$1 == "irohaSdkVersion" { print $2 }' kotlin/gradle.properties
+)"
+if [[ -z "${PRIVACY_CORE_JVM_VERSION}" ]]; then
+  echo "kotlin/gradle.properties does not declare irohaSdkVersion." >&2
+  exit 1
+fi
+PRIVACY_CORE_JVM_JAR="${ROOT_DIR}/kotlin/core-jvm/build/libs/core-jvm-${PRIVACY_CORE_JVM_VERSION}.jar"
+if [[ ! -f "${PRIVACY_CORE_JVM_JAR}" ]]; then
+  echo "core-jvm dependency was not built at ${PRIVACY_CORE_JVM_JAR}." >&2
+  exit 1
+fi
 javac \
+  -cp "${PRIVACY_CORE_JVM_JAR}" \
   -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \
   -d "${JAVA_OUT}" \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java
-java -ea -cp "${JAVA_OUT}" \
+java -ea -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
   org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest
-java -ea -cp "${JAVA_OUT}" \
+java -ea -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
   org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests

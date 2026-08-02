@@ -82,11 +82,7 @@ pub mod isi {
         alias: Option<&AssetDefinitionAlias>,
         definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
-        let mut allowed_stems = vec![definition.name().as_str()];
-        if let Some(projected_name) = definition.id().try_name() {
-            allowed_stems.push(projected_name.as_ref());
-        }
-        validate_asset_alias_against_names(alias, allowed_stems).map_err(|err| {
+        validate_asset_alias_against_names(alias, [definition.name().as_str()]).map_err(|err| {
             InstructionExecutionError::InvariantViolation(
                 format!("invalid asset definition alias: {err}").into(),
             )
@@ -116,38 +112,16 @@ pub mod isi {
         })
     }
 
-    fn asset_definition_home_dataspace_for_alias(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition: &AssetDefinition,
-        alias: Option<&AssetDefinitionAlias>,
-    ) -> Option<DataSpaceId> {
-        let dataspace_alias = alias
-            .map(|alias| alias.dataspace_segment().to_owned())
-            .or_else(|| {
-                definition
-                    .id()
-                    .try_domain()
-                    .map(|domain| domain.dataspace().as_ref().to_owned())
-            });
-
-        match dataspace_alias {
-            Some(alias) => dataspace_id_for_alias_segment(state_transaction, &alias),
-            None if definition.balance_scope_policy() == AssetBalancePolicy::Global => {
-                Some(DataSpaceId::UNIVERSAL)
-            }
-            None => None,
-        }
-    }
-
-    fn asset_definition_declared_home_dataspace(
+    fn asset_definition_home_dataspace(
         state_transaction: &StateTransaction<'_, '_>,
         definition: &AssetDefinition,
     ) -> Option<DataSpaceId> {
-        asset_definition_home_dataspace_for_alias(
-            state_transaction,
-            definition,
-            definition.alias().as_ref(),
-        )
+        definition
+            .owning_domain()
+            .as_ref()
+            .map_or(Some(DataSpaceId::UNIVERSAL), |domain| {
+                dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref())
+            })
     }
 
     fn dataspace_is_public_or_universal(
@@ -168,7 +142,6 @@ pub mod isi {
     fn ensure_global_asset_definition_home_is_public_or_universal(
         state_transaction: &StateTransaction<'_, '_>,
         definition: &AssetDefinition,
-        alias: Option<&AssetDefinitionAlias>,
     ) -> Result<(), InstructionExecutionError> {
         if state_transaction.replay_compatibility {
             return Ok(());
@@ -177,9 +150,16 @@ pub mod isi {
             return Ok(());
         }
 
-        let home_dataspace =
-            asset_definition_home_dataspace_for_alias(state_transaction, definition, alias)
-                .unwrap_or(DataSpaceId::UNIVERSAL);
+        let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "asset definition {} owning domain has no active dataspace",
+                        definition.id()
+                    )
+                    .into(),
+                )
+            })?;
 
         if !dataspace_is_public_or_universal(state_transaction, home_dataspace) {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -202,15 +182,18 @@ pub mod isi {
         if state_transaction.replay_compatibility {
             return Ok(());
         }
-        ensure_global_asset_definition_home_is_public_or_universal(
-            state_transaction,
-            definition,
-            definition.alias().as_ref(),
-        )?;
+        ensure_global_asset_definition_home_is_public_or_universal(state_transaction, definition)?;
 
-        let home_dataspace =
-            asset_definition_declared_home_dataspace(state_transaction, definition)
-                .unwrap_or(DataSpaceId::UNIVERSAL);
+        let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "asset definition {} owning domain has no active dataspace",
+                        definition.id()
+                    )
+                    .into(),
+                )
+            })?;
         let route_dataspace = state_transaction
             .current_dataspace_id
             .or(state_transaction.world.current_dataspace_id);
@@ -675,38 +658,6 @@ pub mod isi {
         }
     }
 
-    fn account_created_event_domain(
-        state_transaction: &StateTransaction<'_, '_>,
-        account_id: &AccountId,
-    ) -> Option<DomainId> {
-        state_transaction
-            .world
-            .bound_account_aliases(account_id)
-            .into_iter()
-            .filter(|alias| {
-                crate::sns::resolve_active_account_alias(
-                    &state_transaction.world,
-                    &state_transaction.nexus.dataspace_catalog,
-                    alias,
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .as_ref()
-                    == Some(account_id)
-            })
-            .find_map(|alias| {
-                alias
-                    .domain_id(&state_transaction.nexus.dataspace_catalog)
-                    .expect("bound account alias dataspace must exist in catalog")
-            })
-            .or_else(|| {
-                DomainId::try_new(
-                    crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
-                    crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
-                )
-                .ok()
-            })
-    }
-
     fn ensure_asset_definition_human_fields(
         asset_definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
@@ -721,6 +672,124 @@ pub mod isi {
             )
         })?;
         validate_alias_for_asset_definition(asset_definition.alias().as_ref(), asset_definition)?;
+        Ok(())
+    }
+
+    fn validate_asset_definition_alias_route(
+        state_transaction: &StateTransaction<'_, '_>,
+        alias: Option<&AssetDefinitionAlias>,
+    ) -> Result<(), InstructionExecutionError> {
+        let Some(alias) = alias else {
+            return Ok(());
+        };
+        if dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment()).is_none() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "asset definition alias `{alias}` references an unknown or inactive dataspace"
+                )
+                .into(),
+            ));
+        }
+        let Some(domain) = alias.domain_segment() else {
+            return Ok(());
+        };
+        let domain_id = DomainId::try_new(domain, alias.dataspace_segment()).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("asset definition alias `{alias}` has invalid domain context: {err}")
+                    .into(),
+            )
+        })?;
+        if state_transaction.world.domains.get(&domain_id).is_none() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("asset definition alias `{alias}` references missing domain {domain_id}")
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_authority_can_manage_asset_definition_alias(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        alias: &AssetDefinitionAlias,
+    ) -> Result<(), InstructionExecutionError> {
+        // Genesis is the trusted namespace bootstrap. Every post-genesis mutation must carry the
+        // exact account-alias namespace permission; replay compatibility deliberately does not
+        // bypass this first-release authorization boundary.
+        if state_transaction._curr_block.is_genesis() {
+            return Ok(());
+        }
+        let dataspace =
+            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                format!(
+                    "asset definition alias `{alias}` references an unknown or inactive dataspace"
+                )
+                .into(),
+            )
+                })?;
+        let domain = alias
+            .domain_segment()
+            .map(|domain| DomainId::try_new(domain, alias.dataspace_segment()))
+            .transpose()
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("asset definition alias `{alias}` has invalid domain context: {err}")
+                        .into(),
+                )
+            })?;
+        if authority_can_manage_account_alias_scope(
+            &state_transaction.world,
+            authority,
+            dataspace,
+            domain.as_ref(),
+        ) {
+            return Ok(());
+        }
+        Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "authority {authority} lacks exact CanManageAccountAlias scope for asset definition alias `{alias}`"
+            )
+            .into(),
+        ))
+    }
+
+    fn ensure_asset_definition_domain_context(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        asset_definition: &AssetDefinition,
+    ) -> Result<(), InstructionExecutionError> {
+        let owning_domain = asset_definition.owning_domain().as_ref();
+        if asset_definition.balance_scope_policy() == AssetBalancePolicy::DataspaceRestricted
+            && owning_domain.is_none()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "dataspace-restricted asset definition {} requires an explicit owning domain",
+                    asset_definition.id()
+                )
+                .into(),
+            ));
+        }
+        let Some(domain_id) = owning_domain else {
+            return Ok(());
+        };
+        let domain = state_transaction.world.domain(domain_id).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "asset definition {} references missing owning domain {domain_id}",
+                    asset_definition.id(),
+                )
+                .into(),
+            )
+        })?;
+        if domain.owned_by() != authority {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("authority {authority} does not own asset definition domain {domain_id}")
+                    .into(),
+            ));
+        }
         Ok(())
     }
 
@@ -1295,15 +1364,8 @@ pub mod isi {
                 ));
             }
 
-            if let Some(created_domain) =
-                account_created_event_domain(state_transaction, &account_id)
-            {
-                state_transaction
-                    .world
-                    .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                        AccountCreated::new(account, created_domain),
-                    ))));
-            }
+            let created = AccountEvent::Created(AccountCreated::new(account));
+            state_transaction.world.emit_events(Some(created.into()));
 
             Ok(())
         }
@@ -2288,6 +2350,22 @@ pub mod isi {
         ) -> Result<(), Error> {
             let asset_definition = self.object().clone().build(authority);
             ensure_asset_definition_human_fields(&asset_definition)?;
+            validate_asset_definition_alias_route(
+                state_transaction,
+                asset_definition.alias().as_ref(),
+            )?;
+            if let Some(alias) = asset_definition.alias().as_ref() {
+                ensure_authority_can_manage_asset_definition_alias(
+                    state_transaction,
+                    authority,
+                    alias,
+                )?;
+            }
+            ensure_asset_definition_domain_context(
+                state_transaction,
+                authority,
+                &asset_definition,
+            )?;
             ensure_global_asset_definition_registered_on_authoritative_route(
                 state_transaction,
                 &asset_definition,
@@ -2336,9 +2414,7 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::Created(asset_definition),
-                )));
+                .emit_asset_definition_event(AssetDefinitionEvent::Created(asset_definition));
 
             Ok(())
         }
@@ -2610,6 +2686,11 @@ pub mod isi {
                     .cloned(),
             );
 
+            let domain = state_transaction
+                .world
+                .asset_definition_domains
+                .get(&asset_definition_id)
+                .cloned();
             let mut events = Vec::with_capacity(assets_to_remove.len() + 1);
             for asset_id in assets_to_remove {
                 if state_transaction
@@ -2620,7 +2701,10 @@ pub mod isi {
                     error!(%asset_id, "asset not found. This is a bug");
                 }
 
-                events.push(AssetEvent::Deleted(asset_id).into());
+                events.push(DataEvent::asset(
+                    AssetEvent::Deleted(asset_id),
+                    domain.clone(),
+                ));
             }
 
             if state_transaction
@@ -2643,9 +2727,10 @@ pub mod isi {
                 .escrow_accounts
                 .remove(&asset_definition_id);
 
-            events.push(DataEvent::from(AssetDefinitionEvent::Deleted(
-                asset_definition_id,
-            )));
+            events.push(DataEvent::asset_definition(
+                AssetDefinitionEvent::Deleted(asset_definition_id),
+                domain,
+            ));
 
             state_transaction.world.emit_events(events);
 
@@ -2656,7 +2741,7 @@ pub mod isi {
     impl Execute for SetAssetDefinitionAlias {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let SetAssetDefinitionAlias {
@@ -2680,13 +2765,39 @@ pub mod isi {
                 .world
                 .asset_definition(&asset_definition_id)
                 .map_err(Error::from)?;
+            if definition.owned_by() != authority {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "only asset-definition owner {} may change alias for {asset_definition_id}",
+                        definition.owned_by()
+                    )
+                    .into(),
+                )
+                .into());
+            }
             validate_alias_for_asset_definition(alias.as_ref(), &definition)?;
-            ensure_global_asset_definition_home_is_public_or_universal(
-                state_transaction,
-                &definition,
-                alias.as_ref(),
-            )?;
-
+            validate_asset_definition_alias_route(state_transaction, alias.as_ref())?;
+            let existing_alias = state_transaction
+                .world
+                .asset_definition_alias_bindings
+                .get(&asset_definition_id)
+                .map(|binding| binding.alias.clone());
+            if let Some(alias) = alias.as_ref() {
+                ensure_authority_can_manage_asset_definition_alias(
+                    state_transaction,
+                    authority,
+                    alias,
+                )?;
+            }
+            if let Some(existing_alias) = existing_alias.as_ref()
+                && alias.as_ref() != Some(existing_alias)
+            {
+                ensure_authority_can_manage_asset_definition_alias(
+                    state_transaction,
+                    authority,
+                    existing_alias,
+                )?;
+            }
             if let Some(alias) = alias {
                 let bound_at_ms = state_transaction.block_unix_timestamp_ms();
                 if lease_expiry_ms.is_some_and(|lease_expiry_ms| lease_expiry_ms <= bound_at_ms) {
@@ -2710,255 +2821,6 @@ pub mod isi {
                 state_transaction
                     .world
                     .clear_asset_definition_alias(&asset_definition_id);
-            }
-
-            Ok(())
-        }
-    }
-
-    fn migrate_global_asset_balances_to_dataspace(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        asset_definition_id: &AssetDefinitionId,
-        dataspace_id: DataSpaceId,
-    ) -> Result<(), Error> {
-        let global_asset_ids = state_transaction
-            .world
-            .assets
-            .iter()
-            .filter_map(|(asset_id, _)| {
-                (asset_id.definition() == asset_definition_id
-                    && matches!(asset_id.scope(), AssetBalanceScope::Global))
-                .then_some(asset_id.clone())
-            })
-            .collect::<Vec<_>>();
-
-        // Preflight the complete migration before removing any global bucket. In particular, a
-        // pre-existing scoped bucket must be checked against its full post-merge balance rather
-        // than only the amount moving out of the global bucket.
-        let mut migrations = Vec::with_capacity(global_asset_ids.len());
-        for global_asset_id in global_asset_ids {
-            let Some(source_value) = state_transaction
-                .world
-                .assets
-                .get(&global_asset_id)
-                .cloned()
-            else {
-                return Err(FindError::Asset(global_asset_id.into()).into());
-            };
-            let source_amount = source_value.clone().into_inner();
-            let scoped_asset_id = AssetId::with_scope(
-                asset_definition_id.clone(),
-                global_asset_id.account().clone(),
-                AssetBalanceScope::Dataspace(dataspace_id),
-            );
-            let destination_existed = state_transaction
-                .world
-                .assets
-                .get(&scoped_asset_id)
-                .is_some();
-            let merged_amount = state_transaction
-                .world
-                .precheck_numeric_asset_credit_exact(&scoped_asset_id, &source_amount)?;
-
-            if state_transaction
-                .world
-                .asset_metadata
-                .get(&global_asset_id)
-                .is_some()
-                && state_transaction
-                    .world
-                    .asset_metadata
-                    .get(&scoped_asset_id)
-                    .is_some()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot migrate global asset bucket {global_asset_id}: dataspace bucket {scoped_asset_id} already has metadata"
-                    )
-                    .into(),
-                )
-                    .into());
-            }
-
-            migrations.push((
-                global_asset_id,
-                source_value,
-                source_amount,
-                scoped_asset_id,
-                destination_existed,
-                merged_amount,
-            ));
-        }
-
-        for (
-            global_asset_id,
-            source_value,
-            source_amount,
-            scoped_asset_id,
-            destination_existed,
-            merged_amount,
-        ) in migrations
-        {
-            let source_metadata = state_transaction
-                .world
-                .asset_metadata
-                .get(&global_asset_id)
-                .cloned();
-            let removed = state_transaction
-                .world
-                .remove_asset_and_metadata(&global_asset_id)
-                .expect("preflighted global migration source must remain present");
-            debug_assert_eq!(removed, source_value);
-
-            if destination_existed {
-                let destination_value = state_transaction
-                    .world
-                    .assets
-                    .get_mut(&scoped_asset_id)
-                    .expect("destination balance exists");
-                **destination_value = merged_amount;
-            } else {
-                state_transaction
-                    .world
-                    .assets
-                    .insert(scoped_asset_id.clone(), source_value);
-                state_transaction.world.track_asset_holder(&scoped_asset_id);
-            }
-            state_transaction
-                .world
-                .refresh_nonzero_asset_holder(&scoped_asset_id);
-            if let Some(source_metadata) = source_metadata {
-                state_transaction
-                    .world
-                    .asset_metadata
-                    .insert(scoped_asset_id.clone(), source_metadata);
-            }
-
-            state_transaction.world.emit_events([
-                AssetEvent::Removed(AssetChanged {
-                    asset: global_asset_id,
-                    amount: source_amount.clone(),
-                }),
-                AssetEvent::Added(AssetChanged {
-                    asset: scoped_asset_id,
-                    amount: source_amount,
-                }),
-            ]);
-        }
-
-        Ok(())
-    }
-
-    impl Execute for SetAssetDefinitionBalancePolicy {
-        fn execute(
-            self,
-            _authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let SetAssetDefinitionBalancePolicy {
-                asset_definition_id,
-                balance_scope_policy,
-                migrate_global_balances_to_dataspace,
-            } = self;
-
-            let current_policy = state_transaction
-                .world
-                .asset_definition(&asset_definition_id)
-                .map_err(Error::from)?
-                .balance_scope_policy();
-
-            if current_policy == balance_scope_policy {
-                if migrate_global_balances_to_dataspace.is_some() {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "migration dataspace is only accepted when changing Global to DataspaceRestricted"
-                                .into(),
-                        ),
-                    )
-                    .into());
-                }
-                return Ok(());
-            }
-
-            match (current_policy, balance_scope_policy) {
-                (AssetBalancePolicy::Global, AssetBalancePolicy::DataspaceRestricted) => {
-                    let dataspace_id = migrate_global_balances_to_dataspace.ok_or_else(|| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "Global to DataspaceRestricted migration requires migrate_global_balances_to_dataspace"
-                                    .into(),
-                            ),
-                        )
-                    })?;
-                    if state_transaction
-                        .nexus
-                        .dataspace_catalog
-                        .by_id(dataspace_id)
-                        .is_none()
-                    {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                format!("unknown migration dataspace {}", dataspace_id.as_u64())
-                                    .into(),
-                            ),
-                        )
-                        .into());
-                    }
-
-                    let referenced_by_revision = state_transaction
-                        .world
-                        .fee_sponsor_program_revisions
-                        .iter()
-                        .any(|(_, revision)| {
-                            revision
-                                .asset_budgets
-                                .iter()
-                                .any(|budget| budget.asset_definition_id == asset_definition_id)
-                        });
-                    let referenced_by_vault = state_transaction
-                        .world
-                        .fee_sponsor_vaults
-                        .iter()
-                        .any(|(key, _)| key.asset_definition_id == asset_definition_id);
-                    // Verified relay leases bind an immutable revision and funded vault, so these
-                    // two indexes also transitively cover every valid live sponsor allocation.
-                    if referenced_by_revision || referenced_by_vault {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                format!(
-                                    "asset definition {asset_definition_id} cannot become DataspaceRestricted while referenced by a fee sponsor revision, vault, or relay lease"
-                                )
-                                .into(),
-                            ),
-                        )
-                        .into());
-                    }
-
-                    migrate_global_asset_balances_to_dataspace(
-                        state_transaction,
-                        &asset_definition_id,
-                        dataspace_id,
-                    )?;
-                    state_transaction
-                        .world
-                        .asset_definition_mut(&asset_definition_id)
-                        .map_err(Error::from)?
-                        .balance_scope_policy = AssetBalancePolicy::DataspaceRestricted;
-                }
-                (AssetBalancePolicy::DataspaceRestricted, AssetBalancePolicy::Global) => {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "asset definition {asset_definition_id} cannot be promoted from DataspaceRestricted to Global"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-                (AssetBalancePolicy::Global, AssetBalancePolicy::Global)
-                | (
-                    AssetBalancePolicy::DataspaceRestricted,
-                    AssetBalancePolicy::DataspaceRestricted,
-                ) => {}
             }
 
             Ok(())
@@ -3111,15 +2973,13 @@ pub mod isi {
                         .insert(key.clone(), value.clone())
                 })?;
 
-            state_transaction
-                .world
-                .emit_events(Some(AssetDefinitionEvent::MetadataInserted(
-                    MetadataChanged {
-                        target: asset_definition_id,
-                        key,
-                        value,
-                    },
-                )));
+            state_transaction.world.emit_asset_definition_event(
+                AssetDefinitionEvent::MetadataInserted(MetadataChanged {
+                    target: asset_definition_id,
+                    key,
+                    value,
+                }),
+            );
 
             Ok(())
         }
@@ -3143,15 +3003,13 @@ pub mod isi {
                         .ok_or_else(|| FindError::MetadataKey(self.key().clone()))
                 })?;
 
-            state_transaction
-                .world
-                .emit_events(Some(AssetDefinitionEvent::MetadataRemoved(
-                    MetadataChanged {
-                        target: asset_definition_id,
-                        key: self.key().clone(),
-                        value,
-                    },
-                )));
+            state_transaction.world.emit_asset_definition_event(
+                AssetDefinitionEvent::MetadataRemoved(MetadataChanged {
+                    target: asset_definition_id,
+                    key: self.key().clone(),
+                    value,
+                }),
+            );
 
             Ok(())
         }
@@ -3246,15 +3104,25 @@ pub mod isi {
 
             let next_musubi_owner_generation = (source != destination)
                 .then(|| {
-                    state_transaction
+                    let current_generation = match state_transaction
                         .world
-                        .musubi_domain_ownership_generation(&object)
-                        .checked_add(1)
-                        .ok_or_else(|| {
-                            Error::InvariantViolation(
-                                "Musubi domain ownership generation overflow".into(),
-                            )
-                        })
+                        .musubi_domain_ownership_generations()
+                        .get(&object)
+                        .copied()
+                    {
+                        None => 1,
+                        Some(generation) if generation >= 2 => generation,
+                        Some(_) => {
+                            return Err(Error::InvariantViolation(
+                                "Musubi domain ownership generation is noncanonical".into(),
+                            ));
+                        }
+                    };
+                    current_generation.checked_add(1).ok_or_else(|| {
+                        Error::InvariantViolation(
+                            "Musubi domain ownership generation overflow".into(),
+                        )
+                    })
                 })
                 .transpose()?;
 
@@ -3922,22 +3790,28 @@ mod tests {
         Register::domain(Domain::new(active_domain_id.clone()))
             .execute(authority, state_transaction)
             .expect("register active governance guard domain");
-        let active_voting_asset_id = AssetDefinitionId::new(
+        let active_voting_asset_id = AssetDefinitionId::derive_from_components(
             active_domain_id,
             "replacement".parse().expect("replacement asset name"),
         );
-        Register::asset_definition(
-            AssetDefinition::numeric(active_voting_asset_id.clone())
-                .with_name(active_voting_asset_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            active_voting_asset_id.clone(),
+            "replacement".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(authority, state_transaction)
         .expect("register replacement governance voting asset");
-        let voting_asset_id =
-            AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
-        Register::asset_definition(
-            AssetDefinition::numeric(voting_asset_id.clone())
-                .with_name(voting_asset_id.name().to_string()),
-        )
+        let voting_asset_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "xor".parse().expect("asset name"),
+        );
+        Register::asset_definition(AssetDefinition::numeric(
+            voting_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(authority, state_transaction)
         .expect("register retained validation-fee voting asset");
         let bond_escrow_account = fixture_account(0x91);
@@ -3990,7 +3864,7 @@ mod tests {
     }
 
     fn validation_fee_guard_sbd_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("sbd", "guard").expect("SBD guard domain"),
             "sbd".parse().expect("SBD asset name"),
         )
@@ -4001,7 +3875,7 @@ mod tests {
     ) -> ValidationFeeTreasuryPayoutBindingV1 {
         let controller = fixture_account(0xA0);
         let contract_address = ContractAddress::derive(
-            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &controller,
             91,
             DataSpaceId::UNIVERSAL,
@@ -4153,7 +4027,7 @@ mod tests {
                 approved: true,
             },
         );
-        state_transaction.world.governance_proposals.insert(
+        state_transaction.world.put_governance_proposal(
             proposal_id,
             GovernanceProposalRecord {
                 proposer: (*ALICE_ID).clone(),
@@ -4213,7 +4087,7 @@ mod tests {
     fn drift_validation_fee_governance_config(
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     ) {
-        state_transaction.gov.voting_asset_id = AssetDefinitionId::new(
+        state_transaction.gov.voting_asset_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("active", "guard").expect("active guard domain"),
             "replacement".parse().expect("replacement asset name"),
         );
@@ -4305,18 +4179,22 @@ mod tests {
             DomainId::try_new("orchard_account", "guard").expect("Orchard guard domain");
         seed_domain(&mut state, &domain_id, &authority);
         let reserve_account = AccountId::new(checked_keypair().public_key().clone());
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "coin".parse().expect("asset name"),
+        );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::account(NewAccount::new(reserve_account.clone()))
             .execute(&authority, &mut transaction)
             .expect("register Orchard reserve account");
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(&authority, &mut transaction)
         .expect("register Orchard backing definition");
         let state_key = install_orchard_pool_dependency_guard(
@@ -4351,18 +4229,22 @@ mod tests {
         let domain_id = DomainId::try_new("orchard_asset", "guard").expect("Orchard guard domain");
         seed_domain(&mut state, &domain_id, &authority);
         let reserve_account = AccountId::new(checked_keypair().public_key().clone());
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "coin".parse().expect("asset name"),
+        );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::account(NewAccount::new(reserve_account.clone()))
             .execute(&authority, &mut transaction)
             .expect("register Orchard reserve account");
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(&authority, &mut transaction)
         .expect("register Orchard backing definition");
         let state_key = install_orchard_pool_dependency_guard(
@@ -4401,18 +4283,22 @@ mod tests {
         let domain_id = DomainId::try_new("orchard_domain", "guard").expect("Orchard guard domain");
         seed_domain(&mut state, &domain_id, &authority);
         let reserve_account = AccountId::new(checked_keypair().public_key().clone());
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "coin".parse().expect("asset name"));
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "coin".parse().expect("asset name"),
+        );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::account(NewAccount::new(reserve_account.clone()))
             .execute(&authority, &mut transaction)
             .expect("register Orchard reserve account");
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(&authority, &mut transaction)
         .expect("register Orchard backing definition");
         let state_key = install_orchard_pool_dependency_guard(
@@ -4660,7 +4546,7 @@ mod tests {
     fn repair_only_quote_guard() -> AliasQuoteGuardV1 {
         AliasQuoteGuardV1 {
             expected_policy_version: 0,
-            expected_payment_asset: AssetDefinitionId::new(
+            expected_payment_asset: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("assets", "universal").expect("fixture asset domain"),
                 "xor".parse().expect("fixture asset name"),
             ),
@@ -5015,13 +4901,6 @@ mod tests {
                 tx.world.insert_domain_entry(domain_id.clone(), domain);
                 tx.world.track_domain_owner(&domain_id, &domain_owner);
             }
-            let domain_selector =
-                iroha_data_model::account::AccountDomainSelector::from_domain(&domain_id)
-                    .expect("fixture domain selector");
-            tx.world
-                .domain_selectors
-                .insert(domain_selector, domain_id.clone());
-
             let selector =
                 crate::sns::selector_for_domain(&domain_id).expect("SNS domain selector");
             let storage_key = crate::sns::record_storage_key(&selector);
@@ -5248,7 +5127,7 @@ mod tests {
     }
 
     #[test]
-    fn register_domainless_account_emits_created_event_with_universal_domain() {
+    fn register_domainless_account_emits_direct_created_event() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let account_id = AccountId::new(checked_keypair().public_key().clone());
@@ -5260,17 +5139,12 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register domainless account");
 
-        let expected_domain = DomainId::try_new(
-            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
-            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
-        )
-        .expect("reserved universal dataspace alias should form a domain id");
         let created = tx
             .world
             .internal_event_buf
             .iter()
             .find_map(|event| match event.as_ref() {
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Created(created)))
+                DataEvent::Account(AccountEvent::Created(created))
                     if created.account.id() == &account_id =>
                 {
                     Some(created.clone())
@@ -5279,7 +5153,10 @@ mod tests {
             })
             .expect("account created event");
 
-        assert_eq!(created.domain, expected_domain);
+        assert_eq!(created.account.id(), &account_id);
+        assert!(tx.world.internal_event_buf.iter().all(|event| {
+            !matches!(event.as_ref(), DataEvent::Domain(DomainEvent::Account(_)))
+        }));
     }
 
     #[test]
@@ -5309,7 +5186,7 @@ mod tests {
     }
 
     #[test]
-    fn register_account_with_label_emits_created_event_with_alias_domain() {
+    fn register_account_with_label_still_emits_direct_created_event() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -5333,7 +5210,7 @@ mod tests {
             .internal_event_buf
             .iter()
             .find_map(|event| match event.as_ref() {
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Created(created)))
+                DataEvent::Account(AccountEvent::Created(created))
                     if created.account.id() == &account_id =>
                 {
                     Some(created.clone())
@@ -5342,7 +5219,10 @@ mod tests {
             })
             .expect("account created event");
 
-        assert_eq!(created.domain, domain_id);
+        assert_eq!(created.account.id(), &account_id);
+        assert!(tx.world.internal_event_buf.iter().all(|event| {
+            !matches!(event.as_ref(), DataEvent::Domain(DomainEvent::Account(_)))
+        }));
     }
 
     #[test]
@@ -7366,6 +7246,52 @@ mod tests {
     }
 
     #[test]
+    fn transfer_domain_rejects_noncanonical_musubi_generation_before_owner_mutation() {
+        for generation in [0, 1] {
+            let mut state = test_state();
+            let source = (*ALICE_ID).clone();
+            let destination = (*BOB_ID).clone();
+            let domain_id = DomainId::try_new("generation_guard", "universal").expect("domain id");
+            seed_domain(&mut state, &domain_id, &source);
+            seed_account(&mut state, &source, &domain_id);
+            seed_account(&mut state, &destination, &domain_id);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .musubi_domain_ownership_generations_mut()
+                .insert(domain_id.clone(), generation);
+
+            let error = Transfer::domain(source.clone(), domain_id.clone(), destination.clone())
+                .execute(&source, &mut transaction)
+                .expect_err("a noncanonical stored generation must fail before transfer");
+            assert!(
+                error
+                    .to_string()
+                    .contains("Musubi domain ownership generation is noncanonical"),
+                "unexpected generation guard error: {error}"
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .domain(&domain_id)
+                    .expect("domain remains registered")
+                    .owned_by(),
+                &source
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .musubi_domain_ownership_generations()
+                    .get(&domain_id),
+                Some(&generation)
+            );
+        }
+    }
+
+    #[test]
     fn register_account_rejects_opaque_ids_without_uaid() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("opaque", "world").expect("domain id");
@@ -7724,11 +7650,15 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
         Register::asset_definition({
             let __asset_definition_id = asset_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -7935,8 +7865,7 @@ mod tests {
             },
         );
         tx.world
-            .governance_locks
-            .insert("retained-account-custody".to_owned(), locks);
+            .put_governance_locks("retained-account-custody".to_owned(), locks);
         tx.gov.bond_escrow_account = authority.clone();
         tx.gov.slash_receiver_account = authority.clone();
 
@@ -8350,7 +8279,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap());
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "bond".parse().unwrap());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8359,8 +8288,12 @@ mod tests {
             .expect("register account");
         Register::asset_definition({
             let __asset_definition_id = asset_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "bond".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -8748,7 +8681,8 @@ mod tests {
 
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "usd".parse().unwrap());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8757,8 +8691,12 @@ mod tests {
             .expect("register account");
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -8786,17 +8724,24 @@ mod tests {
         let chain_id: ChainId = "offline-escrow-testnet".parse().expect("chain id");
         let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "usd".parse().expect("asset definition name"),
         );
         let escrow_account_id =
             iroha_data_model::offline::offline_escrow_account_id(&chain_id, &asset_definition_id);
         let mut metadata = Metadata::default();
-        metadata.insert("offline.enabled".parse().expect("legacy metadata key"), Json::new(true));
-        let mut asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string())
-            .build(&authority);
+        metadata.insert(
+            "offline.enabled".parse().expect("legacy metadata key"),
+            Json::new(true),
+        );
+        let mut asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "usd".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         asset_definition.metadata = metadata;
         let world = World::with_assets(
             [Domain::new(domain_id).build(&authority)],
@@ -9109,7 +9054,10 @@ mod tests {
                 lane_id: LaneId::SINGLE,
                 epoch: 1,
                 asset: AssetId::new(
-                    AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap()),
+                    AssetDefinitionId::derive_from_components(
+                        domain_id.clone(),
+                        "fee".parse().unwrap(),
+                    ),
                     account_id.clone(),
                 ),
                 total_reward: Quantity::from(1_u32),
@@ -9156,7 +9104,10 @@ mod tests {
                 LaneId::SINGLE,
                 authority.clone(),
                 AssetId::new(
-                    AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap()),
+                    AssetDefinitionId::derive_from_components(
+                        domain_id.clone(),
+                        "fee".parse().unwrap(),
+                    ),
                     account_id.clone(),
                 ),
             ),
@@ -9209,7 +9160,10 @@ mod tests {
                 lane_id: LaneId::new(1),
                 epoch: 1,
                 asset: AssetId::new(
-                    AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap()),
+                    AssetDefinitionId::derive_from_components(
+                        domain_id.clone(),
+                        "fee".parse().unwrap(),
+                    ),
                     account_id.clone(),
                 ),
                 total_reward: Quantity::from(1_u32),
@@ -9269,22 +9223,31 @@ mod tests {
             account_id.clone(),
             authority.clone(),
             iroha_data_model::repo::RepoCashLeg {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     domain_id.clone(),
                     "usd".parse().unwrap(),
                 ),
                 quantity: Quantity::from(10_u32),
             },
             AssetId::new(
-                AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
+                AssetDefinitionId::derive_from_components(
+                    domain_id.clone(),
+                    "usd".parse().unwrap(),
+                ),
                 authority.clone(),
             ),
             iroha_data_model::repo::RepoCollateralLeg::new(
-                AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
+                AssetDefinitionId::derive_from_components(
+                    domain_id.clone(),
+                    "bond".parse().unwrap(),
+                ),
                 Quantity::from(12_u32),
             ),
             AssetId::new(
-                AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
+                AssetDefinitionId::derive_from_components(
+                    domain_id.clone(),
+                    "bond".parse().unwrap(),
+                ),
                 authority.clone(),
             ),
             250,
@@ -9342,7 +9305,10 @@ mod tests {
                 iroha_data_model::isi::SettlementLegSnapshot {
                     role: iroha_data_model::isi::SettlementLegRole::Delivery,
                     leg: iroha_data_model::isi::SettlementLeg::new(
-                        AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
+                        AssetDefinitionId::derive_from_components(
+                            domain_id.clone(),
+                            "usd".parse().unwrap(),
+                        ),
                         Quantity::one(),
                         account_id.clone(),
                         authority.clone(),
@@ -9351,7 +9317,10 @@ mod tests {
                 iroha_data_model::isi::SettlementLegSnapshot {
                     role: iroha_data_model::isi::SettlementLegRole::Payment,
                     leg: iroha_data_model::isi::SettlementLeg::new(
-                        AssetDefinitionId::new(domain_id.clone(), "eur".parse().unwrap()),
+                        AssetDefinitionId::derive_from_components(
+                            domain_id.clone(),
+                            "eur".parse().unwrap(),
+                        ),
                         Quantity::one(),
                         authority.clone(),
                         account_id.clone(),
@@ -9489,7 +9458,7 @@ mod tests {
         let proposal_id = [0xA5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse()
                     .expect("contract address"),
                 code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
@@ -9500,7 +9469,7 @@ mod tests {
                 manifest_provenance: None,
             },
         );
-        tx.world.governance_proposals.insert(
+        tx.world.put_governance_proposal(
             proposal_id,
             crate::state::GovernanceProposalRecord {
                 proposer: account_id.clone(),
@@ -9862,7 +9831,7 @@ mod tests {
         let proposal_id = [0xC5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse()
                     .expect("contract address"),
                 code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
@@ -9881,7 +9850,7 @@ mod tests {
             candidate_count: 0,
             derived_by: Default::default(),
         };
-        tx.world.governance_proposals.insert(
+        tx.world.put_governance_proposal(
             proposal_id,
             crate::state::GovernanceProposalRecord {
                 proposer: authority.clone(),
@@ -10022,7 +9991,8 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let asset_name: Name = "usd".parse().expect("asset name");
-        let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), asset_name);
         let mut metadata = Metadata::default();
         metadata.insert(
             "offline.enabled".parse().expect("legacy metadata key"),
@@ -10039,6 +10009,7 @@ mod tests {
             logo: None,
             metadata,
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10067,7 +10038,8 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let asset_name: Name = "eur".parse().expect("asset name");
-        let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), asset_name);
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "EUR".to_owned(),
@@ -10078,6 +10050,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10106,8 +10079,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id =
-            AssetDefinitionId::new(domain_id, "unit".parse().expect("asset definition name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "unit".parse().expect("asset definition name"),
+        );
         let new_definition = NewAssetDefinition {
             id: definition_id,
             name: "Private Unit".to_owned(),
@@ -10118,6 +10093,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10176,8 +10152,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id =
-            AssetDefinitionId::new(domain_id, "unit".parse().expect("asset definition name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "unit".parse().expect("asset definition name"),
+        );
         let new_definition = NewAssetDefinition {
             id: definition_id,
             name: "Private Unit".to_owned(),
@@ -10188,6 +10166,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10212,7 +10191,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("private-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "unit".parse().expect("name"),
+        );
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
@@ -10224,6 +10206,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10252,7 +10235,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("private-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "unit".parse().expect("name"),
+        );
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id,
@@ -10264,6 +10250,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10292,7 +10279,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "unit".parse().expect("name"),
+        );
         let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
@@ -10304,6 +10294,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: Some(domain_id),
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10329,12 +10320,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId =
-            DomainId::try_new("restricted-unit", "universal").expect("domain");
+        let domain_id: DomainId = DomainId::try_new("restricted-unit", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "unit".parse().expect("name"),
+        );
+        let alias: AssetDefinitionAlias = "unit#restricted-unit.paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "unit".to_owned(),
@@ -10345,6 +10338,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            owning_domain: Some(domain_id),
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10373,6 +10367,51 @@ mod tests {
     }
 
     #[test]
+    fn register_restricted_asset_definition_requires_explicit_owning_domain() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let paynet = DataSpaceId::new(7);
+        let definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x8a, 0xb5, 0xec, 0x8c, 0x32, 0xdf, 0x46, 0xcf, 0x87, 0xca, 0x3e, 0xd9, 0xce, 0x36,
+            0xa8, 0x19,
+        ])
+        .expect("opaque asset definition id");
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("dataspace-root alias");
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "unit".to_owned(),
+            AssetBalancePolicy::DataspaceRestricted,
+            None,
+        )
+        .with_alias(Some(alias.clone()));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
+        tx.current_dataspace_id = Some(paynet);
+        tx.world.current_dataspace_id = Some(paynet);
+
+        let error = Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect_err("restricted definitions must not omit authoritative domain context");
+        assert!(
+            error
+                .to_string()
+                .contains("requires an explicit owning domain"),
+            "unexpected error: {error}"
+        );
+        assert!(tx.world.asset_definitions.get(&definition_id).is_none());
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
+        assert!(
+            tx.world
+                .asset_definition_domains
+                .get(&definition_id)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn register_asset_definition_rejects_missing_explicit_name() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -10380,15 +10419,22 @@ mod tests {
             DomainId::try_new("missing-name", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id =
-            AssetDefinitionId::new(domain_id, "usd".parse().expect("asset definition name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "usd".parse().expect("asset definition name"),
+        );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        let err = Register::asset_definition(AssetDefinition::numeric(definition_id))
-            .execute(&authority, &mut tx)
-            .expect_err("registration without explicit name must fail");
+        let err = Register::asset_definition(AssetDefinition::numeric(
+            definition_id,
+            "   ".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&authority, &mut tx)
+        .expect_err("registration without explicit name must fail");
         assert!(
             err.to_string().contains("invalid asset definition name"),
             "unexpected error: {err}"
@@ -10402,8 +10448,14 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-test", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let id1 = AssetDefinitionId::new(domain_id.clone(), "usd1".parse().expect("asset name"));
-        let id2 = AssetDefinitionId::new(domain_id, "usd2".parse().expect("asset name"));
+        let id1 = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "usd1".parse().expect("asset name"),
+        );
+        let id2 = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "usd2".parse().expect("asset name"),
+        );
         let alias: AssetDefinitionAlias = "USD#issuer.main".parse().expect("alias");
 
         let first = NewAssetDefinition {
@@ -10416,6 +10468,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let second = NewAssetDefinition {
@@ -10428,6 +10481,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10449,6 +10503,156 @@ mod tests {
     }
 
     #[test]
+    fn asset_alias_requires_asset_owner_and_exact_domain_namespace_scope() {
+        let attacker = (*ALICE_ID).clone();
+        let namespace_owner = (*BOB_ID).clone();
+        let mut state = test_state_with_authority(&attacker);
+        let issuer_domain =
+            DomainId::try_new("attacker-issuer", "universal").expect("issuer domain");
+        let victim_domain =
+            DomainId::try_new("victim", "universal").expect("victim namespace domain");
+        seed_domain(&mut state, &issuer_domain, &attacker);
+        seed_domain(&mut state, &victim_domain, &namespace_owner);
+        seed_account(&mut state, &namespace_owner, &victim_domain);
+
+        let definition_id = AssetDefinitionId::derive_from_components(
+            issuer_domain,
+            "usd".parse().expect("asset name"),
+        );
+        let alias: AssetDefinitionAlias = "usd#victim.universal".parse().expect("alias");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let error = Register::asset_definition(
+            AssetDefinition::numeric(
+                definition_id.clone(),
+                "usd".to_owned(),
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .with_alias(Some(alias.clone())),
+        )
+        .execute(&attacker, &mut tx)
+        .expect_err("asset ownership must not confer a victim-domain alias");
+        assert!(error.to_string().contains("CanManageAccountAlias"));
+        assert!(tx.world.asset_definitions.get(&definition_id).is_none());
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
+
+        Register::asset_definition(AssetDefinition::numeric(
+            definition_id.clone(),
+            "usd".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&attacker, &mut tx)
+        .expect("register unaliased attacker-owned definition");
+
+        let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&attacker, &mut tx)
+            .expect_err("asset owner still needs exact victim-domain namespace scope");
+        assert!(error.to_string().contains("CanManageAccountAlias"));
+        assert!(
+            tx.world
+                .asset_definition_alias_bindings
+                .get(&definition_id)
+                .is_none()
+        );
+
+        tx.world.add_account_permission(
+            &namespace_owner,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(victim_domain.clone()),
+            }),
+        );
+        let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&namespace_owner, &mut tx)
+            .expect_err("namespace authority must not replace asset-owner authority");
+        assert!(error.to_string().contains("only asset-definition owner"));
+        assert!(
+            tx.world
+                .asset_definition_alias_bindings
+                .get(&definition_id)
+                .is_none()
+        );
+
+        tx.world.add_account_permission(
+            &attacker,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(victim_domain),
+            }),
+        );
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&attacker, &mut tx)
+            .expect("delegated exact domain scope and asset ownership authorize binding");
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id)
+        );
+    }
+
+    #[test]
+    fn domainless_asset_alias_requires_exact_dataspace_namespace_scope() {
+        let authority = (*ALICE_ID).clone();
+        let mut state = test_state_with_authority(&authority);
+        let issuer_domain =
+            DomainId::try_new("dataspace-issuer", "universal").expect("issuer domain");
+        seed_domain(&mut state, &issuer_domain, &authority);
+        let definition_id = AssetDefinitionId::derive_from_components(
+            issuer_domain,
+            "cash".parse().expect("asset name"),
+        );
+        let alias: AssetDefinitionAlias = "cash#paynet".parse().expect("dataspace-root alias");
+
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
+        Register::asset_definition(AssetDefinition::numeric(
+            definition_id.clone(),
+            "cash".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&authority, &mut tx)
+        .expect("register unaliased definition");
+
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(
+                    DomainId::try_new("unrelated", "paynet").expect("unrelated domain scope"),
+                ),
+            }),
+        );
+        let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect_err("domain permission must not authorize a dataspace-root alias");
+        assert!(error.to_string().contains("CanManageAccountAlias"));
+        assert!(
+            tx.world
+                .asset_definition_alias_bindings
+                .get(&definition_id)
+                .is_none()
+        );
+
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
+            }),
+        );
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("delegated exact dataspace scope authorizes domainless binding");
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id)
+        );
+    }
+
+    #[test]
     fn set_asset_definition_alias_updates_world_indexes() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -10456,7 +10660,8 @@ mod tests {
             DomainId::try_new("alias-update", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "usd".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "USD".to_owned(),
@@ -10467,6 +10672,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10512,7 +10718,8 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-clear", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "usd".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "USD".to_owned(),
@@ -10523,6 +10730,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10569,7 +10777,8 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-global", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "unit".to_owned(),
@@ -10580,6 +10789,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10610,7 +10820,8 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-public", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "unit".to_owned(),
@@ -10621,6 +10832,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10651,7 +10863,8 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-universal", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -10659,10 +10872,14 @@ mod tests {
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.world.insert_asset_definition_entry(
             definition_id.clone(),
-            AssetDefinition::numeric(definition_id.clone())
-                .with_name("unit".to_owned())
-                .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
-                .build(&authority),
+            AssetDefinition::numeric(
+                definition_id.clone(),
+                "unit".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&authority),
+            Some(domain_id),
         );
 
         let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
@@ -10684,7 +10901,8 @@ mod tests {
             DomainId::try_new("alias-clear-universal", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "unit".to_owned(),
@@ -10695,6 +10913,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10728,11 +10947,15 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("cash", "paynet").expect("domain");
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("unit".to_owned())
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
-            .build(&authority);
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "unit".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -10769,7 +10992,8 @@ mod tests {
             DomainId::try_new("alias-restricted", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "unit".to_owned(),
@@ -10780,6 +11004,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -10804,646 +11029,16 @@ mod tests {
     }
 
     #[test]
-    fn balance_policy_migration_rejects_fee_sponsor_revision_and_vault_assets() {
-        use iroha_data_model::nexus::{
-            FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorIvmSelector,
-            FeeSponsorProgramId, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
-            FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVault,
-            FeeSponsorVaultKey,
-        };
-
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id = DomainId::try_new("sponsor-policy-lock", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let revision_asset =
-            AssetDefinitionId::new(domain_id.clone(), "revision".parse().expect("name"));
-        let vault_asset = AssetDefinitionId::new(domain_id, "vault".parse().expect("name"));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let paynet = DataSpaceId::new(7);
-        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
-        for (id, name) in [
-            (revision_asset.clone(), "Revision Fee Asset"),
-            (vault_asset.clone(), "Vault Fee Asset"),
-        ] {
-            Register::asset_definition(NewAssetDefinition {
-                id,
-                name: name.to_owned(),
-                description: None,
-                alias: None,
-                spec: NumericSpec::integer(),
-                mintable: Mintable::Infinitely,
-                logo: None,
-                metadata: Metadata::default(),
-                balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-                confidential_policy: AssetConfidentialPolicy::transparent(),
-            })
-            .execute(&authority, &mut tx)
-            .expect("register global fee asset");
-        }
-
-        let program_id = FeeSponsorProgramId::new(
-            authority.clone(),
-            "policy_lock".parse().expect("program name"),
-        );
-        tx.world.fee_sponsor_program_revisions.insert(
-            FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
-            FeeSponsorProgramRevision {
-                program_id: program_id.clone(),
-                revision: 1,
-                eligibility: FeeSponsorEligibility::EnrolledOnly,
-                rules: vec![FeeSponsorRule {
-                    id: "allow_ivm".parse().expect("rule name"),
-                    effect: FeeSponsorRuleEffect::Allow,
-                    selectors: vec![FeeSponsorRuleSelector::Ivm(FeeSponsorIvmSelector {
-                        code_hash: Hash::new(b"fee-sponsor-policy-lock"),
-                    })],
-                }],
-                asset_budgets: vec![FeeSponsorAssetBudget {
-                    asset_definition_id: revision_asset.clone(),
-                    per_transaction: Quantity::from(1_u32),
-                    per_block: Quantity::from(10_u32),
-                    per_program_epoch: Quantity::from(100_u32),
-                    per_beneficiary_epoch: Quantity::from(5_u32),
-                    reserve_floor: Quantity::zero(),
-                    epoch_length_blocks: nonzero!(100_u64),
-                }],
-            },
-        );
-        let vault_key = FeeSponsorVaultKey {
-            program_id,
-            asset_definition_id: vault_asset.clone(),
-        };
-        tx.world.fee_sponsor_vaults.insert(
-            vault_key.clone(),
-            FeeSponsorVault {
-                key: vault_key,
-                balance: Quantity::from(1_u32),
-            },
-        );
-
-        for asset_definition_id in [revision_asset, vault_asset] {
-            let error = SetAssetDefinitionBalancePolicy::new(
-                asset_definition_id.clone(),
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                Some(paynet),
-            )
-            .execute(&authority, &mut tx)
-            .expect_err("fee sponsor reference must lock global balance policy");
-            assert!(
-                instruction_error_contains(&error, "fee sponsor revision, vault, or relay lease"),
-                "unexpected migration error: {error}"
-            );
-            assert_eq!(
-                tx.world
-                    .asset_definition(&asset_definition_id)
-                    .expect("fee asset definition remains registered")
-                    .balance_scope_policy(),
-                iroha_data_model::asset::AssetBalancePolicy::Global
-            );
-        }
-    }
-
-    #[test]
-    fn set_asset_definition_balance_policy_migrates_global_balances_to_dataspace() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId =
-            DomainId::try_new("policy-migration", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-        seed_account(&mut state, &ALICE_ID, &domain_id);
-        seed_account(&mut state, &BOB_ID, &domain_id);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "Private Unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let paynet = DataSpaceId::new(7);
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: paynet,
-                alias: "paynet".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog");
-        tx.nexus.dataspace_catalog = dataspace_catalog.clone();
-        tx.world.dataspace_catalog = dataspace_catalog;
-
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register global definition");
-        Mint::asset_quantity(10_u32, AssetId::of(definition_id.clone(), ALICE_ID.clone()))
-            .execute(&authority, &mut tx)
-            .expect("mint alice");
-        Mint::asset_quantity(5_u32, AssetId::of(definition_id.clone(), BOB_ID.clone()))
-            .execute(&authority, &mut tx)
-            .expect("mint bob");
-
-        let original_total = tx
-            .world
-            .asset_definition(&definition_id)
-            .expect("definition exists")
-            .total_quantity()
-            .clone();
-
-        SetAssetDefinitionBalancePolicy::new(
-            definition_id.clone(),
-            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            Some(paynet),
-        )
-        .execute(&authority, &mut tx)
-        .expect("migrate balance policy");
-
-        let updated = tx
-            .world
-            .asset_definition(&definition_id)
-            .expect("definition exists");
-        assert_eq!(
-            updated.balance_scope_policy(),
-            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
-        );
-        assert_eq!(updated.total_quantity(), &original_total);
-
-        let alice_global = AssetId::of(definition_id.clone(), ALICE_ID.clone());
-        let bob_global = AssetId::of(definition_id.clone(), BOB_ID.clone());
-        let alice_scoped = AssetId::with_scope(
-            definition_id.clone(),
-            ALICE_ID.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(paynet),
-        );
-        let bob_scoped = AssetId::with_scope(
-            definition_id.clone(),
-            BOB_ID.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(paynet),
-        );
-
-        assert!(tx.world.assets.get(&alice_global).is_none());
-        assert!(tx.world.assets.get(&bob_global).is_none());
-        assert_eq!(
-            tx.world
-                .assets
-                .get(&alice_scoped)
-                .map(|value| value.clone().into_inner()),
-            Some(Quantity::from(10_u32))
-        );
-        assert_eq!(
-            tx.world
-                .assets
-                .get(&bob_scoped)
-                .map(|value| value.clone().into_inner()),
-            Some(Quantity::from(5_u32))
-        );
-        assert!(
-            tx.world
-                .asset_definition_assets
-                .get(&definition_id)
-                .is_some_and(
-                    |assets| assets.contains(&alice_scoped) && assets.contains(&bob_scoped)
-                )
-        );
-    }
-
-    #[test]
-    fn balance_policy_migration_rejects_merged_bucket_above_holding_limit_atomically() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id =
-            DomainId::try_new("policy-limit-migration", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-        seed_account(&mut state, &ALICE_ID, &domain_id);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "Limited Private Unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let paynet = DataSpaceId::new(7);
-        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register global definition");
-
-        let global_asset = AssetId::new(definition_id.clone(), ALICE_ID.clone());
-        Mint::asset_quantity(10_u32, global_asset.clone())
-            .execute(&authority, &mut tx)
-            .expect("mint global balance");
-        let scoped_asset = AssetId::with_scope(
-            definition_id.clone(),
-            ALICE_ID.clone(),
-            AssetBalanceScope::Dataspace(paynet),
-        );
-        let (scoped_asset_id, scoped_value) =
-            Asset::new(scoped_asset.clone(), Quantity::from(2_u32)).into_key_value();
-        tx.world
-            .assets
-            .insert(scoped_asset_id.clone(), scoped_value);
-        tx.world.track_asset_holder(&scoped_asset_id);
-        tx.world.track_nonzero_asset_holder(&scoped_asset_id);
-        tx.world
-            .increase_asset_total_amount(&definition_id, &Quantity::from(2_u32))
-            .expect("fixture total includes the pre-existing scoped bucket");
-
-        let metadata_key: Name = "migration_note".parse().expect("metadata key");
-        let mut global_metadata = Metadata::default();
-        global_metadata.insert(
-            metadata_key,
-            Json::new("stay global on rejection".to_owned()),
-        );
-        tx.world
-            .asset_metadata
-            .insert(global_asset.clone(), global_metadata.clone());
-
-        SetAssetHoldingLimit::new(
-            ALICE_ID.clone(),
-            definition_id.clone(),
-            Some(Quantity::from(11_u32)),
-        )
-        .execute(&authority, &mut tx)
-        .expect("set a limit below the merged destination balance");
-        let total_before = tx
-            .world
-            .asset_definition(&definition_id)
-            .expect("definition exists")
-            .total_quantity()
-            .clone();
-        let external_events_before = tx.world.external_event_buf.len();
-        let internal_events_before = tx.world.internal_event_buf.len();
-
-        let error = SetAssetDefinitionBalancePolicy::new(
-            definition_id.clone(),
-            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            Some(paynet),
-        )
-        .execute(&authority, &mut tx)
-        .expect_err("the merged scoped balance must respect the holding limit");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::AssetTransferAdmission(
-                AssetTransferAdmissionError::HoldingLimitExceeded(_)
-            )
-        ));
-
-        assert_eq!(
-            tx.world
-                .assets
-                .get(&global_asset)
-                .map(|value| value.as_ref().clone()),
-            Some(Quantity::from(10_u32))
-        );
-        assert_eq!(
-            tx.world
-                .assets
-                .get(&scoped_asset)
-                .map(|value| value.as_ref().clone()),
-            Some(Quantity::from(2_u32))
-        );
-        assert_eq!(
-            tx.world.asset_metadata.get(&global_asset),
-            Some(&global_metadata)
-        );
-        assert!(tx.world.asset_metadata.get(&scoped_asset).is_none());
-        let definition = tx
-            .world
-            .asset_definition(&definition_id)
-            .expect("definition remains");
-        assert_eq!(
-            definition.balance_scope_policy(),
-            iroha_data_model::asset::AssetBalancePolicy::Global
-        );
-        assert_eq!(definition.total_quantity(), &total_before);
-        assert_eq!(tx.world.external_event_buf.len(), external_events_before);
-        assert_eq!(tx.world.internal_event_buf.len(), internal_events_before);
-    }
-
-    #[test]
-    fn set_asset_definition_balance_policy_rejects_missing_migration_dataspace() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId =
-            DomainId::try_new("policy-missing-migration", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "Private Unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register global definition");
-
-        let err = SetAssetDefinitionBalancePolicy::new(
-            definition_id,
-            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect_err("migration dataspace is required for global to restricted");
-
-        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            message,
-        )) = err
-        else {
-            panic!("unexpected error: {err:?}");
-        };
-        assert!(
-            message.contains("requires migrate_global_balances_to_dataspace"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    fn set_asset_definition_balance_policy_rejects_noop_with_migration_dataspace() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId =
-            DomainId::try_new("policy-noop-migration", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "Private Unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register global definition");
-
-        let err = SetAssetDefinitionBalancePolicy::new(
-            definition_id,
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(DataSpaceId::UNIVERSAL),
-        )
-        .execute(&authority, &mut tx)
-        .expect_err("migration dataspace is invalid for a policy no-op");
-
-        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            message,
-        )) = err
-        else {
-            panic!("unexpected error: {err:?}");
-        };
-        assert!(
-            message.contains("only accepted when changing Global to DataspaceRestricted"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    fn asset_home_coverage_balance_policy_noop_without_migration_succeeds() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId =
-            DomainId::try_new("policy-noop-ok", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "Private Unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register global definition");
-
-        SetAssetDefinitionBalancePolicy::new(
-            definition_id.clone(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("policy no-op without migration dataspace should succeed");
-
-        assert_eq!(
-            tx.world
-                .asset_definition(&definition_id)
-                .expect("definition exists")
-                .balance_scope_policy(),
-            iroha_data_model::asset::AssetBalancePolicy::Global
-        );
-    }
-
-    #[test]
-    fn asset_home_more_coverage_balance_policy_migrates_empty_definition_without_assets() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId =
-            DomainId::try_new("policy-empty-migration", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "Private Unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let paynet = DataSpaceId::new(7);
-        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register empty global definition");
-
-        SetAssetDefinitionBalancePolicy::new(
-            definition_id.clone(),
-            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            Some(paynet),
-        )
-        .execute(&authority, &mut tx)
-        .expect("empty global definition can migrate policy without balances");
-
-        let updated = tx
-            .world
-            .asset_definition(&definition_id)
-            .expect("definition exists");
-        assert_eq!(
-            updated.balance_scope_policy(),
-            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
-        );
-        assert!(
-            tx.world
-                .asset_definition_assets
-                .get(&definition_id)
-                .is_none_or(|assets| assets.is_empty()),
-            "empty migration should not synthesize scoped balance entries"
-        );
-    }
-
-    #[test]
-    fn asset_home_coverage_balance_policy_rejects_unknown_migration_dataspace() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId =
-            DomainId::try_new("policy-unknown-migration", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "Private Unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register global definition");
-
-        let err = SetAssetDefinitionBalancePolicy::new(
-            definition_id,
-            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            Some(DataSpaceId::new(99)),
-        )
-        .execute(&authority, &mut tx)
-        .expect_err("unknown migration dataspace must fail");
-
-        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            message,
-        )) = err
-        else {
-            panic!("unexpected error: {err:?}");
-        };
-        assert!(
-            message.contains("unknown migration dataspace 99"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    fn set_asset_definition_balance_policy_rejects_restricted_to_global() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId =
-            DomainId::try_new("policy-restricted", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "Private Unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register restricted definition");
-
-        let err = SetAssetDefinitionBalancePolicy::new(
-            definition_id,
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect_err("restricted assets cannot be promoted to global");
-
-        assert!(
-            err.to_string().contains("cannot be promoted"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn set_contract_alias_updates_world_indexes() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -11481,8 +11076,13 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let benefit_dataspace = DataSpaceId::new(42);
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, benefit_dataspace).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            benefit_dataspace,
+        )
+        .expect("address");
         let alias: ContractAlias = "benefit::benefit".parse().expect("benefit alias");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11516,8 +11116,13 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let dynamic_dataspace =
             crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            dynamic_dataspace,
+        )
+        .expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -11552,8 +11157,13 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let dynamic_dataspace = DataSpaceId::new(4_242);
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            dynamic_dataspace,
+        )
+        .expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -11582,8 +11192,13 @@ mod tests {
     fn set_contract_alias_clear_allows_stale_undeployed_binding() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -11630,8 +11245,13 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let dynamic_dataspace =
             crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            dynamic_dataspace,
+        )
+        .expect("address");
         let alias: ContractAlias = "router::is".parse().expect("alias");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11671,8 +11291,13 @@ mod tests {
     fn set_contract_alias_clear_allows_unknown_dynamic_dataspace_without_binding() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::new(4_242)).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            DataSpaceId::new(4_242),
+        )
+        .expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -11695,8 +11320,13 @@ mod tests {
     fn set_contract_alias_clear_rejects_lease_without_alias() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::new(4_242)).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            DataSpaceId::new(4_242),
+        )
+        .expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -11721,8 +11351,13 @@ mod tests {
     fn set_contract_alias_rejects_account_alias_collision() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("address");
         let label =
             AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
 
@@ -11757,8 +11392,13 @@ mod tests {
     fn bind_account_alias_rejects_contract_alias_collision() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("address");
         let label =
             AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
         let account = Account {
@@ -11815,7 +11455,8 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-grace", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "usd".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "USD".to_owned(),
@@ -11826,6 +11467,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -11883,7 +11525,8 @@ mod tests {
             DomainId::try_new("alias-past-expiry", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "usd".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "USD".to_owned(),
@@ -11894,6 +11537,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -11924,7 +11568,8 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let asset_name: Name = "gbp".parse().expect("asset name");
-        let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+        let definition_id =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), asset_name);
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "GBP".to_owned(),
@@ -11935,6 +11580,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -11979,7 +11625,10 @@ mod tests {
         let domain_id = DomainId::try_new("offline-disable", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "cash".parse().expect("asset name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "cash".parse().expect("asset name"),
+        );
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "Offline cash".to_owned(),
@@ -11990,6 +11639,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -12018,10 +11668,7 @@ mod tests {
             Some(&Json::new(false))
         );
         assert!(
-            tx.settlement
-                .offline
-                .escrow_accounts
-                .is_empty(),
+            tx.settlement.offline.escrow_accounts.is_empty(),
             "legacy-looking metadata must not materialize offline state"
         );
     }
@@ -12033,7 +11680,10 @@ mod tests {
         let domain_id = DomainId::try_new("offline-remove", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "cash".parse().expect("asset name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "cash".parse().expect("asset name"),
+        );
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "Offline cash".to_owned(),
@@ -12044,6 +11694,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -12073,10 +11724,7 @@ mod tests {
             "metadata must be removed"
         );
         assert!(
-            tx.settlement
-                .offline
-                .escrow_accounts
-                .is_empty(),
+            tx.settlement.offline.escrow_accounts.is_empty(),
             "metadata removal must not materialize offline state"
         );
     }
@@ -12089,7 +11737,10 @@ mod tests {
             DomainId::try_new("offline-metadata-disabled", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "gbp".parse().expect("asset name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "gbp".parse().expect("asset name"),
+        );
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "GBP".to_owned(),
@@ -12100,6 +11751,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
@@ -12123,10 +11775,7 @@ mod tests {
             "metadata should be stored unchanged"
         );
         assert!(
-            tx.settlement
-                .offline
-                .escrow_accounts
-                .is_empty(),
+            tx.settlement.offline.escrow_accounts.is_empty(),
             "legacy-looking metadata must not materialize offline state"
         );
     }
@@ -12144,7 +11793,7 @@ mod tests {
         let initiator = AccountId::new(checked_keypair().public_key().clone());
         let counterparty = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id =
-            AssetDefinitionId::new(asset_domain.clone(), "usd".parse().unwrap());
+            AssetDefinitionId::derive_from_components(asset_domain.clone(), "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12152,8 +11801,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12171,11 +11824,17 @@ mod tests {
                 },
                 AssetId::new(asset_definition_id.clone(), counterparty.clone()),
                 iroha_data_model::repo::RepoCollateralLeg::new(
-                    AssetDefinitionId::new(asset_domain.clone(), "bond".parse().unwrap()),
+                    AssetDefinitionId::derive_from_components(
+                        asset_domain.clone(),
+                        "bond".parse().unwrap(),
+                    ),
                     Quantity::from(12_u32),
                 ),
                 AssetId::new(
-                    AssetDefinitionId::new(asset_domain, "bond".parse().unwrap()),
+                    AssetDefinitionId::derive_from_components(
+                        asset_domain,
+                        "bond".parse().unwrap(),
+                    ),
                     counterparty,
                 ),
                 250,
@@ -12209,7 +11868,8 @@ mod tests {
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12217,8 +11877,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12247,16 +11911,22 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::new(asset_domain.clone(), "locked".parse().unwrap());
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            asset_domain.clone(),
+            "locked".parse().unwrap(),
+        );
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "locked".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register retained custody asset definition");
@@ -12281,10 +11951,9 @@ mod tests {
             },
         );
         tx.world
-            .governance_locks
-            .insert("retained-asset-custody".to_owned(), locks);
+            .put_governance_locks("retained-asset-custody".to_owned(), locks);
         tx.gov.voting_asset_id =
-            AssetDefinitionId::new(asset_domain, "replacement".parse().unwrap());
+            AssetDefinitionId::derive_from_components(asset_domain, "replacement".parse().unwrap());
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
@@ -12310,7 +11979,8 @@ mod tests {
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12318,8 +11988,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12349,7 +12023,8 @@ mod tests {
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12357,8 +12032,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12388,7 +12067,8 @@ mod tests {
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12396,8 +12076,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12427,7 +12111,8 @@ mod tests {
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12435,8 +12120,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12470,7 +12159,7 @@ mod tests {
         seed_domain(&mut state, &holder_domain, &authority);
 
         let asset_definition_id =
-            AssetDefinitionId::new(asset_domain.clone(), "usd".parse().unwrap());
+            AssetDefinitionId::derive_from_components(asset_domain.clone(), "usd".parse().unwrap());
         let asset_account = AccountId::new(checked_keypair().public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
         let asset_id = AssetId::new(asset_definition_id.clone(), asset_account.clone());
@@ -12487,8 +12176,12 @@ mod tests {
             .expect("register holder account");
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12590,7 +12283,8 @@ mod tests {
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12598,8 +12292,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12642,7 +12340,8 @@ mod tests {
 
         let from = AccountId::new(checked_keypair().public_key().clone());
         let to = AccountId::new(checked_keypair().public_key().clone());
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12650,8 +12349,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12682,7 +12385,7 @@ mod tests {
                 iroha_data_model::isi::SettlementLegSnapshot {
                     role: iroha_data_model::isi::SettlementLegRole::Payment,
                     leg: iroha_data_model::isi::SettlementLeg::new(
-                        AssetDefinitionId::new(
+                        AssetDefinitionId::derive_from_components(
                             counterparty_domain,
                             "eur".parse().expect("asset name"),
                         ),
@@ -12723,15 +12426,20 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let asset_definition_id = AssetDefinitionId::new(domain_id, "fee".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "fee".parse().unwrap());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "fee".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
@@ -12778,7 +12486,8 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("zk", "guard").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let asset_definition_id = AssetDefinitionId::new(domain_id, "shield".parse().unwrap());
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(domain_id, "shield".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -12786,8 +12495,12 @@ mod tests {
 
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "shield".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");

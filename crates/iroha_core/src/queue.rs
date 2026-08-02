@@ -16604,7 +16604,7 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator_primary,
             0,
             DataSpaceId::UNIVERSAL,
@@ -16768,7 +16768,7 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -16851,7 +16851,7 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -16944,14 +16944,14 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             1,
             DataSpaceId::UNIVERSAL,
@@ -17111,14 +17111,14 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             1,
             DataSpaceId::UNIVERSAL,
@@ -17288,7 +17288,7 @@ pub mod tests {
         let mut world = world_with_test_domains();
         let (validator, keypair) = gen_account_in("wonderland");
         let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             7,
             DataSpaceId::UNIVERSAL,
@@ -17330,7 +17330,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let instruction_contract_address =
             iroha_data_model::smart_contract::ContractAddress::derive(
-                iroha_data_model::account::address::chain_discriminant(),
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &validator,
                 8,
                 DataSpaceId::UNIVERSAL,
@@ -20224,16 +20224,20 @@ pub mod tests {
             DomainId::try_new("wonderland", "universal").expect("policy domain id");
         let policy_domain = Domain::new(policy_domain_id.clone()).build(&policy_authority);
         let policy_account = Account::new(policy_authority.clone()).build(&policy_authority);
-        let policy_asset_definition_id = AssetDefinitionId::new(
+        let policy_asset_definition_id = AssetDefinitionId::derive_from_components(
             policy_domain_id,
             "replayzkpolicy".parse().expect("policy asset name"),
         );
-        let policy_asset_definition = AssetDefinition::numeric(policy_asset_definition_id.clone())
-            .with_name(policy_asset_definition_id.name().to_string())
-            .confidential_policy(
-                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-            )
-            .build(&policy_authority);
+        let policy_asset_definition = AssetDefinition::numeric(
+            policy_asset_definition_id.clone(),
+            "replayzkpolicy".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+        )
+        .build(&policy_authority);
         let mut world = World::with([policy_domain], [policy_account], [policy_asset_definition]);
         let mut zk_state = crate::state::ZkAssetState::default();
         zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
@@ -22034,7 +22038,7 @@ pub mod tests {
         );
 
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"proposal-gas-contract-code"),
@@ -23216,14 +23220,20 @@ pub mod tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
         let account = Account::new(authority_id.clone()).build(&authority_id);
-        let asset_def_id =
-            AssetDefinitionId::new(domain_id, "zkqueuepolicy".parse().expect("asset name"));
-        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-            .with_name(asset_def_id.name().to_string())
-            .confidential_policy(
-                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-            )
-            .build(&authority_id);
+        let asset_def_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "zkqueuepolicy".parse().expect("asset name"),
+        );
+        let asset_definition = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "zkqueuepolicy".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+        )
+        .build(&authority_id);
         let mut world = World::with([domain], [account], [asset_definition]);
         let mut zk_state = crate::state::ZkAssetState::default();
         zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
@@ -26927,11 +26937,17 @@ pub mod tests {
             DomainId::try_new("queue_fee_drift", "universal").expect("fee drift domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let fee_asset =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("fee drift asset name"));
-        let definition = AssetDefinition::numeric(fee_asset.clone())
-            .with_name("queue fee drift XOR".to_owned())
-            .build(&authority);
+        let fee_asset = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "xor".parse().expect("fee drift asset name"),
+        );
+        let definition = AssetDefinition::numeric(
+            fee_asset.clone(),
+            "queue fee drift XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let payer_asset_id = AssetId::new(fee_asset.clone(), authority.clone());
         let payer_asset = Asset::new(payer_asset_id.clone(), Quantity::from(10_u32));
         let world = World::with_assets([domain], [account], [definition], [payer_asset], []);

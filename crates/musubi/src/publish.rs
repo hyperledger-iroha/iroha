@@ -21,12 +21,12 @@ use iroha_data_model::{
     account::AccountId,
     isi::musubi::PublishMusubiReleaseV1,
     musubi::{
-        ArchiveId, MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveCommitmentV1,
-        MusubiArchiveLocationIdV1, MusubiArchiveLocationStateV1, MusubiArchiveLocationV1,
-        MusubiArchiveRecordV1, MusubiContentDigestV1, MusubiNamespaceDelegationV1,
-        MusubiNamespaceV1, MusubiPackageScopeV1, MusubiPublicationV1, MusubiRegistrySnapshotV1,
-        MusubiReleaseDigestV1, MusubiReleaseRecordV1, MusubiResolverReleaseRowV1,
-        MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
+        ArchiveId, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+        MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationStateV1,
+        MusubiArchiveLocationV1, MusubiArchiveRecordV1, MusubiContentDigestV1,
+        MusubiNamespaceDelegationV1, MusubiNamespaceV1, MusubiPackageScopeV1, MusubiPublicationV1,
+        MusubiRegistrySnapshotV1, MusubiReleaseDigestV1, MusubiReleaseRecordV1,
+        MusubiResolverReleaseRowV1, MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
         MusubiSemanticReleaseDigestV1, MusubiStorageAvailabilityV1, MusubiVerificationLockDigestV1,
     },
     sorafs::{
@@ -34,18 +34,43 @@ use iroha_data_model::{
         pin_registry::{ManifestDigest, ReplicationOrderId},
     },
 };
-use norito::codec::{Decode, DecodeAll as _, Encode};
+use norito::{
+    DecodeLimits,
+    codec::{Decode, Encode},
+};
 
 use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
+
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 
 const JOURNAL_SCHEMA: &str = "musubi-publication-journal";
 const JOURNAL_VERSION: u8 = 1;
 const JOURNAL_DIRECTORY: &str = "publication-v1";
 const JOURNAL_EXTENSION: &str = "norito";
+const JOURNAL_LOCK_EXTENSION: &str = "lock";
 const STAGED_CAR_EXTENSION: &str = "car";
 const MAX_JOURNAL_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_JOURNAL_BYTES_USIZE: usize = 16 * 1024 * 1024;
+const JOURNAL_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
+    1_048_576,
+    MAX_JOURNAL_BYTES_USIZE,
+    2_097_152,
+    64 * 1024 * 1024,
+    128,
+);
 const OPERATION_ID_DOMAIN: &[u8] = b"iroha.musubi.publication-operation.v1";
 const PUBLISH_INSTRUCTION_DOMAIN: &[u8] = b"iroha.musubi.publish-instruction.v1";
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const FILE_SHARE_READ: u32 = 0x0000_0001;
+#[cfg(windows)]
+const FILE_SHARE_WRITE: u32 = 0x0000_0002;
 
 /// Stable identifier used to make every remote publication transition idempotent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
@@ -296,7 +321,7 @@ impl PublicationValidationEvidenceV1 {
 /// Idempotent archive-registration and permanent pin/order result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveRegistrationV1 {
-    /// Finalized authoritative archive record, whether newly created or reused.
+    /// Finalized authoritative archive record retaining this operation's exact staging receipt.
     pub archive: MusubiArchiveRecordV1,
     /// Stable location identity reserved for this publication.
     pub location_id: MusubiArchiveLocationIdV1,
@@ -311,7 +336,11 @@ pub struct PublicationArchiveRegistrationV1 {
 }
 
 impl PublicationArchiveRegistrationV1 {
-    fn validate_for(&self, request: &PublicationRequestV1) -> Result<(), PublicationError> {
+    fn validate_for(
+        &self,
+        request: &PublicationRequestV1,
+        staging_receipt: &MusubiSeedIngressReceiptV1,
+    ) -> Result<(), PublicationError> {
         self.archive
             .validate()
             .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
@@ -325,6 +354,7 @@ impl PublicationArchiveRegistrationV1 {
             .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
         if self.archive.archive_id != request.archive_commitment.archive_id()
             || &self.archive.commitment != &request.archive_commitment
+            || &self.archive.staging_receipt != staging_receipt
             || &registered_binding.chain_id != &request.chain_id
             || registered_binding.genesis_block_hash != request.genesis_block_hash
             || registered_binding.semantic_release_manifest_digest
@@ -340,7 +370,9 @@ impl PublicationArchiveRegistrationV1 {
         {
             return Err(PublicationError::InvalidEvidence {
                 phase: PublicationPhaseV1::ArchiveRegistration,
-                reason: "archive registration or permanent pin was substituted".to_owned(),
+                reason:
+                    "archive registration, exact staging receipt, or permanent pin was substituted"
+                        .to_owned(),
             });
         }
         Ok(())
@@ -615,7 +647,14 @@ impl PublicationJournalV1 {
                 .map_err(|error| invalid(PublicationPhaseV1::SeedIngress, error))?;
         }
         if let Some(registration) = &self.archive_registration {
-            registration.validate_for(&self.request)?;
+            registration.validate_for(
+                &self.request,
+                self.staging_receipt.as_ref().ok_or_else(|| {
+                    PublicationError::InvalidJournal(
+                        "archive registration is missing its exact staging receipt".to_owned(),
+                    )
+                })?,
+            )?;
         }
         if let Some(location) = &self.replication {
             validate_replication(&self.request, self.registration()?, location)?;
@@ -681,9 +720,7 @@ impl PublicationStagedCarSourceV1 {
         expected_size: u64,
     ) -> Self {
         Self {
-            path: user_state_root
-                .join(JOURNAL_DIRECTORY)
-                .join(format!("{operation_id}.{STAGED_CAR_EXTENSION}")),
+            path: user_state_root.join(staged_car_relative_path(operation_id)),
             expected_size,
         }
     }
@@ -693,13 +730,89 @@ impl PublicationStagedCarSourceV1 {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Durably stage exact CAR bytes below the private operation directory.
+    ///
+    /// Identical retries reuse an already verified regular file. A different body at the same
+    /// operation id, an unsafe filesystem entry, or bytes that disagree with the request
+    /// commitment fail closed without replacing the existing path.
+    pub fn stage_bytes(
+        user_state_root: &Path,
+        operation_id: PublicationOperationIdV1,
+        expected_size: u64,
+        expected_digest: MusubiContentDigestV1,
+        bytes: &[u8],
+    ) -> Result<Self, PublicationError> {
+        if expected_size == 0
+            || expected_size > MUSUBI_MAX_CAR_BYTES_V1
+            || u64::try_from(bytes.len()).ok() != Some(expected_size)
+            || blake3::hash(bytes).as_bytes() != expected_digest.as_bytes()
+        {
+            return Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Validation,
+                reason: "staged CAR bytes do not match their bounded request commitment".to_owned(),
+            });
+        }
+        let source = Self::new(user_state_root, operation_id, expected_size);
+        match fs::symlink_metadata(source.path()) {
+            Ok(_) => {
+                source.verify_digest(expected_digest)?;
+                return Ok(source);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(PublicationError::CarSource(error)),
+        }
+        let root = AtomicWriteRoot::new(user_state_root).map_err(PublicationError::JournalWrite)?;
+        root.replace(&staged_car_relative_path(operation_id), bytes)
+            .map_err(PublicationError::JournalWrite)?;
+        source.verify_digest(expected_digest)?;
+        Ok(source)
+    }
+
+    fn verify_digest(
+        &self,
+        expected_digest: MusubiContentDigestV1,
+    ) -> Result<(), PublicationError> {
+        let mut reader = self.open_car().map_err(PublicationError::CarSource)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut observed = 0_u64;
+        loop {
+            let read = reader
+                .read(&mut buffer)
+                .map_err(PublicationError::CarSource)?;
+            if read == 0 {
+                break;
+            }
+            observed = observed
+                .checked_add(u64::try_from(read).expect("read buffer length fits u64"))
+                .ok_or_else(|| {
+                    PublicationError::InvalidJournal("staged CAR length overflowed".to_owned())
+                })?;
+            if observed > self.expected_size {
+                return Err(PublicationError::InvalidJournal(
+                    "staged CAR grew while it was verified".to_owned(),
+                ));
+            }
+            hasher.update(&buffer[..read]);
+        }
+        if observed != self.expected_size
+            || hasher.finalize().as_bytes() != expected_digest.as_bytes()
+        {
+            return Err(PublicationError::InvalidJournal(
+                "existing staged CAR differs from the immutable publication request".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl PublicationCarSource for PublicationStagedCarSourceV1 {
     fn open_car(&self) -> io::Result<Box<dyn Read + '_>> {
         let inspected = fs::symlink_metadata(&self.path)?;
-        if inspected.file_type().is_symlink()
-            || !inspected.is_file()
+        if self.expected_size == 0
+            || self.expected_size > MUSUBI_MAX_CAR_BYTES_V1
+            || !metadata_is_safe_regular_file(&inspected)
             || inspected.len() != self.expected_size
         {
             return Err(io::Error::new(
@@ -707,25 +820,91 @@ impl PublicationCarSource for PublicationStagedCarSourceV1 {
                 "staged publication CAR is not the expected bounded regular file",
             ));
         }
-        #[cfg(unix)]
-        if std::os::unix::fs::MetadataExt::nlink(&inspected) != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "staged publication CAR has an unexpected hard link",
-            ));
-        }
         let mut options = OpenOptions::new();
         options.read(true);
+        #[cfg(windows)]
+        options.share_mode(FILE_SHARE_READ);
         set_no_follow(&mut options);
         let file = options.open(&self.path)?;
         let opened = file.metadata()?;
-        if !same_file(&inspected, &opened) || opened.len() != self.expected_size {
+        let linked_after = fs::symlink_metadata(&self.path)?;
+        if !metadata_is_safe_regular_file(&opened)
+            || !metadata_is_safe_regular_file(&linked_after)
+            || !same_file_snapshot(&inspected, &opened)
+            || !same_file_snapshot(&opened, &linked_after)
+            || opened.len() != self.expected_size
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "staged publication CAR changed while it was opened",
             ));
         }
-        Ok(Box::new(file))
+        Ok(Box::new(StableCarReader {
+            path: self.path.clone(),
+            file,
+            initial: opened,
+            expected_size: self.expected_size,
+            observed: 0,
+            complete: false,
+        }))
+    }
+}
+
+struct StableCarReader {
+    path: PathBuf,
+    file: File,
+    initial: fs::Metadata,
+    expected_size: u64,
+    observed: u64,
+    complete: bool,
+}
+
+impl StableCarReader {
+    fn validate_complete_snapshot(&self) -> io::Result<()> {
+        let opened = self.file.metadata()?;
+        let linked = fs::symlink_metadata(&self.path)?;
+        if !metadata_is_safe_regular_file(&opened)
+            || !metadata_is_safe_regular_file(&linked)
+            || !same_file_snapshot(&self.initial, &opened)
+            || !same_file_snapshot(&opened, &linked)
+            || opened.len() != self.expected_size
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "staged publication CAR changed while it was read",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Read for StableCarReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.complete || buffer.is_empty() {
+            return Ok(0);
+        }
+        let read = self.file.read(buffer)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "staged publication CAR ended before its committed length",
+            ));
+        }
+        self.observed = self
+            .observed
+            .checked_add(u64::try_from(read).expect("read length fits u64"))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CAR length overflowed"))?;
+        if self.observed > self.expected_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "staged publication CAR exceeded its committed length",
+            ));
+        }
+        if self.observed == self.expected_size {
+            self.validate_complete_snapshot()?;
+            self.complete = true;
+        }
+        Ok(read)
     }
 }
 
@@ -816,6 +995,7 @@ pub trait PublicationBackend {
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError>;
 
     /// Idempotently register/reuse the archive and create/reuse its permanent pin and order.
+    /// The returned archive record must retain the exact supplied staging receipt.
     fn ensure_archive_and_permanent_pin(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -873,6 +1053,49 @@ pub struct PublicationJournalStore {
     root: AtomicWriteRoot,
 }
 
+struct PublicationOperationLockV1 {
+    file: File,
+    path: PathBuf,
+    identity: fs::Metadata,
+    parent: File,
+    parent_path: PathBuf,
+    parent_identity: fs::Metadata,
+}
+
+impl PublicationOperationLockV1 {
+    fn validate(&self) -> Result<(), PublicationError> {
+        let opened = self.file.metadata().map_err(PublicationError::JournalIo)?;
+        let named = fs::symlink_metadata(&self.path).map_err(PublicationError::JournalIo)?;
+        let parent_opened = self
+            .parent
+            .metadata()
+            .map_err(PublicationError::JournalIo)?;
+        let parent_named =
+            fs::symlink_metadata(&self.parent_path).map_err(PublicationError::JournalIo)?;
+        if !operation_lock_metadata_is_safe(&opened, &self.parent_identity)
+            || !operation_lock_metadata_is_safe(&named, &self.parent_identity)
+            || !same_file_snapshot(&self.identity, &opened)
+            || !same_file_snapshot(&opened, &named)
+            || !same_directory(&self.parent_identity, &parent_opened)
+            || !same_directory(&parent_opened, &parent_named)
+        {
+            return Err(PublicationError::InvalidJournal(
+                "publication operation lock changed identity".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn finish<T>(self, result: Result<T, PublicationError>) -> Result<T, PublicationError> {
+        let unlock = File::unlock(&self.file).map_err(PublicationError::JournalIo);
+        match (result, unlock) {
+            (Err(error), _) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(error)) => Err(error),
+        }
+    }
+}
+
 impl PublicationJournalStore {
     /// Open or create the private `publication-v1` journal directory.
     pub fn open(user_state_root: &Path) -> Result<Self, PublicationError> {
@@ -882,7 +1105,6 @@ impl PublicationJournalStore {
             Ok(()) => {
                 #[cfg(unix)]
                 {
-                    use std::os::unix::fs::PermissionsExt as _;
                     fs::set_permissions(&journal_directory, fs::Permissions::from_mode(0o700))
                         .map_err(PublicationError::JournalIo)?;
                 }
@@ -893,19 +1115,10 @@ impl PublicationJournalStore {
         };
         let metadata =
             fs::symlink_metadata(&journal_directory).map_err(PublicationError::JournalIo)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        if !journal_directory_metadata_is_safe(&metadata) {
             return Err(PublicationError::InvalidJournal(
-                "publication journal directory is not a real directory".to_owned(),
+                "publication journal directory is not a private real directory".to_owned(),
             ));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            if metadata.permissions().mode() & 0o077 != 0 {
-                return Err(PublicationError::InvalidJournal(
-                    "publication journal directory is not private".to_owned(),
-                ));
-            }
         }
         if created {
             File::open(root.path())
@@ -921,18 +1134,24 @@ impl PublicationJournalStore {
         request: PublicationRequestV1,
     ) -> Result<PublicationJournalV1, PublicationError> {
         let journal = PublicationJournalV1::new(request)?;
-        match self.load(journal.operation_id) {
-            Ok(existing) if existing.request == journal.request => return Ok(existing),
-            Ok(_) => {
-                return Err(PublicationError::InvalidJournal(
-                    "operation id collision has different immutable request bytes".to_owned(),
-                ));
+        let operation_lock = self.lock_operation(journal.operation_id)?;
+        let result = (|| {
+            match self.load(journal.operation_id) {
+                Ok(existing) if existing.request == journal.request => return Ok(existing),
+                Ok(_) => {
+                    return Err(PublicationError::InvalidJournal(
+                        "operation id collision has different immutable request bytes".to_owned(),
+                    ));
+                }
+                Err(PublicationError::NotFound(_)) => {}
+                Err(error) => return Err(error),
             }
-            Err(PublicationError::NotFound(_)) => {}
-            Err(error) => return Err(error),
-        }
-        self.write(&journal)?;
-        Ok(journal)
+            operation_lock.validate()?;
+            self.write(&journal)?;
+            operation_lock.validate()?;
+            Ok(journal)
+        })();
+        operation_lock.finish(result)
     }
 
     /// Load and fully validate one journal by typed operation id.
@@ -949,26 +1168,19 @@ impl PublicationJournalStore {
             }
             Err(error) => return Err(PublicationError::JournalIo(error)),
         };
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() > MAX_JOURNAL_BYTES
-        {
+        if !metadata_is_safe_regular_file(&metadata) || metadata.len() > MAX_JOURNAL_BYTES {
             return Err(PublicationError::InvalidJournal(
                 "journal is not a bounded regular file".to_owned(),
             ));
         }
-        #[cfg(unix)]
-        if std::os::unix::fs::MetadataExt::nlink(&metadata) != 1 {
-            return Err(PublicationError::InvalidJournal(
-                "journal has an unexpected hard link".to_owned(),
-            ));
-        }
         let mut options = OpenOptions::new();
         options.read(true);
+        #[cfg(windows)]
+        options.share_mode(FILE_SHARE_READ);
         set_no_follow(&mut options);
         let mut file = options.open(&path).map_err(PublicationError::JournalIo)?;
         let opened = file.metadata().map_err(PublicationError::JournalIo)?;
-        if !same_file(&metadata, &opened) {
+        if !metadata_is_safe_regular_file(&opened) || !same_file_snapshot(&metadata, &opened) {
             return Err(PublicationError::InvalidJournal(
                 "journal changed while it was opened".to_owned(),
             ));
@@ -977,16 +1189,28 @@ impl PublicationJournalStore {
             PublicationError::InvalidJournal("journal length does not fit memory".to_owned())
         })?;
         let mut bytes = Vec::with_capacity(capacity);
-        file.read_to_end(&mut bytes)
+        file.by_ref()
+            .take(MAX_JOURNAL_BYTES + 1)
+            .read_to_end(&mut bytes)
             .map_err(PublicationError::JournalIo)?;
-        if bytes.len() as u64 != metadata.len() {
+        if bytes.len() > MAX_JOURNAL_BYTES_USIZE {
+            return Err(PublicationError::InvalidJournal(
+                "journal grew beyond its fixed size bound while it was read".to_owned(),
+            ));
+        }
+        let opened_after = file.metadata().map_err(PublicationError::JournalIo)?;
+        let linked_after = fs::symlink_metadata(&path).map_err(PublicationError::JournalIo)?;
+        if bytes.len() as u64 != metadata.len()
+            || !metadata_is_safe_regular_file(&opened_after)
+            || !metadata_is_safe_regular_file(&linked_after)
+            || !same_file_snapshot(&metadata, &opened_after)
+            || !same_file_snapshot(&opened_after, &linked_after)
+        {
             return Err(PublicationError::InvalidJournal(
                 "journal length changed while it was read".to_owned(),
             ));
         }
-        let journal = PublicationJournalV1::decode_all(&mut bytes.as_slice()).map_err(|error| {
-            PublicationError::InvalidJournal(format!("journal is not canonical Norito: {error}"))
-        })?;
+        let journal = decode_publication_journal(&bytes)?;
         if journal.operation_id != operation_id {
             return Err(PublicationError::InvalidJournal(
                 "journal filename and encoded operation id differ".to_owned(),
@@ -998,7 +1222,11 @@ impl PublicationJournalStore {
 
     fn write(&self, journal: &PublicationJournalV1) -> Result<(), PublicationError> {
         journal.validate()?;
-        let bytes = journal.encode();
+        let bytes = norito::encode_canonical(journal).map_err(|error| {
+            PublicationError::InvalidJournal(format!(
+                "journal could not be canonically encoded: {error}"
+            ))
+        })?;
         if bytes.len() as u64 > MAX_JOURNAL_BYTES {
             return Err(PublicationError::InvalidJournal(
                 "journal exceeds its fixed size bound".to_owned(),
@@ -1014,19 +1242,112 @@ impl PublicationJournalStore {
         previous: &PublicationJournalV1,
         mut next: PublicationJournalV1,
     ) -> Result<PublicationJournalV1, PublicationError> {
-        let current = self.load(previous.operation_id)?;
-        if current.revision != previous.revision || current != *previous {
-            return Err(PublicationError::ConcurrentJournalUpdate);
+        let operation_lock = self.lock_operation(previous.operation_id)?;
+        let result = (|| {
+            let current = self.load(previous.operation_id)?;
+            if current.revision != previous.revision || current != *previous {
+                return Err(PublicationError::ConcurrentJournalUpdate);
+            }
+            next.revision = previous.revision.checked_add(1).ok_or_else(|| {
+                PublicationError::InvalidJournal("journal revision overflowed".to_owned())
+            })?;
+            operation_lock.validate()?;
+            self.write(&next)?;
+            operation_lock.validate()?;
+            let persisted = self.load(next.operation_id)?;
+            if persisted != next {
+                return Err(PublicationError::ConcurrentJournalUpdate);
+            }
+            Ok(persisted)
+        })();
+        operation_lock.finish(result)
+    }
+
+    fn lock_operation(
+        &self,
+        operation_id: PublicationOperationIdV1,
+    ) -> Result<PublicationOperationLockV1, PublicationError> {
+        let parent_path = self.root.path().join(JOURNAL_DIRECTORY);
+        let parent_before =
+            fs::symlink_metadata(&parent_path).map_err(PublicationError::JournalIo)?;
+        if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
+            return Err(PublicationError::InvalidJournal(
+                "publication journal directory is not a real directory".to_owned(),
+            ));
         }
-        next.revision = previous.revision.checked_add(1).ok_or_else(|| {
-            PublicationError::InvalidJournal("journal revision overflowed".to_owned())
+        let parent = File::open(&parent_path).map_err(PublicationError::JournalIo)?;
+        let parent_opened = parent.metadata().map_err(PublicationError::JournalIo)?;
+        let parent_named =
+            fs::symlink_metadata(&parent_path).map_err(PublicationError::JournalIo)?;
+        if !same_directory(&parent_before, &parent_opened)
+            || !same_directory(&parent_opened, &parent_named)
+        {
+            return Err(PublicationError::InvalidJournal(
+                "publication journal directory changed identity".to_owned(),
+            ));
+        }
+
+        let path = self
+            .root
+            .path()
+            .join(operation_lock_relative_path(operation_id));
+        let before = match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if !operation_lock_metadata_is_safe(&metadata, &parent_opened) {
+                    return Err(PublicationError::InvalidJournal(
+                        "publication operation lock is not a private empty regular file".to_owned(),
+                    ));
+                }
+                Some(metadata)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(PublicationError::JournalIo(error)),
+        };
+
+        let (file, created) = match before.as_ref() {
+            Some(_) => (open_existing_operation_lock(&path)?, false),
+            None => match create_operation_lock(&path) {
+                Ok(file) => (file, true),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    (open_existing_operation_lock(&path)?, false)
+                }
+                Err(error) => return Err(PublicationError::JournalIo(error)),
+            },
+        };
+        if created {
+            #[cfg(unix)]
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(PublicationError::JournalIo)?;
+            file.sync_all().map_err(PublicationError::JournalIo)?;
+            parent.sync_all().map_err(PublicationError::JournalIo)?;
+        }
+        let opened = file.metadata().map_err(PublicationError::JournalIo)?;
+        let named = fs::symlink_metadata(&path).map_err(PublicationError::JournalIo)?;
+        if !operation_lock_metadata_is_safe(&opened, &parent_opened)
+            || !operation_lock_metadata_is_safe(&named, &parent_opened)
+            || before
+                .as_ref()
+                .is_some_and(|metadata| !same_file_snapshot(metadata, &opened))
+            || !same_file_snapshot(&opened, &named)
+        {
+            return Err(PublicationError::InvalidJournal(
+                "publication operation lock changed while it was opened".to_owned(),
+            ));
+        }
+        file.try_lock().map_err(|error| match error {
+            fs::TryLockError::WouldBlock => PublicationError::ConcurrentJournalUpdate,
+            fs::TryLockError::Error(error) => PublicationError::JournalIo(error),
         })?;
-        self.write(&next)?;
-        let persisted = self.load(next.operation_id)?;
-        if persisted != next {
-            return Err(PublicationError::ConcurrentJournalUpdate);
-        }
-        Ok(persisted)
+        let operation_lock = PublicationOperationLockV1 {
+            file,
+            path,
+            identity: opened,
+            parent,
+            parent_path,
+            parent_identity: parent_opened,
+        };
+        operation_lock.validate()?;
+        Ok(operation_lock)
     }
 }
 
@@ -1126,7 +1447,7 @@ impl<'a> PublicationEngine<'a> {
                     let registration = backend
                         .ensure_archive_and_permanent_pin(operation_id, &journal.request, receipt)
                         .map_err(PublicationError::Backend)?;
-                    registration.validate_for(&journal.request)?;
+                    registration.validate_for(&journal.request, receipt)?;
                     next.archive_registration = Some(registration);
                     next.phase = PublicationPhaseV1::Replication;
                 }
@@ -1340,8 +1661,27 @@ fn invalid(phase: PublicationPhaseV1, error: impl fmt::Display) -> PublicationEr
     }
 }
 
+fn decode_publication_journal(bytes: &[u8]) -> Result<PublicationJournalV1, PublicationError> {
+    if bytes.is_empty() || bytes.len() > MAX_JOURNAL_BYTES_USIZE {
+        return Err(PublicationError::InvalidJournal(
+            "journal exceeds its fixed canonical frame bound".to_owned(),
+        ));
+    }
+    norito::decode_canonical_with_limits(bytes, JOURNAL_DECODE_LIMITS).map_err(|error| {
+        PublicationError::InvalidJournal(format!("journal is not canonical Norito: {error}"))
+    })
+}
+
 fn journal_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
     Path::new(JOURNAL_DIRECTORY).join(format!("{operation_id}.{JOURNAL_EXTENSION}"))
+}
+
+fn operation_lock_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
+    Path::new(JOURNAL_DIRECTORY).join(format!("{operation_id}.{JOURNAL_LOCK_EXTENSION}"))
+}
+
+fn staged_car_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
+    PathBuf::from(JOURNAL_DIRECTORY).join(format!("{operation_id}.{STAGED_CAR_EXTENSION}"))
 }
 
 fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
@@ -1361,18 +1701,153 @@ fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-#[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
+fn open_existing_operation_lock(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    set_no_follow(&mut options);
+    #[cfg(windows)]
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    options.open(path)
 }
 
-#[cfg(not(unix))]
-fn same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    // `AtomicWriteRoot` uses the same std-only fallback on platforms without
-    // stable metadata identities; symlink/reparse validation remains at the
-    // directory and target checks around each durable replacement.
-    true
+fn create_operation_lock(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    set_no_follow(&mut options);
+    #[cfg(unix)]
+    options.mode(0o600);
+    #[cfg(windows)]
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    options.open(path)
+}
+
+#[cfg(unix)]
+fn operation_lock_metadata_is_safe(metadata: &fs::Metadata, parent: &fs::Metadata) -> bool {
+    metadata_is_safe_regular_file(metadata)
+        && metadata.len() == 0
+        && metadata.permissions().mode() & 0o7777 == 0o600
+        && metadata.uid() == parent.uid()
+}
+
+#[cfg(windows)]
+fn operation_lock_metadata_is_safe(metadata: &fs::Metadata, _parent: &fs::Metadata) -> bool {
+    metadata_is_safe_regular_file(metadata) && metadata.len() == 0
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn operation_lock_metadata_is_safe(_metadata: &fs::Metadata, _parent: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn journal_directory_metadata_is_safe(metadata: &fs::Metadata) -> bool {
+    metadata.is_dir()
+        && !metadata.file_type().is_symlink()
+        && metadata.permissions().mode() & 0o7777 == 0o700
+}
+
+#[cfg(windows)]
+fn journal_directory_metadata_is_safe(metadata: &fs::Metadata) -> bool {
+    metadata.is_dir() && !metadata_is_windows_reparse_point(metadata)
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn journal_directory_metadata_is_safe(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    journal_directory_metadata_is_safe(left)
+        && journal_directory_metadata_is_safe(right)
+        && left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.uid() == right.uid()
+}
+
+#[cfg(windows)]
+fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    journal_directory_metadata_is_safe(left)
+        && journal_directory_metadata_is_safe(right)
+        && left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn same_directory(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+fn metadata_is_safe_regular_file(metadata: &fs::Metadata) -> bool {
+    metadata.is_file()
+        && !metadata.file_type().is_symlink()
+        && !metadata_is_windows_reparse_point(metadata)
+        && metadata_has_one_hard_link(metadata)
+}
+
+#[cfg(windows)]
+fn metadata_is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+const fn metadata_is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    metadata.nlink() == 1
+}
+
+#[cfg(windows)]
+fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
+    metadata.number_of_links() == Some(1)
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn metadata_has_one_hard_link(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.file_type() == right.file_type()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+        && left.nlink() == 1
+        && right.nlink() == 1
+}
+
+#[cfg(windows)]
+fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+        && left.file_type() == right.file_type()
+        && left.file_attributes() == right.file_attributes()
+        && left.file_size() == right.file_size()
+        && left.creation_time() == right.creation_time()
+        && left.last_write_time() == right.last_write_time()
+        && left.number_of_links() == Some(1)
+        && right.number_of_links() == Some(1)
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn same_file_snapshot(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
 }
 
 fn set_no_follow(options: &mut OpenOptions) {
@@ -1381,6 +1856,10 @@ fn set_no_follow(options: &mut OpenOptions) {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(platform_no_follow_flag());
     }
+    #[cfg(windows)]
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    #[cfg(not(any(unix, windows)))]
+    let _ = options;
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -1424,6 +1903,11 @@ const fn platform_no_follow_flag() -> i32 {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+
+    #[cfg(unix)]
+    use std::io::Write as _;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
 
     use iroha::{
         crypto::{Algorithm, KeyPair, SignatureOf},
@@ -1485,6 +1969,234 @@ mod tests {
                 .expect("wrong length must fail")
                 .kind(),
             io::ErrorKind::InvalidData
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_car_reader_rejects_hard_links_and_in_place_growth() {
+        let state = tempdir().expect("state root");
+        fs::create_dir(state.path().join(JOURNAL_DIRECTORY)).expect("publication directory");
+        let operation_id = "0404040404040404040404040404040404040404040404040404040404040404"
+            .parse()
+            .expect("operation id");
+        let source = PublicationStagedCarSourceV1::new(state.path(), operation_id, 4);
+        fs::write(source.path(), b"car!").expect("stage fixture CAR");
+        let linked = state.path().join("linked.car");
+        fs::hard_link(source.path(), &linked).expect("create hard link");
+        assert_eq!(
+            source
+                .open_car()
+                .err()
+                .expect("hard-linked source rejected")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        fs::remove_file(linked).expect("remove fixture hard link");
+
+        let mut reader = source.open_car().expect("open exact CAR");
+        let mut prefix = [0_u8; 2];
+        reader.read_exact(&mut prefix).expect("read prefix");
+        OpenOptions::new()
+            .append(true)
+            .open(source.path())
+            .expect("open source for mutation")
+            .write_all(b"x")
+            .expect("grow source");
+        let mut remainder = Vec::new();
+        let error = reader
+            .read_to_end(&mut remainder)
+            .expect_err("in-place growth rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_car_bytes_are_commitment_checked_and_idempotent() {
+        let state = tempdir().expect("state root");
+        let _store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let operation_id = "0202020202020202020202020202020202020202020202020202020202020202"
+            .parse()
+            .expect("operation id");
+        let bytes = b"canonical-car";
+        let expected_size = u64::try_from(bytes.len()).expect("fixture length fits u64");
+        let digest = MusubiContentDigestV1::new(*blake3::hash(bytes).as_bytes());
+        let source = PublicationStagedCarSourceV1::stage_bytes(
+            state.path(),
+            operation_id,
+            expected_size,
+            digest,
+            bytes,
+        )
+        .expect("stage committed CAR");
+        PublicationStagedCarSourceV1::stage_bytes(
+            state.path(),
+            operation_id,
+            expected_size,
+            digest,
+            bytes,
+        )
+        .expect("identical retry reuses staged CAR");
+
+        fs::write(source.path(), b"substituted!!").expect("substitute same-length fixture");
+        assert!(matches!(
+            PublicationStagedCarSourceV1::stage_bytes(
+                state.path(),
+                operation_id,
+                expected_size,
+                digest,
+                bytes,
+            ),
+            Err(PublicationError::InvalidJournal(_))
+        ));
+
+        let other_id = "0303030303030303030303030303030303030303030303030303030303030303"
+            .parse()
+            .expect("other operation id");
+        assert!(matches!(
+            PublicationStagedCarSourceV1::stage_bytes(
+                state.path(),
+                other_id,
+                expected_size,
+                MusubiContentDigestV1::new([9; 32]),
+                bytes,
+            ),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Validation,
+                ..
+            })
+        ));
+        assert!(
+            !PublicationStagedCarSourceV1::new(state.path(), other_id, expected_size)
+                .path()
+                .exists()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_decode_rejects_trailing_bare_and_oversized_frames() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("journal store");
+        let (request, _) = request();
+        let operation_id = request.operation_id();
+        let journal = store.create(request).expect("create canonical journal");
+        let path = state.path().join(journal_relative_path(operation_id));
+        let canonical = fs::read(&path).expect("read canonical journal");
+        assert_eq!(
+            decode_publication_journal(&canonical).expect("decode canonical journal"),
+            journal
+        );
+
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open journal for trailing-byte injection")
+            .write_all(&[0])
+            .expect("append trailing byte");
+        assert!(matches!(
+            store.load(operation_id),
+            Err(PublicationError::InvalidJournal(_))
+        ));
+
+        store
+            .root
+            .replace(&journal_relative_path(operation_id), &journal.encode())
+            .expect("replace with legacy bare encoding");
+        assert!(matches!(
+            store.load(operation_id),
+            Err(PublicationError::InvalidJournal(_))
+        ));
+
+        let oversized = vec![0_u8; MAX_JOURNAL_BYTES_USIZE + 1];
+        assert!(matches!(
+            decode_publication_journal(&oversized),
+            Err(PublicationError::InvalidJournal(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operation_lock_is_private_exclusive_and_rejects_hard_links() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("journal store");
+        let (request, _) = request();
+        let operation_id = request.operation_id();
+        store.create(request).expect("create journal");
+        let lock_path = state
+            .path()
+            .join(operation_lock_relative_path(operation_id));
+        let metadata = fs::symlink_metadata(&lock_path).expect("operation lock metadata");
+        assert_eq!(metadata.len(), 0);
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+
+        let held = store
+            .lock_operation(operation_id)
+            .expect("hold operation lock");
+        let second = PublicationJournalStore::open(state.path()).expect("second journal store");
+        assert!(matches!(
+            second.lock_operation(operation_id),
+            Err(PublicationError::ConcurrentJournalUpdate)
+        ));
+        held.finish(Ok(())).expect("release operation lock");
+
+        let hard_link = state.path().join("operation-lock-hard-link");
+        fs::hard_link(&lock_path, &hard_link).expect("link operation lock");
+        assert!(matches!(
+            store.lock_operation(operation_id),
+            Err(PublicationError::InvalidJournal(_))
+        ));
+        fs::remove_file(hard_link).expect("remove fixture hard link");
+
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o4600))
+            .expect("add set-user-ID bit to operation lock");
+        assert!(matches!(
+            store.lock_operation(operation_id),
+            Err(PublicationError::InvalidJournal(_))
+        ));
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
+            .expect("restore operation lock permissions");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_transition_cas_has_exactly_one_winner() {
+        use std::sync::{Arc, Barrier};
+
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("journal store");
+        let (request, _) = request();
+        let operation_id = request.operation_id();
+        let previous = store.create(request).expect("create journal");
+        let barrier = Arc::new(Barrier::new(2));
+        let root = state.path().to_path_buf();
+        let workers = (0..2)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let root = root.clone();
+                let previous = previous.clone();
+                std::thread::spawn(move || {
+                    let store = PublicationJournalStore::open(&root).expect("worker journal store");
+                    barrier.wait();
+                    store.transition(&previous, previous.clone())
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("transition worker"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(PublicationError::ConcurrentJournalUpdate)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            store.load(operation_id).expect("winning journal").revision,
+            2
         );
     }
 
@@ -1970,6 +2682,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn retry_and_receipt_substitution_never_advance_the_journal() {
         let temp = tempdir().expect("state root");
@@ -2032,6 +2745,7 @@ mod tests {
         assert!(unchanged.staging_receipt.is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
         let temp = tempdir().expect("state root");
@@ -2086,6 +2800,7 @@ mod tests {
         assert_eq!(backend.submissions, 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn trait_backed_readback_substitution_stops_before_amx() {
         let temp = tempdir().expect("state root");
@@ -2114,6 +2829,7 @@ mod tests {
         assert!(journal.readbacks.is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn journal_rejects_missing_phase_evidence_and_tampered_receipt_signature() {
         let temp = tempdir().expect("state root");
@@ -2157,9 +2873,10 @@ mod tests {
             .expect("receipt")
             .approvals[0]
             .public_key = attacker.public_key().clone();
+        let tampered = norito::encode_canonical(&tampered).expect("encode tampered journal");
         store
             .root
-            .replace(&journal_relative_path(operation_id), &tampered.encode())
+            .replace(&journal_relative_path(operation_id), &tampered)
             .expect("simulate durable disk substitution");
         assert!(matches!(
             store.load(operation_id),
@@ -2171,11 +2888,42 @@ mod tests {
     }
 
     #[test]
+    fn journal_rejects_archive_registration_receipt_replay_from_another_nonce() {
+        let (request, broker) = request();
+        let registration = registration(&request, &broker);
+        let expected_receipt = registration.archive.staging_receipt.clone();
+        let mut journal = PublicationJournalV1::new(request.clone()).expect("publication journal");
+        journal.validation = Some(validation_evidence(&request));
+        journal.staging_receipt = Some(expected_receipt);
+        journal.archive_registration = Some(registration);
+        journal.phase = PublicationPhaseV1::Replication;
+        journal
+            .validate()
+            .expect("registration must retain the exact staged receipt");
+
+        let mut replayed_binding = request.receipt_binding();
+        replayed_binding.nonce = [0xEE; 32];
+        journal
+            .archive_registration
+            .as_mut()
+            .expect("archive registration")
+            .archive
+            .staging_receipt = signed_receipt(&replayed_binding, &broker);
+        assert!(matches!(
+            journal.validate(),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::ArchiveRegistration,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn replication_requires_three_exact_finalized_provider_attestations() {
         let (request, broker) = request();
         let registration = registration(&request, &broker);
         registration
-            .validate_for(&request)
+            .validate_for(&request, &registration.archive.staging_receipt)
             .expect("valid archive registration");
 
         let below_quorum = location(&request, &registration, 2);

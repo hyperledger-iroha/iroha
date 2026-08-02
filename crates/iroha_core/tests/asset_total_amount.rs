@@ -55,13 +55,17 @@ fn asset_totals_track_multi_account_mint_and_burn() {
             .expect("register account");
     }
 
-    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "multi_total".parse().unwrap(),
-    );
-    Register::asset_definition(
-        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
-    )
+    let definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "multi_total".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        definition_id.clone(),
+        "multi_total".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
 
@@ -156,13 +160,17 @@ fn asset_totals_drop_when_unregistering_account() {
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register holder");
 
-    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "account_drop".parse().unwrap(),
-    );
-    Register::asset_definition(
-        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
-    )
+    let definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "account_drop".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        definition_id.clone(),
+        "account_drop".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register definition");
 
@@ -243,13 +251,17 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register foreign holder");
 
-    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("source", "universal").unwrap(),
-        "domain_drop".parse().unwrap(),
-    );
-    Register::asset_definition(
-        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
-    )
+    let definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("source", "universal").unwrap(),
+            "domain_drop".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        definition_id.clone(),
+        "domain_drop".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source definition");
 
@@ -347,13 +359,17 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register foreign holder");
 
-    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("source", "universal").unwrap(),
-        "teardown".parse().unwrap(),
-    );
-    Register::asset_definition(
-        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
-    )
+    let definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("source", "universal").unwrap(),
+            "teardown".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        definition_id.clone(),
+        "teardown".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source definition");
 

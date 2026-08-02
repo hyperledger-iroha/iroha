@@ -1,11 +1,20 @@
-//! Experimental explorer DTOs used for future Torii app API endpoints.
+//! Explorer DTOs and bounded collection projections for Torii's app API.
+//!
+//! The six world-backed collection routes use canonical, filter-bound seek cursors. A request
+//! returns at most 100 matches and inspects at most 512 candidate keys, so sparse secondary
+//! filters cannot turn one read-admission token into a ledger-scale scan. Block, transaction, and
+//! instruction history retain their separate page-number contract.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    fmt,
+    ops::Bound::{Excluded, Unbounded},
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+};
 use hex;
 use iroha_core::state::WorldReadOnly;
 use iroha_crypto::HashOf;
@@ -54,14 +63,63 @@ const ACCOUNT_QR_DIMENSION_PX: u32 = 192;
 const ACCOUNT_QR_ERROR_CORRECTION: EcLevel = EcLevel::M;
 const ACCOUNT_QR_ERROR_CORRECTION_LABEL: &str = "M";
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ExplorerAggregates {
-    account_counters: BTreeMap<AccountId, AccountCounters>,
-    account_domains: BTreeMap<AccountId, BTreeSet<DomainId>>,
-    domain_counters: BTreeMap<DomainId, DomainCounters>,
-    definition_instances: BTreeMap<AssetDefinitionId, u32>,
-    definition_holders: BTreeMap<AssetDefinitionId, BTreeSet<AccountId>>,
+/// Default number of matching world records returned by an Explorer cursor page.
+pub(crate) const EXPLORER_CURSOR_DEFAULT_LIMIT: u32 = 25;
+/// Hard ceiling for matching world records returned by one Explorer cursor page.
+pub(crate) const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
+/// Hard ceiling for candidate keys inspected by one Explorer cursor page.
+pub(crate) const EXPLORER_CURSOR_MAX_SCAN: usize = 512;
+
+const EXPLORER_CURSOR_MAGIC: [u8; 4] = *b"IXC1";
+const EXPLORER_CURSOR_FILTER_DOMAIN: &[u8] = b"iroha-explorer-filter-v1";
+const EXPLORER_CURSOR_MAX_KEY_BYTES: usize = 1_024;
+const EXPLORER_CURSOR_MAX_ENCODED_BYTES: usize = 1_424;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum ExplorerCursorCollection {
+    Accounts = 1,
+    Domains = 2,
+    AssetDefinitions = 3,
+    Assets = 4,
+    Nfts = 5,
+    Rwas = 6,
 }
+
+impl ExplorerCursorCollection {
+    const fn tag(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Invalid Explorer cursor request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExplorerCursorError {
+    /// The requested page limit is outside the first-release bound.
+    InvalidLimit,
+    /// The cursor is not the unique canonical base64url representation.
+    InvalidEncoding,
+    /// The cursor is malformed or exceeds its fixed transport bound.
+    InvalidFrame,
+    /// The cursor belongs to another collection or filter set.
+    ScopeMismatch,
+    /// The cursor contains a non-canonical collection key.
+    InvalidKey,
+}
+
+impl fmt::Display for ExplorerCursorError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidLimit => "limit must be between 1 and 100",
+            Self::InvalidEncoding => "cursor is not canonical base64url without padding",
+            Self::InvalidFrame => "cursor frame is malformed or too large",
+            Self::ScopeMismatch => "cursor does not belong to these filters",
+            Self::InvalidKey => "cursor contains a non-canonical collection key",
+        })
+    }
+}
+
+impl std::error::Error for ExplorerCursorError {}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AccountCounters {
@@ -77,105 +135,6 @@ pub(crate) struct DomainCounters {
     nfts: u32,
 }
 
-impl ExplorerAggregates {
-    pub(crate) fn build(world: &impl WorldReadOnly) -> Self {
-        let mut agg = Self::default();
-
-        for account in world.accounts_iter() {
-            let account_id = account.id().clone();
-            agg.account_counters.entry(account_id.clone()).or_default();
-            let account_domains = agg.account_domains.entry(account_id).or_default();
-            let linked_domains = world
-                .bound_account_aliases(account.id())
-                .into_iter()
-                .filter_map(|alias| alias.domain_id(world.dataspace_catalog()).ok().flatten())
-                .collect::<BTreeSet<_>>();
-            for domain_id in linked_domains {
-                account_domains.insert(domain_id.clone());
-                let entry = agg.domain_counters.entry(domain_id).or_default();
-                entry.accounts = entry.accounts.saturating_add(1);
-            }
-        }
-
-        for domain in world.domains_iter() {
-            let entry = agg
-                .account_counters
-                .entry(domain.owned_by().clone())
-                .or_default();
-            entry.domains = entry.domains.saturating_add(1);
-            agg.domain_counters.entry(domain.id().clone()).or_default();
-        }
-
-        for asset in world.assets_iter() {
-            let account_id = asset.id().account().clone();
-            let definition_id = asset.id().definition().clone();
-
-            let account_entry = agg.account_counters.entry(account_id.clone()).or_default();
-            account_entry.assets = account_entry.assets.saturating_add(1);
-
-            if !definition_id.is_opaque_canonical() {
-                let domain_entry = agg
-                    .domain_counters
-                    .entry(definition_id.domain().clone())
-                    .or_default();
-                domain_entry.assets = domain_entry.assets.saturating_add(1);
-            }
-
-            *agg.definition_instances
-                .entry(definition_id.clone())
-                .or_default() += 1;
-            agg.definition_holders
-                .entry(definition_id)
-                .or_default()
-                .insert(account_id);
-        }
-
-        for (nft_id, nft) in world.nfts().iter() {
-            let owner_entry = agg
-                .account_counters
-                .entry(nft.owned_by.clone())
-                .or_default();
-            owner_entry.nfts = owner_entry.nfts.saturating_add(1);
-
-            let domain_entry = agg
-                .domain_counters
-                .entry(nft_id.domain().clone())
-                .or_default();
-            domain_entry.nfts = domain_entry.nfts.saturating_add(1);
-        }
-
-        agg
-    }
-
-    pub(crate) fn account_counters(&self, id: &AccountId) -> AccountCounters {
-        self.account_counters.get(id).copied().unwrap_or_default()
-    }
-
-    pub(crate) fn domain_counters(&self, id: &DomainId) -> DomainCounters {
-        self.domain_counters.get(id).copied().unwrap_or_default()
-    }
-
-    pub(crate) fn definition_instance_count(&self, id: &AssetDefinitionId) -> u32 {
-        self.definition_instances.get(id).copied().unwrap_or(0)
-    }
-
-    pub(crate) fn account_linked_to_domain(&self, account: &AccountId, domain: &DomainId) -> bool {
-        self.account_domains
-            .get(account)
-            .is_some_and(|domains| domains.contains(domain))
-    }
-
-    pub(crate) fn account_holds_definition(
-        &self,
-        definition: &AssetDefinitionId,
-        account: &AccountId,
-    ) -> bool {
-        self.definition_holders
-            .get(definition)
-            .map_or(false, |holders| holders.contains(account))
-    }
-}
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct ExplorerPaginationQuery {
     #[norito(default = "default_page")]
@@ -184,12 +143,44 @@ pub(crate) struct ExplorerPaginationQuery {
     pub per_page: u64,
 }
 
+/// Cursor controls shared by the six world-backed Explorer collections.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct ExplorerCursorQuery {
+    /// Opaque cursor returned by the preceding request with the same filters.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Maximum matching records to return.
+    #[norito(default = "default_cursor_limit")]
+    pub limit: u32,
+}
+
+impl ExplorerCursorQuery {
+    fn validated_limit(&self) -> Result<usize, ExplorerCursorError> {
+        if self.limit == 0 || self.limit > EXPLORER_CURSOR_MAX_LIMIT {
+            return Err(ExplorerCursorError::InvalidLimit);
+        }
+        Ok(usize::try_from(self.limit).expect("bounded u32 Explorer limit fits usize"))
+    }
+}
+
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerPaginationMeta {
     pub page: u64,
     pub per_page: u64,
     pub total_pages: u64,
     pub total_items: u64,
+}
+
+/// Seek-pagination metadata for a bounded world-backed Explorer collection.
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerCursorMeta {
+    /// Maximum matching records requested for this page.
+    pub limit: u32,
+    /// Opaque resume token, or `None` after the candidate range is exhausted.
+    pub next_cursor: Option<String>,
+    /// Whether the maintained candidate range has more keys to inspect.
+    pub has_more: bool,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -217,7 +208,7 @@ impl ExplorerAccountDto {
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAccountsPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerCursorMeta,
     pub items: Vec<ExplorerAccountDto>,
 }
 
@@ -296,6 +287,10 @@ const fn default_per_page() -> u64 {
     10
 }
 
+const fn default_cursor_limit() -> u32 {
+    EXPLORER_CURSOR_DEFAULT_LIMIT
+}
+
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerDomainDto {
     pub id: String,
@@ -323,13 +318,15 @@ impl ExplorerDomainDto {
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerDomainsPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerCursorMeta,
     pub items: Vec<ExplorerDomainDto>,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAssetDefinitionDto {
     pub id: String,
+    /// Immutable domain ownership, or `None` for an intentionally unowned global definition.
+    pub owning_domain: Option<String>,
     pub mintable: String,
     pub logo: Option<String>,
     pub metadata: Value,
@@ -347,6 +344,7 @@ impl ExplorerAssetDefinitionDto {
     ) -> Self {
         Self {
             id: definition.id().to_string(),
+            owning_domain: definition.owning_domain().as_ref().map(ToString::to_string),
             mintable: mintable_label(definition.mintable()),
             logo: definition.logo().as_ref().map(ToString::to_string),
             metadata: metadata_to_json(definition.metadata()),
@@ -357,21 +355,11 @@ impl ExplorerAssetDefinitionDto {
             circulating_quantity: None,
         }
     }
-
-    pub(crate) fn from_definition(
-        definition: &AssetDefinition,
-        aggregates: &ExplorerAggregates,
-    ) -> Self {
-        Self::from_definition_with_asset_count(
-            definition,
-            aggregates.definition_instance_count(definition.id()),
-        )
-    }
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAssetDefinitionsPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerCursorMeta,
     pub items: Vec<ExplorerAssetDefinitionDto>,
 }
 
@@ -486,7 +474,7 @@ impl ExplorerAssetDto {
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAssetsPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerCursorMeta,
     pub items: Vec<ExplorerAssetDto>,
 }
 
@@ -509,7 +497,7 @@ impl ExplorerNftDto {
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerNftsPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerCursorMeta,
     pub items: Vec<ExplorerNftDto>,
 }
 
@@ -564,7 +552,7 @@ impl ExplorerRwaDto {
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerRwasPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerCursorMeta,
     pub items: Vec<ExplorerRwaDto>,
 }
 
@@ -1556,35 +1544,176 @@ fn format_rejection_reason_message(reason: &TransactionRejectionReason) -> Strin
     }
 }
 
-pub(crate) fn accounts_page<'world, I>(
-    accounts: I,
-    aggregates: &ExplorerAggregates,
-    domain_filter: Option<&DomainId>,
-    definition_filter: Option<&AssetDefinitionId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerAccountsPage
-where
-    I: IntoIterator<Item = AccountEntry<'world>>,
-{
-    let mut items = Vec::new();
-    for entry in accounts {
-        if let Some(domain) = domain_filter {
-            if !aggregates.account_linked_to_domain(entry.id(), domain) {
-                continue;
+fn explorer_filter_digest(
+    collection: ExplorerCursorCollection,
+    filters: &[Option<String>],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(EXPLORER_CURSOR_FILTER_DOMAIN);
+    hasher.update([collection.tag()]);
+    hasher.update(
+        u32::try_from(filters.len())
+            .expect("fixed Explorer filter list fits u32")
+            .to_be_bytes(),
+    );
+    for filter in filters {
+        match filter {
+            Some(value) => {
+                hasher.update([1]);
+                hasher.update(
+                    u32::try_from(value.len())
+                        .expect("bounded identifier length fits u32")
+                        .to_be_bytes(),
+                );
+                hasher.update(value.as_bytes());
             }
+            None => hasher.update([0]),
         }
-        if let Some(definition) = definition_filter {
-            if !aggregates.account_holds_definition(definition, entry.id()) {
-                continue;
-            }
-        }
-        let counts = aggregates.account_counters(entry.id());
-        items.push(ExplorerAccountDto::from_entry(entry, counts));
     }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerAccountsPage { pagination, items }
+    hasher.finalize().into()
+}
+
+fn encode_explorer_cursor(
+    collection: ExplorerCursorCollection,
+    filter_digest: [u8; 32],
+    key: &str,
+) -> Result<String, ExplorerCursorError> {
+    if key.is_empty() || key.len() > EXPLORER_CURSOR_MAX_KEY_BYTES {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
+    let key_len = u16::try_from(key.len()).map_err(|_| ExplorerCursorError::InvalidKey)?;
+    let mut frame = Vec::with_capacity(4 + 1 + 32 + 2 + key.len());
+    frame.extend_from_slice(&EXPLORER_CURSOR_MAGIC);
+    frame.push(collection.tag());
+    frame.extend_from_slice(&filter_digest);
+    frame.extend_from_slice(&key_len.to_be_bytes());
+    frame.extend_from_slice(key.as_bytes());
+    Ok(URL_SAFE_NO_PAD.encode(frame))
+}
+
+fn decode_explorer_cursor_key(
+    cursor: &str,
+    collection: ExplorerCursorCollection,
+    filter_digest: [u8; 32],
+) -> Result<String, ExplorerCursorError> {
+    if cursor.is_empty() || cursor.len() > EXPLORER_CURSOR_MAX_ENCODED_BYTES {
+        return Err(ExplorerCursorError::InvalidFrame);
+    }
+    let frame = URL_SAFE_NO_PAD
+        .decode(cursor.as_bytes())
+        .map_err(|_| ExplorerCursorError::InvalidEncoding)?;
+    if URL_SAFE_NO_PAD.encode(&frame) != cursor {
+        return Err(ExplorerCursorError::InvalidEncoding);
+    }
+    const HEADER_LEN: usize = 4 + 1 + 32 + 2;
+    if frame.len() < HEADER_LEN || frame[..4] != EXPLORER_CURSOR_MAGIC {
+        return Err(ExplorerCursorError::InvalidFrame);
+    }
+    if frame[4] != collection.tag() || frame[5..37] != filter_digest {
+        return Err(ExplorerCursorError::ScopeMismatch);
+    }
+    let key_len = usize::from(u16::from_be_bytes([frame[37], frame[38]]));
+    if key_len == 0
+        || key_len > EXPLORER_CURSOR_MAX_KEY_BYTES
+        || frame.len() != HEADER_LEN + key_len
+    {
+        return Err(ExplorerCursorError::InvalidFrame);
+    }
+    String::from_utf8(frame[HEADER_LEN..].to_vec()).map_err(|_| ExplorerCursorError::InvalidKey)
+}
+
+fn canonical_cursor_key<K>(
+    cursor: Option<&str>,
+    collection: ExplorerCursorCollection,
+    filter_digest: [u8; 32],
+) -> Result<Option<K>, ExplorerCursorError>
+where
+    K: std::str::FromStr + ToString,
+{
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    let key = decode_explorer_cursor_key(cursor, collection, filter_digest)?;
+    let parsed = key
+        .parse::<K>()
+        .map_err(|_| ExplorerCursorError::InvalidKey)?;
+    if parsed.to_string() != key {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
+    Ok(Some(parsed))
+}
+
+#[derive(Debug)]
+struct ExplorerScanPage<K, T> {
+    items: Vec<T>,
+    last_scanned: Option<K>,
+    #[cfg(test)]
+    scanned: usize,
+    has_more: bool,
+}
+
+fn collect_explorer_cursor_page<I, Candidate, K, T>(
+    candidates: I,
+    limit: usize,
+    key_of: impl for<'candidate> Fn(&'candidate Candidate) -> &'candidate K,
+    include: impl Fn(&Candidate) -> bool,
+    project: impl Fn(Candidate) -> T,
+) -> ExplorerScanPage<K, T>
+where
+    I: IntoIterator<Item = Candidate>,
+    K: Clone,
+{
+    let scan_budget = limit
+        .saturating_mul(8)
+        .max(limit)
+        .min(EXPLORER_CURSOR_MAX_SCAN);
+    let mut candidates = candidates.into_iter().peekable();
+    let mut items = Vec::with_capacity(limit);
+    let mut last_scanned = None;
+    let mut scanned = 0_usize;
+
+    while items.len() < limit && scanned < scan_budget {
+        let Some(candidate) = candidates.next() else {
+            break;
+        };
+        last_scanned = Some(key_of(&candidate).clone());
+        scanned = scanned.saturating_add(1);
+        if include(&candidate) {
+            items.push(project(candidate));
+        }
+    }
+
+    ExplorerScanPage {
+        items,
+        last_scanned,
+        #[cfg(test)]
+        scanned,
+        has_more: candidates.peek().is_some(),
+    }
+}
+
+fn explorer_cursor_meta<K: ToString>(
+    collection: ExplorerCursorCollection,
+    filter_digest: [u8; 32],
+    limit: u32,
+    last_scanned: Option<&K>,
+    has_more: bool,
+) -> Result<ExplorerCursorMeta, ExplorerCursorError> {
+    let next_cursor = if has_more {
+        let last_scanned = last_scanned.ok_or(ExplorerCursorError::InvalidFrame)?;
+        Some(encode_explorer_cursor(
+            collection,
+            filter_digest,
+            &last_scanned.to_string(),
+        )?)
+    } else {
+        None
+    };
+    Ok(ExplorerCursorMeta {
+        limit,
+        next_cursor,
+        has_more,
+    })
 }
 
 pub(crate) fn account_counters_from_world(
@@ -1596,7 +1725,10 @@ pub(crate) fn account_counters_from_world(
             .domains_by_owner()
             .get(id)
             .map_or(0, |domains| saturating_usize_to_u32(domains.len())),
-        assets: saturating_usize_to_u32(world.assets_in_account_iter(id).count()),
+        assets: world
+            .assets_by_account()
+            .get(id)
+            .map_or(0, |assets| saturating_usize_to_u32(assets.len())),
         nfts: world
             .nfts_by_owner()
             .get(id)
@@ -1608,22 +1740,20 @@ pub(crate) fn domain_counters_from_world(
     world: &impl WorldReadOnly,
     id: &DomainId,
 ) -> DomainCounters {
-    let assets = world.domain_asset_definitions().get(id).map_or(0, |defs| {
-        saturating_usize_to_u32(
-            defs.iter()
-                .map(|definition_id| {
-                    world
-                        .asset_definition_assets()
-                        .get(definition_id)
-                        .map_or(0, BTreeSet::len)
-                })
-                .sum::<usize>(),
-        )
-    });
+    let accounts = world
+        .account_scope_domain_key(id)
+        .and_then(|key| world.account_scope_accounts().get(&key))
+        .map_or(0, |accounts| saturating_usize_to_u32(accounts.len()));
     DomainCounters {
-        accounts: saturating_usize_to_u32(world.accounts_in_domain_iter(id).count()),
-        assets,
-        nfts: saturating_usize_to_u32(world.nfts_in_domain_iter(id).count()),
+        accounts,
+        assets: world
+            .assets_by_domain()
+            .get(id)
+            .map_or(0, |assets| saturating_usize_to_u32(assets.len())),
+        nfts: world
+            .nfts_by_domain()
+            .get(id)
+            .map_or(0, |nfts| saturating_usize_to_u32(nfts.len())),
     }
 }
 
@@ -1652,202 +1782,236 @@ pub(crate) fn accounts_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     domain_filter: Option<&'world DomainId>,
     definition_filter: Option<&'world AssetDefinitionId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerAccountsPage {
+    query: &ExplorerCursorQuery,
+) -> Result<ExplorerAccountsPage, ExplorerCursorError> {
+    let limit = query.validated_limit()?;
+    let filter_digest = explorer_filter_digest(
+        ExplorerCursorCollection::Accounts,
+        &[
+            domain_filter.map(ToString::to_string),
+            definition_filter.map(ToString::to_string),
+        ],
+    );
+    let after = canonical_cursor_key::<AccountId>(
+        query.cursor.as_deref(),
+        ExplorerCursorCollection::Accounts,
+        filter_digest,
+    )?;
     let accounts: Box<dyn Iterator<Item = AccountEntry<'world>> + 'world> =
         if let Some(definition) = definition_filter {
-            Box::new(world.asset_definition_holders_iter(definition).filter_map(
-                move |account_id| {
+            let holders = world.asset_definition_holders().get(definition);
+            let account_ids: Box<dyn Iterator<Item = &'world AccountId> + 'world> = match holders {
+                Some(holders) => match after.clone() {
+                    Some(after) => Box::new(holders.range((Excluded(after), Unbounded))),
+                    None => Box::new(holders.iter()),
+                },
+                None => Box::new(std::iter::empty()),
+            };
+            Box::new(account_ids.filter_map(move |account_id| {
+                world
+                    .accounts()
+                    .get_key_value(account_id)
+                    .map(|(id, value)| AccountEntry::new(id, value))
+            }))
+        } else if let Some(domain) = domain_filter {
+            let account_ids = world
+                .account_scope_domain_key(domain)
+                .and_then(|key| world.account_scope_accounts().get(&key));
+            let account_ids: Box<dyn Iterator<Item = &'world AccountId> + 'world> =
+                match account_ids {
+                    Some(account_ids) => match after.clone() {
+                        Some(after) => Box::new(account_ids.range((Excluded(after), Unbounded))),
+                        None => Box::new(account_ids.iter()),
+                    },
+                    None => Box::new(std::iter::empty()),
+                };
+            Box::new(account_ids.filter_map(move |account_id| {
+                world
+                    .accounts()
+                    .get_key_value(account_id)
+                    .map(|(id, value)| AccountEntry::new(id, value))
+            }))
+        } else {
+            match after {
+                Some(after) => Box::new(
                     world
                         .accounts()
-                        .get_key_value(account_id)
-                        .map(|(id, value)| AccountEntry::new(id, value))
-                },
-            ))
-        } else if let Some(domain) = domain_filter {
-            Box::new(world.accounts_in_domain_iter(domain))
-        } else {
-            Box::new(world.accounts_iter())
+                        .range((Excluded(after), Unbounded))
+                        .map(|(id, value)| AccountEntry::new(id, value)),
+                ),
+                None => Box::new(world.accounts_iter()),
+            }
         };
 
-    let mut items = Vec::new();
-    for entry in accounts {
-        if let Some(domain) = domain_filter
-            && !world.account_has_alias_domain(entry.id(), domain)
-        {
-            continue;
-        }
-        if let Some(definition) = definition_filter
-            && !account_holds_definition_from_world(world, definition, entry.id())
-        {
-            continue;
-        }
-        let counts = account_counters_from_world(world, entry.id());
-        items.push(ExplorerAccountDto::from_entry(entry, counts));
-    }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerAccountsPage { pagination, items }
-}
-
-pub(crate) fn domains_page<'world, I>(
-    domains: I,
-    aggregates: &ExplorerAggregates,
-    owned_by: Option<&AccountId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerDomainsPage
-where
-    I: IntoIterator<Item = &'world Domain>,
-{
-    let mut items = Vec::new();
-    for domain in domains {
-        if let Some(owner) = owned_by {
-            if domain.owned_by() != owner {
-                continue;
-            }
-        }
-        let counts = aggregates.domain_counters(domain.id());
-        items.push(ExplorerDomainDto::from_domain(domain, counts));
-    }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerDomainsPage { pagination, items }
+    let scanned = collect_explorer_cursor_page(
+        accounts,
+        limit,
+        AccountEntry::id,
+        |entry| {
+            domain_filter.is_none_or(|domain| world.account_has_alias_domain(entry.id(), domain))
+                && definition_filter.is_none_or(|definition| {
+                    account_holds_definition_from_world(world, definition, entry.id())
+                })
+        },
+        |entry| {
+            let counts = account_counters_from_world(world, entry.id());
+            ExplorerAccountDto::from_entry(entry, counts)
+        },
+    );
+    let pagination = explorer_cursor_meta(
+        ExplorerCursorCollection::Accounts,
+        filter_digest,
+        query.limit,
+        scanned.last_scanned.as_ref(),
+        scanned.has_more,
+    )?;
+    Ok(ExplorerAccountsPage {
+        pagination,
+        items: scanned.items,
+    })
 }
 
 pub(crate) fn domains_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     owned_by: Option<&'world AccountId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerDomainsPage {
+    query: &ExplorerCursorQuery,
+) -> Result<ExplorerDomainsPage, ExplorerCursorError> {
+    let limit = query.validated_limit()?;
+    let filter_digest = explorer_filter_digest(
+        ExplorerCursorCollection::Domains,
+        &[owned_by.map(ToString::to_string)],
+    );
+    let after = canonical_cursor_key::<DomainId>(
+        query.cursor.as_deref(),
+        ExplorerCursorCollection::Domains,
+        filter_digest,
+    )?;
     let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> = if let Some(owner) = owned_by {
-        Box::new(world.domains_owned_by_iter(owner))
+        let domain_ids = world.domains_by_owner().get(owner);
+        let domain_ids: Box<dyn Iterator<Item = &'world DomainId> + 'world> = match domain_ids {
+            Some(domain_ids) => match after {
+                Some(after) => Box::new(domain_ids.range((Excluded(after), Unbounded))),
+                None => Box::new(domain_ids.iter()),
+            },
+            None => Box::new(std::iter::empty()),
+        };
+        Box::new(domain_ids.filter_map(|domain_id| world.domains().get(domain_id)))
     } else {
-        Box::new(world.domains_iter())
+        match after {
+            Some(after) => Box::new(
+                world
+                    .domains()
+                    .range((Excluded(after), Unbounded))
+                    .map(|(_, domain)| domain),
+            ),
+            None => Box::new(world.domains_iter()),
+        }
     };
 
-    let mut items = Vec::new();
-    for domain in domains {
-        if let Some(owner) = owned_by
-            && domain.owned_by() != owner
-        {
-            continue;
-        }
-        let counts = domain_counters_from_world(world, domain.id());
-        items.push(ExplorerDomainDto::from_domain(domain, counts));
-    }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerDomainsPage { pagination, items }
-}
-
-pub(crate) fn asset_definitions_page<'world, I>(
-    definitions: I,
-    aggregates: &ExplorerAggregates,
-    domain_filter: Option<&DomainId>,
-    owner_filter: Option<&AccountId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerAssetDefinitionsPage
-where
-    I: IntoIterator<Item = &'world AssetDefinition>,
-{
-    let mut items = Vec::new();
-    for definition in definitions {
-        if let Some(domain) = domain_filter
-            && definition.id().try_domain() != Some(domain)
-        {
-            continue;
-        }
-        if let Some(owner) = owner_filter {
-            if definition.owned_by() != owner {
-                continue;
-            }
-        }
-        items.push(ExplorerAssetDefinitionDto::from_definition(
-            definition, aggregates,
-        ));
-    }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerAssetDefinitionsPage { pagination, items }
+    let scanned = collect_explorer_cursor_page(
+        domains,
+        limit,
+        |domain| domain.id(),
+        |domain| owned_by.is_none_or(|owner| domain.owned_by() == owner),
+        |domain| {
+            let counts = domain_counters_from_world(world, domain.id());
+            ExplorerDomainDto::from_domain(domain, counts)
+        },
+    );
+    let pagination = explorer_cursor_meta(
+        ExplorerCursorCollection::Domains,
+        filter_digest,
+        query.limit,
+        scanned.last_scanned.as_ref(),
+        scanned.has_more,
+    )?;
+    Ok(ExplorerDomainsPage {
+        pagination,
+        items: scanned.items,
+    })
 }
 
 pub(crate) fn asset_definitions_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
-    domain_filter: Option<&'world DomainId>,
+    owning_domain_filter: Option<&'world DomainId>,
     owner_filter: Option<&'world AccountId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerAssetDefinitionsPage {
+    query: &ExplorerCursorQuery,
+) -> Result<ExplorerAssetDefinitionsPage, ExplorerCursorError> {
+    let limit = query.validated_limit()?;
+    let filter_digest = explorer_filter_digest(
+        ExplorerCursorCollection::AssetDefinitions,
+        &[
+            owning_domain_filter.map(ToString::to_string),
+            owner_filter.map(ToString::to_string),
+        ],
+    );
+    let after = canonical_cursor_key::<AssetDefinitionId>(
+        query.cursor.as_deref(),
+        ExplorerCursorCollection::AssetDefinitions,
+        filter_digest,
+    )?;
     let definitions: Box<dyn Iterator<Item = &'world AssetDefinition> + 'world> =
         if let Some(owner) = owner_filter {
-            Box::new(world.asset_definitions_owned_by_iter(owner))
-        } else if let Some(domain) = domain_filter {
-            Box::new(world.asset_definitions_in_domain_iter(domain))
+            let definition_ids = world.asset_definitions_by_owner().get(owner);
+            let definition_ids: Box<dyn Iterator<Item = &'world AssetDefinitionId> + 'world> =
+                match definition_ids {
+                    Some(definition_ids) => match after.clone() {
+                        Some(after) => Box::new(definition_ids.range((Excluded(after), Unbounded))),
+                        None => Box::new(definition_ids.iter()),
+                    },
+                    None => Box::new(std::iter::empty()),
+                };
+            Box::new(definition_ids.filter_map(|id| world.asset_definitions().get(id)))
+        } else if let Some(domain) = owning_domain_filter {
+            let definition_ids = world.domain_asset_definitions().get(domain);
+            let definition_ids: Box<dyn Iterator<Item = &'world AssetDefinitionId> + 'world> =
+                match definition_ids {
+                    Some(definition_ids) => match after {
+                        Some(after) => Box::new(definition_ids.range((Excluded(after), Unbounded))),
+                        None => Box::new(definition_ids.iter()),
+                    },
+                    None => Box::new(std::iter::empty()),
+                };
+            Box::new(definition_ids.filter_map(|id| world.asset_definitions().get(id)))
         } else {
-            Box::new(world.asset_definitions_iter())
+            match after {
+                Some(after) => Box::new(
+                    world
+                        .asset_definitions()
+                        .range((Excluded(after), Unbounded))
+                        .map(|(_, definition)| definition),
+                ),
+                None => Box::new(world.asset_definitions_iter()),
+            }
         };
 
-    let mut items = Vec::new();
-    for definition in definitions {
-        if let Some(domain) = domain_filter
-            && definition.id().try_domain() != Some(domain)
-        {
-            continue;
-        }
-        if let Some(owner) = owner_filter
-            && definition.owned_by() != owner
-        {
-            continue;
-        }
-        items.push(
+    let scanned = collect_explorer_cursor_page(
+        definitions,
+        limit,
+        |definition| definition.id(),
+        |definition| {
+            owning_domain_filter.is_none_or(|domain| {
+                world.asset_definition_domains().get(definition.id()) == Some(domain)
+            }) && owner_filter.is_none_or(|owner| definition.owned_by() == owner)
+        },
+        |definition| {
             ExplorerAssetDefinitionDto::from_definition_with_asset_count(
                 definition,
                 definition_instance_count_from_world(world, definition.id()),
-            ),
-        );
-    }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerAssetDefinitionsPage { pagination, items }
-}
-
-pub(crate) fn assets_page<'world, I>(
-    assets: I,
-    owned_by: Option<&AccountId>,
-    definition_filter: Option<&AssetDefinitionId>,
-    asset_filter: Option<&AssetId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerAssetsPage
-where
-    I: IntoIterator<Item = AssetEntry<'world>>,
-{
-    let mut items = Vec::new();
-    for asset in assets {
-        if let Some(expected) = asset_filter {
-            if asset.id() != expected {
-                continue;
-            }
-        }
-        if let Some(account_id) = owned_by {
-            if asset.id().account() != account_id {
-                continue;
-            }
-        }
-        if let Some(definition_id) = definition_filter {
-            if asset.id().definition() != definition_id {
-                continue;
-            }
-        }
-        items.push(ExplorerAssetDto::from_entry(asset));
-    }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerAssetsPage { pagination, items }
+            )
+        },
+    );
+    let pagination = explorer_cursor_meta(
+        ExplorerCursorCollection::AssetDefinitions,
+        filter_digest,
+        query.limit,
+        scanned.last_scanned.as_ref(),
+        scanned.has_more,
+    )?;
+    Ok(ExplorerAssetDefinitionsPage {
+        pagination,
+        items: scanned.items,
+    })
 }
 
 pub(crate) fn assets_page_for_filters<'world>(
@@ -1855,123 +2019,292 @@ pub(crate) fn assets_page_for_filters<'world>(
     owned_by: Option<&'world AccountId>,
     definition_filter: Option<&'world AssetDefinitionId>,
     asset_filter: Option<&'world AssetId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerAssetsPage {
+    query: &ExplorerCursorQuery,
+) -> Result<ExplorerAssetsPage, ExplorerCursorError> {
+    let limit = query.validated_limit()?;
+    let filter_digest = explorer_filter_digest(
+        ExplorerCursorCollection::Assets,
+        &[
+            owned_by.map(ToString::to_string),
+            definition_filter.map(ToString::to_string),
+            asset_filter.map(ToString::to_string),
+        ],
+    );
+    let after = canonical_cursor_key::<AssetId>(
+        query.cursor.as_deref(),
+        ExplorerCursorCollection::Assets,
+        filter_digest,
+    )?;
+    if let (Some(after), Some(owner)) = (after.as_ref(), owned_by)
+        && after.account() != owner
+    {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
+    if let (Some(after), Some(owner), Some(definition)) =
+        (after.as_ref(), owned_by, definition_filter)
+        && (after.account() != owner || after.definition() != definition)
+    {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
+
     let assets: Box<dyn Iterator<Item = AssetEntry<'world>> + 'world> =
         if let Some(asset_id) = asset_filter {
-            Box::new(world.asset(asset_id).ok().into_iter())
+            let entry = after
+                .as_ref()
+                .is_none_or(|after| asset_id > after)
+                .then(|| world.assets().get_key_value(asset_id))
+                .flatten()
+                .map(|(id, value)| AssetEntry::new(id, value));
+            Box::new(entry.into_iter())
         } else if let Some(owner) = owned_by {
             if let Some(definition) = definition_filter {
-                Box::new(world.assets_in_account_by_definition_iter(owner, definition))
+                match after {
+                    Some(after) => Box::new(
+                        world
+                            .assets()
+                            .range((Excluded(after), Unbounded))
+                            .take_while(move |(id, _)| {
+                                id.account() == owner && id.definition() == definition
+                            })
+                            .map(|(id, value)| AssetEntry::new(id, value)),
+                    ),
+                    None => Box::new(world.assets_in_account_by_definition_iter(owner, definition)),
+                }
             } else {
-                Box::new(world.assets_in_account_iter(owner))
+                match after {
+                    Some(after) => Box::new(
+                        world
+                            .assets()
+                            .range((Excluded(after), Unbounded))
+                            .take_while(move |(id, _)| id.account() == owner)
+                            .map(|(id, value)| AssetEntry::new(id, value)),
+                    ),
+                    None => Box::new(world.assets_in_account_iter(owner)),
+                }
             }
         } else if let Some(definition) = definition_filter {
-            Box::new(world.asset_entries_by_definition_iter(definition))
+            let asset_ids = world.asset_definition_assets().get(definition);
+            let asset_ids: Box<dyn Iterator<Item = &'world AssetId> + 'world> = match asset_ids {
+                Some(asset_ids) => match after {
+                    Some(after) => Box::new(asset_ids.range((Excluded(after), Unbounded))),
+                    None => Box::new(asset_ids.iter()),
+                },
+                None => Box::new(std::iter::empty()),
+            };
+            Box::new(asset_ids.filter_map(move |asset_id| {
+                world
+                    .assets()
+                    .get_key_value(asset_id)
+                    .map(|(id, value)| AssetEntry::new(id, value))
+            }))
         } else {
-            Box::new(world.assets_iter())
+            match after {
+                Some(after) => Box::new(
+                    world
+                        .assets()
+                        .range((Excluded(after), Unbounded))
+                        .map(|(id, value)| AssetEntry::new(id, value)),
+                ),
+                None => Box::new(world.assets_iter()),
+            }
         };
-    assets_page(
+    let scanned = collect_explorer_cursor_page(
         assets,
-        owned_by,
-        definition_filter,
-        asset_filter,
-        page,
-        per_page,
-    )
-}
-
-pub(crate) fn nfts_page<'world, I>(
-    nfts: I,
-    owned_by: Option<&AccountId>,
-    domain_filter: Option<&DomainId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerNftsPage
-where
-    I: IntoIterator<Item = NftEntry<'world>>,
-{
-    let mut items = Vec::new();
-    for nft in nfts {
-        if let Some(owner) = owned_by {
-            if nft.value().owned_by != *owner {
-                continue;
-            }
-        }
-        if let Some(domain) = domain_filter {
-            if nft.id().domain() != domain {
-                continue;
-            }
-        }
-        items.push(ExplorerNftDto::from_entry(nft));
-    }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerNftsPage { pagination, items }
+        limit,
+        AssetEntry::id,
+        |asset| {
+            asset_filter.is_none_or(|expected| asset.id() == expected)
+                && owned_by.is_none_or(|owner| asset.id().account() == owner)
+                && definition_filter.is_none_or(|definition| asset.id().definition() == definition)
+        },
+        ExplorerAssetDto::from_entry,
+    );
+    let pagination = explorer_cursor_meta(
+        ExplorerCursorCollection::Assets,
+        filter_digest,
+        query.limit,
+        scanned.last_scanned.as_ref(),
+        scanned.has_more,
+    )?;
+    Ok(ExplorerAssetsPage {
+        pagination,
+        items: scanned.items,
+    })
 }
 
 pub(crate) fn nfts_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     owned_by: Option<&'world AccountId>,
     domain_filter: Option<&'world DomainId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerNftsPage {
-    let nfts: Box<dyn Iterator<Item = NftEntry<'world>> + 'world> = if let Some(owner) = owned_by {
-        Box::new(world.nfts_in_account_iter(owner))
-    } else if let Some(domain) = domain_filter {
-        Box::new(world.nfts_in_domain_iter(domain))
-    } else {
-        Box::new(world.nfts_iter())
-    };
-    nfts_page(nfts, owned_by, domain_filter, page, per_page)
-}
-
-pub(crate) fn rwas_page<'world, I>(
-    rwas: I,
-    owned_by: Option<&AccountId>,
-    domain_filter: Option<&DomainId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerRwasPage
-where
-    I: IntoIterator<Item = RwaEntry<'world>>,
-{
-    let mut items = Vec::new();
-    for rwa in rwas {
-        if let Some(owner) = owned_by {
-            if rwa.value().owned_by != *owner {
-                continue;
-            }
-        }
-        if let Some(domain) = domain_filter {
-            if rwa.id().domain() != domain {
-                continue;
-            }
-        }
-        items.push(ExplorerRwaDto::from_entry(rwa));
+    query: &ExplorerCursorQuery,
+) -> Result<ExplorerNftsPage, ExplorerCursorError> {
+    let limit = query.validated_limit()?;
+    let filter_digest = explorer_filter_digest(
+        ExplorerCursorCollection::Nfts,
+        &[
+            owned_by.map(ToString::to_string),
+            domain_filter.map(ToString::to_string),
+        ],
+    );
+    let after = canonical_cursor_key::<NftId>(
+        query.cursor.as_deref(),
+        ExplorerCursorCollection::Nfts,
+        filter_digest,
+    )?;
+    if owned_by.is_none()
+        && let (Some(after), Some(domain)) = (after.as_ref(), domain_filter)
+        && after.domain() != domain
+    {
+        return Err(ExplorerCursorError::InvalidKey);
     }
-    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
-    let (items, pagination) = paginate(items, page, per_page);
-    ExplorerRwasPage { pagination, items }
+    let nfts: Box<dyn Iterator<Item = NftEntry<'world>> + 'world> = if let Some(owner) = owned_by {
+        let nft_ids = world.nfts_by_owner().get(owner);
+        let nft_ids: Box<dyn Iterator<Item = &'world NftId> + 'world> = match nft_ids {
+            Some(nft_ids) => match after {
+                Some(after) => Box::new(nft_ids.range((Excluded(after), Unbounded))),
+                None => Box::new(nft_ids.iter()),
+            },
+            None => Box::new(std::iter::empty()),
+        };
+        Box::new(nft_ids.filter_map(move |nft_id| {
+            world
+                .nfts()
+                .get_key_value(nft_id)
+                .map(|(id, value)| NftEntry::new(id, value))
+        }))
+    } else if let Some(domain) = domain_filter {
+        let nft_ids = world.nfts_by_domain().get(domain);
+        let nft_ids: Box<dyn Iterator<Item = &'world NftId> + 'world> = match nft_ids {
+            Some(nft_ids) => match after {
+                Some(after) => Box::new(nft_ids.range((Excluded(after), Unbounded))),
+                None => Box::new(nft_ids.iter()),
+            },
+            None => Box::new(std::iter::empty()),
+        };
+        Box::new(nft_ids.filter_map(move |nft_id| {
+            world
+                .nfts()
+                .get_key_value(nft_id)
+                .map(|(id, value)| NftEntry::new(id, value))
+        }))
+    } else {
+        match after {
+            Some(after) => Box::new(
+                world
+                    .nfts()
+                    .range((Excluded(after), Unbounded))
+                    .map(|(id, value)| NftEntry::new(id, value)),
+            ),
+            None => Box::new(world.nfts_iter()),
+        }
+    };
+    let scanned = collect_explorer_cursor_page(
+        nfts,
+        limit,
+        NftEntry::id,
+        |nft| {
+            owned_by.is_none_or(|owner| nft.value().owned_by == *owner)
+                && domain_filter.is_none_or(|domain| nft.id().domain() == domain)
+        },
+        ExplorerNftDto::from_entry,
+    );
+    let pagination = explorer_cursor_meta(
+        ExplorerCursorCollection::Nfts,
+        filter_digest,
+        query.limit,
+        scanned.last_scanned.as_ref(),
+        scanned.has_more,
+    )?;
+    Ok(ExplorerNftsPage {
+        pagination,
+        items: scanned.items,
+    })
 }
 
 pub(crate) fn rwas_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     owned_by: Option<&'world AccountId>,
     domain_filter: Option<&'world DomainId>,
-    page: u64,
-    per_page: u64,
-) -> ExplorerRwasPage {
+    query: &ExplorerCursorQuery,
+) -> Result<ExplorerRwasPage, ExplorerCursorError> {
+    let limit = query.validated_limit()?;
+    let filter_digest = explorer_filter_digest(
+        ExplorerCursorCollection::Rwas,
+        &[
+            owned_by.map(ToString::to_string),
+            domain_filter.map(ToString::to_string),
+        ],
+    );
+    let after = canonical_cursor_key::<iroha_data_model::rwa::RwaId>(
+        query.cursor.as_deref(),
+        ExplorerCursorCollection::Rwas,
+        filter_digest,
+    )?;
+    if owned_by.is_none()
+        && let (Some(after), Some(domain)) = (after.as_ref(), domain_filter)
+        && after.domain() != domain
+    {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
     let rwas: Box<dyn Iterator<Item = RwaEntry<'world>> + 'world> = if let Some(owner) = owned_by {
-        Box::new(world.rwas_in_account_iter(owner))
+        let rwa_ids = world.rwas_by_owner().get(owner);
+        let rwa_ids: Box<dyn Iterator<Item = &'world iroha_data_model::rwa::RwaId> + 'world> =
+            match rwa_ids {
+                Some(rwa_ids) => match after {
+                    Some(after) => Box::new(rwa_ids.range((Excluded(after), Unbounded))),
+                    None => Box::new(rwa_ids.iter()),
+                },
+                None => Box::new(std::iter::empty()),
+            };
+        Box::new(rwa_ids.filter_map(move |rwa_id| {
+            world
+                .rwas()
+                .get_key_value(rwa_id)
+                .map(|(id, value)| RwaEntry::new(id, value))
+        }))
     } else if let Some(domain) = domain_filter {
-        Box::new(world.rwas_in_domain_iter(domain))
+        match after {
+            Some(after) => Box::new(
+                world
+                    .rwas()
+                    .range((Excluded(after), Unbounded))
+                    .take_while(move |(id, _)| id.domain() == domain)
+                    .map(|(id, value)| RwaEntry::new(id, value)),
+            ),
+            None => Box::new(world.rwas_in_domain_iter(domain)),
+        }
     } else {
-        Box::new(world.rwas_iter())
+        match after {
+            Some(after) => Box::new(
+                world
+                    .rwas()
+                    .range((Excluded(after), Unbounded))
+                    .map(|(id, value)| RwaEntry::new(id, value)),
+            ),
+            None => Box::new(world.rwas_iter()),
+        }
     };
-    rwas_page(rwas, owned_by, domain_filter, page, per_page)
+    let scanned = collect_explorer_cursor_page(
+        rwas,
+        limit,
+        RwaEntry::id,
+        |rwa| {
+            owned_by.is_none_or(|owner| rwa.value().owned_by == *owner)
+                && domain_filter.is_none_or(|domain| rwa.id().domain() == domain)
+        },
+        ExplorerRwaDto::from_entry,
+    );
+    let pagination = explorer_cursor_meta(
+        ExplorerCursorCollection::Rwas,
+        filter_digest,
+        query.limit,
+        scanned.last_scanned.as_ref(),
+        scanned.has_more,
+    )?;
+    Ok(ExplorerRwasPage {
+        pagination,
+        items: scanned.items,
+    })
 }
 
 pub(crate) fn block_created_at(duration: Duration) -> String {
@@ -1996,22 +2329,20 @@ fn saturating_usize_to_u32(value: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeSet, iter, num::NonZeroU32, str::FromStr, time::Duration as StdDuration,
-    };
+    use std::{iter, num::NonZeroU32, str::FromStr, time::Duration as StdDuration};
 
+    use iroha_core::state::World;
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
-        account::AccountDetails,
-        asset::{AssetDefinitionId, AssetId, definition::MintabilityTokens},
+        account::{Account, AccountDetails},
+        asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId, definition::MintabilityTokens},
         block::{BlockHeader, builder::BlockBuilder},
         common::{Owned, Ref},
-        domain::DomainId,
+        domain::{Domain, DomainId},
         isi::{Register, Transfer},
         metadata::Metadata,
         nexus::DataSpaceId,
         nft::{NftData, NftId},
-        rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::ContractAddress,
         transaction::{
             error::TransactionRejectionReason,
@@ -2022,6 +2353,83 @@ mod tests {
     };
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
+
+    #[test]
+    fn legacy_world_offset_page_helpers_cannot_reenter() {
+        let source = include_str!("explorer.rs");
+
+        for name in [
+            "accounts_page",
+            "domains_page",
+            "asset_definitions_page",
+            "assets_page",
+            "nfts_page",
+            "rwas_page",
+        ] {
+            let declared = source.lines().map(str::trim_start).any(|line| {
+                let line = line.strip_prefix("pub(crate) ").unwrap_or(line);
+                line.strip_prefix("fn ")
+                    .and_then(|rest| rest.strip_prefix(name))
+                    .and_then(|tail| tail.as_bytes().first())
+                    .is_some_and(|byte| matches!(byte, b'(' | b'<'))
+            });
+            assert!(!declared, "legacy offset helper `{name}` must stay removed");
+        }
+    }
+
+    #[test]
+    fn asset_definition_owning_domain_filter_uses_stored_ownership() {
+        let domain_id =
+            DomainId::try_new("owned_explorer", "universal").expect("domain identifier");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "coin".parse().expect("asset name"),
+        );
+        let alias: AssetDefinitionAlias = "coin#owned_explorer.universal"
+            .parse()
+            .expect("qualified asset alias");
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id.clone()),
+        )
+        .with_alias(Some(alias))
+        .build(&ALICE_ID);
+        let world = World::with_assets(
+            [Domain::new(domain_id.clone()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [definition],
+            [],
+            [],
+        );
+        let view = world.view();
+        assert_eq!(
+            view.asset_definition_domains().get(&definition_id),
+            Some(&domain_id),
+            "fixture must retain exact authoritative domain context"
+        );
+        let query = ExplorerCursorQuery {
+            cursor: None,
+            limit: EXPLORER_CURSOR_MAX_LIMIT,
+        };
+
+        let domain_page = asset_definitions_page_for_filters(&view, Some(&domain_id), None, &query)
+            .expect("domain-filtered page");
+        assert_eq!(domain_page.items.len(), 1);
+        assert_eq!(domain_page.items[0].id, definition_id.to_string());
+        let domain_text = domain_id.to_string();
+        assert_eq!(
+            domain_page.items[0].owning_domain.as_deref(),
+            Some(domain_text.as_str())
+        );
+
+        let domain_and_owner_page =
+            asset_definitions_page_for_filters(&view, Some(&domain_id), Some(&ALICE_ID), &query)
+                .expect("domain-and-owner-filtered page");
+        assert_eq!(domain_and_owner_page.items.len(), 1);
+        assert_eq!(domain_and_owner_page.items[0].id, definition_id.to_string());
+    }
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -2063,6 +2471,106 @@ mod tests {
         assert_eq!(meta.per_page, 2);
         assert_eq!(meta.total_items, 5);
         assert_eq!(meta.total_pages, 3);
+    }
+
+    #[test]
+    fn explorer_cursor_is_canonical_collection_and_filter_bound() {
+        let filters = [Some("wonderland.universal".to_owned()), None];
+        let digest = explorer_filter_digest(ExplorerCursorCollection::Accounts, &filters);
+        let cursor = encode_explorer_cursor(
+            ExplorerCursorCollection::Accounts,
+            digest,
+            &ALICE_ID.to_string(),
+        )
+        .expect("bounded canonical cursor");
+        let decoded = canonical_cursor_key::<AccountId>(
+            Some(&cursor),
+            ExplorerCursorCollection::Accounts,
+            digest,
+        )
+        .expect("canonical account cursor")
+        .expect("cursor key");
+        assert_eq!(decoded, ALICE_ID.clone());
+
+        let other_filters = [Some("garden.universal".to_owned()), None];
+        let other_digest =
+            explorer_filter_digest(ExplorerCursorCollection::Accounts, &other_filters);
+        assert_eq!(
+            canonical_cursor_key::<AccountId>(
+                Some(&cursor),
+                ExplorerCursorCollection::Accounts,
+                other_digest,
+            )
+            .unwrap_err(),
+            ExplorerCursorError::ScopeMismatch,
+        );
+        assert_eq!(
+            canonical_cursor_key::<AccountId>(
+                Some(&cursor),
+                ExplorerCursorCollection::Domains,
+                digest,
+            )
+            .unwrap_err(),
+            ExplorerCursorError::ScopeMismatch,
+        );
+        assert_eq!(
+            decode_explorer_cursor_key(
+                &format!("{cursor}="),
+                ExplorerCursorCollection::Accounts,
+                digest,
+            )
+            .unwrap_err(),
+            ExplorerCursorError::InvalidEncoding,
+        );
+    }
+
+    #[test]
+    fn explorer_cursor_query_defaults_and_rejects_retired_page_fields() {
+        let query: ExplorerCursorQuery =
+            json::from_str("{}").expect("default Explorer cursor query");
+        assert_eq!(query.limit, EXPLORER_CURSOR_DEFAULT_LIMIT);
+        assert!(query.cursor.is_none());
+        assert_eq!(query.validated_limit(), Ok(25));
+
+        let oversized: ExplorerCursorQuery =
+            json::from_str(r#"{"limit":101}"#).expect("typed oversized limit");
+        assert_eq!(
+            oversized.validated_limit(),
+            Err(ExplorerCursorError::InvalidLimit),
+        );
+        assert!(
+            json::from_str::<ExplorerCursorQuery>(r#"{"page":1,"per_page":10}"#).is_err(),
+            "first-release cursor routes must reject retired offset/page controls",
+        );
+    }
+
+    #[test]
+    fn sparse_cursor_scan_is_bounded_and_does_not_skip_first_unreturned_match() {
+        let mut after = None;
+        let mut pages = 0_usize;
+        loop {
+            let candidates = (after.map_or(0, |value| value + 1))..2_000;
+            let page = collect_explorer_cursor_page(
+                candidates,
+                1,
+                |candidate| candidate,
+                |candidate| *candidate == 1_000,
+                |candidate| candidate,
+            );
+            assert!(
+                page.scanned <= 8,
+                "one-token sparse scan exceeded its budget"
+            );
+            pages = pages.saturating_add(1);
+            if let Some(item) = page.items.first() {
+                assert_eq!(*item, 1_000, "the first matching key must not be skipped");
+                assert_eq!(page.last_scanned, Some(1_000));
+                break;
+            }
+            assert!(page.has_more, "sparse scan stopped before the matching key");
+            after = page.last_scanned;
+            assert!(pages < 200, "bounded continuation failed to make progress");
+        }
     }
 
     #[test]
@@ -2158,16 +2666,19 @@ mod tests {
 
     #[test]
     fn asset_definition_dto_contains_metadata() {
-        let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let mut definition = {
             let __asset_definition_id = def_id.clone();
             iroha_data_model::asset::definition::AssetDefinition::numeric(
-                __asset_definition_id.clone(),
+                __asset_definition_id,
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
             )
-            .with_name(__asset_definition_id.name().to_string())
         }
         .build(&ALICE_ID);
         definition.set_mintable(Mintable::Once);
@@ -2176,23 +2687,23 @@ mod tests {
             "ticker".parse().unwrap(),
             json::Value::String("ROSE".into()),
         );
-        let mut aggregates = ExplorerAggregates::default();
-        aggregates.definition_instances.insert(def_id.clone(), 7);
-        let dto = ExplorerAssetDefinitionDto::from_definition(&definition, &aggregates);
+        let dto = ExplorerAssetDefinitionDto::from_definition_with_asset_count(&definition, 7);
         assert_eq!(dto.mintable, "Once");
         assert_eq!(dto.assets, 7);
         assert_eq!(dto.total_quantity, Quantity::from(100_u32));
         assert!(dto.locked_quantity.is_none());
         assert!(dto.circulating_quantity.is_none());
         assert_eq!(dto.owned_by, ALICE_ID.to_string());
+        assert_eq!(dto.owning_domain, None);
     }
 
     #[test]
     fn asset_dto_formats_value() {
-        let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::new(def_id, ALICE_ID.clone());
         let value = Owned::new(Quantity::from(42u32));
         let entry = Ref::new(&asset_id, &value);
@@ -2471,8 +2982,9 @@ mod tests {
     #[test]
     fn transaction_detail_includes_contract_call_argument_record() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
-            .expect("contract address");
+        let contract_address =
+            ContractAddress::derive(&chain, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+                .expect("contract address");
         let arguments = vec![0x4b, 0x4f, 0x54, 0x4f];
         let tx = TransactionBuilder::new(
             chain,
@@ -2520,283 +3032,6 @@ mod tests {
     }
 
     #[test]
-    fn accounts_page_filters_by_domain_and_definition() {
-        let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let mut aggregates = ExplorerAggregates::default();
-        aggregates.account_counters.insert(
-            ALICE_ID.clone(),
-            AccountCounters {
-                domains: 1,
-                assets: 2,
-                nfts: 0,
-            },
-        );
-        aggregates.account_counters.insert(
-            BOB_ID.clone(),
-            AccountCounters {
-                domains: 0,
-                assets: 1,
-                nfts: 0,
-            },
-        );
-        let mut holders = BTreeSet::new();
-        holders.insert(ALICE_ID.clone());
-        aggregates
-            .definition_holders
-            .insert(def_id.clone(), holders);
-
-        let alice_details = Owned::new(AccountDetails::new(
-            Metadata::default(),
-            None,
-            None,
-            Vec::new(),
-        ));
-        let bob_details = Owned::new(AccountDetails::new(
-            Metadata::default(),
-            None,
-            None,
-            Vec::new(),
-        ));
-        let alice_id = ALICE_ID.clone();
-        let bob_id = BOB_ID.clone();
-        let domain_filter: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("domain id");
-        aggregates
-            .account_domains
-            .entry(alice_id.clone())
-            .or_default()
-            .insert(domain_filter.clone());
-        let accounts = vec![
-            Ref::new(&alice_id, &alice_details),
-            Ref::new(&bob_id, &bob_details),
-        ];
-
-        let page = accounts_page(
-            accounts,
-            &aggregates,
-            Some(&domain_filter),
-            Some(&def_id),
-            1,
-            10,
-        );
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].id, alice_id.to_string());
-        assert_eq!(page.items[0].owned_assets, 2);
-        assert_eq!(page.pagination.total_items, 1);
-    }
-
-    #[test]
-    fn assets_page_filters_by_owner_and_definition() {
-        let rose_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let lily_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "lily".parse().unwrap(),
-        );
-        let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
-        let bob_asset_id = AssetId::new(lily_def.clone(), BOB_ID.clone());
-        let alice_value = Owned::new(Quantity::from(10u32));
-        let bob_value = Owned::new(Quantity::from(5u32));
-
-        let owned_page = assets_page(
-            vec![
-                Ref::new(&alice_asset_id, &alice_value),
-                Ref::new(&bob_asset_id, &bob_value),
-            ],
-            Some(&*ALICE_ID),
-            None,
-            None,
-            1,
-            10,
-        );
-        assert_eq!(owned_page.items.len(), 1);
-        assert_eq!(owned_page.items[0].id, alice_asset_id.to_string());
-
-        let definition_page = assets_page(
-            vec![
-                Ref::new(&alice_asset_id, &alice_value),
-                Ref::new(&bob_asset_id, &bob_value),
-            ],
-            None,
-            Some(&lily_def),
-            None,
-            1,
-            10,
-        );
-        assert_eq!(definition_page.items.len(), 1);
-        assert_eq!(definition_page.items[0].id, bob_asset_id.to_string());
-    }
-
-    #[test]
-    fn assets_page_filters_by_asset_id() {
-        let rose_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
-        let bob_asset_id = AssetId::new(rose_def, BOB_ID.clone());
-        let alice_value = Owned::new(Quantity::from(10u32));
-        let bob_value = Owned::new(Quantity::from(5u32));
-
-        let page = assets_page(
-            vec![
-                Ref::new(&alice_asset_id, &alice_value),
-                Ref::new(&bob_asset_id, &bob_value),
-            ],
-            None,
-            None,
-            Some(&alice_asset_id),
-            1,
-            10,
-        );
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].id, alice_asset_id.to_string());
-    }
-
-    #[test]
-    fn nfts_page_filters_by_owner_and_domain() {
-        let nft_alpha: NftId = "alpha$wonderland.universal".parse().expect("nft id");
-        let nft_beta: NftId = "beta$garden_of_live_flowers.universal"
-            .parse()
-            .expect("nft id");
-        let mut alpha_data = NftData {
-            content: Metadata::default(),
-            owned_by: ALICE_ID.clone(),
-        };
-        alpha_data.content.insert(
-            "series".parse().unwrap(),
-            json::Value::String("alpha".into()),
-        );
-        let alpha_value = Owned::new(alpha_data);
-        let beta_value = Owned::new(NftData {
-            content: Metadata::default(),
-            owned_by: BOB_ID.clone(),
-        });
-
-        let owner_page = nfts_page(
-            vec![
-                Ref::new(&nft_alpha, &alpha_value),
-                Ref::new(&nft_beta, &beta_value),
-            ],
-            Some(&*ALICE_ID),
-            None,
-            1,
-            10,
-        );
-        assert_eq!(owner_page.items.len(), 1);
-        assert_eq!(owner_page.items[0].id, nft_alpha.to_string());
-
-        let domain_filter = nft_beta.domain().clone();
-        let domain_page = nfts_page(
-            vec![
-                Ref::new(&nft_alpha, &alpha_value),
-                Ref::new(&nft_beta, &beta_value),
-            ],
-            None,
-            Some(&domain_filter),
-            1,
-            10,
-        );
-        assert_eq!(domain_page.items.len(), 1);
-        assert_eq!(domain_page.items[0].id, nft_beta.to_string());
-    }
-
-    #[test]
-    fn rwas_page_filters_by_owner_and_domain() {
-        let rwa_alpha: RwaId = format!(
-            "{}$wonderland.universal",
-            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
-        )
-        .parse()
-        .expect("rwa id");
-        let rwa_alpha_parent: RwaId = format!(
-            "{}$wonderland.universal",
-            iroha_crypto::Hash::prehashed([9; iroha_crypto::Hash::LENGTH])
-        )
-        .parse()
-        .expect("rwa parent id");
-        let rwa_beta: RwaId = format!(
-            "{}$garden_of_live_flowers.universal",
-            iroha_crypto::Hash::prehashed([8; iroha_crypto::Hash::LENGTH])
-        )
-        .parse()
-        .expect("rwa id");
-
-        let mut alpha_data = RwaData {
-            quantity: "10".parse().unwrap(),
-            spec: iroha_primitives::numeric::NumericSpec::integer(),
-            primary_reference: "https://example.test/rwa/alpha".to_owned(),
-            status: Some("vaulted".parse().unwrap()),
-            metadata: Metadata::default(),
-            parents: vec![RwaParentRef::new(
-                rwa_alpha_parent.clone(),
-                Quantity::from(4_u32),
-            )],
-            controls: RwaControlPolicy::default(),
-            owned_by: ALICE_ID.clone(),
-            is_frozen: false,
-            held_quantity: Quantity::zero(),
-        };
-        alpha_data.metadata.insert(
-            "series".parse().unwrap(),
-            json::Value::String("alpha".into()),
-        );
-        let alpha_value = Owned::new(alpha_data);
-        let beta_value = Owned::new(RwaData {
-            quantity: "6".parse().unwrap(),
-            spec: iroha_primitives::numeric::NumericSpec::integer(),
-            primary_reference: "https://example.test/rwa/beta".to_owned(),
-            status: None,
-            metadata: Metadata::default(),
-            parents: Vec::new(),
-            controls: RwaControlPolicy::default(),
-            owned_by: BOB_ID.clone(),
-            is_frozen: true,
-            held_quantity: "2".parse().unwrap(),
-        });
-
-        let owner_page = rwas_page(
-            vec![
-                Ref::new(&rwa_alpha, &alpha_value),
-                Ref::new(&rwa_beta, &beta_value),
-            ],
-            Some(&*ALICE_ID),
-            None,
-            1,
-            10,
-        );
-        assert_eq!(owner_page.items.len(), 1);
-        assert_eq!(owner_page.items[0].id, rwa_alpha.to_string());
-        assert_eq!(owner_page.items[0].parents.len(), 1);
-        assert_eq!(
-            owner_page.items[0].parents[0].rwa,
-            rwa_alpha_parent.to_string()
-        );
-        assert_eq!(owner_page.items[0].parents[0].quantity, "4");
-
-        let domain_filter = rwa_beta.domain().clone();
-        let domain_page = rwas_page(
-            vec![
-                Ref::new(&rwa_alpha, &alpha_value),
-                Ref::new(&rwa_beta, &beta_value),
-            ],
-            None,
-            Some(&domain_filter),
-            1,
-            10,
-        );
-        assert_eq!(domain_page.items.len(), 1);
-        assert_eq!(domain_page.items[0].id, rwa_beta.to_string());
-        assert_eq!(domain_page.items[0].held_quantity, "2");
-        assert!(domain_page.items[0].is_frozen);
-    }
-
-    #[test]
     fn instruction_kind_classifies_register_and_transfer() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
             DomainId::try_new("test", "universal").expect("domain id"),
@@ -2807,10 +3042,11 @@ mod tests {
             ExplorerInstructionKind::Register
         );
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
         let transfer = Transfer::asset_quantity(asset_id, 1u32, BOB_ID.clone());
         let transfer_box: InstructionBox = transfer.into();

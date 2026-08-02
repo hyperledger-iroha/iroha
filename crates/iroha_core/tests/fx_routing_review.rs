@@ -136,14 +136,14 @@ fn routing_policy() -> LaneRoutingPolicy {
 }
 
 fn source_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("cbuae", "universal").expect("source asset domain"),
         "aed".parse().expect("source asset name"),
     )
 }
 
 fn destination_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("sbp", "universal").expect("destination asset domain"),
         "pkr".parse().expect("destination asset name"),
     )
@@ -197,8 +197,8 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     let destination_domain = DomainId::try_new("sbp", "universal").expect("destination domain");
     let mut world = World::with_assets(
         [
-            Domain::new(source_domain).build(&ALICE_ID),
-            Domain::new(destination_domain).build(&ALICE_ID),
+            Domain::new(source_domain.clone()).build(&ALICE_ID),
+            Domain::new(destination_domain.clone()).build(&ALICE_ID),
         ],
         [
             Account::new(ALICE_ID.clone()).build(&ALICE_ID),
@@ -207,12 +207,20 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
             Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()).build(&ALICE_ID),
         ],
         [
-            AssetDefinition::numeric(source_asset_definition_id())
-                .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                .build(&ALICE_ID),
-            AssetDefinition::numeric(destination_asset_definition_id())
-                .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                .build(&ALICE_ID),
+            AssetDefinition::numeric(
+                source_asset_definition_id(),
+                "aed".to_owned(),
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(source_domain),
+            )
+            .build(&ALICE_ID),
+            AssetDefinition::numeric(
+                destination_asset_definition_id(),
+                "pkr".to_owned(),
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(destination_domain),
+            )
+            .build(&ALICE_ID),
         ],
         std::iter::empty::<Asset>(),
         std::iter::empty::<Nft>(),
@@ -346,8 +354,13 @@ fn participant_routes(plan: &RoutingPlan) -> BTreeSet<(LaneId, DataSpaceId)> {
 fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
     let fixture = fixture(None);
     let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
-    let contract_address = ContractAddress::derive(0, &ALICE_ID, 0, CONTRACT_DATASPACE)
-        .expect("deterministic contract address");
+    let contract_address = ContractAddress::derive(
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &ALICE_ID,
+        0,
+        CONTRACT_DATASPACE,
+    )
+    .expect("deterministic contract address");
     let transaction = accepted_transaction(
         &fixture.state,
         vec![

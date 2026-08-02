@@ -225,18 +225,20 @@ fn validate_prepared_genesis(
         "prepared genesis signer {embedded_signer} differs from verifier key {public_key}"
     );
 
-    let mut signatures = block.signatures();
-    let signature = signatures
-        .next()
-        .ok_or_else(|| eyre!("prepared signed genesis has no block signature"))?;
-    ensure!(
-        signature.index() == 0 && signatures.next().is_none(),
-        "prepared signed genesis must have exactly one block signature at index 0"
-    );
-    signature
-        .signature()
-        .verify_hash(&public_key, block.hash())
-        .wrap_err("verify prepared genesis block signature")?;
+    {
+        let mut signatures = block.signatures();
+        let signature = signatures
+            .next()
+            .ok_or_else(|| eyre!("prepared signed genesis has no block signature"))?;
+        ensure!(
+            signature.index() == 0 && signatures.next().is_none(),
+            "prepared signed genesis must have exactly one block signature at index 0"
+        );
+        signature
+            .signature()
+            .verify_hash(&public_key, block.hash())
+            .wrap_err("verify prepared genesis block signature")?;
+    }
     for transaction in block.external_transactions() {
         transaction
             .verify_signature()
@@ -332,8 +334,12 @@ fn parse_prepared_peer_config(path: &Path) -> color_eyre::Result<actual::Root> {
         .and_then(toml::Value::as_integer)
         .and_then(|value| u16::try_from(value).ok());
     let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
-    let source = TomlSource::from_file(path)
-        .wrap_err_with(|| format!("load prepared validator config {}", path.display()))?;
+    let source = TomlSource::from_file(path).map_err(|error| {
+        eyre!(
+            "load prepared validator config {}: {error:?}",
+            path.display()
+        )
+    })?;
     actual::Root::from_toml_source(source).map_err(|error| {
         eyre!(
             "prepared validator config {} is invalid: {error:?}",

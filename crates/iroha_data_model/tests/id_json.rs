@@ -14,7 +14,8 @@ fn account_id() -> AccountId {
 fn asset_id() -> AssetId {
     let domain = iroha_data_model::DomainId::parse_fully_qualified(DOMAIN).expect("asset domain");
     let account_id = AccountId::new(SIGNATORY.parse().expect("public key"));
-    let definition = AssetDefinitionId::new(domain, "xor".parse().expect("asset name"));
+    let definition =
+        AssetDefinitionId::derive_from_components(domain, "xor".parse().expect("asset name"));
     AssetId::new(definition, account_id)
 }
 

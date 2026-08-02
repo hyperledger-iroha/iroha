@@ -7403,17 +7403,18 @@ mod tests {
 
     #[test]
     fn governance_submission_account_digest_is_fixed_and_identity_bound() {
-        let publisher = governance_dag_submission_account_digest_v1(
-            b"canonical-norito-publisher-account",
-        );
-        let same_publisher = governance_dag_submission_account_digest_v1(
-            b"canonical-norito-publisher-account",
-        );
+        let publisher =
+            governance_dag_submission_account_digest_v1(b"canonical-norito-publisher-account");
+        let same_publisher =
+            governance_dag_submission_account_digest_v1(b"canonical-norito-publisher-account");
         let other_publisher = governance_dag_submission_account_digest_v1(
             b"canonical-norito-other-publisher-account",
         );
 
-        assert_eq!(publisher.len(), GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1);
+        assert_eq!(
+            publisher.len(),
+            GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1
+        );
         assert_eq!(publisher, same_publisher);
         assert_ne!(publisher, other_publisher);
     }

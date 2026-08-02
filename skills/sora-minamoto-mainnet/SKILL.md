@@ -76,7 +76,7 @@ mainnet wiring with read-only calls only:
 4. Fetch the latest known block with `iroha.blocks.get`.
 5. List recent transactions with `iroha.transactions.list`, then check one
    listed hash with `iroha.transactions.status`.
-6. Optionally call a Musubi read such as `iroha.musubi.alias.resolve`; a
+6. Optionally call a Musubi read such as `iroha.musubi.queries.alias`; a
    `404 not_found` means that alias is absent, not that the tool is broken.
 
 Do not use broad alias-index enumeration as a health check. It may be

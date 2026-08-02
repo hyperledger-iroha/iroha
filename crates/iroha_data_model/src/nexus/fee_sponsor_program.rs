@@ -1200,7 +1200,7 @@ mod tests {
         let mut invalid = revision.clone();
         invalid.rules[0].selectors = vec![FeeSponsorRuleSelector::ContractCall(
             FeeSponsorContractSelector {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                     .parse()
                     .expect("fixture contract address"),
                 code_hash: Hash::new(b"fee-sponsor-contract"),
@@ -1215,7 +1215,7 @@ mod tests {
         let mut invalid = revision.clone();
         invalid.rules[0].selectors = vec![FeeSponsorRuleSelector::ContractCall(
             FeeSponsorContractSelector {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                     .parse()
                     .expect("fixture contract address"),
                 code_hash: Hash::new(b"fee-sponsor-contract"),

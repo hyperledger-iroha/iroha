@@ -26,7 +26,7 @@ use tokio::{task::spawn_blocking, time::timeout};
 /// 3b. If proofs are invalid or tampered with, the client rejects the data.
 #[tokio::test]
 async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()> {
-    let rose_def: AssetDefinitionId = AssetDefinitionId::new(
+    let rose_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("asset definition"),
         "rose".parse().expect("asset definition"),
     );

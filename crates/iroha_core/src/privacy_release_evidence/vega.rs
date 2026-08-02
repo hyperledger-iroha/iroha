@@ -9,10 +9,51 @@ const VEGA_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0xa7; 32];
 pub(super) const VEGA_RELEASE_ACTION_INDEX_V1: u32 = VEGA_PRIVACY_ACTION_INDEX_V1;
 pub(super) const VEGA_RELEASE_CREATION_TIME_MS_V1: u64 = VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1 - 1;
 pub(super) const VEGA_RELEASE_NONCE_V1: u32 = 26;
-pub(super) const VEGA_RELEASE_VARIABLE_COUNT_V1: u64 = 524_288;
-pub(super) const VEGA_RELEASE_CONSTRAINT_COUNT_V1: u64 = 1_048_576;
-pub(super) const VEGA_RELEASE_COMBINED_SUMCHECK_ROUNDS_V1: u64 = 40;
-const VEGA_RELEASE_PUBLIC_INPUT_COUNT_V1: usize = 14;
+pub(super) const VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1: u64 = 1_048_576;
+pub(super) const VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1: u64 = 2_359_296;
+pub(super) const VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1: u64 = 21;
+pub(super) const VEGA_RELEASE_MC_UPSTREAM_COMMIT_V1: &str =
+    "c0ee259053cd12eaf43ed71b5cde375452b3ee4d";
+pub(super) const VEGA_RELEASE_MC_WIRE_DESCRIPTOR_V1: &str = "canonical-mc-2-plus-6-sha256-steps";
+const VEGA_RELEASE_MC_STEP_COUNT_V1: usize = 8;
+const VEGA_RELEASE_MC_SHARED_VARIABLES_V1: usize = 524_288;
+const VEGA_RELEASE_MC_STEP_PRECOMMITTED_VARIABLES_V1: usize = 2_048;
+const VEGA_RELEASE_MC_STEP_REST_VARIABLES_V1: usize = 522_240;
+const VEGA_RELEASE_MC_CORE_PRECOMMITTED_VARIABLES_V1: usize = 2_048;
+const VEGA_RELEASE_MC_CORE_REST_VARIABLES_V1: usize = 522_240;
+const VEGA_RELEASE_MC_STEP_CONSTRAINTS_V1: usize = 262_144;
+const VEGA_RELEASE_MC_STEP_VARIABLES_V1: usize = 1_048_576;
+const VEGA_RELEASE_MC_CORE_CONSTRAINTS_V1: usize = 262_144;
+const VEGA_RELEASE_MC_CORE_VARIABLES_V1: usize = 1_048_576;
+const VEGA_RELEASE_MC_SHARED_COMMITMENT_POINTS_V1: usize = 256;
+const VEGA_RELEASE_MC_STEP_PRECOMMITTED_POINTS_V1: usize = 1;
+const VEGA_RELEASE_MC_STEP_REST_POINTS_V1: usize = 255;
+const VEGA_RELEASE_MC_STEP_PUBLIC_VALUES_V1: usize = 1;
+const VEGA_RELEASE_MC_CORE_PRECOMMITTED_POINTS_V1: usize = 1;
+const VEGA_RELEASE_MC_CORE_REST_POINTS_V1: usize = 255;
+const VEGA_RELEASE_MC_CORE_PUBLIC_VALUES_V1: usize = 18;
+const VEGA_RELEASE_MC_EVALUATION_RESPONSE_SCALARS_V1: usize = 2_048;
+const VEGA_RELEASE_MC_VERIFIER_ROUNDS_V1: usize = 47;
+const VEGA_RELEASE_MC_VERIFIER_PUBLIC_VALUES_V1: usize = 6;
+const VEGA_RELEASE_MC_NOVA_CROSS_TERM_POINTS_V1: usize = 16;
+const VEGA_RELEASE_MC_RANDOM_WITNESS_POINTS_V1: usize = 47;
+const VEGA_RELEASE_MC_RANDOM_ERROR_POINTS_V1: usize = 16;
+const VEGA_RELEASE_MC_RANDOM_PUBLIC_VALUES_V1: usize = 49;
+const VEGA_RELEASE_MC_VERIFIER_CONSTRAINTS_V1: usize = 512;
+const VEGA_RELEASE_MC_VERIFIER_VARIABLES_V1: usize = 1_504;
+const VEGA_RELEASE_MC_RELAXED_OUTER_ROUNDS_V1: usize = 9;
+const VEGA_RELEASE_MC_RELAXED_INNER_ROUNDS_V1: usize = 12;
+const VEGA_RELEASE_MC_RELAXED_OPENING_SCALARS_V1: usize = 32;
+pub(super) const VEGA_RELEASE_PUBLIC_INPUT_COUNT_V1: usize = 14;
+
+const fn vega_release_verifier_challenges_v1() -> [usize; VEGA_RELEASE_MC_VERIFIER_ROUNDS_V1] {
+    let mut values = [1; VEGA_RELEASE_MC_VERIFIER_ROUNDS_V1];
+    values[3] = 0;
+    values[44] = 0;
+    values[45] = 0;
+    values[46] = 0;
+    values
+}
 
 pub(super) struct VegaReleaseFixtureV1 {
     pub(super) public_input: VegaPrivacyActionPublicInputV1,
@@ -193,19 +234,58 @@ pub(super) fn run_vega_stage_v1(
 
     let dimensions = vega_mdl_proof_dimensions_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let variable_count = u64::try_from(dimensions.variable_count)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let constraint_count = u64::try_from(dimensions.constraint_count)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let combined_sumcheck_rounds = dimensions
-        .outer_sumcheck_rounds
-        .checked_add(dimensions.inner_sumcheck_rounds)
+    let total_app_constraints = dimensions
+        .step_constraints
+        .checked_mul(dimensions.num_steps)
+        .and_then(|value| value.checked_add(dimensions.core_constraints))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let max_circuit_variables =
+        u64::try_from(dimensions.step_variables.max(dimensions.core_variables))
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let relaxed_sumcheck_rounds = dimensions
+        .relaxed_outer_rounds
+        .checked_add(dimensions.relaxed_inner_rounds)
         .and_then(|rounds| u64::try_from(rounds).ok())
         .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     if VEGA_MDL_PUBLIC_INPUT_COUNT_V1 != VEGA_RELEASE_PUBLIC_INPUT_COUNT_V1
-        || variable_count != VEGA_RELEASE_VARIABLE_COUNT_V1
-        || constraint_count != VEGA_RELEASE_CONSTRAINT_COUNT_V1
-        || combined_sumcheck_rounds != VEGA_RELEASE_COMBINED_SUMCHECK_ROUNDS_V1
+        || dimensions.num_steps != VEGA_RELEASE_MC_STEP_COUNT_V1
+        || dimensions.shared_variables != VEGA_RELEASE_MC_SHARED_VARIABLES_V1
+        || dimensions.step_precommitted_variables != VEGA_RELEASE_MC_STEP_PRECOMMITTED_VARIABLES_V1
+        || dimensions.step_rest_variables != VEGA_RELEASE_MC_STEP_REST_VARIABLES_V1
+        || dimensions.core_precommitted_variables != VEGA_RELEASE_MC_CORE_PRECOMMITTED_VARIABLES_V1
+        || dimensions.core_rest_variables != VEGA_RELEASE_MC_CORE_REST_VARIABLES_V1
+        || dimensions.step_constraints != VEGA_RELEASE_MC_STEP_CONSTRAINTS_V1
+        || dimensions.step_variables != VEGA_RELEASE_MC_STEP_VARIABLES_V1
+        || dimensions.core_constraints != VEGA_RELEASE_MC_CORE_CONSTRAINTS_V1
+        || dimensions.core_variables != VEGA_RELEASE_MC_CORE_VARIABLES_V1
+        || dimensions.shared_commitment_points != VEGA_RELEASE_MC_SHARED_COMMITMENT_POINTS_V1
+        || dimensions.step_precommitted_points != VEGA_RELEASE_MC_STEP_PRECOMMITTED_POINTS_V1
+        || dimensions.step_rest_points != VEGA_RELEASE_MC_STEP_REST_POINTS_V1
+        || dimensions.step_public_values != VEGA_RELEASE_MC_STEP_PUBLIC_VALUES_V1
+        || dimensions.step_challenges != 0
+        || dimensions.core_precommitted_points != VEGA_RELEASE_MC_CORE_PRECOMMITTED_POINTS_V1
+        || dimensions.core_rest_points != VEGA_RELEASE_MC_CORE_REST_POINTS_V1
+        || dimensions.core_public_values != VEGA_RELEASE_MC_CORE_PUBLIC_VALUES_V1
+        || dimensions.core_challenges != 0
+        || dimensions.evaluation_response_scalars != VEGA_RELEASE_MC_EVALUATION_RESPONSE_SCALARS_V1
+        || dimensions.verifier_round_commitment_points != [1; VEGA_RELEASE_MC_VERIFIER_ROUNDS_V1]
+        || dimensions.verifier_public_values != VEGA_RELEASE_MC_VERIFIER_PUBLIC_VALUES_V1
+        || dimensions.verifier_challenges_per_round != vega_release_verifier_challenges_v1()
+        || dimensions.nova_cross_term_points != VEGA_RELEASE_MC_NOVA_CROSS_TERM_POINTS_V1
+        || dimensions.random_witness_commitment_points != VEGA_RELEASE_MC_RANDOM_WITNESS_POINTS_V1
+        || dimensions.random_error_commitment_points != VEGA_RELEASE_MC_RANDOM_ERROR_POINTS_V1
+        || dimensions.random_public_values != VEGA_RELEASE_MC_RANDOM_PUBLIC_VALUES_V1
+        || dimensions.verifier_constraints != VEGA_RELEASE_MC_VERIFIER_CONSTRAINTS_V1
+        || dimensions.verifier_variables != VEGA_RELEASE_MC_VERIFIER_VARIABLES_V1
+        || dimensions.relaxed_outer_rounds != VEGA_RELEASE_MC_RELAXED_OUTER_ROUNDS_V1
+        || dimensions.relaxed_outer_coefficients != 3
+        || dimensions.relaxed_inner_rounds != VEGA_RELEASE_MC_RELAXED_INNER_ROUNDS_V1
+        || dimensions.relaxed_inner_coefficients != 2
+        || dimensions.relaxed_opening_scalars != VEGA_RELEASE_MC_RELAXED_OPENING_SCALARS_V1
+        || total_app_constraints != VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1
+        || max_circuit_variables != VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1
+        || relaxed_sumcheck_rounds != VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
@@ -478,12 +558,12 @@ pub(super) fn run_vega_stage_v1(
         ),
         failure_class,
         resources: PrivacyReleaseResourceFactsV1 {
-            primary_units: constraint_count,
-            primary_ceiling: VEGA_RELEASE_CONSTRAINT_COUNT_V1,
-            secondary_units: variable_count,
-            secondary_ceiling: VEGA_RELEASE_VARIABLE_COUNT_V1,
-            relation_depth: combined_sumcheck_rounds,
-            relation_depth_ceiling: VEGA_RELEASE_COMBINED_SUMCHECK_ROUNDS_V1,
+            primary_units: total_app_constraints,
+            primary_ceiling: VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1,
+            secondary_units: max_circuit_variables,
+            secondary_ceiling: VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1,
+            relation_depth: relaxed_sumcheck_rounds,
+            relation_depth_ceiling: VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1,
         },
     })
 }

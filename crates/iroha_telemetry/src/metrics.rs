@@ -3397,6 +3397,7 @@ mod serde_tests {
             build: BuildStatus {
                 version: "2.0.0-rc.test".to_owned(),
                 git_commit_sha: "deadbeef".to_owned(),
+                dpn_validator_release_commit: "feedface".to_owned(),
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
             },
@@ -5597,6 +5598,8 @@ pub struct BuildStatus {
     pub version: String,
     /// Git commit SHA baked into this binary.
     pub git_commit_sha: String,
+    /// DPN validator release commit baked into a Taira validator binary.
+    pub dpn_validator_release_commit: String,
     /// Enabled Cargo features baked into this binary.
     pub cargo_features: String,
     /// Target triple used to compile this binary.
@@ -5608,6 +5611,9 @@ impl BuildStatus {
         Self {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             git_commit_sha: option_env!("VERGEN_GIT_SHA")
+                .unwrap_or("unknown")
+                .to_owned(),
+            dpn_validator_release_commit: option_env!("IROHA_DPN_VALIDATOR_RELEASE_COMMIT")
                 .unwrap_or("unknown")
                 .to_owned(),
             cargo_features: option_env!("VERGEN_CARGO_FEATURES")

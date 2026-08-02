@@ -247,19 +247,27 @@ where
 fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<AccountId>) {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_portfolio"));
     let domain_id: DomainId = DomainId::try_new("portfolio", "universal").unwrap();
-    let cash_id = AssetDefinitionId::new(domain_id.clone(), "cash".parse().unwrap());
-    let points_id = AssetDefinitionId::new(domain_id.clone(), "points".parse().unwrap());
+    let cash_id =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "cash".parse().unwrap());
+    let points_id =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "points".parse().unwrap());
     let first_account = account_id_from_signatory(domain_id.clone(), ACCOUNT_SIGNATORY);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(first_account.clone()).with_uaid(Some(uaid))).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(cash_id.clone()).with_name("cash".to_owned()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            cash_id.clone(),
+            "cash".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(points_id.clone()).with_name("points".to_owned()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            points_id.clone(),
+            "points".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
         Mint::asset_quantity(500u64, AssetId::new(cash_id, first_account.clone())).into(),
         Mint::asset_quantity(250u64, AssetId::new(points_id, first_account.clone())).into(),
@@ -303,19 +311,27 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
 fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_fixture"));
     let domain_id: DomainId = DomainId::try_new("portfolio_fixture", "universal").unwrap();
-    let cash_id = AssetDefinitionId::new(domain_id.clone(), "cash".parse().unwrap());
-    let points_id = AssetDefinitionId::new(domain_id.clone(), "points".parse().unwrap());
+    let cash_id =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "cash".parse().unwrap());
+    let points_id =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "points".parse().unwrap());
     let first_account = account_id_from_seed(&domain_id, 0x11);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(first_account.clone()).with_uaid(Some(uaid))).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(cash_id.clone()).with_name("cash".to_owned()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            cash_id.clone(),
+            "cash".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(points_id.clone()).with_name("points".to_owned()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            points_id.clone(),
+            "points".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
         Mint::asset_quantity(875u64, AssetId::new(cash_id, first_account.clone())).into(),
         Mint::asset_quantity(320u64, AssetId::new(points_id, first_account.clone())).into(),

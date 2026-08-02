@@ -16,9 +16,11 @@ internal object MusubiJsonV1 {
         "/v1/musubi/queries/versions",
         "/v1/musubi/queries/maintainers",
         "/v1/musubi/queries/archive-locations",
+        "/v1/musubi/queries/archive-retention",
         "/v1/musubi/queries/alias",
         "/v1/musubi/queries/alias-history",
         "/v1/musubi/queries/ordered-prefix",
+        "/v1/musubi/queries/search",
     )
 
     fun encode(value: Any?): ByteArray =
@@ -62,15 +64,50 @@ internal object MusubiJsonV1 {
     fun parseVersionPage(payload: ByteArray): MusubiPageV1<MusubiVersionV1> =
         parsePage(parse(payload, "Musubi versions response"), "response", ::parseVersion)
 
-    fun parseMaintainerPage(payload: ByteArray): MusubiPageV1<MusubiPackageMemberV1> =
-        parsePage(parse(payload, "Musubi maintainers response"), "response", ::parseMember)
-
-    fun parseArchiveLocationPage(payload: ByteArray): MusubiPageV1<MusubiArchiveLocationV1> =
+    fun parseMaintainerPage(payload: ByteArray): MusubiPageV1<MusubiMaintainerDirectoryEntryV1> =
         parsePage(
+            parse(payload, "Musubi maintainers response"),
+            "response",
+            ::parseMaintainerDirectoryEntry,
+        )
+
+    fun parseArchiveLocationPage(payload: ByteArray): MusubiArchiveLocationPageV1 {
+        val root = exactObject(
             parse(payload, "Musubi archive-locations response"),
             "response",
-            ::parseArchiveLocation,
+            setOf("chain_id", "genesis_hash", "archive", "items", "next_cursor", "snapshot"),
         )
+        val snapshot = parseSnapshot(root["snapshot"], "response.snapshot")
+        val cursor = root["next_cursor"]?.let { parseCursor(it, "response.next_cursor") }
+        val items = list(root["items"], "response.items").mapIndexed { index, item ->
+            parseArchiveLocation(item, "response.items[$index]")
+        }
+        return MusubiArchiveLocationPageV1(
+            string(root["chain_id"], "response.chain_id"),
+            fixedBytes(root["genesis_hash"], "response.genesis_hash"),
+            parseArchiveRecord(root["archive"], "response.archive"),
+            items,
+            cursor,
+            snapshot,
+        )
+    }
+
+    fun parseArchiveRetentionPage(payload: ByteArray): MusubiArchiveRetentionPageV1 {
+        val root = exactObject(
+            parse(payload, "Musubi archive-retention response"),
+            "response",
+            setOf("chain_id", "genesis_hash", "items", "snapshot"),
+        )
+        val items = list(root["items"], "response.items").mapIndexed { index, item ->
+            parseArchiveRetentionDecision(item, "response.items[$index]")
+        }
+        return MusubiArchiveRetentionPageV1(
+            string(root["chain_id"], "response.chain_id"),
+            fixedBytes(root["genesis_hash"], "response.genesis_hash"),
+            items,
+            parseSnapshot(root["snapshot"], "response.snapshot"),
+        )
+    }
 
     fun parseAlias(payload: ByteArray): MusubiAliasRecordV1 =
         parseAliasRecord(parse(payload, "Musubi alias response"), "response")
@@ -82,7 +119,10 @@ internal object MusubiJsonV1 {
         val root = exactObject(
             parse(payload, "Musubi ordered-prefix response"),
             "response",
-            setOf("chain_id", "genesis_hash", "items", "next_cursor", "snapshot"),
+            setOf(
+                "chain_id", "genesis_hash", "namespace_binding", "items", "next_cursor",
+                "snapshot",
+            ),
         )
         val snapshot = parseSnapshot(root["snapshot"], "response.snapshot")
         val cursor = root["next_cursor"]?.let { parseCursor(it, "response.next_cursor") }
@@ -92,10 +132,27 @@ internal object MusubiJsonV1 {
         return MusubiOrderedPrefixPageV1(
             string(root["chain_id"], "response.chain_id"),
             fixedBytes(root["genesis_hash"], "response.genesis_hash"),
+            parseNamespaceBinding(root["namespace_binding"], "response.namespace_binding"),
             items,
             cursor,
             snapshot,
         )
+    }
+
+    fun parseSearchPage(payload: ByteArray): MusubiSearchPageV1 {
+        val root = exactObject(
+            parse(payload, "Musubi search response"),
+            "response",
+            setOf("items", "next_cursor", "snapshot"),
+        )
+        val snapshot = parseSearchSnapshot(root["snapshot"], "response.snapshot")
+        val cursor = root["next_cursor"]?.let {
+            parseSearchCursor(it, "response.next_cursor")
+        }
+        val items = list(root["items"], "response.items").mapIndexed { index, item ->
+            parseSearchHit(item, "response.items[$index]")
+        }
+        return MusubiSearchPageV1(items, cursor, snapshot)
     }
 
     fun decodeQuery(path: String, value: Any?): MusubiWireValueV1 {
@@ -131,6 +188,21 @@ internal object MusubiJsonV1 {
                     parsePageRequest(root["page"], "request.page"),
                 )
             }
+            "/v1/musubi/queries/archive-retention" -> {
+                val root = exactObject(
+                    value,
+                    "request",
+                    setOf("archive_ids", "expected_snapshot"),
+                )
+                MusubiArchiveRetentionQueryV1(
+                    list(root["archive_ids"], "request.archive_ids").mapIndexed { index, item ->
+                        digest(item, "request.archive_ids[$index]")
+                    },
+                    root["expected_snapshot"]?.let {
+                        parseSnapshot(it, "request.expected_snapshot")
+                    },
+                )
+            }
             "/v1/musubi/queries/alias", "/v1/musubi/queries/alias-history" -> {
                 val root = exactObject(value, "request", setOf("alias", "page"))
                 MusubiAliasQueryV1(
@@ -138,11 +210,18 @@ internal object MusubiJsonV1 {
                     parsePageRequest(root["page"], "request.page"),
                 )
             }
-            else -> {
+            "/v1/musubi/queries/ordered-prefix" -> {
                 val root = exactObject(value, "request", setOf("prefix", "page"))
                 MusubiOrderedPrefixQueryV1(
                     newtypeText(root["prefix"], "request.prefix"),
                     parsePageRequest(root["page"], "request.page"),
+                )
+            }
+            else -> {
+                val root = exactObject(value, "request", setOf("query", "page"))
+                MusubiSearchQueryV1(
+                    string(root["query"], "request.query"),
+                    parseSearchPageRequest(root["page"], "request.page"),
                 )
             }
         }
@@ -157,9 +236,11 @@ internal object MusubiJsonV1 {
             "/v1/musubi/queries/versions" -> parseVersionPage(payload)
             "/v1/musubi/queries/maintainers" -> parseMaintainerPage(payload)
             "/v1/musubi/queries/archive-locations" -> parseArchiveLocationPage(payload)
+            "/v1/musubi/queries/archive-retention" -> parseArchiveRetentionPage(payload)
             "/v1/musubi/queries/alias" -> parseAlias(payload)
             "/v1/musubi/queries/alias-history" -> parseAliasHistoryPage(payload)
             "/v1/musubi/queries/ordered-prefix" -> parseOrderedPackagePage(payload)
+            "/v1/musubi/queries/search" -> parseSearchPage(payload)
             else -> throw IllegalArgumentException("unsupported Musubi V1 query path: $path")
         }
     }
@@ -198,6 +279,20 @@ internal object MusubiJsonV1 {
             "Domain" -> MusubiPackageScopeV1.domain(string(root["value"], "$field.value"))
             else -> throw IllegalArgumentException("$field.kind is unsupported in Musubi V1")
         }
+    }
+
+    private fun parseNamespaceBinding(value: Any?, field: String): MusubiNamespaceBindingV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf("namespace", "home_dataspace", "scope", "generation"),
+        )
+        return MusubiNamespaceBindingV1(
+            MusubiNamespaceV1(newtypeText(root["namespace"], "$field.namespace")),
+            u64(root["home_dataspace"], "$field.home_dataspace"),
+            parseScope(root["scope"], "$field.scope"),
+            nonZeroU64(root["generation"], "$field.generation"),
+        )
     }
 
     private fun parseSelector(value: Any?, field: String): MusubiPackageSelectorV1 {
@@ -328,6 +423,40 @@ internal object MusubiJsonV1 {
         return MusubiPageRequestV1(
             limit,
             root["cursor"]?.let { parseCursor(it, "$field.cursor") },
+        )
+    }
+
+    private fun parseSearchSnapshot(value: Any?, field: String): MusubiSearchSnapshotV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf("finalized_height", "finalized_block_hash", "projection_revision"),
+        )
+        return MusubiSearchSnapshotV1(
+            nonZeroU64(root["finalized_height"], "$field.finalized_height"),
+            fixedBytes(root["finalized_block_hash"], "$field.finalized_block_hash"),
+            nonZeroU64(root["projection_revision"], "$field.projection_revision"),
+        )
+    }
+
+    private fun parseSearchCursor(value: Any?, field: String): MusubiSearchCursorV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf("snapshot", "query_hash", "last_package"),
+        )
+        return MusubiSearchCursorV1(
+            parseSearchSnapshot(root["snapshot"], "$field.snapshot"),
+            digest(root["query_hash"], "$field.query_hash"),
+            parsePackage(root["last_package"], "$field.last_package"),
+        )
+    }
+
+    private fun parseSearchPageRequest(value: Any?, field: String): MusubiSearchPageRequestV1 {
+        val root = exactObject(value, field, setOf("limit", "cursor"))
+        return MusubiSearchPageRequestV1(
+            u32(root["limit"], "$field.limit"),
+            root["cursor"]?.let { parseSearchCursor(it, "$field.cursor") },
         )
     }
 
@@ -468,11 +597,11 @@ internal object MusubiJsonV1 {
                 val takedown = exactObject(
                     root["value"],
                     "$field.value",
-                    setOf("action_digest", "reason", "enacted_at_height"),
+                    setOf("action_digest", "reason", "applied_at_height"),
                 )
                 digest(takedown["action_digest"], "$field.value.action_digest")
                 newtypeText(takedown["reason"], "$field.value.reason")
-                nonZeroU64(takedown["enacted_at_height"], "$field.value.enacted_at_height")
+                nonZeroU64(takedown["applied_at_height"], "$field.value.applied_at_height")
             }
             else -> throw IllegalArgumentException("$field.kind is unsupported in Musubi V1")
         }
@@ -525,33 +654,168 @@ internal object MusubiJsonV1 {
         validateGovernance(root["governance"], "$field.governance")
     }
 
+    private fun parseMaintainerDirectoryEntry(
+        value: Any?,
+        field: String,
+    ): MusubiMaintainerDirectoryEntryV1 {
+        val root = tagged(value, field)
+        return when (string(root["kind"], "$field.kind")) {
+            "Accepted" -> MusubiMaintainerDirectoryEntryV1.Accepted(
+                parseMember(root["value"], "$field.value"),
+            )
+            "PendingInvitation" -> MusubiMaintainerDirectoryEntryV1.PendingInvitation(
+                parseMaintainerInvitation(root["value"], "$field.value"),
+            )
+            else -> throw IllegalArgumentException("$field.kind is unsupported in Musubi V1")
+        }
+    }
+
     private fun parseMember(value: Any?, field: String): MusubiPackageMemberV1 {
         val root = exactObject(
             value,
             field,
             setOf("package", "account", "role", "accepted_at_height", "governance_revision"),
         )
-        val role = tagged(root["role"], "$field.role")
-        val roleKind = string(role["kind"], "$field.role.kind")
-        when (roleKind) {
-            "Owner" -> require(role["value"] == null) { "$field.role.value must be null" }
-            "Maintainer" -> {
-                val permissions = exactObject(
-                    role["value"],
-                    "$field.role.value",
-                    setOf("publish", "yank", "metadata", "archive_locations"),
-                )
-                permissions.forEach { (key, item) -> boolean(item, "$field.role.value.$key") }
-            }
-            else -> throw IllegalArgumentException("$field.role.kind is unsupported in Musubi V1")
-        }
+        val roleKind = parsePackageRole(root["role"], "$field.role")
+        val account = string(root["account"], "$field.account")
+        MusubiValidationV1.requireExactText(account, "$field.account")
         return MusubiPackageMemberV1(
             parsePackage(root["package"], "$field.package"),
-            string(root["account"], "$field.account"),
+            account,
             roleKind,
             nonZeroU64(root["accepted_at_height"], "$field.accepted_at_height"),
             nonZeroU64(root["governance_revision"], "$field.governance_revision"),
             root,
+        )
+    }
+
+    private fun parseMaintainerInvitation(
+        value: Any?,
+        field: String,
+    ): MusubiMaintainerInvitationV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf(
+                "invite_id", "package", "invited_by", "invited_account", "role",
+                "expected_governance_revision", "expires_at_height", "state",
+            ),
+        )
+        val inviteId = digest(root["invite_id"], "$field.invite_id")
+        require(inviteId.bytes().any { it.toInt() != 0 }) { "$field.invite_id must not be inert" }
+        val invitedBy = string(root["invited_by"], "$field.invited_by")
+        val invitedAccount = string(root["invited_account"], "$field.invited_account")
+        MusubiValidationV1.requireExactText(invitedBy, "$field.invited_by")
+        MusubiValidationV1.requireExactText(invitedAccount, "$field.invited_account")
+        val roleKind = parsePackageRole(root["role"], "$field.role")
+        val stateKind = taggedUnit(root["state"], "$field.state", setOf("Pending"))
+        return MusubiMaintainerInvitationV1(
+            inviteId,
+            parsePackage(root["package"], "$field.package"),
+            invitedBy,
+            invitedAccount,
+            roleKind,
+            nonZeroU64(
+                root["expected_governance_revision"],
+                "$field.expected_governance_revision",
+            ),
+            nonZeroU64(root["expires_at_height"], "$field.expires_at_height"),
+            stateKind,
+            root,
+        )
+    }
+
+    private fun parsePackageRole(value: Any?, field: String): String {
+        val role = tagged(value, field)
+        val roleKind = string(role["kind"], "$field.kind")
+        when (roleKind) {
+            "Owner" -> require(role["value"] == null) { "$field.value must be null" }
+            "Maintainer" -> {
+                val permissions = exactObject(
+                    role["value"],
+                    "$field.value",
+                    setOf("publish", "yank", "metadata", "archive_locations"),
+                )
+                val grants = permissions.map { (key, item) ->
+                    boolean(item, "$field.value.$key")
+                }
+                require(grants.any { it }) {
+                    "$field.value must grant at least one permission"
+                }
+            }
+            else -> throw IllegalArgumentException("$field.kind is unsupported in Musubi V1")
+        }
+        return roleKind
+    }
+
+    private fun parseArchiveRetentionDecision(
+        value: Any?,
+        field: String,
+    ): MusubiArchiveRetentionDecisionV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf(
+                "archive_id", "disposition", "active_releases", "yanked_releases",
+                "taken_down_releases", "storage",
+            ),
+        )
+        val disposition = when (
+            taggedUnit(
+                root["disposition"],
+                "$field.disposition",
+                setOf(
+                    "RetainUnknown", "RetainReferenced", "PruneUnreferenced",
+                    "PruneGovernedTakedown",
+                ),
+            )
+        ) {
+            "RetainUnknown" -> MusubiArchiveRetentionDispositionV1.RETAIN_UNKNOWN
+            "RetainReferenced" -> MusubiArchiveRetentionDispositionV1.RETAIN_REFERENCED
+            "PruneUnreferenced" -> MusubiArchiveRetentionDispositionV1.PRUNE_UNREFERENCED
+            else -> MusubiArchiveRetentionDispositionV1.PRUNE_GOVERNED_TAKEDOWN
+        }
+        return MusubiArchiveRetentionDecisionV1(
+            digest(root["archive_id"], "$field.archive_id"),
+            disposition,
+            u16(root["active_releases"], "$field.active_releases"),
+            u16(root["yanked_releases"], "$field.yanked_releases"),
+            u16(root["taken_down_releases"], "$field.taken_down_releases"),
+            root["storage"]?.let { parseArchiveAvailability(it, "$field.storage") },
+        )
+    }
+
+    private fun parseArchiveAvailability(
+        value: Any?,
+        field: String,
+    ): MusubiArchiveAvailabilityV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf(
+                "archive_id", "availability", "healthy_replicas", "active_locations",
+                "finalized_height", "finalized_block_hash", "index_revision",
+            ),
+        )
+        val availability = when (
+            taggedUnit(
+                root["availability"],
+                "$field.availability",
+                setOf("Selectable", "BelowQuorum", "Unavailable"),
+            )
+        ) {
+            "Selectable" -> MusubiStorageAvailabilityV1.SELECTABLE
+            "BelowQuorum" -> MusubiStorageAvailabilityV1.BELOW_QUORUM
+            else -> MusubiStorageAvailabilityV1.UNAVAILABLE
+        }
+        return MusubiArchiveAvailabilityV1(
+            digest(root["archive_id"], "$field.archive_id"),
+            availability,
+            u16(root["healthy_replicas"], "$field.healthy_replicas"),
+            u8(root["active_locations"], "$field.active_locations"),
+            nonZeroU64(root["finalized_height"], "$field.finalized_height"),
+            fixedBytes(root["finalized_block_hash"], "$field.finalized_block_hash"),
+            nonZeroU64(root["index_revision"], "$field.index_revision"),
         )
     }
 
@@ -583,6 +847,119 @@ internal object MusubiJsonV1 {
             "$field must carry pin and replication-order identities"
         }
         return MusubiArchiveLocationV1(location, archive, revision, state, root)
+    }
+
+    private fun parseArchiveRecord(value: Any?, field: String): MusubiArchiveRecordV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf(
+                "archive_id", "commitment", "staging_receipt", "registered_by",
+                "registered_at_height", "location_revision", "location_ids",
+            ),
+        )
+        return MusubiArchiveRecordV1(
+            digest(root["archive_id"], "$field.archive_id"),
+            parseArchiveCommitment(root["commitment"], "$field.commitment"),
+            parseSeedIngressReceipt(root["staging_receipt"], "$field.staging_receipt"),
+            string(root["registered_by"], "$field.registered_by"),
+            nonZeroU64(root["registered_at_height"], "$field.registered_at_height"),
+            nonZeroU64(root["location_revision"], "$field.location_revision"),
+            list(root["location_ids"], "$field.location_ids").mapIndexed { index, item ->
+                digest(item, "$field.location_ids[$index]")
+            },
+        )
+    }
+
+    private fun parseArchiveCommitment(value: Any?, field: String): MusubiArchiveCommitmentV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf(
+                "root_cid", "chunker", "chunk_plan_digest", "por_root", "content_length",
+                "car_digest", "car_size", "bundle_digest", "source_tree_digest",
+                "descriptor_digest", "file_count", "chunk_count",
+            ),
+        )
+        val chunker = exactObject(
+            root["chunker"],
+            "$field.chunker",
+            setOf("profile_id", "namespace", "name", "semver", "multihash_code"),
+        )
+        val profile = MusubiChunkerProfileHandleV1(
+            u32(chunker["profile_id"], "$field.chunker.profile_id"),
+            string(chunker["namespace"], "$field.chunker.namespace"),
+            string(chunker["name"], "$field.chunker.name"),
+            string(chunker["semver"], "$field.chunker.semver"),
+            u64(chunker["multihash_code"], "$field.chunker.multihash_code"),
+        )
+        return MusubiArchiveCommitmentV1(
+            byteArray(root["root_cid"], "$field.root_cid", 36),
+            profile,
+            digest(root["chunk_plan_digest"], "$field.chunk_plan_digest"),
+            digest(root["por_root"], "$field.por_root"),
+            u64(root["content_length"], "$field.content_length"),
+            digest(root["car_digest"], "$field.car_digest"),
+            u64(root["car_size"], "$field.car_size"),
+            digest(root["bundle_digest"], "$field.bundle_digest"),
+            digest(root["source_tree_digest"], "$field.source_tree_digest"),
+            digest(root["descriptor_digest"], "$field.descriptor_digest"),
+            u32(root["file_count"], "$field.file_count"),
+            u32(root["chunk_count"], "$field.chunk_count"),
+        )
+    }
+
+    private fun parseSeedIngressReceipt(value: Any?, field: String): MusubiSeedIngressReceiptV1 {
+        val root = exactObject(value, field, setOf("payload", "approvals"))
+        val payload = exactObject(
+            root["payload"],
+            "$field.payload",
+            setOf("version", "binding", "issued_at_ms", "expires_at_ms"),
+        )
+        require(u8(payload["version"], "$field.payload.version") == 1) {
+            "$field.payload.version is unsupported in Musubi V1"
+        }
+        val binding = exactObject(
+            payload["binding"],
+            "$field.payload.binding",
+            setOf(
+                "chain_id", "genesis_block_hash", "publisher", "ingress_broker",
+                "seed_provider", "semantic_release_manifest_digest", "archive_id",
+                "car_body_digest", "car_body_length", "nonce",
+            ),
+        )
+        val typedBinding = MusubiSeedIngressReceiptBindingV1(
+            string(binding["chain_id"], "$field.payload.binding.chain_id"),
+            fixedBytes(binding["genesis_block_hash"], "$field.payload.binding.genesis_block_hash"),
+            string(binding["publisher"], "$field.payload.binding.publisher"),
+            string(binding["ingress_broker"], "$field.payload.binding.ingress_broker"),
+            newtypeText(binding["seed_provider"], "$field.payload.binding.seed_provider"),
+            digest(
+                binding["semantic_release_manifest_digest"],
+                "$field.payload.binding.semantic_release_manifest_digest",
+            ),
+            digest(binding["archive_id"], "$field.payload.binding.archive_id"),
+            digest(binding["car_body_digest"], "$field.payload.binding.car_body_digest"),
+            u64(binding["car_body_length"], "$field.payload.binding.car_body_length"),
+            fixedBytes(binding["nonce"], "$field.payload.binding.nonce"),
+        )
+        val typedPayload = MusubiSeedIngressReceiptPayloadV1(
+            typedBinding,
+            u64(payload["issued_at_ms"], "$field.payload.issued_at_ms"),
+            u64(payload["expires_at_ms"], "$field.payload.expires_at_ms"),
+        )
+        val approvals = list(root["approvals"], "$field.approvals").mapIndexed { index, item ->
+            val approval = exactObject(
+                item,
+                "$field.approvals[$index]",
+                setOf("public_key", "signature"),
+            )
+            MusubiSeedIngressReceiptApprovalV1(
+                string(approval["public_key"], "$field.approvals[$index].public_key"),
+                string(approval["signature"], "$field.approvals[$index].signature"),
+            )
+        }
+        return MusubiSeedIngressReceiptV1(typedPayload, approvals)
     }
 
     private fun parseAliasRecord(value: Any?, field: String): MusubiAliasRecordV1 {
@@ -644,6 +1021,27 @@ internal object MusubiJsonV1 {
         )
     }
 
+    private fun parseSearchHit(value: Any?, field: String): MusubiSearchHitV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf(
+                "package", "claimed_namespace", "description", "keywords", "metadata_revision",
+            ),
+        )
+        return MusubiSearchHitV1(
+            parsePackage(root["package"], "$field.package"),
+            MusubiNamespaceV1(
+                newtypeText(root["claimed_namespace"], "$field.claimed_namespace"),
+            ),
+            root["description"]?.let { newtypeText(it, "$field.description") },
+            list(root["keywords"], "$field.keywords").mapIndexed { index, item ->
+                newtypeText(item, "$field.keywords[$index]")
+            },
+            nonZeroU64(root["metadata_revision"], "$field.metadata_revision"),
+        )
+    }
+
     private fun <T : MusubiWireValueV1> parsePage(
         value: Any?,
         field: String,
@@ -665,9 +1063,13 @@ internal object MusubiJsonV1 {
     }
 
     private fun fixedBytes(value: Any?, field: String): ByteArray {
+        return byteArray(value, field, 32)
+    }
+
+    private fun byteArray(value: Any?, field: String, size: Int): ByteArray {
         val bytes = list(value, field)
-        require(bytes.size == 32) { "$field must contain exactly 32 bytes" }
-        return ByteArray(32) { index -> u8(bytes[index], "$field[$index]").toByte() }
+        require(bytes.size == size) { "$field must contain exactly $size bytes" }
+        return ByteArray(size) { index -> u8(bytes[index], "$field[$index]").toByte() }
     }
 
     private fun newtypeText(value: Any?, field: String): String {

@@ -16015,7 +16015,7 @@ seiyaku Privacy {
     #[test]
     fn mint_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -16042,7 +16042,7 @@ seiyaku Privacy {
     fn transfer_asset_batch_instruction_json_roundtrip() {
         let source = sample_account("wonderland");
         let destination = sample_account("looking_glass");
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain"),
             "rose".parse().expect("valid asset name"),
         );
@@ -16097,7 +16097,7 @@ seiyaku Privacy {
     #[test]
     fn burn_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -16920,7 +16920,7 @@ seiyaku Privacy {
     fn transfer_asset_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -17612,7 +17612,7 @@ seiyaku Privacy {
     #[test]
     fn governance_propose_deploy_contract_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(ProposeDeployContract {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
             code_hash_hex: "aa".repeat(32),
@@ -17648,7 +17648,7 @@ seiyaku Privacy {
     }
 
     fn validation_fee_asset(domain: &str, name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("validation-fee fixture domain"),
             name.parse().expect("validation-fee fixture asset name"),
         )
@@ -17679,7 +17679,7 @@ seiyaku Privacy {
 
     fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBindingV1 {
         let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("validation-fee payout contract address");
         ValidationFeeTreasuryPayoutBindingV1 {
@@ -18815,7 +18815,7 @@ seiyaku Privacy {
         .expect("unsigned transaction draft");
         let mut expected: TransactionPayload =
             json::from_json(&draft.payload_json).expect("decode exact draft JSON");
-        let fee_asset = AssetDefinitionId::new(
+        let fee_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "universal").expect("fee domain"),
             "xor".parse().expect("asset name"),
         );
@@ -19134,7 +19134,7 @@ seiyaku Privacy {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -19165,7 +19165,7 @@ seiyaku Privacy {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "fee-intent-preservation".parse().expect("valid chain id");
-        let fee_asset = AssetDefinitionId::new(
+        let fee_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "universal").expect("fee domain"),
             "xor".parse().expect("fee asset name"),
         );
@@ -19230,7 +19230,7 @@ seiyaku Privacy {
     fn activate_contract_instance_instruction_json_roundtrip() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -19347,7 +19347,7 @@ seiyaku Privacy {
         let authority = AccountId::new(keypair.public_key().clone());
         let expected_code_hash = Hash::new(b"js-decoder-contract-code");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             3,
             DataSpaceId::UNIVERSAL,
@@ -19392,7 +19392,7 @@ seiyaku Privacy {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -19447,8 +19447,13 @@ seiyaku Privacy {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let contract_address = ContractAddress::derive(0, &authority, 9, DataSpaceId::UNIVERSAL)
-            .expect("contract address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            9,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let expected_code_hash = Hash::new(b"js-host-mixed-batch-code");
         let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
             DomainId::try_new("mixed-batch", "universal").expect("domain id"),
@@ -19510,7 +19515,7 @@ seiyaku Privacy {
         let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
         let error = checked_batch_executable(
             vec![ExecutableBatchItem::ContractCall(ContractInvocation {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                     .parse()
                     .expect("contract address"),
                 expected_code_hash: Hash::new(b"js-host-missing-gas"),
@@ -19576,7 +19581,7 @@ seiyaku Privacy {
         let quoted = FeePaymentIntent::authority(
             vec![iroha_data_model::transaction::FeeChargeLimit::new(
                 iroha_data_model::transaction::FeeChargeKind::PipelineGas,
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("fees", "universal").expect("fee domain"),
                     "xor".parse().expect("asset name"),
                 ),
@@ -19751,7 +19756,7 @@ seiyaku Privacy {
             .to_i105_for_discriminant(369)
             .expect("taira i105");
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -20011,11 +20016,11 @@ seiyaku Privacy {
         let settle = SettleFxCorridor {
             policy_id: "aed_pkr".parse().expect("policy name"),
             expected_policy_revision: 3,
-            source_asset_definition_id: AssetDefinitionId::new(
+            source_asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cbuae", "universal").expect("source asset domain"),
                 "aed".parse().expect("source asset name"),
             ),
-            destination_asset_definition_id: AssetDefinitionId::new(
+            destination_asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sbp", "universal").expect("destination asset domain"),
                 "pkr".parse().expect("destination asset name"),
             ),

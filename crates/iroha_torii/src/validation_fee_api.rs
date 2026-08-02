@@ -1,5 +1,7 @@
 //! Typed Torii surface for Parliament-governed validation-fee state.
 
+use std::ops::Bound::{Excluded, Unbounded};
+
 use axum::{
     extract::{ConnectInfo, Path, State},
     http::HeaderMap,
@@ -24,17 +26,19 @@ use iroha_data_model::{
 use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-    VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
-    ValidationFeeCurrentPolicyProofV1, ValidationFeeParliamentBodyProgressV1,
-    ValidationFeeParliamentSnapshotV1, ValidationFeePlainBallotDirectionV1,
-    ValidationFeePlainBallotDraftRequestV1, ValidationFeePlainBallotDraftResponseV1,
-    ValidationFeeProposalDetailQueryV1, ValidationFeeProposalDetailV1,
-    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
-    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
+    VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
+    ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
+    ValidationFeeParliamentBodyProgressV1, ValidationFeeParliamentSnapshotV1,
+    ValidationFeePlainBallotDirectionV1, ValidationFeePlainBallotDraftRequestV1,
+    ValidationFeePlainBallotDraftResponseV1, ValidationFeeProposalDetailQueryV1,
+    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
+    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
+    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListQueryV1,
     ValidationFeeProposalListV1, ValidationFeeProposalLockV1, ValidationFeeProposalLocksV1,
     ValidationFeeProposalPipelineStageV1, ValidationFeeProposalPipelineV1,
     ValidationFeeProposalRecordV1, ValidationFeeProposalReferendumV1,
     ValidationFeeProposalStatusV1, ValidationFeeProposalTallyV1,
+    decode_validation_fee_proposal_cursor_v1, encode_validation_fee_proposal_cursor_v1,
     validation_fee_policy_proof_page_tip,
 };
 use mv::storage::StorageReadOnly as _;
@@ -591,11 +595,27 @@ fn public_proposal_record(
     })
 }
 
-/// Return all typed validation-fee Parliament proposals.
+fn bounded_validation_fee_proposal_keys<'a>(
+    indexed: impl Iterator<Item = (&'a (u64, [u8; 32]), &'a ())>,
+    limit: usize,
+) -> (Vec<(u64, [u8; 32])>, bool) {
+    let mut keys = indexed
+        .take(limit.saturating_add(1))
+        .map(|(key, ())| *key)
+        .collect::<Vec<_>>();
+    let has_more = keys.len() > limit;
+    if has_more {
+        keys.pop();
+    }
+    (keys, has_more)
+}
+
+/// Return one bounded page of typed validation-fee Parliament proposals.
 pub(crate) async fn handler_proposals(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(query): NoritoQuery<ValidationFeeProposalListQueryV1>,
 ) -> Result<JsonBody<ValidationFeeProposalListV1>, Error> {
     check_access(
         &app,
@@ -604,14 +624,42 @@ pub(crate) async fn handler_proposals(
         "v1/validation-fee/proposals",
     )
     .await?;
+    if query.limit == 0 || query.limit > VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1 {
+        return Err(bad_request(format!(
+            "limit must be between 1 and {VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1}"
+        )));
+    }
+    let after = query
+        .cursor
+        .as_deref()
+        .map(decode_validation_fee_proposal_cursor_v1)
+        .transpose()
+        .map_err(bad_request)?;
     let world = app.state.world_view();
-    let mut proposals = Vec::new();
-    for (proposal_id, proposal) in world.governance_proposals().iter() {
-        if !matches!(
-            proposal.kind,
-            ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
-        ) {
-            continue;
+    let index = world.validation_fee_proposal_index();
+    let indexed: Box<dyn Iterator<Item = (&(u64, [u8; 32]), &())> + '_> = match after {
+        Some(after) => Box::new(index.range((Excluded(after), Unbounded))),
+        None => Box::new(index.iter()),
+    };
+    let limit = usize::try_from(query.limit).expect("bounded u32 page limit fits usize");
+    let (page_keys, has_more) = bounded_validation_fee_proposal_keys(indexed, limit);
+    let mut proposals = Vec::with_capacity(limit);
+    let mut last_key = None;
+    for (created_height, proposal_id) in page_keys {
+        let proposal = world
+            .governance_proposals()
+            .get(&proposal_id)
+            .ok_or_else(|| inconsistent("validation-fee proposal index references no proposal"))?;
+        if proposal.created_height != created_height
+            || !matches!(
+                proposal.kind,
+                ProposalKind::ValidationFeePolicy(_)
+                    | ProposalKind::ValidationFeePayoutLifecycle(_)
+            )
+        {
+            return Err(inconsistent(
+                "validation-fee proposal index does not match its exact typed proposal",
+            ));
         }
         let referendum_id = hex::encode(proposal_id);
         let referendum = world
@@ -623,27 +671,25 @@ pub(crate) async fn handler_proposals(
             })?;
         let approvals = world.governance_stage_approvals().get(&referendum_id);
         proposals.push(public_proposal_record(
-            *proposal_id,
+            proposal_id,
             proposal,
             referendum,
             approvals,
         )?);
+        last_key = Some((created_height, proposal_id));
     }
-    proposals.sort_by(|left, right| {
-        left.created_height
-            .parse::<u64>()
-            .expect("Core-created proposal height is canonical")
-            .cmp(
-                &right
-                    .created_height
-                    .parse::<u64>()
-                    .expect("Core-created proposal height is canonical"),
-            )
-            .then_with(|| left.proposal_id.cmp(&right.proposal_id))
-    });
+    let next_cursor = if has_more {
+        last_key.map(|(created_height, proposal_id)| {
+            encode_validation_fee_proposal_cursor_v1(created_height, proposal_id)
+        })
+    } else {
+        None
+    };
     Ok(JsonBody(ValidationFeeProposalListV1 {
         version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
+        limit: query.limit,
         proposals,
+        next_cursor,
     }))
 }
 
@@ -1097,9 +1143,51 @@ pub(crate) async fn handler_plain_ballot_draft(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{cell::Cell, collections::BTreeMap};
 
     use super::*;
+
+    #[test]
+    fn proposal_page_traversal_reads_only_limit_plus_one_index_rows() {
+        let rows = (0_u64..10_000)
+            .map(|created_height| {
+                let mut proposal_id = [0_u8; 32];
+                proposal_id[..8].copy_from_slice(&created_height.to_be_bytes());
+                ((created_height, proposal_id), ())
+            })
+            .collect::<Vec<_>>();
+        let visited = Cell::new(0_usize);
+        let indexed = rows
+            .iter()
+            .inspect(|_| visited.set(visited.get().saturating_add(1)))
+            .map(|(key, value)| (key, value));
+
+        let (keys, has_more) = bounded_validation_fee_proposal_keys(indexed, 3);
+
+        assert_eq!(visited.get(), 4, "one lookahead row is the exact bound");
+        assert_eq!(keys.len(), 3);
+        assert!(has_more);
+        assert_eq!(keys[0].0, 0);
+        assert_eq!(keys[2].0, 2);
+    }
+
+    #[test]
+    fn proposal_list_cannot_reintroduce_a_full_governance_scan() {
+        let source = include_str!("validation_fee_api.rs");
+        let start = source
+            .find("fn bounded_validation_fee_proposal_keys")
+            .expect("bounded proposal-key projection");
+        let tail = &source[start..];
+        let end = tail
+            .find("/// Return one typed validation-fee Parliament proposal.")
+            .expect("proposal-list handler terminator");
+        let implementation = &tail[..end];
+
+        assert!(implementation.contains("validation_fee_proposal_index()"));
+        assert!(implementation.contains("bounded_validation_fee_proposal_keys(indexed, limit)"));
+        assert!(!implementation.contains("governance_proposals().iter()"));
+        assert!(!implementation.contains(".sort"));
+    }
 
     #[test]
     fn explicit_draft_window_accounts_for_next_block_and_exact_span() {

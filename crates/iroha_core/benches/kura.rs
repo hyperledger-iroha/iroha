@@ -300,7 +300,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
 
     let (alice_id, alice_keypair) = gen_account_in("test");
     let (bob_id, _bob_keypair) = gen_account_in("test");
-    let xor_id = iroha_data_model::asset::AssetDefinitionId::new(
+    let xor_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("test", "universal").unwrap(),
         "xor".parse().unwrap(),
     );

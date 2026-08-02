@@ -134,6 +134,7 @@ pub(super) struct CircuitBuilder {
     constraints: Vec<Constraint>,
 }
 
+#[derive(Clone)]
 pub(super) struct CircuitAssignment {
     pub(super) shape: Shape,
     pub(super) witness: Vec<Scalar>,
@@ -156,6 +157,10 @@ impl CircuitBuilder {
         (index < self.public_inputs.len())
             .then_some(Variable::Public(index))
             .ok_or(CircuitError::InvalidDimension)
+    }
+
+    pub(super) fn constraint_count(&self) -> usize {
+        self.constraints.len()
     }
 
     pub(super) fn alloc(&mut self, value: Scalar) -> Result<Variable, CircuitError> {

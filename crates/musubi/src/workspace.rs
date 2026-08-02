@@ -333,6 +333,113 @@ impl Workspace {
                 .collect(),
         }
     }
+
+    /// Load a validated local path package below this workspace root.
+    ///
+    /// Active workspace members are returned from the already materialized
+    /// member set, preserving workspace inheritance. A non-member path package
+    /// is parsed as a standalone package: it may refer to other packages below
+    /// the same workspace root, but it may not inherit workspace fields or
+    /// dependencies. This gives graph construction a single filesystem-safe
+    /// entry point for recursively reachable path dependencies.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `manifest_path` is outside the workspace root, is
+    /// not the canonical `Musubi.toml` of a non-symlink directory, declares a
+    /// nested workspace, uses unavailable workspace inheritance, or contains
+    /// an invalid dependency.
+    pub fn load_path_package(
+        &self,
+        manifest_path: &Path,
+    ) -> Result<WorkspaceMember, WorkspaceError> {
+        if let Some(member) = self
+            .members
+            .values()
+            .find(|member| member.manifest_path == manifest_path)
+        {
+            return Ok(member.clone());
+        }
+
+        let package_root = manifest_path.parent().ok_or_else(|| {
+            WorkspaceError::new(
+                WorkspaceErrorKind::Dependency,
+                Some(manifest_path.to_path_buf()),
+                "path dependency manifest has no package directory",
+            )
+        })?;
+        let package_root = confined_directory(&self.root, &self.root, package_root)?;
+        let expected_manifest = package_root.join(MANIFEST_FILE_NAME);
+        if expected_manifest != manifest_path {
+            return Err(WorkspaceError::new(
+                WorkspaceErrorKind::Dependency,
+                Some(manifest_path.to_path_buf()),
+                format!(
+                    "path dependency manifest must be `{}`",
+                    expected_manifest.display()
+                ),
+            ));
+        }
+        let manifest = read_manifest(&expected_manifest)?;
+        if manifest.workspace.is_some() {
+            return Err(WorkspaceError::new(
+                WorkspaceErrorKind::Membership,
+                Some(expected_manifest),
+                "a reachable non-member path package must not declare a nested workspace",
+            ));
+        }
+        let package = manifest
+            .resolve_package(None)
+            .map_err(|error| WorkspaceError::manifest(manifest_path, &error))?;
+        let local_packages = self
+            .members
+            .iter()
+            .map(|(path, member)| (member.manifest_path.clone(), path.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let resolved_packages = self
+            .members
+            .iter()
+            .map(|(path, member)| (path.clone(), member.package.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let no_workspace_dependencies = BTreeMap::new();
+        let dependencies = resolve_dependencies(
+            &self.root,
+            &package_root,
+            manifest_path,
+            &manifest.dependencies,
+            DependencyKind::Normal,
+            &no_workspace_dependencies,
+            &local_packages,
+            &resolved_packages,
+        )?;
+        let dev_dependencies = resolve_dependencies(
+            &self.root,
+            &package_root,
+            manifest_path,
+            &manifest.dev_dependencies,
+            DependencyKind::Development,
+            &no_workspace_dependencies,
+            &local_packages,
+            &resolved_packages,
+        )?;
+        let relative = package_root.strip_prefix(&self.root).map_err(|_| {
+            WorkspaceError::new(
+                WorkspaceErrorKind::Escape,
+                Some(package_root.clone()),
+                "path dependency package is outside the workspace root",
+            )
+        })?;
+        let workspace_path = portable_from_relative_path(relative)?;
+        Ok(WorkspaceMember {
+            workspace_path,
+            package_root,
+            manifest_path: manifest_path.to_path_buf(),
+            manifest,
+            package,
+            dependencies,
+            dev_dependencies,
+        })
+    }
 }
 
 /// Discover the nearest ancestor `Musubi.toml` without following symlinks.
@@ -1216,6 +1323,44 @@ exports = []
             workspace.members()[&PortablePath::new("packages/lib").expect("path")]
                 .dev_dependencies
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn loads_reachable_nonmember_path_package_without_workspace_inheritance() {
+        let temp = fixture();
+        let helper = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "helper"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+exports = ["help"]
+[dependencies]
+lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
+"#;
+        write_file(&temp.path().join("packages/helper/Musubi.toml"), helper);
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        let root = fs::canonicalize(temp.path()).expect("canonical root");
+        let package = workspace
+            .load_path_package(&root.join("packages/helper/Musubi.toml"))
+            .expect("reachable standalone path package");
+        assert_eq!(package.package.selector.to_string(), "apps.sora/helper");
+        assert_eq!(
+            package.dependencies["lib"].local_manifest.as_deref(),
+            Some(root.join("packages/lib/Musubi.toml").as_path())
+        );
+
+        let inherited = helper.replace("version = \"1.0.0\"", "version = { workspace = true }");
+        write_file(&temp.path().join("packages/helper/Musubi.toml"), &inherited);
+        assert_eq!(
+            workspace
+                .load_path_package(&root.join("packages/helper/Musubi.toml"))
+                .expect_err("nonmember inheritance must fail")
+                .kind(),
+            WorkspaceErrorKind::Manifest
         );
     }
 

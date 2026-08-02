@@ -57,13 +57,14 @@ pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-    VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
-    ValidationFeeCurrentPolicyProofV1, ValidationFeePlainBallotDirectionV1,
-    ValidationFeePlainBallotDraftRequestV1, ValidationFeePlainBallotDraftResponseV1,
-    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
-    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
-    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListV1,
-    ValidationFeeProposalRecordV1, ValidationFeeVerifiedPolicyProjectionV1,
+    VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
+    ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
+    ValidationFeePlainBallotDirectionV1, ValidationFeePlainBallotDraftRequestV1,
+    ValidationFeePlainBallotDraftResponseV1, ValidationFeeProposalDetailV1,
+    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
+    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
+    ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
+    ValidationFeeVerifiedPolicyProjectionV1, decode_validation_fee_proposal_cursor_v1,
 };
 use iroha_torii_shared::{
     AccountReadResponse, ErrorEnvelope, FeeQuoteRequest, FeeQuoteResponse,
@@ -188,12 +189,16 @@ pub enum PublicMusubiQueryPathV1 {
     Maintainers,
     /// Fetch one finalized archive-location page.
     ArchiveLocations,
+    /// Fetch bounded exact finalized archive cache-retention decisions.
+    ArchiveRetention,
     /// Fetch one exact permanent global alias.
     Alias,
     /// Fetch one finalized permanent-alias history page.
     AliasHistory,
     /// Fetch one finalized byte-ordered package-prefix page.
     OrderedPrefix,
+    /// Search the finalized-event package metadata projection.
+    Search,
 }
 
 impl PublicMusubiQueryPathV1 {
@@ -205,9 +210,11 @@ impl PublicMusubiQueryPathV1 {
             Self::Versions => "/v1/musubi/queries/versions",
             Self::Maintainers => "/v1/musubi/queries/maintainers",
             Self::ArchiveLocations => "/v1/musubi/queries/archive-locations",
+            Self::ArchiveRetention => "/v1/musubi/queries/archive-retention",
             Self::Alias => "/v1/musubi/queries/alias",
             Self::AliasHistory => "/v1/musubi/queries/alias-history",
             Self::OrderedPrefix => "/v1/musubi/queries/ordered-prefix",
+            Self::Search => "/v1/musubi/queries/search",
         }
     }
 }
@@ -8240,7 +8247,7 @@ mod offline_client_tests {
     }
 
     fn asset_definition_id(name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain id"),
             name.parse().expect("asset definition name"),
         )
@@ -8727,6 +8734,7 @@ mod status_tests {
         let got = decode_status_response(&resp).expect("json decode");
 
         assert_eq!(got.build.git_commit_sha, "");
+        assert_eq!(got.build.dpn_validator_release_commit, "");
         assert_eq!(got.peers, 2);
         assert_eq!(got.blocks, 3);
         assert_eq!(got.queue_size, 1);
@@ -14693,12 +14701,13 @@ impl Client {
         for instr in &instructions {
             if let Some(RegisterBox::Role(register_role)) =
                 instr.as_any().downcast_ref::<RegisterBox>()
-                && register_role
-                    .object()
-                    .id()
-                    .name()
-                    .as_ref()
-                    .starts_with(MULTISIG_SIGNATORY)
+                && {
+                    let name = register_role.object().id().name().as_ref();
+                    name == MULTISIG_SIGNATORY
+                        || name
+                            .strip_prefix(MULTISIG_SIGNATORY)
+                            .is_some_and(|suffix| suffix.starts_with('/'))
+                }
             {
                 return Err(eyre!(
                     "reserved multisig role names may not be registered by clients"
@@ -19166,14 +19175,34 @@ impl Client {
         ))
     }
 
-    /// List all typed validation-fee Parliament proposals.
+    /// Read one bounded page of typed validation-fee Parliament proposals.
     ///
     /// # Errors
     ///
-    /// Returns an error for transport/HTTP/JSON failure or a response whose
-    /// proposal id, kind, version, or voting mode is inconsistent.
-    pub fn list_validation_fee_proposals(&self) -> Result<ValidationFeeProposalListV1> {
-        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSALS);
+    /// Returns an error for an invalid cursor or limit, transport/HTTP/JSON
+    /// failure, or a response whose page boundary, proposal id, kind, version,
+    /// or voting mode is inconsistent.
+    pub fn list_validation_fee_proposals_page(
+        &self,
+        cursor: Option<&str>,
+        limit: u32,
+    ) -> Result<ValidationFeeProposalListV1> {
+        if limit == 0 || limit > VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1 {
+            return Err(eyre!(
+                "validation-fee proposal page limit must be between 1 and {}",
+                VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1
+            ));
+        }
+        let after = cursor
+            .map(decode_validation_fee_proposal_cursor_v1)
+            .transpose()
+            .map_err(|error| eyre!("invalid validation-fee proposal cursor: {error}"))?;
+        let mut url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSALS);
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        if let Some(cursor) = cursor {
+            url.query_pairs_mut().append_pair("cursor", cursor);
+        }
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON)
@@ -19193,6 +19222,12 @@ impl Client {
                 "validation-fee proposal list has an unsupported version"
             ));
         }
+        let limit_usize = usize::try_from(limit).expect("bounded u32 page limit fits usize");
+        if result.limit != limit || result.proposals.len() > limit_usize {
+            return Err(eyre!(
+                "validation-fee proposal page violates the requested limit"
+            ));
+        }
         let mut order_keys = Vec::with_capacity(result.proposals.len());
         for proposal in &result.proposals {
             let created_height = validate_validation_fee_proposal_record(proposal)?;
@@ -19202,6 +19237,40 @@ impl Client {
             return Err(eyre!(
                 "validation-fee proposal list is not canonically ordered"
             ));
+        }
+        if let (Some((after_height, after_id)), Some((first_height, first_id))) =
+            (after, order_keys.first().copied())
+        {
+            let after_id = hex::encode(after_id);
+            if (first_height, first_id) <= (after_height, after_id.as_str()) {
+                return Err(eyre!(
+                    "validation-fee proposal page did not advance beyond its cursor"
+                ));
+            }
+        }
+        if let Some(next_cursor) = result.next_cursor.as_deref() {
+            if result.proposals.len() != limit_usize {
+                return Err(eyre!(
+                    "a short validation-fee proposal page cannot advertise a next cursor"
+                ));
+            }
+            let next = decode_validation_fee_proposal_cursor_v1(next_cursor)
+                .map_err(|error| eyre!("invalid validation-fee next cursor: {error}"))?;
+            let Some((last_height, last_id)) = order_keys.last().copied() else {
+                return Err(eyre!(
+                    "empty validation-fee proposal page cannot advertise a next cursor"
+                ));
+            };
+            let last_id = hex::decode(last_id)
+                .wrap_err("validation-fee proposal id stopped being canonical")?;
+            let last_id: [u8; 32] = last_id
+                .try_into()
+                .map_err(|_| eyre!("validation-fee proposal id has the wrong width"))?;
+            if next != (last_height, last_id) {
+                return Err(eyre!(
+                    "validation-fee next cursor is not bound to the last returned proposal"
+                ));
+            }
         }
         Ok(result)
     }
@@ -22120,16 +22189,18 @@ mod subscription_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let (provider, provider_key) = gen_account_in("commerce");
         let (subscriber, subscriber_key) = gen_account_in("users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "fixed_plan".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "fixed_plan".parse().unwrap(),
+            );
         let subscription_id: NftId = "sub-1$subscriptions.universal".parse().unwrap();
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let unit_key: Name = "compute_ms".parse().unwrap();
         let provider_private = provider_key.private_key().clone();
         let subscriber_private = subscriber_key.private_key().clone();
@@ -24745,7 +24816,7 @@ mod tests {
                 .expect("alias literal"),
             DataSpaceId::new(7),
         );
-        let payment_asset = AssetDefinitionId::new(
+        let payment_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("assets", "paynet").expect("asset domain"),
             "xor".parse().expect("asset name"),
         );
@@ -24834,7 +24905,7 @@ mod tests {
         });
         let guard = AliasQuoteGuardV1 {
             expected_policy_version: 3,
-            expected_payment_asset: AssetDefinitionId::new(
+            expected_payment_asset: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("assets", "paynet").expect("asset domain"),
                 "xor".parse().expect("asset name"),
             ),
@@ -24899,7 +24970,7 @@ mod tests {
                 .expect("alias literal"),
             DataSpaceId::new(7),
         );
-        let payment_asset = AssetDefinitionId::new(
+        let payment_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("assets", "paynet").expect("asset domain"),
             "xor".parse().expect("asset name"),
         );
@@ -26350,7 +26421,7 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &client.chain,
             &client.account,
             0,
             DataSpaceId::UNIVERSAL,
@@ -26384,7 +26455,7 @@ mod tests {
             std::str::from_utf8(raw).expect("fixture JSON"),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &client.chain,
             &client.account,
             1,
             DataSpaceId::UNIVERSAL,
@@ -35664,10 +35735,11 @@ mod tests {
             transaction::error::TransactionRejectionReason,
         };
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let reason = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             crate::data_model::isi::error::InstructionExecutionError::Query(
                 QueryExecutionFail::Find(FindError::AssetDefinition(asset_def)),

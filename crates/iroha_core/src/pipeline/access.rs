@@ -58,6 +58,7 @@ const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 /// entrypoint permission check (direct grants, role bindings, and role grants).
 const AUTHORIZATION_EPOCH_KEY: &str = "authorization:*";
 const ACCOUNT_WILDCARD_KEY: &str = "account:*";
+const DOMAIN_WILDCARD_KEY: &str = "domain:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
 const NEXUS_ACTIVE_LANE_CATALOG_KEY: &str = "nexus.active_lane_catalog";
@@ -1444,7 +1445,7 @@ fn access_set_from_hint_keys(
             state_keys.insert(raw.to_owned());
             return Some(());
         }
-        if raw == ACCOUNT_WILDCARD_KEY {
+        if raw == ACCOUNT_WILDCARD_KEY || raw == DOMAIN_WILDCARD_KEY {
             state_keys.insert(raw.to_owned());
             return Some(());
         }
@@ -1728,21 +1729,16 @@ where
 }
 
 fn derive_simple_asset_transfer_batch(batch: &[InstructionBox]) -> Option<AccessSet> {
-    let mut set = AccessSet::new();
     for instr in batch {
         let transfer = instr.as_any().downcast_ref::<TransferBox>()?;
-        let TransferBox::Asset(transfer) = transfer else {
+        let TransferBox::Asset(_) = transfer else {
             return None;
         };
-        let source_id = transfer.source.clone();
-        let destination_id = AssetId::of(
-            transfer.source.definition.clone(),
-            transfer.destination.clone(),
-        );
-        add_asset_rw(&mut set, &source_id);
-        add_asset_rw(&mut set, &destination_id);
     }
-    Some(set)
+    // User asset transfer admission reads dynamic alias, policy, escrow, and routing state.
+    // Until those keys have first-class scheduler categories, the only complete declaration is
+    // the scheduler's designed conservative fence.
+    Some(AccessSet::global())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1777,11 +1773,8 @@ where
     if let Some(tb) = any.downcast_ref::<TransferBox>() {
         match tb {
             TransferBox::Asset(t) => {
-                // source: AssetId, destination: AccountId
-                let src = t.source.clone();
-                let dst = AssetId::of(t.source.definition.clone(), t.destination.clone());
-                add_asset_rw(&mut set, &src);
-                add_asset_rw(&mut set, &dst);
+                let _ = t;
+                set = AccessSet::global();
             }
             TransferBox::Domain(t) => {
                 add_domain_rw(&mut set, &t.object);
@@ -1789,7 +1782,7 @@ where
                 add_account_r(&mut set, &t.destination);
             }
             TransferBox::AssetDefinition(t) => {
-                add_asset_def_rw(&mut set, &t.object);
+                add_asset_def_rw(&mut set, &t.object, state_ro);
                 add_account_r(&mut set, &t.source);
                 add_account_r(&mut set, &t.destination);
             }
@@ -1839,8 +1832,8 @@ where
     if let Some(mb) = any.downcast_ref::<MintBox>() {
         match mb {
             MintBox::Asset(m) => {
-                add_asset_rw(&mut set, &m.destination);
-                add_asset_def_rw(&mut set, m.destination.definition());
+                let _ = m;
+                set = AccessSet::global();
             }
             MintBox::TriggerRepetitions(m) => {
                 add_trigger_rw(&mut set, &m.destination);
@@ -1853,21 +1846,14 @@ where
     if let Some(bb) = any.downcast_ref::<BurnBox>() {
         match bb {
             BurnBox::Asset(b) => {
-                add_asset_rw(&mut set, &b.destination);
-                add_asset_def_rw(&mut set, b.destination.definition());
+                let _ = b;
+                set = AccessSet::global();
             }
             BurnBox::TriggerRepetitions(b) => {
                 add_trigger_rw(&mut set, &b.destination);
             }
         }
         return set;
-    }
-
-    if any
-        .downcast_ref::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>()
-        .is_some()
-    {
-        return AccessSet::global();
     }
 
     // Set / Remove key-values
@@ -1880,7 +1866,7 @@ where
                 add_domain_detail_rw(&mut set, &s.object, &s.key);
             }
             SetKeyValueBox::AssetDefinition(s) => {
-                add_asset_def_detail_rw(&mut set, &s.object, &s.key);
+                add_asset_def_detail_rw(&mut set, &s.object, &s.key, state_ro);
             }
             SetKeyValueBox::Nft(s) => {
                 add_nft_detail_rw(&mut set, &s.object, &s.key);
@@ -1901,7 +1887,7 @@ where
                 add_domain_detail_rw(&mut set, &r.object, &r.key);
             }
             RemoveKeyValueBox::AssetDefinition(r) => {
-                add_asset_def_detail_rw(&mut set, &r.object, &r.key);
+                add_asset_def_detail_rw(&mut set, &r.object, &r.key, state_ro);
             }
             RemoveKeyValueBox::Nft(r) => {
                 add_nft_detail_rw(&mut set, &r.object, &r.key);
@@ -1920,7 +1906,13 @@ where
             RegisterBox::Domain(r) => add_domain_rw(&mut set, &r.object.id().clone()),
             RegisterBox::Account(r) => add_account_rw(&mut set, r.object.id()),
             RegisterBox::AssetDefinition(r) => {
-                add_asset_def_rw(&mut set, &r.object.id().clone());
+                add_asset_def_rw(&mut set, r.object.id(), state_ro);
+                if let Some(alias) = r.object.alias().as_ref()
+                    && let Some(domain_name) = alias.domain_segment()
+                    && let Ok(domain) = DomainId::try_new(domain_name, alias.dataspace_segment())
+                {
+                    add_domain_r(&mut set, &domain);
+                }
             }
             RegisterBox::Nft(r) => add_nft_rw(&mut set, r.object.id()),
             RegisterBox::Peer(_) => set = AccessSet::global(),
@@ -1953,19 +1945,21 @@ where
     }
     if let Some(instr) = any.downcast_ref::<zk::Unshield>() {
         let asset_id = AssetId::of(instr.asset().clone(), instr.to().clone());
-        add_asset_rw(&mut set, &asset_id);
+        add_asset_rw(&mut set, &asset_id, state_ro);
         add_zk_asset_rw(&mut set, instr.asset());
         let Ok(key) = "zk.unshield.last".parse::<Name>() else {
             return AccessSet::global();
         };
-        add_asset_def_detail_rw(&mut set, instr.asset(), &key);
+        add_asset_def_detail_rw(&mut set, instr.asset(), &key, state_ro);
         return set;
     }
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
         match ub {
-            UnregisterBox::Domain(u) => add_domain_rw(&mut set, &u.object),
+            UnregisterBox::Domain(_) => set = AccessSet::global(),
             UnregisterBox::Account(u) => add_account_rw(&mut set, &u.object),
-            UnregisterBox::AssetDefinition(u) => add_asset_def_rw(&mut set, &u.object),
+            UnregisterBox::AssetDefinition(u) => {
+                add_asset_def_rw(&mut set, &u.object, state_ro);
+            }
             UnregisterBox::Nft(u) => add_nft_rw(&mut set, &u.object),
             UnregisterBox::Peer(_) => set = AccessSet::global(),
             UnregisterBox::Trigger(u) => add_trigger_rw(&mut set, &u.object),
@@ -2200,6 +2194,7 @@ fn add_account_r(set: &mut AccessSet, id: &AccountId) {
     set.add_read(key_account(id));
 }
 fn add_domain_r(set: &mut AccessSet, id: &DomainId) {
+    set.add_read(DOMAIN_WILDCARD_KEY.to_owned());
     set.add_read(key_domain(id));
 }
 fn add_account_rw(set: &mut AccessSet, id: &AccountId) {
@@ -2216,43 +2211,73 @@ fn add_account_detail_rw(set: &mut AccessSet, id: &AccountId, key: &Name) {
     set.add_write(d);
 }
 fn add_domain_rw(set: &mut AccessSet, id: &DomainId) {
+    set.add_read(DOMAIN_WILDCARD_KEY.to_owned());
+    set.add_write(DOMAIN_WILDCARD_KEY.to_owned());
     let k = key_domain(id);
     set.add_read(k.clone());
     set.add_write(k);
 }
 fn add_domain_detail_rw(set: &mut AccessSet, id: &DomainId, key: &Name) {
-    set.add_read(key_domain(id));
+    add_domain_r(set, id);
     let d = key_domain_detail(id, key);
     set.add_read(d.clone());
     set.add_write(d);
 }
-fn add_asset_def_rw(set: &mut AccessSet, id: &AssetDefinitionId) {
+fn add_asset_definition_domain_r<R>(
+    set: &mut AccessSet,
+    id: &AssetDefinitionId,
+    state_ro: Option<&R>,
+) where
+    R: StateReadOnly,
+{
+    let authoritative =
+        state_ro.and_then(|state| state.world().asset_definition_domains().get(id).cloned());
+    if let Some(domain) = authoritative {
+        add_domain_r(set, &domain);
+    } else {
+        // Opaque identifiers without a state view cannot prove an exact owning domain. Reading
+        // the category fence conflicts with every domain mutation instead of under-declaring.
+        set.add_read(DOMAIN_WILDCARD_KEY.to_owned());
+    }
+}
+
+fn add_asset_def_rw<R>(set: &mut AccessSet, id: &AssetDefinitionId, state_ro: Option<&R>)
+where
+    R: StateReadOnly,
+{
     set.add_read(ASSET_DEF_WILDCARD_KEY.to_owned());
     set.add_write(ASSET_DEF_WILDCARD_KEY.to_owned());
-    if let Some(domain) = id.try_domain() {
-        add_domain_r(set, domain);
-    }
+    add_asset_definition_domain_r(set, id, state_ro);
     let k = key_asset_def(id);
     set.add_read(k.clone());
     set.add_write(k);
 }
-fn add_asset_def_r(set: &mut AccessSet, id: &AssetDefinitionId) {
+fn add_asset_def_r<R>(set: &mut AccessSet, id: &AssetDefinitionId, state_ro: Option<&R>)
+where
+    R: StateReadOnly,
+{
     set.add_read(ASSET_DEF_WILDCARD_KEY.to_owned());
-    if let Some(domain) = id.try_domain() {
-        add_domain_r(set, domain);
-    }
+    add_asset_definition_domain_r(set, id, state_ro);
     set.add_read(key_asset_def(id));
 }
-fn add_asset_def_detail_rw(set: &mut AccessSet, id: &AssetDefinitionId, key: &Name) {
-    if let Some(domain) = id.try_domain() {
-        add_domain_r(set, domain);
-    }
+fn add_asset_def_detail_rw<R>(
+    set: &mut AccessSet,
+    id: &AssetDefinitionId,
+    key: &Name,
+    state_ro: Option<&R>,
+) where
+    R: StateReadOnly,
+{
+    add_asset_definition_domain_r(set, id, state_ro);
     set.add_read(key_asset_def(id));
     let d = key_asset_def_detail(id, key);
     set.add_read(d.clone());
     set.add_write(d);
 }
-fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
+fn add_asset_rw<R>(set: &mut AccessSet, id: &AssetId, state_ro: Option<&R>)
+where
+    R: StateReadOnly,
+{
     set.add_read(ASSET_WILDCARD_KEY.to_owned());
     set.add_write(ASSET_WILDCARD_KEY.to_owned());
     let k = key_asset(id);
@@ -2260,10 +2285,7 @@ fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
     set.add_write(k);
     // Asset operations rely on the owning account/domain and definition state.
     add_account_r(set, id.account());
-    if let Some(domain) = id.definition().try_domain() {
-        add_domain_r(set, domain);
-    }
-    add_asset_def_r(set, id.definition());
+    add_asset_def_r(set, id.definition(), state_ro);
 }
 fn add_zk_asset_rw(set: &mut AccessSet, id: &AssetDefinitionId) {
     let k = key_zk_asset(id);
@@ -2976,7 +2998,7 @@ mod tests {
     fn lifecycle_calls_write_the_instance_marker_scheduler_key() {
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -3019,7 +3041,7 @@ mod tests {
     fn mixed_executable_batch_forces_a_global_scheduler_barrier() {
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             92,
             DataSpaceId::UNIVERSAL,
@@ -3852,11 +3874,11 @@ seiyaku DynamicAccessCounter {
     fn isi_access_transfer_and_mint() {
         let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
-        let domain_id = wonderland_domain_id();
-        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
+        let ad: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "coin".parse().unwrap(),
+            );
         let src = AssetId::of(ad.clone(), alice.clone());
 
         let isis: Vec<iroha_data_model::isi::InstructionBox> = vec![
@@ -3877,21 +3899,7 @@ seiyaku DynamicAccessCounter {
             None,
             IvmStrategy::Conservative,
         );
-        let a_src = key_asset(&src);
-        let a_dst = key_asset(&AssetId::of(ad, bob.clone()));
-        let k_account_alice = key_account(&alice);
-        let k_account_bob = key_account(&bob);
-        let k_asset_def = key_asset_def(src.definition());
-        let k_domain = key_domain(&domain_id);
-        assert!(set.read_keys.contains(&a_src));
-        assert!(set.write_keys.contains(&a_src));
-        assert!(set.read_keys.contains(&a_dst));
-        assert!(set.write_keys.contains(&a_dst));
-        assert!(set.read_keys.contains(&k_account_alice));
-        assert!(set.read_keys.contains(&k_account_bob));
-        assert!(set.read_keys.contains(&k_asset_def));
-        assert!(set.write_keys.contains(&k_asset_def));
-        assert!(set.read_keys.contains(&k_domain));
+        assert!(set.write_keys.contains("*"));
     }
 
     #[test]
@@ -3899,7 +3907,7 @@ seiyaku DynamicAccessCounter {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
         let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
         let (carol, _) = iroha_test_samples::gen_account_in("wonderland");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
@@ -3925,6 +3933,7 @@ seiyaku DynamicAccessCounter {
         }
 
         assert_eq!(fast, generic);
+        assert!(fast.write_keys.contains("*"));
         assert!(
             derive_simple_asset_transfer_batch(&[Log::new(Level::INFO, "noop".into()).into()])
                 .is_none()
@@ -4323,11 +4332,17 @@ seiyaku DynamicAccessCounter {
         let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id = wonderland_domain_id();
         let account = new_wonderland_account(&alice);
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "coin".parse().unwrap(),
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "coin".parse().unwrap(),
+            );
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         );
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone());
 
         let isis: Vec<iroha_data_model::isi::InstructionBox> = vec![
             Register::account(account).into(),
@@ -5052,10 +5067,11 @@ seiyaku DynamicAccessCounter {
         let state = State::new(world, kura, query);
 
         // Insert manifest with access-set hints into WSV
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def, alice.clone());
         let hints = AccessSetHints {
             read_keys: vec![format!("account:{alice}")],
@@ -5126,10 +5142,11 @@ seiyaku DynamicAccessCounter {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def, alice.clone());
         let hints = AccessSetHints {
             read_keys: vec![format!("account:{alice}")],
@@ -5554,10 +5571,11 @@ seiyaku DynamicAccessCounter {
         ivm::ProgramMetadata::parse(&prog).expect("header parse");
         let code_hash = ivm::contract_code_hash(&prog);
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def, alice.clone());
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
@@ -5717,14 +5735,19 @@ seiyaku DynamicAccessCounter {
             Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
             Register::asset_definition({
                 let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&alice, &mut stx)
             .unwrap();
@@ -5767,10 +5790,11 @@ seiyaku DynamicAccessCounter {
             IvmStrategy::Conservative,
         );
 
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
         let asset_key = key_asset(&asset_id);
         let asset_def_key = key_asset_def(&asset_def_id);

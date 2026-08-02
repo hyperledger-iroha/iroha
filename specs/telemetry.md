@@ -861,6 +861,34 @@ Operational guidance:
 Refer to `sorafs/provider_advert_rollout.md` for the R0–R3 enforcement
 timeline, Grafana export (`grafana_sorafs_admission.json`), checked-in dashboard (`dashboards/grafana/sorafs_provider_admission.json`), and canonical alert wiring (`dashboards/alerts/sorafs_provider_admission_rules.yml`) that Observability keeps in sync across environments.
 
+### Musubi V1 Registry and Publication
+
+The closed-label metric definitions live in
+`iroha_telemetry::metrics::musubi`. The checked operator artifacts are
+`dashboards/grafana/musubi_registry.json`,
+`dashboards/alerts/musubi_registry_rules.yml`, and its rule-unit fixture
+`dashboards/alerts/tests/musubi_registry_rules.test.yml`. The exact metric
+contract, producer boundaries, and incident procedures are maintained beside
+the implementation in `specs/musubi_operations_runbook.md`.
+
+Core records typed governance rejections at the mutation boundary and updates
+replication shortfall when an exact archive availability projection crosses
+the selectable boundary. The latter is currently a process-local transition
+projection: restart-safe exact hydration remains a release gate, so a zero
+sample immediately after restart is not proof that no release is below quorum.
+Torii records structurally invalid cursors, while Core's currently collapsed
+`Expired` query error can only be exported as the bounded `other` reason;
+preserving the exact anchor, revision, query, caller, or boundary reason through
+the query error boundary remains open.
+
+The injected private publication service records authenticated terminal ingest
+deadletters and integrity failures. Invalid or future-skewed staging receipts
+use `receipt_invalid`; expired staging receipts use `receipt_expired`.
+Publication phase age, cache corruption/capacity, selected-root storage usage,
+and consumer-fetch integrity still require their authoritative long-lived host
+producers. The one-shot Musubi CLI deliberately does not install a Prometheus
+producer, and absent series for those signals mean unknown rather than healthy.
+
 ### Torii Norito-RPC Observability
 
 Norito-RPC transport telemetry requirements are captured in `specs/torii/norito_rpc_telemetry.md`. Key metrics:
@@ -905,7 +933,7 @@ root-history hygiene, and checkpoint behaviour:
 
 - `iroha_confidential_tree_commitments{asset_id}` — current number of commitments (leaves).
 - `iroha_confidential_tree_depth{asset_id}` — Merkle depth in levels (bounded by the verifier profile).
-- `iroha_confidential_root_history_entries{asset_id}` — retained historical roots (should match `zk.root_history_cap`).
+- `iroha_confidential_root_history_entries{asset_id}` — retained historical roots (should not exceed `confidential.tree_roots_history_len`).
 - `iroha_confidential_frontier_checkpoints{asset_id}` — number of recorded frontier checkpoints.
 - `iroha_confidential_frontier_last_checkpoint_height{asset_id}` — height of the last frontier checkpoint (0 when no checkpoint exists).
 - `iroha_confidential_frontier_last_checkpoint_commitments{asset_id}` — commitment count captured alongside the last checkpoint.

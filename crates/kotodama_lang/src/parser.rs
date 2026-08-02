@@ -5929,6 +5929,28 @@ mod tests {
     }
 
     #[test]
+    fn unshield_parser_registry_has_no_guest_output_parameter() {
+        let source = SourceFile::new(SourceId(11), "unshield-parameters.ko", String::new());
+        let parser = CstAstLowerer::new(&[], &source, false);
+        assert_eq!(
+            parser.call_parameter_names("crypto::zk::build_unshield", false),
+            Some(
+                [
+                    "asset_definition",
+                    "destination",
+                    "amount",
+                    "inputs",
+                    "backend",
+                    "proof",
+                    "verification_key",
+                ]
+                .map(str::to_owned)
+                .to_vec()
+            )
+        );
+    }
+
+    #[test]
     fn mixed_call_fixes_use_the_declared_parameter_mapping_in_both_directions() {
         for (id, call, original, replacement) in [
             (7, "target(1, second: 2)", "1", "first: 1"),
@@ -6452,7 +6474,7 @@ mod tests {
     }
 
     fn sample_asset_definition_literal() -> String {
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         )

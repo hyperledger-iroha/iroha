@@ -59,6 +59,7 @@ impl_nested_json_key_codec!(
     crate::musubi::MusubiPackageIdV1,
     crate::musubi::MusubiPackageSelectorV1,
     crate::musubi::MusubiPackageMemberKeyV1,
+    crate::musubi::MusubiMaintainerDirectoryKeyV1,
     crate::musubi::MusubiInviteIdV1,
     crate::musubi::MusubiReleaseIdV1,
     crate::musubi::ArchiveId,
@@ -695,6 +696,13 @@ mod tests {
         SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1,
         SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
     };
+    use crate::{
+        musubi::{
+            MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
+            MusubiPackageScopeV1,
+        },
+        nexus::DataSpaceId,
+    };
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
@@ -710,6 +718,27 @@ mod tests {
         let raw_key = parser.parse_string().expect("parse encoded json key");
         let decoded = AccountId::decode_json_key(&raw_key).expect("decode json key");
         assert_eq!(decoded, account);
+    }
+
+    #[test]
+    fn musubi_maintainer_directory_key_json_codec_roundtrip() {
+        let keypair = checked_random_keypair();
+        let key = MusubiMaintainerDirectoryKeyV1::pending(
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(7),
+                MusubiPackageScopeV1::DataspaceRoot,
+                "codec".parse().expect("package name"),
+            ),
+            AccountId::new(keypair.public_key().clone()),
+            MusubiInviteIdV1::new([0x42; 32]),
+        );
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded JSON key");
+        let decoded = MusubiMaintainerDirectoryKeyV1::decode_json_key(&raw_key)
+            .expect("decode maintainer directory key");
+        assert_eq!(decoded, key);
     }
 
     #[test]

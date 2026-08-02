@@ -335,44 +335,15 @@ fn repair_alias_intent_resource(
     match intent {
         AliasIntentV1::Dataspace(_) => {}
         AliasIntentV1::Domain(value) => {
-            let selector = AccountDomainSelector::from_domain(&value.domain.canonical_name)
-                .map_err(|error| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(error.to_string().into()),
-                    )
-                })?;
             if state_transaction
                 .world
                 .domains
                 .get(&value.domain.canonical_name)
                 .is_none()
             {
-                // Classification has already proved that this selector is either
-                // absent or points at this exact domain. Remove the latter dangling
-                // derived entry so the normal registration path can rebuild the
-                // domain, selector, and owner index atomically.
-                if state_transaction.world.domain_selectors.get(&selector)
-                    == Some(&value.domain.canonical_name)
-                {
-                    state_transaction
-                        .world
-                        .domain_selectors
-                        .remove(selector.clone());
-                }
                 Register::domain(Domain::new(value.domain.canonical_name.clone()))
                     .execute(&value.owner, state_transaction)?;
             } else {
-                if state_transaction
-                    .world
-                    .domain_selectors
-                    .get(&selector)
-                    .is_none()
-                {
-                    state_transaction
-                        .world
-                        .domain_selectors
-                        .insert(selector, value.domain.canonical_name.clone());
-                }
                 state_transaction
                     .world
                     .track_domain_owner(&value.domain.canonical_name, &value.owner);
@@ -1303,9 +1274,13 @@ mod tests {
         let authority_account = Account::new(authority.clone()).build(&collector);
         let target_a_account = Account::new(target_a.clone()).build(&collector);
         let target_b_account = Account::new(target_b.clone()).build(&collector);
-        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
-            .with_name("xor".to_owned())
-            .build(&collector);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&collector);
         let mut world = World::with(
             [genesis, leumi, hapoalim],
             [
@@ -1497,9 +1472,13 @@ mod tests {
         let leased_domain = Domain::new(leased_domain_id.clone()).build(&owner);
         let owner_account = Account::new(owner.clone()).build(&collector);
         let collector_account = Account::new(collector.clone()).build(&collector);
-        let definition = AssetDefinition::numeric(payment_asset.clone())
-            .with_name("xor".to_owned())
-            .build(&collector);
+        let definition = AssetDefinition::numeric(
+            payment_asset.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&collector);
         let owner_asset = (!owner_balance.is_zero()).then(|| {
             Asset::new(
                 AssetId::of(payment_asset.clone(), owner.clone()),
@@ -1890,9 +1869,13 @@ mod tests {
                 .build(&collector);
         let authority_account = Account::new(authority.clone()).build(&collector);
         let collector_account = Account::new(collector.clone()).build(&collector);
-        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
-            .with_name("xor".to_owned())
-            .build(&collector);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&collector);
         let payer_asset = Asset::new(
             AssetId::of(payment_asset.clone(), authority.clone()),
             Quantity::from(1_000_u64),
@@ -1987,9 +1970,13 @@ mod tests {
                 .build(&collector);
         let authority_account = Account::new(authority.clone()).build(&collector);
         let collector_account = Account::new(collector.clone()).build(&collector);
-        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
-            .with_name("xor".to_owned())
-            .build(&collector);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&collector);
         let payer_asset = Asset::new(
             AssetId::of(payment_asset.clone(), authority.clone()),
             Quantity::from(1_000_u64),
@@ -2102,9 +2089,13 @@ mod tests {
         let authority_account = Account::new(authority.clone()).build(&collector);
         let collector_account = Account::new(collector.clone()).build(&collector);
         let conflict_account = Account::new(conflict_owner.clone()).build(&collector);
-        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
-            .with_name("xor".to_owned())
-            .build(&collector);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&collector);
         let payer_asset = Asset::new(
             AssetId::of(payment_asset.clone(), authority.clone()),
             Quantity::from(100_u32),
@@ -2348,9 +2339,13 @@ mod tests {
                 .build(&collector);
         let authority_account = Account::new(authority.clone()).build(&collector);
         let collector_account = Account::new(collector.clone()).build(&collector);
-        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let mut world = World::with(
             [genesis_domain],
             [authority_account, collector_account],
@@ -2610,9 +2605,13 @@ mod tests {
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let mut world = World::with([genesis_domain], [authority_account], [payment_definition]);
         seed_default_namespace_policies(&mut world);
         let state = State::new_for_testing(
@@ -2707,9 +2706,13 @@ mod tests {
                 .build(&collector);
         let authority_account = Account::new(authority.clone()).build(&collector);
         let collector_account = Account::new(collector.clone()).build(&collector);
-        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
-            .with_name("xor".to_owned())
-            .build(&collector);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&collector);
         let payer_asset = Asset::new(
             AssetId::of(payment_asset.clone(), authority.clone()),
             Quantity::from(1_000_u64),
@@ -2816,9 +2819,13 @@ mod tests {
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let mut world = World::with([genesis_domain], [authority_account], [payment_definition]);
         seed_default_namespace_policies(&mut world);
         let mut permissions = world
@@ -2913,9 +2920,13 @@ mod tests {
         let hbl_domain = Domain::new(DomainId::try_new("hbl", "sbp").expect("hbl.sbp domain id"))
             .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let mut world = World::with(
             [genesis_domain, hbl_domain],
             [authority_account],
@@ -3230,9 +3241,13 @@ mod tests {
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let mut world = World::with([genesis_domain], [authority_account], [payment_definition]);
         seed_default_namespace_policies(&mut world);
         let state = State::new_for_testing(
@@ -3311,9 +3326,13 @@ mod tests {
                 .build(&collector);
         let authority_account = Account::new(authority.clone()).build(&collector);
         let collector_account = Account::new(collector.clone()).build(&collector);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&collector);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&collector);
         let mut world = World::with(
             vec![genesis_domain],
             vec![authority_account, collector_account],
@@ -3408,9 +3427,13 @@ mod tests {
                 .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let resource_owner_account = Account::new(resource_owner.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let mut world = World::with(
             vec![genesis_domain],
             vec![authority_account, resource_owner_account],
@@ -3506,9 +3529,13 @@ mod tests {
                 .build(&owner);
         let owner_account = Account::new(owner.clone()).build(&owner);
         let authority_account = Account::new(authority.clone()).build(&owner);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&owner);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner);
         let mut world = World::with(
             vec![genesis_domain],
             vec![owner_account, authority_account],

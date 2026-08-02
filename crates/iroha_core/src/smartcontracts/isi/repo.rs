@@ -951,25 +951,35 @@ mod tests {
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
-        let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
-        let collateral_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "bond".parse().unwrap(),
-        );
+        let cash_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
+        let collateral_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "bond".parse().unwrap(),
+            );
 
         let cash_def = {
             let __asset_definition_id = cash_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         }
         .build(&ALICE_ID);
         let collateral_def = {
             let __asset_definition_id = collateral_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "bond".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         }
         .build(&ALICE_ID);
 
@@ -1014,25 +1024,35 @@ mod tests {
         let custodian_id = checked_account_id();
         let custodian_account = Account::new(custodian_id.clone()).build(&ALICE_ID);
 
-        let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
-        let collateral_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "bond".parse().unwrap(),
-        );
+        let cash_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
+        let collateral_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "bond".parse().unwrap(),
+            );
 
         let cash_def = {
             let __asset_definition_id = cash_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         }
         .build(&ALICE_ID);
         let collateral_def = {
             let __asset_definition_id = collateral_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "bond".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         }
         .build(&ALICE_ID);
 
@@ -1240,10 +1260,10 @@ mod tests {
         );
         assert!(stx.world.repo_agreements.get(&agreement_id).is_none());
         assert!(
-            stx.world.internal_event_buf.iter().all(|event| !matches!(
-                event.as_ref(),
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Repo(_)))
-            )),
+            stx.world
+                .internal_event_buf
+                .iter()
+                .all(|event| !matches!(event.as_ref(), DataEvent::Account(AccountEvent::Repo(_)))),
             "a rejected pair must not emit repo lifecycle events"
         );
     }
@@ -1258,21 +1278,27 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-        let cash_def_id =
-            AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("cash name"));
-        let collateral_def_id =
-            AssetDefinitionId::new(domain_id, "bond".parse().expect("collateral name"));
-        let cash_definition = {
-            let id = cash_def_id.clone();
-            AssetDefinition::numeric(id.clone()).with_name(id.name().to_string())
-        }
-        .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+        let cash_def_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "usd".parse().expect("cash name"),
+        );
+        let collateral_def_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "bond".parse().expect("collateral name"),
+        );
+        let cash_definition = AssetDefinition::numeric(
+            cash_def_id.clone(),
+            "usd".to_owned(),
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(domain_id.clone()),
+        )
         .build(&ALICE_ID);
-        let collateral_definition = {
-            let id = collateral_def_id.clone();
-            AssetDefinition::numeric(id.clone()).with_name(id.name().to_string())
-        }
-        .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+        let collateral_definition = AssetDefinition::numeric(
+            collateral_def_id.clone(),
+            "bond".to_owned(),
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(domain_id),
+        )
         .build(&ALICE_ID);
         let bob_cash = AssetId::with_scope(
             cash_def_id.clone(),
@@ -1387,9 +1413,8 @@ mod tests {
         let mut counterparty_event = None;
         let mut custodian_event = None;
         for event in &stx.world.internal_event_buf {
-            if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Repo(
-                RepoAccountEvent::Initiated(payload),
-            ))) = event.as_ref()
+            if let DataEvent::Account(AccountEvent::Repo(RepoAccountEvent::Initiated(payload))) =
+                event.as_ref()
             {
                 match payload.role {
                     RepoAccountRole::Initiator => initiator_event = Some(payload.clone()),
@@ -1703,9 +1728,8 @@ mod tests {
 
         let mut roles = Vec::new();
         for event in &stx.world.internal_event_buf {
-            if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Repo(
-                RepoAccountEvent::Initiated(payload),
-            ))) = event.as_ref()
+            if let DataEvent::Account(AccountEvent::Repo(RepoAccountEvent::Initiated(payload))) =
+                event.as_ref()
             {
                 roles.push((payload.account.clone(), payload.role));
                 if payload.role == RepoAccountRole::Custodian {
@@ -1939,9 +1963,8 @@ mod tests {
         let mut counterparty_event = None;
         let mut custodian_event = None;
         for event in &stx.world.internal_event_buf {
-            if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Repo(
-                RepoAccountEvent::Settled(payload),
-            ))) = event.as_ref()
+            if let DataEvent::Account(AccountEvent::Repo(RepoAccountEvent::Settled(payload))) =
+                event.as_ref()
             {
                 match payload.role() {
                     RepoAccountRole::Initiator => initiator_event = Some(payload.clone()),
@@ -2185,9 +2208,8 @@ mod tests {
         let mut counterparty_event = None;
         let mut custodian_event = None;
         for event in &stx.world.internal_event_buf {
-            if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Repo(
-                RepoAccountEvent::Settled(payload),
-            ))) = event.as_ref()
+            if let DataEvent::Account(AccountEvent::Repo(RepoAccountEvent::Settled(payload))) =
+                event.as_ref()
             {
                 match payload.role() {
                     RepoAccountRole::Initiator => initiator_event = Some(payload.clone()),
@@ -2347,9 +2369,8 @@ mod tests {
         let mut counterparty_event = None;
         let mut custodian_event = None;
         for event in &stx.world.internal_event_buf {
-            if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Repo(
-                RepoAccountEvent::Settled(payload),
-            ))) = event.as_ref()
+            if let DataEvent::Account(AccountEvent::Repo(RepoAccountEvent::Settled(payload))) =
+                event.as_ref()
             {
                 match payload.role() {
                     RepoAccountRole::Initiator => initiator_event = Some(payload.clone()),
@@ -2453,9 +2474,8 @@ mod tests {
 
         let mut roles = Vec::new();
         for event in &stx.world.internal_event_buf {
-            if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Repo(
-                RepoAccountEvent::MarginCalled(payload),
-            ))) = event.as_ref()
+            if let DataEvent::Account(AccountEvent::Repo(RepoAccountEvent::MarginCalled(payload))) =
+                event.as_ref()
             {
                 roles.push((payload.account().clone(), *payload.role()));
                 assert_eq!(payload.agreement_id(), &agreement_id);

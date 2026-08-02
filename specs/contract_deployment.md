@@ -24,6 +24,29 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (July 
   enforces `(contract_address, code_hash, abi_hash)` equality when the
   namespace is protected.
 
+## Contract address identity
+
+Every V1 contract address uses the single lowercase Bech32m HRP `irohac`.
+The HRP is presentation only: parsers reject any other HRP, and network
+identity is committed inside the digest rather than inferred from a display
+prefix. The 29-byte address payload is
+`version_u8 || dataspace_id_u64_be || digest[0..20]`, where `version_u8` is
+`1` and `digest` is BLAKE3 over this exact preimage:
+
+```text
+"iroha:contract-address:v1"
+|| chain_id_utf8_len_u16_be || exact_canonical_chain_id_utf8
+|| dataspace_id_u64_be || deploy_nonce_u64_be
+|| deployer_canonical_bytes_len_u32_be || deployer_canonical_bytes
+```
+
+`CommitContractDeployment` always supplies the authenticated chain identifier
+from consensus state and recomputes the address before writing any binding.
+Client-side derivation APIs therefore require an explicit full `ChainId`; the
+account-address I105 discriminant is used only to decode or render the deployer
+literal and is never a contract-identity input. The CLI spelling is
+`iroha contract derive-address --chain-id <CHAIN_ID> ...`.
+
 ## Stored Artifacts & Retention
 
 - `RegisterSmartContractBytes` stores the compiled program under

@@ -407,20 +407,35 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
-        let mut ad1 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap(),
-        ))
+        let ad3 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "peony".parse().unwrap(),
+            ),
+            "peony".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
@@ -473,20 +488,35 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
-        let mut ad1 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap(),
-        ))
+        let ad3 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "peony".parse().unwrap(),
+            ),
+            "peony".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));

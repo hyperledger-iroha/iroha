@@ -518,6 +518,11 @@ or its derived code hash, ABI hash, offsets, entrypoint count, or canonical
 manifest disagrees with the compiler output. JavaScript framing validation is
 retained as an earlier diagnostic boundary, but cannot authorize deployment by
 itself.
+Contract-address derivation requires the exact canonical `chainId` in both
+`deriveContractAddress(...)` and `deploySmartContractBrowser(...)`. The full
+identifier is length-framed into the address digest; `chainDiscriminant`
+remains required only for strict I105 authority decoding. Every canonical V1
+contract address uses the fixed lowercase `irohac` Bech32m prefix.
 The first release accepts only `provenance: null`; signed provenance remains
 disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,
@@ -901,7 +906,7 @@ const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
 const request = buildMultisigContractCallProposeRequest({
   multisigAccountAlias: "mintops@banka",
   signerAccountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   entrypoint: "execute",
   trigger: "staged_mint_request_hbl",
   args,
@@ -1086,8 +1091,10 @@ if (recovery) {
 ### Iterating NFTs, RWAs, and account assets
 
 The iterable helpers accept `requirePermissions` to fail fast when credentials are missing. NFT
-and RWA explorer filters accept owner/domain pagination, while account-asset queries allow
-quantity comparisons.
+and RWA Explorer lists use opaque seek cursors (`cursor` plus a `limit` from 1 through 100) and
+accept owner/domain filters, while account-asset queries allow quantity comparisons. Pass
+`pagination.nextCursor` unchanged to continue a list; a cursor is bound to its collection and
+filters.
 
 ```js
 const torii = new ToriiClient("https://torii.example", {
@@ -1103,12 +1110,12 @@ console.log("first nft page:", nftPage.items.map((it) => it.id));
 
 const rwaPage = await torii.listExplorerRwas({
   ownedBy: authority,
-  perPage: 2,
+  limit: 2,
 });
 console.log("first RWA page:", rwaPage.items.map((it) => it.id));
 
 for await (const lot of torii.iterateAccountRwas(authority, {
-  pageSize: 2,
+  limit: 2,
   domainId: "commodities",
 })) {
   console.log(`${lot.id} => ${lot.quantity}`);
@@ -2788,7 +2795,7 @@ const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
 
 const response = await torii.prepareContractCall({
   authority: AUTHORITY_ACCOUNT_ID,
-  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   entrypoint: "increment",
   payload: { amount: 1 },
   feePayment: {
@@ -2974,7 +2981,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   authority,
   feePayment,
   proposal: {
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: Buffer.alloc(32, 0xaa),
     abiHash: "hash:…#…",
     abiVersion: "1",
@@ -3052,6 +3059,7 @@ and reuse the `ProofAttachmentInput` structure to describe verifier references.
 import {
   buildRegisterZkAssetTransaction,
   buildShieldTransaction,
+  buildUnshieldTransaction,
   buildZkTransferTransaction,
 } from "@iroha/iroha-js";
 
@@ -3105,7 +3113,30 @@ const transferTx = buildZkTransferTransaction({
   },
   privateKey,
 });
+
+const unshieldTx = buildUnshieldTransaction({
+  chainId: "test-chain",
+  authority,
+  feePayment,
+  unshield: {
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    destinationAccountId: authority,
+    publicAmount: "3",
+    inputs: [Buffer.alloc(32, 0x03)],
+    proof: {
+      backend: "halo2/ipa",
+      proof: Buffer.from("proof-bytes", "base64"),
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
+    },
+  },
+  privateKey,
+});
 ```
+
+`UnshieldInstructionInput` has no caller-supplied output commitments. The
+verified statement determines every private output; an `outputs` property is a
+retired pre-release shape and is rejected by both the builder and the canonical
+Norito codec rather than ignored.
 
 `ProofAttachmentInput` requires the exact `{ backend, name }`
 `verifyingKeyRef` shape; string shorthands, aliases, and embedded key bytes are
@@ -3668,7 +3699,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the payload for `createConnectSession()` (`{"sid":"<hex>","node":"torii.devnet.example"}` is a common pattern).
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
-- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.prepareContractCall` and validates the returned local-signing draft. The helper accepts camelCase keys plus overrides for `authority` and the required exact quoted `feePayment` intent.
+- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.prepareContractCall` and validates the returned local-signing draft. The helper accepts camelCase keys plus overrides for `authority` and the required exact quoted `feePayment` intent.
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
 - `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
@@ -3918,7 +3949,7 @@ for await (const balance of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶr�
 }
 
 const governedContract = await torii.getGovernanceContract(
-  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
 );
 console.log("governed contract:", governedContract.contract_address, governedContract.code_hash_hex);
 
@@ -4034,7 +4065,7 @@ console.log("matching NFTs", nftIds);
 const ownedNfts = [];
 for await (const nft of torii.iterateAccountNfts("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   domainId: "wonderland",
-  pageSize: 10,
+  limit: 10,
 })) {
   ownedNfts.push(nft.id);
 }
@@ -4059,7 +4090,7 @@ for await (const event of torii.streamEvents({
 }
 
 const governanceBinding = await torii.getGovernanceContract(
-  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
 );
 console.log(
   `${governanceBinding.contract_address} :: ${governanceBinding.code_hash_hex}`,
@@ -4092,7 +4123,7 @@ if (!tallyResult.found) {
 // Governance write helpers also accept AbortSignal options so transactions can be cancelled.
 const writeController = new AbortController();
 const deployDraft = await torii.governanceProposeDeployContract({
-  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   codeHash: "hash:7B38...#ABCD",
   abiHash: Buffer.alloc(32, 0xaa),
   abiVersion: "1",

@@ -513,7 +513,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw".into(),
             ),
             contract_alias: None,
             approvers: Vec::new(),
@@ -523,7 +523,7 @@ mod tests {
         let value = &ctx.printed[0];
         assert_eq!(
             value.get("gov_contract_address").and_then(|v| v.as_str()),
-            Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
+            Some("irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw")
         );
         assert!(value.get("gov_manifest_approvers").is_none());
     }
@@ -535,7 +535,7 @@ mod tests {
         let bob = sample_account_string("bob");
         let args = DeployMetaArgs {
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw".into(),
             ),
             contract_alias: None,
             approvers: vec![validator.clone(), format!("   {bob}   ")],
@@ -558,7 +558,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw".into(),
             ),
             contract_alias: None,
             approvers: vec!["not-an-id".into()],
@@ -577,7 +577,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw".into(),
             ),
             contract_alias: None,
             approvers: vec!["alice@invalid-domain".into()],

@@ -4037,10 +4037,16 @@ mod tests {
     fn state_with_accounts(keypairs: &[&KeyPair]) -> State {
         let authority = account(keypairs[0]);
         let asset_definition = settlement_asset_definition();
-        let domain = Domain::new(asset_definition.domain().clone()).build(&authority);
-        let definition = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("sorafs", "universal").expect("settlement domain"))
+                .build(&authority);
+        let definition = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let accounts = keypairs
             .iter()
             .map(|keypair| {
@@ -4074,7 +4080,7 @@ mod tests {
     }
 
     fn settlement_asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("sorafs", "universal").expect("settlement domain"),
             "xor".parse().expect("settlement asset name"),
         )
@@ -4098,10 +4104,16 @@ mod tests {
         let provider_id = account(provider);
         let treasury_id = account(treasury);
         let asset_definition = settlement_asset_definition();
-        let domain = Domain::new(asset_definition.domain().clone()).build(&buyer_id);
-        let definition = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .build(&buyer_id);
+        let domain =
+            Domain::new(DomainId::try_new("sorafs", "universal").expect("settlement domain"))
+                .build(&buyer_id);
+        let definition = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&buyer_id);
         let buyer_asset = Asset::new(
             AssetId::of(asset_definition.clone(), buyer_id.clone()),
             micro_quantity(buyer_balance_micro),
@@ -7008,8 +7020,8 @@ mod tests {
             .clone();
 
         let configured_asset = stx.gov.sorafs_pin_fee_asset_id.clone();
-        stx.gov.sorafs_pin_fee_asset_id = AssetDefinitionId::new(
-            configured_asset.domain().clone(),
+        stx.gov.sorafs_pin_fee_asset_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("sorafs", "universal").expect("settlement domain"),
             "not_xor".parse().expect("wrong asset name"),
         );
         assert!(

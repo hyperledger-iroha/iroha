@@ -43,7 +43,6 @@ use iroha_data_model::{
         },
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorSetCheckpoint},
-    da::commitment::DaCommitmentBundle,
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,

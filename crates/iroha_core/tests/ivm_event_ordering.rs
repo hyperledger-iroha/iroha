@@ -84,11 +84,14 @@ fn ivm_syscall_data_events_follow_order() {
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let account = Account::new(authority_id.clone()).build(&authority_id);
     let asset_def = AssetDefinition::new(
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
+        "rose".to_owned(),
         NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(&authority_id);
     let world = iroha_core::state::World::with_assets([domain], [account], [asset_def], [], []);
@@ -124,10 +127,11 @@ fn ivm_syscall_data_events_follow_order() {
     let val2_bytes = norito::to_bytes(&val2).expect("encode json");
     let ptr_val2 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val2_bytes);
 
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let asset_bytes = norito::to_bytes(&asset_def_id).expect("encode asset definition");
     let ptr_asset_def = store_tlv(
         &mut vm,

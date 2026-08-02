@@ -41,13 +41,71 @@ class MusubiSdkV1FixtureTest {
             val requirement = MusubiVersionReqV1.parse(item["text"] as String)
             assertWireEquals(item["wire"], requirement)
         }
+        arrayValue(canonical["requirement_aliases"]).forEach { fixtureValue ->
+            val item = objectValue(fixtureValue)
+            val requirement = MusubiVersionReqV1.parse(item["input"] as String)
+            assertEquals(item["canonical"], requirement.canonicalText())
+            assertWireEquals(item["wire"], requirement)
+        }
+        arrayValue(canonical["requirement_matches"]).forEach { fixtureValue ->
+            val item = objectValue(fixtureValue)
+            val requirement = MusubiVersionReqV1.parse(item["requirement"] as String)
+            val candidate = MusubiVersionV1.parse(item["candidate"] as String)
+            assertEquals(item["matches"], requirement.matches(candidate))
+        }
+    }
+
+    @Test
+    fun decodedComparatorRequirementsRejectNoncanonicalExactForms() {
+        val first = MusubiVersionComparatorV1(
+            MusubiComparatorOpV1.EQUAL,
+            MusubiVersionV1.parse("1.0.0"),
+        )
+        val second = MusubiVersionComparatorV1(
+            MusubiComparatorOpV1.EQUAL,
+            MusubiVersionV1.parse("2.0.0"),
+        )
+        assertFails {
+            MusubiVersionReqV1.fromWire(
+                MusubiVersionReqV1.Kind.COMPARATORS,
+                comparators = listOf(first),
+            )
+        }
+        assertFails {
+            MusubiVersionReqV1.fromWire(
+                MusubiVersionReqV1.Kind.COMPARATORS,
+                comparators = listOf(first, second),
+            )
+        }
+    }
+
+    @Test
+    fun nameBackedFieldsRejectEveryUnicodeBidiControl() {
+        val controls = charArrayOf(
+            '\u061C',
+            '\u200E',
+            '\u200F',
+            '\u202A',
+            '\u202B',
+            '\u202C',
+            '\u202D',
+            '\u202E',
+            '\u2066',
+            '\u2067',
+            '\u2068',
+            '\u2069',
+        )
+        controls.forEach { control ->
+            assertFails { MusubiNamespaceV1("domain${control}.dataspace") }
+            assertFails { MusubiPackageScopeV1.domain("domain$control") }
+        }
     }
 
     @Test
     fun everyTypedRouteRoundTripsExactRequestAndResponseJson() {
         val routes = routes()
         assertEquals(EXPECTED_PATHS, routes.map { it["path"] }.toSet())
-        assertEquals(9, routes.size)
+        assertEquals(11, routes.size)
 
         routes.forEach { route ->
             val path = route["path"] as String
@@ -55,6 +113,68 @@ class MusubiSdkV1FixtureTest {
             val response = MusubiJsonV1.decodeResponse(path, route["response"])
             assertWireEquals(route["request"], request)
             assertWireEquals(route["response"], response)
+        }
+    }
+
+    @Test
+    fun archiveRetentionIsBoundedTypedAndBindsTheExactRequest() {
+        val route = routes().first {
+            it["path"] == MusubiToriiClientV1.ARCHIVE_RETENTION_PATH
+        }
+        val request = MusubiJsonV1.decodeQuery(
+            MusubiToriiClientV1.ARCHIVE_RETENTION_PATH,
+            route["request"],
+        ) as MusubiArchiveRetentionQueryV1
+        val page = MusubiJsonV1.parseArchiveRetentionPage(
+            MusubiJsonV1.encode(route["response"]),
+        )
+        page.requireMatches(request)
+        assertEquals(4, page.items.size)
+        assertEquals(listOf(true, true, false, false), page.items.map { it.mustRetain() })
+
+        val mismatched = objectValue(deepMutableCopy(route["response"]))
+        val first = objectValue(arrayValue(mismatched["items"])[0])
+        first["archive_id"] = listOf(List(32) { 17L })
+        val executor = FixtureExecutor(
+            mapOf(
+                MusubiToriiClientV1.ARCHIVE_RETENTION_PATH to MusubiJsonV1.encode(mismatched),
+            ),
+        )
+        val client = MusubiToriiClientV1.builder()
+            .baseUri(URI.create("http://localhost:8080"))
+            .executor(executor)
+            .build()
+        assertFails { client.findArchiveRetention(request).join() }
+    }
+
+    @Test
+    fun maintainerDirectoryDecodesAcceptedAndPendingInvitationVariants() {
+        val route = routes().first { it["path"] == MusubiToriiClientV1.MAINTAINERS_PATH }
+        val page = MusubiJsonV1.parseMaintainerPage(MusubiJsonV1.encode(route["response"]))
+        assertEquals(2, page.items.size)
+
+        val accepted = page.items[0] as MusubiMaintainerDirectoryEntryV1.Accepted
+        assertEquals(MusubiMaintainerDirectoryEntryV1.Kind.ACCEPTED, accepted.kind)
+        assertEquals("Owner", accepted.member.roleKind)
+        assertEquals(42L, accepted.member.acceptedAtHeight.toLong())
+
+        val pending = page.items[1] as MusubiMaintainerDirectoryEntryV1.PendingInvitation
+        assertEquals(MusubiMaintainerDirectoryEntryV1.Kind.PENDING_INVITATION, pending.kind)
+        assertEquals("Maintainer", pending.invitation.roleKind)
+        assertEquals("Pending", pending.invitation.stateKind)
+        assertEquals(2L, pending.invitation.expectedGovernanceRevision.toLong())
+        assertTrue(pending.invitation.inviteId.bytes().all { it.toInt() == 13 })
+
+        val malformedResponse = objectValue(deepMutableCopy(route["response"]))
+        val malformedPending = objectValue(
+            objectValue(arrayValue(malformedResponse["items"])[1])["value"],
+        )
+        objectValue(malformedPending["state"])["kind"] = "Accepted"
+        assertFails {
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.MAINTAINERS_PATH,
+                malformedResponse,
+            )
         }
     }
 
@@ -85,12 +205,16 @@ class MusubiSdkV1FixtureTest {
                     client.findMaintainers(request as MusubiPackagePageQueryV1).join()
                 MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH ->
                     client.findArchiveLocations(request as MusubiArchiveLocationQueryV1).join()
+                MusubiToriiClientV1.ARCHIVE_RETENTION_PATH ->
+                    client.findArchiveRetention(request as MusubiArchiveRetentionQueryV1).join()
                 MusubiToriiClientV1.ALIAS_PATH ->
                     client.findAlias(request as MusubiAliasQueryV1).join()
                 MusubiToriiClientV1.ALIAS_HISTORY_PATH ->
                     client.findAliasHistory(request as MusubiAliasQueryV1).join()
                 MusubiToriiClientV1.ORDERED_PREFIX_PATH ->
                     client.findOrderedPrefix(request as MusubiOrderedPrefixQueryV1).join()
+                MusubiToriiClientV1.SEARCH_PATH ->
+                    client.search(request as MusubiSearchQueryV1).join()
                 else -> error("unhandled fixture path $path")
             }
             val captured = executor.requests.last()
@@ -99,6 +223,39 @@ class MusubiSdkV1FixtureTest {
             assertEquals(route["request"], parseJson(captured.body))
         }
         assertEquals(EXPECTED_PATHS, executor.requests.map { it.uri.path }.toSet())
+    }
+
+    @Test
+    fun governedTakedownRequiresOnlyAppliedHeight() {
+        val exactRelease = routes().first {
+            it["path"] == MusubiToriiClientV1.EXACT_RELEASE_PATH
+        }
+        val canonical = objectValue(deepMutableCopy(exactRelease["response"]))
+        canonical["artifact_governance"] = linkedMapOf(
+            "kind" to "TakenDown",
+            "value" to linkedMapOf(
+                "action_digest" to canonical["release_digest"],
+                "reason" to listOf("security response"),
+                "applied_at_height" to 50L,
+            ),
+        )
+        objectValue(canonical["revisions"])["artifact_governance"] = 2L
+        MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, canonical)
+
+        val legacy = objectValue(deepMutableCopy(canonical))
+        val legacyGovernance = objectValue(legacy["artifact_governance"])
+        val legacyPayload = objectValue(legacyGovernance["value"])
+        legacyPayload["enacted_at_height"] = legacyPayload.remove("applied_at_height")
+        assertFails {
+            MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, legacy)
+        }
+
+        val zeroHeight = objectValue(deepMutableCopy(canonical))
+        val zeroGovernance = objectValue(zeroHeight["artifact_governance"])
+        objectValue(zeroGovernance["value"])["applied_at_height"] = 0L
+        assertFails {
+            MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, zeroHeight)
+        }
     }
 
     @Test
@@ -134,6 +291,21 @@ class MusubiSdkV1FixtureTest {
         abi["abi_version"] = 2L
         assertFails {
             MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, response)
+        }
+
+        val archiveRoute = routes().first {
+            it["path"] == MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH
+        }
+        val archiveResponse = objectValue(deepMutableCopy(archiveRoute["response"]))
+        val archive = objectValue(archiveResponse["archive"])
+        val receipt = objectValue(archive["staging_receipt"])
+        val payload = objectValue(receipt["payload"])
+        payload["version"] = 2L
+        assertFails {
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH,
+                archiveResponse,
+            )
         }
     }
 
@@ -203,9 +375,11 @@ class MusubiSdkV1FixtureTest {
             MusubiToriiClientV1.VERSIONS_PATH,
             MusubiToriiClientV1.MAINTAINERS_PATH,
             MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH,
+            MusubiToriiClientV1.ARCHIVE_RETENTION_PATH,
             MusubiToriiClientV1.ALIAS_PATH,
             MusubiToriiClientV1.ALIAS_HISTORY_PATH,
             MusubiToriiClientV1.ORDERED_PREFIX_PATH,
+            MusubiToriiClientV1.SEARCH_PATH,
         )
     }
 }

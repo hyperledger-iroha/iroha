@@ -1574,8 +1574,6 @@ pub struct Common {
     pub peer: Peer,
     /// Trusted peers including self.
     pub trusted_peers: WithOrigin<TrustedPeers>,
-    /// Default domain label used only when encoding/compressing `AccountAddress` selectors.
-    pub default_account_domain_label: WithOrigin<String>,
     /// I105 chain discriminant / network prefix applied when encoding addresses.
     pub chain_discriminant: WithOrigin<u16>,
 }
@@ -2919,10 +2917,6 @@ pub struct Concurrency {
     pub prover_stack_bytes: usize,
     /// Stack size (bytes) for Sumeragi helper threads.
     pub sumeragi_stack_bytes: usize,
-    /// Guest stack size (bytes) for IVM instances.
-    pub guest_stack_bytes: u64,
-    /// Gas→stack multiplier (bytes of stack available per unit of gas).
-    pub gas_to_stack_multiplier: u64,
 }
 
 impl Concurrency {
@@ -2937,22 +2931,11 @@ impl Concurrency {
             scheduler_stack_bytes: defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: defaults::concurrency::PROVER_STACK_BYTES,
             sumeragi_stack_bytes: defaults::concurrency::SUMERAGI_STACK_BYTES,
-            guest_stack_bytes: defaults::concurrency::GUEST_STACK_BYTES,
-            gas_to_stack_multiplier: defaults::concurrency::GAS_TO_STACK_MULTIPLIER,
         }
     }
 
     /// Validate stack sizes to ensure they are non-zero and within sane bounds.
     pub fn validate(&self) -> core::result::Result<(), Report<ParseError>> {
-        let max_guest = defaults::concurrency::GUEST_STACK_BYTES_MAX;
-        if self.guest_stack_bytes == 0 || self.guest_stack_bytes > max_guest {
-            return Err(
-                Report::new(ParseError::InvalidConcurrencyConfig).attach(format!(
-                    "guest_stack_bytes must be in [1, {}], got {}",
-                    max_guest, self.guest_stack_bytes
-                )),
-            );
-        }
         if self.tokio_stack_bytes < defaults::concurrency::TOKIO_STACK_BYTES_MIN
             || self.tokio_stack_bytes > defaults::concurrency::TOKIO_STACK_BYTES_MAX
         {
@@ -2980,10 +2963,6 @@ impl Concurrency {
                     self.sumeragi_stack_bytes
                 )),
             );
-        }
-        if self.gas_to_stack_multiplier == 0 {
-            return Err(Report::new(ParseError::InvalidConcurrencyConfig)
-                .attach("gas_to_stack_multiplier must be non-zero"));
         }
         Ok(())
     }
@@ -4971,8 +4950,8 @@ pub struct Confidential {
     pub policy_transition_delay_blocks: u64,
     /// Grace window around policy activation.
     pub policy_transition_window_blocks: u64,
-    /// Commitment tree root history length.
-    pub tree_roots_history_len: u64,
+    /// Non-zero commitment tree root history length.
+    pub tree_roots_history_len: NonZeroUsize,
     /// Frontier checkpoint interval.
     pub tree_frontier_checkpoint_interval: u64,
     /// Maximum verifier entries allowed in registry.
@@ -8458,6 +8437,8 @@ pub struct Torii {
 pub struct ToriiBootleLanternIssuer {
     /// Durable one-shot authorization store directory.
     pub state_dir: PathBuf,
+    /// Exact non-zero bound on concurrent native issuance operations.
+    pub max_inflight: NonZeroUsize,
     /// Exact governed issuer identity resolved from committed state.
     pub issuer_id: PrivacyIssuerIdV1,
     /// Exact governed policy identity resolved from committed state.
@@ -11624,8 +11605,6 @@ pub struct SorafsGateway {
     pub salt_schedule_dir: Option<PathBuf>,
     /// Named static-site bindings loaded and cached when Torii starts.
     pub site_bindings: SorafsGatewaySiteBindings,
-    /// Optional CDN policy payload (GarCdnPolicyV1) loaded from disk.
-    pub cdn_policy_path: Option<PathBuf>,
     /// Client-facing rate limit configuration.
     pub rate_limit: SorafsGatewayRateLimit,
     /// High-level rollout phase controlling default anonymity policy.
@@ -11650,7 +11629,6 @@ impl Default for SorafsGateway {
             enforce_capabilities: defaults::sorafs::gateway::ENFORCE_CAPABILITIES,
             salt_schedule_dir: None,
             site_bindings: SorafsGatewaySiteBindings::default(),
-            cdn_policy_path: None,
             rate_limit: SorafsGatewayRateLimit::default(),
             rollout_phase: SorafsRolloutPhase::default(),
             anonymity_policy: Some(
@@ -12227,14 +12205,8 @@ pub struct Zk {
     pub stark: Stark,
     /// SCCP proof-admission and deterministic verifier-work limits.
     pub sccp: Sccp,
-    /// Cap on the number of recent shielded Merkle roots kept per asset.
-    pub root_history_cap: usize,
     /// Cap on the number of recent ballot ciphertexts kept per election.
     pub ballot_history_cap: usize,
-    /// When an asset has no commitments, include an explicit empty-tree root in read APIs.
-    pub empty_root_on_empty: bool,
-    /// Depth to use when computing the explicit empty-tree root.
-    pub merkle_depth: u8,
     /// Maximum accepted proof size for stateless pre-verification (bytes).
     pub preverify_max_bytes: usize,
     /// Soft byte-budget for stateless pre-verification (0 = unlimited).
@@ -12287,8 +12259,8 @@ pub struct Zk {
     pub policy_transition_delay_blocks: u64,
     /// Grace window (in blocks) around policy activation for conversions.
     pub policy_transition_window_blocks: u64,
-    /// Commitment tree root history length to retain.
-    pub tree_roots_history_len: u64,
+    /// Non-zero commitment tree root history length to retain.
+    pub tree_roots_history_len: NonZeroUsize,
     /// Interval (in blocks) between frontier checkpoints.
     pub tree_frontier_checkpoint_interval: u64,
     /// Maximum active verifier entries allowed in registry.
@@ -13166,20 +13138,6 @@ mod tests_npos_timeouts {
     }
 
     #[test]
-    fn concurrency_validate_rejects_zero_gas_stack_multiplier() {
-        let mut cfg = Concurrency::from_defaults();
-        cfg.gas_to_stack_multiplier = 0;
-
-        let err = cfg
-            .validate()
-            .expect_err("zero multiplier should be invalid");
-        assert!(matches!(
-            err.current_context(),
-            ParseError::InvalidConcurrencyConfig
-        ));
-    }
-
-    #[test]
     fn concurrency_validate_rejects_too_small_sumeragi_stack() {
         let mut cfg = Concurrency::from_defaults();
         cfg.sumeragi_stack_bytes = defaults::concurrency::SUMERAGI_STACK_BYTES_MIN - 1;
@@ -13215,20 +13173,6 @@ mod tests_npos_timeouts {
         let err = cfg
             .validate()
             .expect_err("Sumeragi stack above maximum must fail");
-        assert!(matches!(
-            err.current_context(),
-            ParseError::InvalidConcurrencyConfig
-        ));
-    }
-
-    #[test]
-    fn concurrency_validate_rejects_excessive_guest_stack() {
-        let mut cfg = Concurrency::from_defaults();
-        cfg.guest_stack_bytes = defaults::concurrency::GUEST_STACK_BYTES_MAX + 1;
-
-        let err = cfg
-            .validate()
-            .expect_err("guest stack beyond max must fail");
         assert!(matches!(
             err.current_context(),
             ParseError::InvalidConcurrencyConfig
@@ -13659,11 +13603,9 @@ mod tests_npos_timeouts {
     }
 }
 
-/// IVM/runtime presentation toggles.
-#[derive(Debug, Clone)]
+/// IVM runtime presentation toggles.
+#[derive(Debug, Clone, Copy)]
 pub struct Ivm {
-    /// Compute resource profile name used to cap IVM guest stack budgets.
-    pub memory_budget_profile: Name,
     /// Banner/presentation toggles surfaced during startup.
     pub banner: Banner,
 }
@@ -13673,7 +13615,6 @@ impl Ivm {
     #[must_use]
     pub fn from_defaults() -> Self {
         Self {
-            memory_budget_profile: defaults::ivm::memory_budget_profile(),
             banner: Banner::from_defaults(),
         }
     }

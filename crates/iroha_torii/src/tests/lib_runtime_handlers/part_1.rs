@@ -275,18 +275,12 @@ fn grant_account_permission_for_test(
 fn seed_asset_definition_for_test(
     app: &SharedAppState,
     asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    owning_domain: Option<&DomainId>,
 ) {
-    let missing_domain = asset_definition_id
-        .try_domain()
-        .is_some_and(|domain_id| app.state.view().world().domain(domain_id).is_err());
-    if missing_domain {
-        bind_domain_name_for_test(
-            app,
-            &asset_definition_id
-                .try_domain()
-                .expect("missing domain implies a projected asset definition id")
-                .to_string(),
-        );
+    if let Some(domain_id) = owning_domain
+        && app.state.view().world().domain(domain_id).is_err()
+    {
+        bind_domain_name_for_test(app, &domain_id.to_string());
     }
 
     let next_height = app
@@ -304,24 +298,15 @@ fn seed_asset_definition_for_test(
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
 
-    if let Some(domain_id) = asset_definition_id.try_domain()
-        && app.state.view().world().domain(domain_id).is_err()
-    {
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&ALICE_ID, &mut tx)
-            .expect("register asset domain");
-    }
-
-    let mut asset_definition =
-        iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone()).with_name(
-            asset_definition_id
-                .try_name()
-                .map_or_else(String::new, ToString::to_string),
-        );
-    if asset_definition_requires_restricted_balance_policy_for_test(app, asset_definition_id) {
-        asset_definition =
-            asset_definition.with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted);
-    }
+    let balance_scope_policy = if asset_definition_requires_restricted_balance_policy_for_test(
+        app,
+        owning_domain,
+    ) {
+        AssetBalancePolicy::DataspaceRestricted
+    } else {
+        AssetBalancePolicy::Global
+    };
+    let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone(), "asset-definition".to_owned(), balance_scope_policy, owning_domain.cloned());
 
     Register::asset_definition(asset_definition)
         .execute(&ALICE_ID, &mut tx)
@@ -333,9 +318,9 @@ fn seed_asset_definition_for_test(
 
 fn asset_definition_requires_restricted_balance_policy_for_test(
     app: &SharedAppState,
-    asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    owning_domain: Option<&DomainId>,
 ) -> bool {
-    let Some(domain_id) = asset_definition_id.try_domain() else {
+    let Some(domain_id) = owning_domain else {
         return false;
     };
     let dataspace_alias = domain_id.dataspace().as_ref();
@@ -1862,6 +1847,11 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         transaction_batch_max_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
         state: state.clone(),
+        #[cfg(feature = "app_api")]
+        musubi_search: Arc::new(RwLock::new(
+            iroha_core::musubi_search::MusubiSearchIndexV1::default(),
+        )),
+        bootle_lantern_issuance_runtime: None,
         kiso,
         query_service: query_handle,
         query_inflight: Arc::new(tokio::sync::Semaphore::new(

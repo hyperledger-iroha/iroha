@@ -4,6 +4,7 @@ namespace Hyperledger.Iroha.Transactions;
 internal static class ContractAddressV1
 {
     private const uint Bech32mConstant = 0x2BC830A3;
+    private const string CanonicalHrp = "irohac";
     private const string Charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
     private static readonly uint[] Generators =
     [
@@ -31,6 +32,10 @@ internal static class ContractAddressV1
         }
 
         var hrp = literal[..separator];
+        if (!string.Equals(hrp, CanonicalHrp, StringComparison.Ordinal))
+        {
+            return false;
+        }
         var values = new List<byte>(literal.Length - separator - 1);
         foreach (var character in literal[(separator + 1)..])
         {

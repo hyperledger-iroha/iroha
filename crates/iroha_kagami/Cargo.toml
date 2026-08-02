@@ -16,7 +16,7 @@ workspace = true
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_executor_data_model.workspace = true
-iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "privacy-exact12-conformance"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_schema_gen.workspace = true
 iroha_primitives.workspace = true
@@ -39,6 +39,7 @@ toml = { version = "0.9.8" }
 tiny-keccak.workspace = true
 blake3.workspace = true
 hex = { workspace = true }
+base64.workspace = true
 rand = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 inquire = "0.9.1"
@@ -49,7 +50,6 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-base64.workspace = true
 
 [features]
 default = ["bls"]

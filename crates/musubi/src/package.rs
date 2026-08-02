@@ -17,13 +17,28 @@ use std::{
 
 pub use iroha_data_model::musubi::MusubiArtifactDescriptorV1;
 use iroha_data_model::{
-    musubi::{MusubiContentDigestV1, MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1},
+    musubi::{
+        MusubiAbiBindingV1, MusubiArchiveCommitmentV1, MusubiContentDigestV1,
+        MusubiDependencyReqV1, MusubiDescriptionV1, MusubiDocumentRefV1, MusubiKeywordV1,
+        MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiReleaseManifestV1,
+        MusubiReleaseMetadataV1, MusubiResolutionProofV1, MusubiSemanticReleaseManifestV1,
+        MusubiVerificationLockV1,
+    },
     name::Name,
+    sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
 };
+use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
 #[cfg(test)]
 use norito::codec::Decode;
 use norito::codec::Encode;
-use sorafs_car::{CarBuildPlan, CarWriteStats, CarWriter, FileEntry, FilePayload, PayloadSource};
+use sorafs_car::{
+    CarBuildPlan, CarWriteStats, CarWriter, FileEntry, FilePayload, PayloadSource,
+    chunker_registry::default_descriptor, compute_chunk_plan_digest_sha3, compute_por_root,
+};
+
+use crate::{
+    lockfile::render_verification_lock, manifest::Inheritable, workspace::WorkspaceMember,
+};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -60,6 +75,14 @@ pub struct PackageLayout {
     readme: Option<PathBuf>,
     license: Option<PathBuf>,
     includes: Vec<PathBuf>,
+    external: Vec<ExternalSelection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExternalSelection {
+    root: PathBuf,
+    selector: PathBuf,
+    shape: SelectionShape,
 }
 
 impl PackageLayout {
@@ -73,6 +96,7 @@ impl PackageLayout {
             readme: None,
             license: None,
             includes: Vec::new(),
+            external: Vec::new(),
         }
     }
 
@@ -110,6 +134,19 @@ impl PackageLayout {
     /// Add one explicit positive include file or directory.
     pub fn add_include(&mut self, path: impl Into<PathBuf>) {
         self.includes.push(path.into());
+    }
+
+    fn add_external(
+        &mut self,
+        root: impl Into<PathBuf>,
+        selector: impl Into<PathBuf>,
+        shape: SelectionShape,
+    ) {
+        self.external.push(ExternalSelection {
+            root: root.into(),
+            selector: selector.into(),
+            shape,
+        });
     }
 }
 
@@ -184,6 +221,16 @@ impl PackagePlan {
         semantic_release_manifest: &MusubiSemanticReleaseManifestV1,
         verification_lock: &MusubiVerificationLockV1,
     ) -> Result<PackageCommitments, PackageError> {
+        let rendered_lock = render_verification_lock(verification_lock).map_err(|error| {
+            PackageError::InvalidBundleBinding(format!(
+                "typed verification lock cannot be rendered: {error}"
+            ))
+        })?;
+        if self.verification_lock() != rendered_lock.as_bytes() {
+            return Err(PackageError::InvalidBundleBinding(
+                "source-tree and typed verification locks do not match".to_owned(),
+            ));
+        }
         semantic_release_manifest
             .validate()
             .map_err(|error| PackageError::InvalidBundleBinding(error.to_string()))?;
@@ -374,6 +421,67 @@ impl PackageCar {
     #[must_use]
     pub const fn source_bytes(&self) -> u64 {
         self.source_bytes
+    }
+
+    /// Derive and validate the complete immutable registry archive commitment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the CAR lacks its single canonical root, its plan/profile is
+    /// inconsistent, PoR derivation fails, a count overflows, or a V1 commitment bound is
+    /// violated.
+    pub fn archive_commitment(&self) -> Result<MusubiArchiveCommitmentV1, PackageError> {
+        if self.stats.root_cids.len() != 1 || self.stats.chunk_profile != self.plan.chunk_profile {
+            return Err(PackageError::CarPlan(
+                "package CAR must have one root and one consistent chunk profile".to_owned(),
+            ));
+        }
+        let root_cid = ManifestRootCid::try_from(self.stats.root_cids[0].clone())
+            .map_err(|error| PackageError::CarPlan(error.to_string()))?;
+        let descriptor = default_descriptor();
+        if descriptor.profile != self.plan.chunk_profile {
+            return Err(PackageError::CarPlan(
+                "package CAR chunk profile is not the registered V1 default".to_owned(),
+            ));
+        }
+        let por_root = compute_por_root(&self.payload, &self.plan)
+            .map_err(|error| PackageError::CarPlan(error.to_string()))?;
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid,
+            chunker: ChunkerProfileHandle {
+                profile_id: descriptor.id.0,
+                namespace: descriptor.namespace.to_owned(),
+                name: descriptor.name.to_owned(),
+                semver: descriptor.semver.to_owned(),
+                multihash_code: descriptor.multihash_code,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new(compute_chunk_plan_digest_sha3(
+                &self.plan.chunks,
+            )),
+            por_root: MusubiContentDigestV1::new(por_root),
+            content_length: self.plan.content_length,
+            car_digest: MusubiContentDigestV1::new(*self.stats.car_archive_digest.as_bytes()),
+            car_size: self.stats.car_size,
+            bundle_digest: self.commitments.bundle_digest(),
+            source_tree_digest: self.commitments.source_tree_digest(),
+            descriptor_digest: self.commitments.descriptor_digest(),
+            file_count: u32::try_from(self.source_file_count).map_err(|_| {
+                PackageError::TooManyFiles {
+                    count: self.source_file_count,
+                    maximum: MAX_SOURCE_FILES,
+                }
+            })?,
+            chunk_count: u32::try_from(self.plan.chunks.len()).map_err(|_| {
+                PackageError::TooManyChunks {
+                    count: self.plan.chunks.len(),
+                    maximum: MAX_SOURCE_CHUNKS,
+                }
+            })?,
+        };
+        commitment
+            .validate()
+            .map_err(|error| PackageError::CarPlan(error.to_string()))?;
+        Ok(commitment)
     }
 }
 
@@ -675,8 +783,9 @@ pub fn normalize_verification_lock_toml(input: &str) -> Result<Vec<u8>, PackageE
 
 /// Plan a clean, positive-set Musubi V1 source tree.
 ///
-/// `manifest_toml` is parsed and rendered canonically. `verification_lock_toml` must be the
-/// exact verification graph generated for publication and is normalized before inclusion.
+/// `manifest_toml` is parsed and rendered canonically. `verification_lock` must be the
+/// exact typed graph generated for publication. Its source-tree TOML and provider-facing
+/// Norito representation are both derived from this one value, so they cannot diverge.
 /// Only the library/contracts/tests/readme/license/include selectors in `layout` are visited.
 ///
 /// # Errors
@@ -686,10 +795,15 @@ pub fn normalize_verification_lock_toml(input: &str) -> Result<Vec<u8>, PackageE
 pub fn plan_package(
     layout: &PackageLayout,
     manifest_toml: &str,
-    verification_lock_toml: &str,
+    verification_lock: &MusubiVerificationLockV1,
 ) -> Result<PackagePlan, PackageError> {
     let manifest = canonicalize_manifest_toml(manifest_toml)?;
-    let lock = normalize_verification_lock_toml(verification_lock_toml)?;
+    let lock = render_verification_lock(verification_lock)
+        .map_err(|error| PackageError::InvalidDocument {
+            document: VERIFICATION_LOCK_PATH,
+            reason: error.to_string(),
+        })?
+        .into_bytes();
     let root = validate_root(layout.root())?;
     let mut collector = Collector::new(root);
     collector.insert_virtual(MANIFEST_PATH, manifest)?;
@@ -713,8 +827,375 @@ pub fn plan_package(
     for path in &layout.includes {
         collector.collect_selector(path, SelectionShape::Either)?;
     }
+    for selection in &layout.external {
+        let root = validate_root(&selection.root)?;
+        let mut external = Collector::new(root.clone());
+        external.collect_selector(&selection.selector, selection.shape)?;
+        for file in external.finish()?.files {
+            let original = format!("external:{}:{}", root.display(), file.path);
+            collector.insert(original, file.path, file.components, file.bytes)?;
+        }
+    }
 
     collector.finish()
+}
+
+/// Derive the positive file selection for one fully resolved workspace package.
+///
+/// Path-bearing `[workspace.package]` values are selected relative to the workspace
+/// root and retain their portable manifest spelling in the clean package tree.
+pub(crate) fn package_layout_for_member(
+    workspace_root: &Path,
+    member: &WorkspaceMember,
+) -> PackageLayout {
+    let mut layout = PackageLayout::new(&member.package_root);
+    let library = member
+        .manifest
+        .library
+        .as_ref()
+        .expect("loaded package members always have a library");
+    layout.set_library(library.source_dir.to_path_buf());
+    for target in &member.manifest.contracts {
+        layout.add_contract(target.path.to_path_buf());
+    }
+    for target in &member.manifest.tests {
+        layout.add_test(target.path.to_path_buf());
+    }
+
+    let package = member
+        .manifest
+        .package
+        .as_ref()
+        .expect("loaded package members always have package metadata");
+    if let Some(readme) = &member.package.readme {
+        if inherited(&package.readme) && workspace_root != member.package_root {
+            layout.add_external(workspace_root, readme.to_path_buf(), SelectionShape::File);
+        } else {
+            layout.set_readme(readme.to_path_buf());
+        }
+    }
+    if let Some(license) = &member.package.license_file {
+        if inherited(&package.license_file) && workspace_root != member.package_root {
+            layout.add_external(workspace_root, license.to_path_buf(), SelectionShape::File);
+        } else {
+            layout.set_license(license.to_path_buf());
+        }
+    }
+    for include in &member.package.include {
+        if inherited(&package.include) && workspace_root != member.package_root {
+            layout.add_external(
+                workspace_root,
+                include.to_path_buf(),
+                SelectionShape::Either,
+            );
+        } else {
+            layout.add_include(include.to_path_buf());
+        }
+    }
+    layout
+}
+
+fn inherited<T>(value: &Option<Inheritable<T>>) -> bool {
+    matches!(value, Some(Inheritable::Workspace))
+}
+
+/// Render one clean publishable package manifest with workspace and local path state removed.
+///
+/// Effective normal dependencies are retained as canonical registry package/range pairs.
+/// Development dependencies never enter the publication manifest.
+pub(crate) fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, PackageError> {
+    let mut root = toml::Table::new();
+    root.insert("manifest-version".to_owned(), toml::Value::Integer(1));
+
+    let resolved = &member.package;
+    let mut package = toml::Table::new();
+    package.insert(
+        "namespace".to_owned(),
+        toml::Value::String(resolved.selector.namespace.to_string()),
+    );
+    package.insert(
+        "name".to_owned(),
+        toml::Value::String(resolved.selector.name.to_string()),
+    );
+    package.insert(
+        "version".to_owned(),
+        toml::Value::String(resolved.version.to_string()),
+    );
+    package.insert("edition".to_owned(), toml::Value::String("1".to_owned()));
+    package.insert(
+        "abi-version".to_owned(),
+        toml::Value::Integer(i64::from(resolved.abi_version)),
+    );
+    insert_optional_string(&mut package, "description", resolved.description.as_deref());
+    insert_optional_path(&mut package, "readme", resolved.readme.as_ref());
+    insert_optional_string(&mut package, "license", resolved.license.as_deref());
+    insert_optional_path(&mut package, "license-file", resolved.license_file.as_ref());
+    insert_optional_string(&mut package, "repository", resolved.repository.as_deref());
+    if !resolved.keywords.is_empty() {
+        package.insert(
+            "keywords".to_owned(),
+            toml::Value::Array(
+                resolved
+                    .keywords
+                    .iter()
+                    .cloned()
+                    .map(toml::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    if !resolved.include.is_empty() {
+        package.insert(
+            "include".to_owned(),
+            toml::Value::Array(
+                resolved
+                    .include
+                    .iter()
+                    .map(|path| toml::Value::String(path.to_string()))
+                    .collect(),
+            ),
+        );
+    }
+    root.insert("package".to_owned(), toml::Value::Table(package));
+
+    let library = member
+        .manifest
+        .library
+        .as_ref()
+        .expect("loaded package members always have a library");
+    let mut library_table = toml::Table::new();
+    library_table.insert(
+        "source-dir".to_owned(),
+        toml::Value::String(library.source_dir.to_string()),
+    );
+    library_table.insert(
+        "exports".to_owned(),
+        toml::Value::Array(
+            library
+                .exports
+                .iter()
+                .map(|export| toml::Value::String(export.to_string()))
+                .collect(),
+        ),
+    );
+    root.insert("lib".to_owned(), toml::Value::Table(library_table));
+    insert_targets(&mut root, "contract", &member.manifest.contracts);
+    insert_targets(&mut root, "test", &member.manifest.tests);
+
+    if !member.dependencies.is_empty() {
+        let mut dependencies = toml::Table::new();
+        for (alias, effective) in &member.dependencies {
+            let (package, requirement) =
+                effective
+                    .dependency
+                    .publication_requirement()
+                    .map_err(|error| PackageError::InvalidDocument {
+                        document: MANIFEST_PATH,
+                        reason: format!("dependency `{alias}`: {error}"),
+                    })?;
+            let mut dependency = toml::Table::new();
+            dependency.insert(
+                "package".to_owned(),
+                toml::Value::String(package.to_string()),
+            );
+            dependency.insert(
+                "version".to_owned(),
+                toml::Value::String(requirement.to_string()),
+            );
+            dependencies.insert(alias.to_string(), toml::Value::Table(dependency));
+        }
+        root.insert("dependencies".to_owned(), toml::Value::Table(dependencies));
+    }
+
+    let rendered = toml::to_string(&root).map_err(|error| PackageError::InvalidDocument {
+        document: MANIFEST_PATH,
+        reason: error.to_string(),
+    })?;
+    crate::manifest::parse_manifest(&rendered).map_err(|error| PackageError::InvalidDocument {
+        document: MANIFEST_PATH,
+        reason: error.to_string(),
+    })?;
+    Ok(rendered)
+}
+
+/// Construct the canonical archive-independent release semantics for a clean package.
+pub(crate) fn semantic_release_manifest(
+    member: &WorkspaceMember,
+    release: MusubiReleaseIdV1,
+    verification_lock: &MusubiVerificationLockV1,
+    interface_digest: MusubiContentDigestV1,
+) -> Result<MusubiSemanticReleaseManifestV1, PackageError> {
+    if release != verification_lock.root
+        || release.package.name != member.package.selector.name
+        || release.version != member.package.version
+    {
+        return Err(PackageError::InvalidBundleBinding(
+            "workspace package, release root, and verification lock disagree".to_owned(),
+        ));
+    }
+    let description = member
+        .package
+        .description
+        .as_deref()
+        .map(MusubiDescriptionV1::new)
+        .transpose()
+        .map_err(bundle_parse_error)?;
+    let readme = member
+        .package
+        .readme
+        .as_ref()
+        .map(|value| MusubiDocumentRefV1::new(value.as_str()))
+        .transpose()
+        .map_err(bundle_parse_error)?;
+    let license_text = member.package.license.as_deref().or_else(|| {
+        member
+            .package
+            .license_file
+            .as_ref()
+            .map(crate::manifest::PortablePath::as_str)
+    });
+    let license = license_text
+        .map(MusubiDocumentRefV1::new)
+        .transpose()
+        .map_err(bundle_parse_error)?;
+    let repository = member
+        .package
+        .repository
+        .as_deref()
+        .map(MusubiDocumentRefV1::new)
+        .transpose()
+        .map_err(bundle_parse_error)?;
+    let keywords = member
+        .package
+        .keywords
+        .iter()
+        .map(|keyword| keyword.parse::<MusubiKeywordV1>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(bundle_parse_error)?;
+    let dependencies = verification_lock
+        .root_dependencies
+        .iter()
+        .map(|edge| MusubiDependencyReqV1 {
+            alias: edge.alias.clone(),
+            package: edge.package.clone(),
+            requirement: edge.requirement.clone(),
+        })
+        .collect();
+    let exports = member
+        .manifest
+        .library
+        .as_ref()
+        .expect("loaded package members always have a library")
+        .exports
+        .clone();
+    let mut semantic = MusubiSemanticReleaseManifestV1 {
+        release,
+        edition: member.package.edition,
+        abi: MusubiAbiBindingV1::new(compute_abi_hash(SyscallPolicy::AbiV1))
+            .map_err(bundle_parse_error)?,
+        dependencies,
+        exports,
+        interface_digest,
+        metadata: MusubiReleaseMetadataV1 {
+            description,
+            readme,
+            license,
+            repository,
+            keywords,
+        },
+        verification_lock_digest: verification_lock.digest(),
+    };
+    semantic.canonicalize();
+    semantic.validate().map_err(bundle_parse_error)?;
+    Ok(semantic)
+}
+
+/// Bind clean bundle semantics and an exact verification graph to one immutable archive.
+pub(crate) fn publication_claim(
+    semantic: &MusubiSemanticReleaseManifestV1,
+    archive: &MusubiArchiveCommitmentV1,
+    snapshot: MusubiRegistrySnapshotV1,
+    verification_lock: MusubiVerificationLockV1,
+) -> Result<MusubiPublicationV1, PackageError> {
+    semantic
+        .validate()
+        .map_err(|error| PackageError::InvalidBundleBinding(error.to_string()))?;
+    archive
+        .validate()
+        .map_err(|error| PackageError::InvalidBundleBinding(error.to_string()))?;
+    let manifest = MusubiReleaseManifestV1 {
+        release: semantic.release.clone(),
+        edition: semantic.edition,
+        abi: semantic.abi,
+        dependencies: semantic.dependencies.clone(),
+        exports: semantic.exports.clone(),
+        interface_digest: semantic.interface_digest,
+        metadata: semantic.metadata.clone(),
+        archive_id: archive.archive_id(),
+        verification_lock_digest: semantic.verification_lock_digest,
+    };
+    let publication = MusubiPublicationV1 {
+        manifest,
+        resolution: MusubiResolutionProofV1 {
+            snapshot,
+            lock: verification_lock,
+        },
+    };
+    publication
+        .validate()
+        .map_err(|error| PackageError::InvalidBundleBinding(error.to_string()))?;
+    if publication.manifest.semantic_manifest() != *semantic {
+        return Err(PackageError::InvalidBundleBinding(
+            "registry release changed the packaged semantic manifest".to_owned(),
+        ));
+    }
+    Ok(publication)
+}
+
+fn bundle_parse_error(error: iroha_data_model::ParseError) -> PackageError {
+    PackageError::InvalidBundleBinding(error.to_string())
+}
+
+fn insert_optional_string(table: &mut toml::Table, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        table.insert(key.to_owned(), toml::Value::String(value.to_owned()));
+    }
+}
+
+fn insert_optional_path(
+    table: &mut toml::Table,
+    key: &str,
+    value: Option<&crate::manifest::PortablePath>,
+) {
+    if let Some(value) = value {
+        table.insert(key.to_owned(), toml::Value::String(value.to_string()));
+    }
+}
+
+fn insert_targets(root: &mut toml::Table, key: &str, targets: &[crate::manifest::LocalTarget]) {
+    if targets.is_empty() {
+        return;
+    }
+    root.insert(
+        key.to_owned(),
+        toml::Value::Array(
+            targets
+                .iter()
+                .map(|target| {
+                    let mut table = toml::Table::new();
+                    table.insert(
+                        "name".to_owned(),
+                        toml::Value::String(target.name.to_string()),
+                    );
+                    table.insert(
+                        "path".to_owned(),
+                        toml::Value::String(target.path.to_string()),
+                    );
+                    toml::Value::Table(table)
+                })
+                .collect(),
+        ),
+    );
 }
 
 fn canonicalize_toml(
@@ -737,7 +1218,7 @@ fn canonicalize_toml(
     Ok((table, output.into_bytes()))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectionShape {
     File,
     Directory,
@@ -1213,7 +1694,7 @@ fn is_fixed_generated_file(path: &Path) -> bool {
     matches!(path.to_str(), Some(MANIFEST_PATH | VERIFICATION_LOCK_PATH))
 }
 
-fn is_excluded_directory(component: &str) -> bool {
+pub(crate) fn is_excluded_directory(component: &str) -> bool {
     matches!(
         component.to_ascii_lowercase().as_str(),
         ".git"
@@ -1235,7 +1716,7 @@ fn is_excluded_directory(component: &str) -> bool {
     )
 }
 
-fn is_sensitive_component(component: &str) -> bool {
+pub(crate) fn is_sensitive_component(component: &str) -> bool {
     let lower = component.to_ascii_lowercase();
     lower == ".env"
         || lower.starts_with(".env.")
@@ -1590,6 +2071,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::workspace::load_workspace;
 
     const MANIFEST: &str = r#"
 manifest-version = 1
@@ -1645,7 +2127,8 @@ packages = []
         fs::write(temp.path().join("src/a.ko"), b"a").expect("a");
         fs::write(temp.path().join("undeclared-secret.txt"), b"do not scan").expect("extra");
 
-        let plan = plan_package(&base_layout(temp.path()), MANIFEST, LOCK).expect("plan");
+        let plan =
+            plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1).expect("plan");
         let paths = plan
             .files()
             .iter()
@@ -1668,14 +2151,16 @@ packages = []
         let mut layout = base_layout(temp.path());
         layout.add_include(".");
 
-        let plan = plan_package(&layout, MANIFEST, LOCK).expect("plan");
+        let plan = plan_package(&layout, MANIFEST, &semantic_release().1).expect("plan");
         assert_eq!(
             plan.canonical_manifest(),
             canonicalize_manifest_toml(MANIFEST).unwrap()
         );
         assert_eq!(
             plan.verification_lock(),
-            normalize_verification_lock_toml(LOCK).unwrap()
+            render_verification_lock(&semantic_release().1)
+                .expect("render verification lock")
+                .as_bytes()
         );
     }
 
@@ -1703,12 +2188,223 @@ packages = []
     }
 
     #[test]
+    fn workspace_publication_manifest_resolves_inheritance_and_removes_local_state() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join("app/src")).expect("app source");
+        fs::create_dir_all(temp.path().join("dep/src")).expect("dep source");
+        fs::create_dir_all(temp.path().join("shared")).expect("shared include");
+        fs::write(temp.path().join("README.md"), "workspace readme").expect("readme");
+        fs::write(temp.path().join("shared/note.txt"), "included").expect("include");
+        fs::write(temp.path().join("app/src/lib.ko"), "module App {}").expect("app module");
+        fs::write(temp.path().join("dep/src/lib.ko"), "module Dep {}").expect("dep module");
+        fs::write(
+            temp.path().join("Musubi.toml"),
+            r#"manifest-version = 1
+[workspace]
+members = ["app", "dep"]
+[workspace.package]
+namespace = "apps.sora"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+readme = "README.md"
+include = ["shared"]
+"#,
+        )
+        .expect("workspace manifest");
+        fs::write(
+            temp.path().join("app/Musubi.toml"),
+            r#"manifest-version = 1
+[package]
+namespace = { workspace = true }
+name = "app"
+version = { workspace = true }
+edition = { workspace = true }
+abi-version = { workspace = true }
+readme = { workspace = true }
+include = { workspace = true }
+[lib]
+exports = []
+[dependencies]
+dep = { path = "../dep", package = "libs.sora/dep", version = "^1.0.0" }
+[dev-dependencies]
+test-kit = { package = "libs.sora/test-kit", version = "^1.0.0" }
+"#,
+        )
+        .expect("app manifest");
+        fs::write(
+            temp.path().join("dep/Musubi.toml"),
+            r#"manifest-version = 1
+[package]
+namespace = "libs.sora"
+name = "dep"
+version = "1.2.0"
+edition = "1"
+abi-version = 1
+[lib]
+exports = []
+"#,
+        )
+        .expect("dep manifest");
+
+        let workspace = load_workspace(&temp.path().join("app")).expect("workspace");
+        let member = workspace
+            .members()
+            .values()
+            .find(|member| member.package.selector.to_string() == "apps.sora/app")
+            .expect("app member");
+        let rendered = publication_manifest_toml(member).expect("publication manifest");
+        let manifest = crate::manifest::parse_manifest(&rendered).expect("strict clean manifest");
+        assert!(manifest.workspace.is_none());
+        assert!(manifest.dev_dependencies.is_empty());
+        let dependency_alias: iroha_data_model::name::Name =
+            "dep".parse().expect("dependency alias");
+        assert!(matches!(
+            &manifest.dependencies[&dependency_alias],
+            crate::manifest::DependencySpec::Concrete(
+                crate::manifest::ConcreteDependency::Registry { .. }
+            )
+        ));
+        let clean_package = manifest.resolve_package(None).expect("concrete package");
+        assert_eq!(
+            clean_package
+                .readme
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("README.md")
+        );
+        assert_eq!(
+            clean_package
+                .include
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["shared"]
+        );
+
+        let layout = package_layout_for_member(workspace.root(), member);
+        let plan = plan_package(&layout, &rendered, &semantic_release().1).expect("package plan");
+        let paths = plan
+            .files()
+            .iter()
+            .map(PlannedFile::path)
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"README.md"));
+        assert!(paths.contains(&"shared/note.txt"));
+        assert!(paths.contains(&"src/lib.ko"));
+    }
+
+    #[test]
+    fn publication_manifest_rejects_local_only_normal_path_dependencies() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join("app/src")).expect("app source");
+        fs::create_dir_all(temp.path().join("dep/src")).expect("dep source");
+        fs::write(temp.path().join("app/src/lib.ko"), "module App {}").expect("app module");
+        fs::write(temp.path().join("dep/src/lib.ko"), "module Dep {}").expect("dep module");
+        fs::write(
+            temp.path().join("Musubi.toml"),
+            r#"manifest-version = 1
+[workspace]
+members = ["app", "dep"]
+"#,
+        )
+        .expect("workspace manifest");
+        fs::write(
+            temp.path().join("app/Musubi.toml"),
+            r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "app"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+exports = []
+[dependencies]
+dep = { path = "../dep" }
+"#,
+        )
+        .expect("app manifest");
+        fs::write(
+            temp.path().join("dep/Musubi.toml"),
+            r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "dep"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+exports = []
+"#,
+        )
+        .expect("dep manifest");
+        let workspace = load_workspace(&temp.path().join("app")).expect("workspace");
+        let member = workspace
+            .members()
+            .values()
+            .find(|member| member.package.selector.to_string() == "apps.sora/app")
+            .expect("app member");
+        assert!(matches!(
+            publication_manifest_toml(member),
+            Err(PackageError::InvalidDocument { reason, .. })
+                if reason.contains("publishable normal path dependency")
+        ));
+    }
+
+    #[test]
+    fn semantic_release_manifest_binds_typed_interface_and_metadata() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join("src")).expect("source");
+        fs::write(temp.path().join("src/lib.ko"), "module Demo {}").expect("module");
+        fs::write(temp.path().join("README.md"), "readme").expect("readme");
+        fs::write(
+            temp.path().join("Musubi.toml"),
+            r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+description = "Typed package"
+readme = "README.md"
+license = "Apache-2.0"
+repository = "https://example.com/musubi"
+keywords = ["contracts", "typed"]
+[lib]
+exports = []
+"#,
+        )
+        .expect("manifest");
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        let member = workspace.members().values().next().expect("member");
+        let (_, lock) = semantic_release();
+        let interface = MusubiContentDigestV1::new([42; 32]);
+        let semantic = semantic_release_manifest(member, lock.root.clone(), &lock, interface)
+            .expect("semantic release");
+        assert_eq!(semantic.interface_digest, interface);
+        assert_eq!(
+            semantic
+                .metadata
+                .description
+                .as_ref()
+                .map(MusubiDescriptionV1::as_str),
+            Some("Typed package")
+        );
+        assert_eq!(semantic.metadata.keywords.len(), 2);
+        assert_eq!(semantic.verification_lock_digest, lock.digest());
+    }
+
+    #[test]
     fn excludes_generated_roots_but_rejects_explicit_selection() {
         let temp = tempdir().expect("tempdir");
         fs::create_dir_all(temp.path().join("src/target")).expect("target");
         fs::write(temp.path().join("src/target/generated.ko"), b"generated").expect("generated");
         fs::write(temp.path().join("src/lib.ko"), b"source").expect("source");
-        let plan = plan_package(&base_layout(temp.path()), MANIFEST, LOCK).expect("plan");
+        let plan =
+            plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1).expect("plan");
         assert!(
             !plan
                 .files()
@@ -1719,7 +2415,7 @@ packages = []
         let mut explicit = PackageLayout::new(temp.path());
         explicit.add_include("src/target");
         assert!(matches!(
-            plan_package(&explicit, MANIFEST, LOCK),
+            plan_package(&explicit, MANIFEST, &semantic_release().1),
             Err(PackageError::ExcludedPath(_))
         ));
     }
@@ -1730,21 +2426,21 @@ packages = []
         let mut traversal = PackageLayout::new(temp.path());
         traversal.add_include("../outside");
         assert!(matches!(
-            plan_package(&traversal, MANIFEST, LOCK),
+            plan_package(&traversal, MANIFEST, &semantic_release().1),
             Err(PackageError::InvalidSelector(_))
         ));
 
         let mut absolute = PackageLayout::new(temp.path());
         absolute.add_include(temp.path());
         assert!(matches!(
-            plan_package(&absolute, MANIFEST, LOCK),
+            plan_package(&absolute, MANIFEST, &semantic_release().1),
             Err(PackageError::InvalidSelector(_))
         ));
 
         fs::create_dir(temp.path().join("src")).expect("src");
         fs::write(temp.path().join("src/CON.ko"), b"reserved").expect("reserved");
         assert!(matches!(
-            plan_package(&base_layout(temp.path()), MANIFEST, LOCK),
+            plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1),
             Err(PackageError::NonPortablePath(_))
         ));
     }
@@ -1780,7 +2476,8 @@ packages = []
         let temp = tempdir().expect("tempdir");
         fs::create_dir(temp.path().join("src")).expect("src");
         fs::write(temp.path().join("src/cafe\u{301}.ko"), b"source").expect("source");
-        let plan = plan_package(&base_layout(temp.path()), MANIFEST, LOCK).expect("plan");
+        let plan =
+            plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1).expect("plan");
         assert!(
             plan.files()
                 .iter()
@@ -1794,7 +2491,11 @@ packages = []
         fs::create_dir(path_case.path().join("src")).expect("src");
         fs::write(path_case.path().join("src/id_ed25519"), b"secret").expect("key");
         assert!(matches!(
-            plan_package(&base_layout(path_case.path()), MANIFEST, LOCK),
+            plan_package(
+                &base_layout(path_case.path()),
+                MANIFEST,
+                &semantic_release().1
+            ),
             Err(PackageError::SensitivePath(_))
         ));
 
@@ -1805,8 +2506,12 @@ packages = []
             b"-----BEGIN PRIVATE KEY-----\nvery-secret-value",
         )
         .expect("source");
-        let error = plan_package(&base_layout(content_case.path()), MANIFEST, LOCK)
-            .expect_err("private key must fail");
+        let error = plan_package(
+            &base_layout(content_case.path()),
+            MANIFEST,
+            &semantic_release().1,
+        )
+        .expect_err("private key must fail");
         assert!(matches!(error, PackageError::SensitiveContent { .. }));
         assert!(!error.to_string().contains("very-secret-value"));
     }
@@ -1824,7 +2529,11 @@ packages = []
         fs::write(symlinks.path().join("outside.ko"), b"outside").expect("outside");
         symlink("../outside.ko", symlinks.path().join("src/link.ko")).expect("symlink");
         assert!(matches!(
-            plan_package(&base_layout(symlinks.path()), MANIFEST, LOCK),
+            plan_package(
+                &base_layout(symlinks.path()),
+                MANIFEST,
+                &semantic_release().1
+            ),
             Err(PackageError::Symlink(_))
         ));
 
@@ -1837,7 +2546,11 @@ packages = []
         )
         .expect("hardlink");
         assert!(matches!(
-            plan_package(&base_layout(hardlinks.path()), MANIFEST, LOCK),
+            plan_package(
+                &base_layout(hardlinks.path()),
+                MANIFEST,
+                &semantic_release().1
+            ),
             Err(PackageError::Hardlink(_))
         ));
 
@@ -1845,7 +2558,11 @@ packages = []
         fs::create_dir(special.path().join("src")).expect("src");
         let _socket = UnixListener::bind(special.path().join("src/socket")).expect("socket");
         assert!(matches!(
-            plan_package(&base_layout(special.path()), MANIFEST, LOCK),
+            plan_package(
+                &base_layout(special.path()),
+                MANIFEST,
+                &semantic_release().1
+            ),
             Err(PackageError::SpecialFile(_))
         ));
 
@@ -1865,7 +2582,11 @@ packages = []
             return;
         }
         assert!(matches!(
-            plan_package(&base_layout(non_utf8.path()), MANIFEST, LOCK),
+            plan_package(
+                &base_layout(non_utf8.path()),
+                MANIFEST,
+                &semantic_release().1
+            ),
             Err(PackageError::NonPortablePath(_))
         ));
     }
@@ -1882,9 +2603,10 @@ packages = []
         fs::write(right.path().join("src/a.ko"), b"a").expect("a");
         fs::write(right.path().join("src/b.ko"), b"b").expect("b");
 
-        let left_plan = plan_package(&base_layout(left.path()), MANIFEST, LOCK).expect("left plan");
-        let right_plan =
-            plan_package(&base_layout(right.path()), MANIFEST, LOCK).expect("right plan");
+        let left_plan = plan_package(&base_layout(left.path()), MANIFEST, &semantic_release().1)
+            .expect("left plan");
+        let right_plan = plan_package(&base_layout(right.path()), MANIFEST, &semantic_release().1)
+            .expect("right plan");
         let (semantic, lock) = semantic_release();
         let left_commitments = left_plan
             .commitment_materials(&semantic, &lock)
@@ -1939,6 +2661,37 @@ packages = []
         );
         assert!(left_car.bytes().len() as u64 <= MAX_CAR_BYTES);
         assert!(left_car.plan().chunks.len() <= MAX_SOURCE_CHUNKS);
+        let left_archive = left_car
+            .archive_commitment()
+            .expect("left archive commitment");
+        let right_archive = right_car
+            .archive_commitment()
+            .expect("right archive commitment");
+        assert_eq!(left_archive, right_archive);
+        assert_eq!(left_archive.file_count, 4);
+        assert_eq!(
+            usize::try_from(left_archive.chunk_count).expect("chunk count fits usize"),
+            left_car.plan().chunks.len()
+        );
+        assert_eq!(left_archive.archive_id(), right_archive.archive_id());
+        assert_eq!(
+            left_archive.car_digest.as_bytes(),
+            left_car.stats().car_archive_digest.as_bytes()
+        );
+        let publication = publication_claim(
+            &semantic,
+            &left_archive,
+            MusubiRegistrySnapshotV1 {
+                finalized_height: 10,
+                finalized_block_hash: [7; 32],
+                index_revision: 3,
+            },
+            lock,
+        )
+        .expect("archive-bound publication claim");
+        assert_eq!(publication.manifest.archive_id, left_archive.archive_id());
+        assert_eq!(publication.manifest.semantic_manifest(), semantic);
+        assert!(!publication.manifest.release_digest().is_zero());
     }
 
     #[test]
@@ -1946,12 +2699,35 @@ packages = []
         let temp = tempdir().expect("tempdir");
         fs::create_dir(temp.path().join("src")).expect("src");
         fs::write(temp.path().join("src/lib.ko"), b"fn demo() {}").expect("source");
-        let plan = plan_package(&base_layout(temp.path()), MANIFEST, LOCK).expect("plan");
+        let plan =
+            plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1).expect("plan");
         let (semantic, mut lock) = semantic_release();
         lock.version = 2;
         assert!(matches!(
             plan.commitment_materials(&semantic, &lock),
             Err(PackageError::InvalidBundleBinding(_))
+        ));
+    }
+
+    #[test]
+    fn semantic_bundle_rejects_two_individually_valid_lock_representations() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir(temp.path().join("src")).expect("src");
+        fs::write(temp.path().join("src/lib.ko"), b"fn demo() {}").expect("source");
+        let (original_semantic, original_lock) = semantic_release();
+        let plan = plan_package(&base_layout(temp.path()), MANIFEST, &original_lock).expect("plan");
+
+        let mut different_lock = original_lock;
+        different_lock.root.version = "1.0.1".parse().expect("different version");
+        let mut different_semantic = original_semantic;
+        different_semantic.release = different_lock.root.clone();
+        different_semantic.verification_lock_digest = different_lock.digest();
+        assert!(different_lock.validate().is_ok());
+        assert!(different_semantic.validate().is_ok());
+        assert!(matches!(
+            plan.commitment_materials(&different_semantic, &different_lock),
+            Err(PackageError::InvalidBundleBinding(reason))
+                if reason.contains("source-tree and typed verification locks")
         ));
     }
 

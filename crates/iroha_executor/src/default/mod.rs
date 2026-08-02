@@ -18,9 +18,8 @@ pub use asset::{
 /// Re-export asset-definition visitor helpers used by the default executor.
 pub use asset_definition::{
     visit_register_asset_definition, visit_remove_asset_definition_key_value,
-    visit_set_asset_definition_alias, visit_set_asset_definition_balance_policy,
-    visit_set_asset_definition_key_value, visit_transfer_asset_definition,
-    visit_unregister_asset_definition,
+    visit_set_asset_definition_alias, visit_set_asset_definition_key_value,
+    visit_transfer_asset_definition, visit_unregister_asset_definition,
 };
 /// Re-export bridge visitor helpers.
 pub use bridge::{visit_apply_sccp_route_governance, visit_record_bridge_receipt};
@@ -66,7 +65,7 @@ use iroha_smart_contract::data_model::{
             CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
             RebindAccountAlias, RenewAliasLease,
         },
-        asset_alias::{SetAssetDefinitionAlias, SetAssetDefinitionBalancePolicy},
+        asset_alias::SetAssetDefinitionAlias,
         bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
@@ -166,6 +165,48 @@ use crate::{
     Execute, deny, execute,
     permission::{AnyPermission, ExecutorPermission as _},
 };
+
+fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
+    const MULTISIG_SIGNATORY_NAMESPACE: &str = "MULTISIG_SIGNATORY";
+
+    let name = role_id.name().as_ref();
+    name == MULTISIG_SIGNATORY_NAMESPACE
+        || name
+            .strip_prefix(MULTISIG_SIGNATORY_NAMESPACE)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+#[cfg(test)]
+mod multisig_role_namespace_tests {
+    use super::*;
+
+    #[test]
+    fn reservation_is_exact_and_does_not_parse_process_local_addresses() {
+        for name in [
+            "MULTISIG_SIGNATORY",
+            "MULTISIG_SIGNATORY/domain/address",
+            "MULTISIG_SIGNATORY//opaque",
+        ] {
+            let role_id: RoleId = name.parse().expect("valid reserved role id");
+            assert!(
+                is_reserved_multisig_role_id(&role_id),
+                "must reserve {name}"
+            );
+        }
+
+        for name in [
+            "MULTISIG_SIGNATORY_ADJACENT",
+            "MULTISIG_SIGNATORY2/domain/address",
+            "ordinary-role",
+        ] {
+            let role_id: RoleId = name.parse().expect("valid ordinary role id");
+            assert!(
+                !is_reserved_multisig_role_id(&role_id),
+                "must not reserve {name}"
+            );
+        }
+    }
+}
 
 /// Helpers shared by custom instruction integrations.
 pub mod isi;
@@ -487,9 +528,13 @@ mod contract_deployment_bootstrap_tests {
     fn contract_lifecycle_instructions_reach_core_dispatch() {
         let authority = account(1);
         let code_hash = Hash::new(b"executor lifecycle dispatch code");
-        let contract_address =
-            ContractAddress::derive(0x1234, &authority, 7, DataSpaceId::UNIVERSAL)
-                .expect("contract address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let instructions: Vec<InstructionBox> = vec![
             RegisterSmartContractCode {
                 manifest: manifest(),
@@ -663,7 +708,7 @@ mod contract_deployment_bootstrap_tests {
             CommitContractDeployment {
                 expected_deploy_nonce: 0,
                 contract_address: ContractAddress::derive(
-                    0x1234,
+                    &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                     &authority,
                     0,
                     DataSpaceId::UNIVERSAL,
@@ -1019,10 +1064,6 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<SetAssetDefinitionAlias>() {
             asset_definition::visit_set_asset_definition_alias(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<SetAssetDefinitionBalancePolicy>() {
-            asset_definition::visit_set_asset_definition_balance_policy(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetAssetTransferAvailability>() {
@@ -1547,7 +1588,7 @@ mod core_authorization_dispatch_tests {
     }
 
     fn asset(domain: &str, name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("valid FX asset domain"),
             name.parse().expect("valid FX asset name"),
         )
@@ -3111,8 +3152,13 @@ pub mod domain {
                     .is_owned_by(&executor.context().authority, executor.host())
             }
         {
+            let domain_asset_definition_ids =
+                match asset_definition_ids_owned_by_domain(executor.host(), domain_id) {
+                    Ok(ids) => ids,
+                    Err(err) => deny!(executor, err),
+                };
             let err = revoke_permissions(executor, |permission| {
-                is_permission_domain_associated(permission, domain_id)
+                is_permission_domain_associated(permission, domain_id, &domain_asset_definition_ids)
             });
             if let Err(err) = err {
                 deny!(executor, err);
@@ -3200,16 +3246,31 @@ pub mod domain {
         deny!(executor, "Can't remove key value in domain metadata");
     }
 
+    fn asset_definition_ids_owned_by_domain(
+        host: &Iroha,
+        domain_id: &DomainId,
+    ) -> Result<Vec<AssetDefinitionId>> {
+        let mut ids = Vec::new();
+        for result in host.query(FindAssetsDefinitions).execute()? {
+            let definition = result?;
+            if definition.owning_domain().as_ref() == Some(domain_id) {
+                ids.push(definition.id().clone());
+            }
+        }
+        Ok(ids)
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn is_permission_domain_associated(
         permission: &Permission,
         domain_id: &DomainId,
+        asset_definition_ids: &[AssetDefinitionId],
     ) -> bool {
         let Ok(permission) = AnyPermission::try_from(permission) else {
             return false;
         };
         let asset_definition_matches_domain =
-            |definition: &AssetDefinitionId| definition.try_domain() == Some(domain_id);
+            |definition: &AssetDefinitionId| asset_definition_ids.contains(definition);
         match permission {
             AnyPermission::CanUnregisterDomain(permission) => &permission.domain == domain_id,
             AnyPermission::CanModifyDomainMetadata(permission) => &permission.domain == domain_id,
@@ -3681,7 +3742,8 @@ pub mod asset_definition {
 
     use super::*;
     use crate::permission::{
-        account::is_account_owner, asset_definition::is_asset_definition_owner, revoke_permissions,
+        account::is_account_owner, asset_definition::is_asset_definition_owner,
+        domain::is_domain_owner, revoke_permissions,
     };
 
     /// Registers an asset definition.
@@ -3689,7 +3751,21 @@ pub mod asset_definition {
         executor: &mut V,
         isi: &Register<AssetDefinition>,
     ) {
-        execute!(executor, isi);
+        let Some(domain_id) = isi.object().owning_domain.as_ref() else {
+            execute!(executor, isi);
+        };
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_domain_owner(domain_id, &executor.context().authority, executor.host()) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+        deny!(
+            executor,
+            "Only the owning-domain owner may register a domain-owned asset definition"
+        );
     }
 
     /// Unregisters an asset definition after confirming ownership or revoke permission.
@@ -3839,29 +3915,6 @@ pub mod asset_definition {
         deny!(
             executor,
             "Only the asset-definition owner may change its alias"
-        );
-    }
-
-    /// Updates balance partitioning when genesis or the definition owner invokes it.
-    pub fn visit_set_asset_definition_balance_policy<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SetAssetDefinitionBalancePolicy,
-    ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        match is_asset_definition_owner(
-            &isi.asset_definition_id,
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
-        deny!(
-            executor,
-            "Only the asset-definition owner may change its balance policy"
         );
     }
 
@@ -4412,7 +4465,7 @@ pub mod asset {
                     DomainId::try_new("test_domain", "universal").expect("valid domain");
                 let keypair = fixture_key_pair_from_height(height);
                 let account = AccountId::new(keypair.public_key().clone());
-                let asset_definition = AssetDefinitionId::new(
+                let asset_definition = AssetDefinitionId::derive_from_components(
                     domain.clone(),
                     "sample_asset".parse::<Name>().expect("valid name"),
                 );
@@ -4618,10 +4671,14 @@ pub mod asset {
                 DomainId::try_new("wonderland", "universal").expect("valid domain");
             let counterparty_keypair = fixture_key_pair(9);
             let counterparty = AccountId::new(counterparty_keypair.public_key().clone());
-            let cash_def =
-                AssetDefinitionId::new(domain.clone(), "cash".parse::<Name>().expect("valid name"));
-            let collateral_def =
-                AssetDefinitionId::new(domain, "collateral".parse::<Name>().expect("valid name"));
+            let cash_def = AssetDefinitionId::derive_from_components(
+                domain.clone(),
+                "cash".parse::<Name>().expect("valid name"),
+            );
+            let collateral_def = AssetDefinitionId::derive_from_components(
+                domain,
+                "collateral".parse::<Name>().expect("valid name"),
+            );
             let agreement_id: RepoAgreementId = "repo_dispatch".parse().expect("repo id");
             let repo_instruction = RepoIsi::new(
                 agreement_id,
@@ -5108,38 +5165,11 @@ pub mod role {
         let grant_role = &Grant::account_role(role.id().clone(), role.grant_to().clone());
         let mut new_role = Role::new(role.id().clone(), role.grant_to().clone());
 
-        // Exception for multisig roles
-        {
-            use crate::permission::domain::is_domain_owner;
-
-            const DELIMITER: char = '/';
-            const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
-
-            fn multisig_home_domain_from(role: &RoleId) -> Option<DomainId> {
-                role.name()
-                    .as_ref()
-                    .strip_prefix(&format!("{MULTISIG_SIGNATORY}{DELIMITER}"))?
-                    .split_once(DELIMITER)
-                    .and_then(|(domain, _)| DomainId::parse_fully_qualified(domain).ok())
-            }
-
-            if role.id().name().as_ref().starts_with(MULTISIG_SIGNATORY) {
-                let Some(home_domain) = multisig_home_domain_from(role.id()) else {
-                    deny!(executor, "violates multisig role name format")
-                };
-                if is_domain_owner(&home_domain, &executor.context().authority, executor.host())
-                    .unwrap_or_default()
-                {
-                    deny!(
-                        executor,
-                        "reserved multisig role names may not be registered"
-                    );
-                }
-                deny!(
-                    executor,
-                    "only the domain owner can register multisig roles"
-                )
-            }
+        if is_reserved_multisig_role_id(role.id()) {
+            deny!(
+                executor,
+                "reserved multisig role names may not be registered"
+            );
         }
 
         let permissions = match validated_role_registration_permissions(
@@ -5530,7 +5560,10 @@ pub mod trigger {
                 AccountAliasPermissionScope, CanDelegateAccountAliasResolution,
                 CanManageAccountAlias, CanResolveAccountAlias,
             },
-            asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
+            asset::{
+                CanMintAssetWithDefinition, CanModifyAssetMetadata,
+                CanModifyAssetMetadataWithDefinition,
+            },
             nexus::{
                 CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
                 CanPublishSpaceDirectoryManifestForAccountDomain, CanWithdrawFeeSponsorProgram,
@@ -5605,7 +5638,7 @@ pub mod trigger {
                 TriggerId::from_str("metadata_cleanup").expect("trigger id must be valid");
             let domain_id =
                 DomainId::try_new("test", "universal").expect("domain id must be valid");
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("test", "universal").unwrap(),
                 "token".parse().unwrap(),
             );
@@ -5650,7 +5683,7 @@ pub mod trigger {
             let domain_id =
                 DomainId::try_new("test", "universal").expect("domain id must be valid");
             let account_id = sample_account_id(0x12, &domain_id);
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("test", "universal").unwrap(),
                 "token".parse().unwrap(),
             );
@@ -5658,7 +5691,7 @@ pub mod trigger {
             for permission in sora_permissions() {
                 let permission = Permission::from(permission);
                 assert!(
-                    !domain::is_permission_domain_associated(&permission, &domain_id),
+                    !domain::is_permission_domain_associated(&permission, &domain_id, &[]),
                     "Sora-specific permissions must not bind to domains"
                 );
                 assert!(
@@ -5683,7 +5716,7 @@ pub mod trigger {
             let other_account = sample_account_id(0x22, &domain_id);
             let other_domain =
                 DomainId::try_new("other", "universal").expect("domain id must be valid");
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("test", "universal").unwrap(),
                 "token".parse().unwrap(),
             );
@@ -5715,11 +5748,13 @@ pub mod trigger {
             for permission in permissions {
                 assert!(!domain::is_permission_domain_associated(
                     &permission,
-                    &domain_id
+                    &domain_id,
+                    &[]
                 ));
                 assert!(!domain::is_permission_domain_associated(
                     &permission,
-                    &other_domain
+                    &other_domain,
+                    &[]
                 ));
                 assert!(account::is_permission_account_associated(
                     &permission,
@@ -5756,11 +5791,13 @@ pub mod trigger {
             );
             assert!(domain::is_permission_domain_associated(
                 &publisher,
-                &hbl_domain
+                &hbl_domain,
+                &[]
             ));
             assert!(!domain::is_permission_domain_associated(
                 &publisher,
-                &ubl_domain
+                &ubl_domain,
+                &[]
             ));
 
             let enrollment = Permission::from(AnyPermission::CanEnrollFeeSponsorProgram(
@@ -5773,7 +5810,8 @@ pub mod trigger {
             ));
             assert!(!domain::is_permission_domain_associated(
                 &enrollment,
-                &hbl_domain
+                &hbl_domain,
+                &[]
             ));
             assert!(account::is_permission_account_associated(
                 &enrollment,
@@ -5782,6 +5820,32 @@ pub mod trigger {
             assert!(!account::is_permission_account_associated(
                 &enrollment,
                 &unrelated
+            ));
+        }
+
+        #[test]
+        fn asset_permission_domain_association_uses_authoritative_ownership_set() {
+            let domain_id = DomainId::try_new("issuer", "universal").expect("domain id");
+            let other_domain = DomainId::try_new("other", "universal").expect("domain id");
+            let definition_id = AssetDefinitionId::derive_from_components(
+                other_domain,
+                "token".parse().expect("asset name"),
+            );
+            let permission = Permission::from(AnyPermission::CanMintAssetWithDefinition(
+                CanMintAssetWithDefinition {
+                    asset_definition: definition_id.clone(),
+                },
+            ));
+
+            assert!(domain::is_permission_domain_associated(
+                &permission,
+                &domain_id,
+                core::slice::from_ref(&definition_id),
+            ));
+            assert!(!domain::is_permission_domain_associated(
+                &permission,
+                &domain_id,
+                &[],
             ));
         }
 
@@ -5810,27 +5874,27 @@ pub mod trigger {
             ));
 
             assert!(
-                domain::is_permission_domain_associated(&resolve_permission, &domain_id),
+                domain::is_permission_domain_associated(&resolve_permission, &domain_id, &[]),
                 "alias resolve permission should bind to the matching domain"
             );
             assert!(
-                !domain::is_permission_domain_associated(&resolve_permission, &other_domain),
+                !domain::is_permission_domain_associated(&resolve_permission, &other_domain, &[]),
                 "alias resolve permission should not bind to other domains"
             );
             assert!(
-                domain::is_permission_domain_associated(&delegate_permission, &domain_id),
+                domain::is_permission_domain_associated(&delegate_permission, &domain_id, &[]),
                 "alias resolve-delegation permission should bind to the matching domain"
             );
             assert!(
-                !domain::is_permission_domain_associated(&delegate_permission, &other_domain),
+                !domain::is_permission_domain_associated(&delegate_permission, &other_domain, &[]),
                 "alias resolve-delegation permission should not bind to other domains"
             );
             assert!(
-                domain::is_permission_domain_associated(&manage_permission, &domain_id),
+                domain::is_permission_domain_associated(&manage_permission, &domain_id, &[]),
                 "alias manage permission should bind to the matching domain"
             );
             assert!(
-                !domain::is_permission_domain_associated(&manage_permission, &other_domain),
+                !domain::is_permission_domain_associated(&manage_permission, &other_domain, &[]),
                 "alias manage permission should not bind to other domains"
             );
         }

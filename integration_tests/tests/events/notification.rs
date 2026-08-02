@@ -18,7 +18,7 @@ use tokio::{
 };
 
 async fn trigger_completion_success_should_produce_event_scenario(network: &Network) -> Result<()> {
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "rose".parse()?,
     );

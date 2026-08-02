@@ -5,9 +5,31 @@
 //! transparent commitments, projected norm witnesses, Schwartz compression,
 //! the generic quadratic linearization, ABDLOP response compression, strict
 //! proof construction, verifier-side challenge reconstruction, and prover
-//! self-verification.
+//! self-verification. It also owns the sealed two-pass presentation transaction
+//! builder so no proof, statement, genesis, policy, or intent binding can be
+//! replaced between proving and signing.
 
-use rand_core_06::{CryptoRng, RngCore};
+use core::{num::NonZeroU32, time::Duration};
+
+use iroha_crypto::{Hash, PrivateKey, PublicKey};
+use iroha_data_model::{
+    account::AccountId,
+    isi::privacy::SubmitPrivacyProofV1,
+    metadata::Metadata,
+    prelude::ChainId,
+    privacy::{
+        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
+        PRIVACY_MAX_CHAIN_ID_BYTES_V1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+    },
+    transaction::{
+        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
+        signed::TransactionSignatureError,
+    },
+};
+use rand_core_06::{CryptoRng, OsRng, RngCore};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -1415,10 +1437,1025 @@ pub enum PresentationProofErrorV1 {
 
 // INTEGER_ONLY_PROOF_PRODUCTION_END
 
+/// Sole privacy-action index in a canonical first-release Bootle/Lantern
+/// presentation transaction.
+pub const BOOTLE_LANTERN_PRESENTATION_PRIVACY_ACTION_INDEX_V1: u32 = 0;
+
+/// Exact signature-bound transaction fields for one direct Bootle/Lantern
+/// presentation.
+#[derive(Clone, Debug)]
+pub struct BootleLanternPresentationPrivacyActionTransactionContextV1 {
+    /// Exact chain identifier.
+    pub chain_id: ChainId,
+    /// Exact single-key transaction authority.
+    pub authority: AccountId,
+    /// Required creation time, resolved once before intent derivation.
+    pub creation_time: Duration,
+    /// Optional transaction TTL.
+    pub time_to_live: Option<Duration>,
+    /// Optional transaction nonce.
+    pub nonce: Option<NonZeroU32>,
+    /// Exact signature-bound fee payer and maxima.
+    pub fee_payment: FeePaymentIntent,
+    /// Exact transaction metadata.
+    pub metadata: Metadata,
+}
+
+/// Exact ledger effect certified by a first-release Bootle/Lantern
+/// presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootleLanternPresentationPrivacyActionEffectV1 {
+    /// Consensus verifies and finalizes the presentation without inferring a
+    /// balance, nullifier, or credential-registry mutation.
+    PresentationVerificationAndFinalityOnly,
+}
+
+/// Pure Bootle/Lantern proving output ready for transaction signing.
+///
+/// The final payload, canonical genesis binding, and exact governed issuer
+/// policy are private. This type deliberately implements neither `Clone` nor a
+/// serialization trait. Its only public production transition is the
+/// consuming [`sign_prepared_bootle_lantern_presentation_privacy_action_v1`]
+/// boundary.
+pub struct BootleLanternPreparedPresentationPrivacyActionV1 {
+    payload: TransactionPayload,
+    canonical_genesis_hash: [u8; 32],
+    issuer_policy: BootleLanternIssuerPolicyV1,
+    issuer_policy_hash: [u8; 32],
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+}
+
+impl core::fmt::Debug for BootleLanternPreparedPresentationPrivacyActionV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BootleLanternPreparedPresentationPrivacyActionV1")
+            .field("issuer_policy_hash", &self.issuer_policy_hash)
+            .field("transaction_intent_digest", &self.transaction_intent_digest)
+            .field("statement_digest", &self.statement_digest)
+            .field("proof_envelope_hash", &self.proof_envelope_hash)
+            .field("statement_bytes", &self.statement_bytes)
+            .field("proof_bytes", &self.proof_bytes)
+            .field(
+                "encoded_proof_envelope_bytes",
+                &self.encoded_proof_envelope_bytes,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl BootleLanternPreparedPresentationPrivacyActionV1 {
+    /// Borrow the final revalidated payload for the isolated native release
+    /// runner.
+    #[cfg(feature = "privacy-release-evidence")]
+    pub(crate) const fn release_evidence_payload_v1(&self) -> &TransactionPayload {
+        &self.payload
+    }
+
+    /// Exact state effect certified by the prepared presentation.
+    #[must_use]
+    pub const fn effect(&self) -> BootleLanternPresentationPrivacyActionEffectV1 {
+        BootleLanternPresentationPrivacyActionEffectV1::PresentationVerificationAndFinalityOnly
+    }
+
+    /// Hash of the exact canonical governed issuer-policy encoding.
+    #[must_use]
+    pub const fn issuer_policy_hash(&self) -> [u8; 32] {
+        self.issuer_policy_hash
+    }
+
+    /// Canonical proof-independent transaction-intent digest.
+    #[must_use]
+    pub const fn transaction_intent_digest(&self) -> [u8; 32] {
+        self.transaction_intent_digest
+    }
+
+    /// Canonical complete typed-statement digest.
+    #[must_use]
+    pub const fn statement_digest(&self) -> [u8; 32] {
+        self.statement_digest
+    }
+
+    /// Hash of the exact canonical proof envelope.
+    #[must_use]
+    pub const fn proof_envelope_hash(&self) -> [u8; 32] {
+        self.proof_envelope_hash
+    }
+
+    /// Canonical encoded typed-statement byte count.
+    #[must_use]
+    pub const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    /// Exact fixed-profile native presentation proof byte count.
+    #[must_use]
+    pub const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    /// Canonical encoded proof-envelope byte count.
+    #[must_use]
+    pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+}
+
+/// Complete signed result produced by the canonical Bootle/Lantern
+/// presentation path.
+pub struct SignedBootleLanternPresentationPrivacyActionV1 {
+    signed_transaction: SignedTransaction,
+    transaction_hash: [u8; 32],
+    adaptive_signed_transaction_bytes: u32,
+    issuer_policy_hash: [u8; 32],
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+}
+
+impl core::fmt::Debug for SignedBootleLanternPresentationPrivacyActionV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("SignedBootleLanternPresentationPrivacyActionV1")
+            .field("transaction_hash", &self.transaction_hash)
+            .field(
+                "adaptive_signed_transaction_bytes",
+                &self.adaptive_signed_transaction_bytes,
+            )
+            .field("issuer_policy_hash", &self.issuer_policy_hash)
+            .field("transaction_intent_digest", &self.transaction_intent_digest)
+            .field("statement_digest", &self.statement_digest)
+            .field("proof_envelope_hash", &self.proof_envelope_hash)
+            .field("statement_bytes", &self.statement_bytes)
+            .field("proof_bytes", &self.proof_bytes)
+            .field(
+                "encoded_proof_envelope_bytes",
+                &self.encoded_proof_envelope_bytes,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl SignedBootleLanternPresentationPrivacyActionV1 {
+    /// Borrow the exact signed transaction.
+    #[must_use]
+    pub const fn signed_transaction(&self) -> &SignedTransaction {
+        &self.signed_transaction
+    }
+
+    /// Consume the result and return the exact signed transaction.
+    #[must_use]
+    pub fn into_signed_transaction(self) -> SignedTransaction {
+        self.signed_transaction
+    }
+
+    /// Canonical transaction hash.
+    #[must_use]
+    pub const fn transaction_hash(&self) -> [u8; 32] {
+        self.transaction_hash
+    }
+
+    /// Canonical adaptive signed-transaction byte count.
+    #[must_use]
+    pub const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    /// Exact state effect certified by the signed presentation.
+    #[must_use]
+    pub const fn effect(&self) -> BootleLanternPresentationPrivacyActionEffectV1 {
+        BootleLanternPresentationPrivacyActionEffectV1::PresentationVerificationAndFinalityOnly
+    }
+
+    /// Hash of the exact canonical governed issuer-policy encoding.
+    #[must_use]
+    pub const fn issuer_policy_hash(&self) -> [u8; 32] {
+        self.issuer_policy_hash
+    }
+
+    /// Canonical proof-independent transaction-intent digest.
+    #[must_use]
+    pub const fn transaction_intent_digest(&self) -> [u8; 32] {
+        self.transaction_intent_digest
+    }
+
+    /// Canonical complete typed-statement digest.
+    #[must_use]
+    pub const fn statement_digest(&self) -> [u8; 32] {
+        self.statement_digest
+    }
+
+    /// Hash of the exact canonical proof envelope.
+    #[must_use]
+    pub const fn proof_envelope_hash(&self) -> [u8; 32] {
+        self.proof_envelope_hash
+    }
+
+    /// Canonical encoded typed-statement byte count.
+    #[must_use]
+    pub const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    /// Exact fixed-profile native presentation proof byte count.
+    #[must_use]
+    pub const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    /// Canonical encoded proof-envelope byte count.
+    #[must_use]
+    pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+}
+
+/// Failure while constructing or validating a canonical Bootle/Lantern
+/// presentation transaction intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum BootleLanternPresentationPrivacyActionIntentErrorV1 {
+    /// The chain identifier is empty or exceeds the consensus maximum.
+    #[error("Bootle/Lantern presentation chain id is outside the first-release byte bound")]
+    InvalidChainId,
+    /// Creation time cannot be represented in the transaction wire.
+    #[error("Bootle/Lantern presentation creation time cannot be represented in milliseconds")]
+    CreationTimeOutOfRange,
+    /// TTL cannot be represented in the transaction wire.
+    #[error("Bootle/Lantern presentation TTL cannot be represented in milliseconds")]
+    TimeToLiveOutOfRange,
+    /// Fee intent, TTL, or fee metadata violates canonical transaction policy.
+    #[error("Bootle/Lantern presentation transaction context is not canonical")]
+    InvalidTransactionContext,
+    /// The locally compiled governed Bootle/Lantern profile is unavailable.
+    #[error("the compiled native Bootle/Lantern profile is unavailable")]
+    CompiledProfileUnavailable,
+    /// The issuer policy is malformed, revoked, or not the exact active record.
+    #[error("the Bootle/Lantern presentation issuer policy is not an active canonical record")]
+    InvalidIssuerPolicy,
+    /// The statement or its exact compiled context is invalid.
+    #[error("the locally produced Bootle/Lantern presentation statement failed validation")]
+    StatementValidation,
+    /// The typed statement could not derive its canonical digest.
+    #[error("Bootle/Lantern presentation statement digest derivation failed")]
+    StatementDigest,
+    /// The unsigned payload could not derive its canonical privacy intent.
+    #[error("Bootle/Lantern presentation transaction-intent derivation failed")]
+    TransactionIntent,
+    /// The final one-action payload did not reproduce the stored intent binding.
+    #[error("the locally produced Bootle/Lantern presentation payload failed intent validation")]
+    FinalIntentBinding,
+}
+
+/// Closed failure for the canonical prove-then-sign Bootle/Lantern
+/// presentation path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum BootleLanternPresentationPrivacyActionBuildErrorV1 {
+    /// Two-pass transaction-intent construction failed.
+    #[error(transparent)]
+    Intent(#[from] BootleLanternPresentationPrivacyActionIntentErrorV1),
+    /// The all-zero genesis sentinel is never a canonical chain binding.
+    #[error("Bootle/Lantern presentation requires a non-zero canonical genesis hash")]
+    ZeroGenesisHash,
+    /// Native relation compilation, proof construction, or verification failed.
+    #[error(transparent)]
+    Native(#[from] super::BoundPresentationErrorV1),
+    /// The typed statement could not derive its canonical digest.
+    #[error("Bootle/Lantern presentation statement digest derivation failed")]
+    StatementDigest,
+    /// The typed statement could not be canonically encoded.
+    #[error("the locally produced Bootle/Lantern presentation statement could not be encoded")]
+    StatementEncoding,
+    /// The governed issuer policy could not be canonically encoded.
+    #[error("the governed Bootle/Lantern issuer policy could not be encoded")]
+    IssuerPolicyEncoding,
+    /// The complete proof envelope failed intrinsic consensus validation.
+    #[error("the locally produced Bootle/Lantern proof envelope failed validation")]
+    EnvelopeValidation,
+    /// The complete proof envelope could not be canonically encoded.
+    #[error("the locally produced Bootle/Lantern proof envelope could not be encoded")]
+    EnvelopeEncoding,
+    /// A bounded canonical byte length did not fit its public result field.
+    #[error("a canonical Bootle/Lantern presentation byte length overflowed")]
+    EncodedLengthOverflow,
+    /// The final proved payload did not reproduce the draft-derived intent.
+    #[error("the locally produced Bootle/Lantern payload failed final intent validation")]
+    FinalIntentBinding,
+    /// The sealed prepared payload no longer matches its integrity record.
+    #[error("the prepared Bootle/Lantern presentation failed integrity validation")]
+    PreparedPayloadDrift,
+    /// The authority is multisig and cannot use the single-key constructor.
+    #[error("the Bootle/Lantern presentation authority is not a single-key authority")]
+    UnsupportedAuthority,
+    /// The supplied private key does not control the exact authority.
+    #[error("the supplied Bootle/Lantern signing key does not control the authority")]
+    AuthorityKeyMismatch,
+    /// The transaction signature backend failed without exposing key material.
+    #[error("Bootle/Lantern presentation transaction signing failed")]
+    TransactionSigning,
+    /// The signed payload differs from the prepared proof or intent.
+    #[error("signed Bootle/Lantern presentation differs from the prepared action")]
+    SignedIntentMismatch,
+}
+
+fn validate_bootle_lantern_presentation_transaction_context_v1(
+    context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
+) -> Result<(), BootleLanternPresentationPrivacyActionIntentErrorV1> {
+    let chain_id_bytes = context.chain_id.as_str().as_bytes().len();
+    if chain_id_bytes == 0
+        || chain_id_bytes
+            > usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
+                .expect("privacy chain-id bound fits usize")
+    {
+        return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidChainId);
+    }
+    if context.creation_time.as_millis() > u128::from(u64::MAX) {
+        return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::CreationTimeOutOfRange);
+    }
+    if context
+        .time_to_live
+        .is_some_and(|ttl| ttl.as_millis() > u128::from(u64::MAX))
+    {
+        return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::TimeToLiveOutOfRange);
+    }
+
+    let mut builder = TransactionBuilder::new(
+        context.chain_id.clone(),
+        context.authority.clone(),
+        context.fee_payment.clone(),
+    )
+    .with_metadata(context.metadata.clone());
+    builder.set_creation_time(context.creation_time);
+    if let Some(ttl) = context.time_to_live {
+        builder.set_ttl(ttl);
+    }
+    if let Some(nonce) = context.nonce {
+        builder.set_nonce(nonce);
+    }
+    builder
+        .into_payload()
+        .map(|_| ())
+        .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext)
+}
+
+fn validate_bootle_lantern_active_issuer_policy_v1(
+    policy: &BootleLanternIssuerPolicyV1,
+) -> Result<(), BootleLanternPresentationPrivacyActionIntentErrorV1> {
+    policy
+        .validate()
+        .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidIssuerPolicy)?;
+    if policy.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+        return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidIssuerPolicy);
+    }
+    Ok(())
+}
+
+fn bootle_lantern_presentation_statement_context_v1(
+    context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
+    profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
+    transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+) -> PrivacyStatementContextV1 {
+    PrivacyStatementContextV1 {
+        chain_id: context.chain_id.clone(),
+        action_index: BOOTLE_LANTERN_PRESENTATION_PRIVACY_ACTION_INDEX_V1,
+        transaction_intent_digest,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+    }
+}
+
+fn bootle_lantern_presentation_statement_v1(
+    context: PrivacyStatementContextV1,
+    policy: &BootleLanternIssuerPolicyV1,
+    disclosures: Vec<BootleLanternDisclosedAttributeV1>,
+) -> IrohaBootleLanternAnoncredStatementV1 {
+    IrohaBootleLanternAnoncredStatementV1 {
+        context,
+        issuer_id: policy.issuer_id,
+        policy_id: policy.policy_id,
+        issuer_policy_epoch: policy.epoch,
+        issuer_policy_record_digest: policy.record_digest,
+        issuer_parameter_id: policy.issuer_parameter_id,
+        issuer_parameter_digest: policy.issuer_parameter_digest,
+        disclosures,
+    }
+}
+
+fn bootle_lantern_presentation_transaction_payload_v1(
+    context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
+    envelope: PrivacyProofEnvelopeV1,
+) -> Result<TransactionPayload, BootleLanternPresentationPrivacyActionIntentErrorV1> {
+    let mut builder = TransactionBuilder::new(
+        context.chain_id.clone(),
+        context.authority.clone(),
+        context.fee_payment.clone(),
+    )
+    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_metadata(context.metadata.clone());
+    builder.set_creation_time(context.creation_time);
+    if let Some(ttl) = context.time_to_live {
+        builder.set_ttl(ttl);
+    }
+    if let Some(nonce) = context.nonce {
+        builder.set_nonce(nonce);
+    }
+    builder
+        .into_payload()
+        .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext)
+}
+
+fn bootle_lantern_presentation_envelope_v1(
+    profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
+    statement: IrohaBootleLanternAnoncredStatementV1,
+    statement_digest: PrivacyStatementDigestV1,
+    proof: Vec<u8>,
+) -> PrivacyProofEnvelopeV1 {
+    PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest,
+        statement: PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement),
+        proof: PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
+    }
+}
+
+fn bootle_lantern_statement_matches_policy_v1(
+    statement: &IrohaBootleLanternAnoncredStatementV1,
+    policy: &BootleLanternIssuerPolicyV1,
+) -> bool {
+    statement.issuer_id == policy.issuer_id
+        && statement.policy_id == policy.policy_id
+        && statement.issuer_policy_epoch == policy.epoch
+        && statement.issuer_policy_record_digest == policy.record_digest
+        && statement.issuer_parameter_id == policy.issuer_parameter_id
+        && statement.issuer_parameter_digest == policy.issuer_parameter_digest
+}
+
+/// Construct the canonical single-action Bootle/Lantern statement and derive
+/// its proof-independent transaction-intent digest.
+///
+/// The proof-empty projection is local to this function and cannot escape as a
+/// prepared or signable payload.
+///
+/// # Errors
+///
+/// Returns a closed error for an invalid transaction context, unavailable
+/// compiled profile, non-active issuer policy, malformed disclosures, or final
+/// intent-binding drift.
+pub fn prepare_bootle_lantern_presentation_transaction_intent_v1(
+    context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
+    policy: &BootleLanternIssuerPolicyV1,
+    disclosures: Vec<BootleLanternDisclosedAttributeV1>,
+) -> Result<
+    IrohaBootleLanternAnoncredStatementV1,
+    BootleLanternPresentationPrivacyActionIntentErrorV1,
+> {
+    validate_bootle_lantern_presentation_transaction_context_v1(context)?;
+    validate_bootle_lantern_active_issuer_policy_v1(policy)?;
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+    )
+    .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let mut statement = bootle_lantern_presentation_statement_v1(
+        bootle_lantern_presentation_statement_context_v1(
+            context,
+            profile,
+            PrivacyTransactionIntentDigestV1::new([0; 32]),
+        ),
+        policy,
+        disclosures,
+    );
+    let projection = bootle_lantern_presentation_envelope_v1(
+        profile,
+        statement.clone(),
+        PrivacyStatementDigestV1::new([0; 32]),
+        Vec::new(),
+    );
+    let transaction_intent_digest =
+        bootle_lantern_presentation_transaction_payload_v1(context, projection)?
+            .privacy_transaction_intent_digest_v1()
+            .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::TransactionIntent)?;
+    statement.context.transaction_intent_digest = transaction_intent_digest;
+    let validated =
+        validate_bootle_lantern_presentation_transaction_intent_v1(context, policy, &statement)?;
+    if validated != transaction_intent_digest {
+        return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::FinalIntentBinding);
+    }
+    Ok(statement)
+}
+
+/// Validate a prepared Bootle/Lantern statement against its exact direct
+/// transaction context and active governed issuer policy.
+///
+/// # Errors
+///
+/// Returns a closed error for context, profile, policy, statement, digest, or
+/// final intent drift.
+pub fn validate_bootle_lantern_presentation_transaction_intent_v1(
+    context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
+    policy: &BootleLanternIssuerPolicyV1,
+    statement: &IrohaBootleLanternAnoncredStatementV1,
+) -> Result<PrivacyTransactionIntentDigestV1, BootleLanternPresentationPrivacyActionIntentErrorV1> {
+    validate_bootle_lantern_presentation_transaction_context_v1(context)?;
+    validate_bootle_lantern_active_issuer_policy_v1(policy)?;
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+    )
+    .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let expected_context = bootle_lantern_presentation_statement_context_v1(
+        context,
+        profile,
+        statement.context.transaction_intent_digest,
+    );
+    if statement.context != expected_context
+        || !bootle_lantern_statement_matches_policy_v1(statement, policy)
+    {
+        return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::StatementValidation);
+    }
+    let typed_statement = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
+    typed_statement
+        .validate(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::StatementValidation)?;
+    let statement_digest = typed_statement
+        .digest()
+        .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::StatementDigest)?;
+    let projection = bootle_lantern_presentation_envelope_v1(
+        profile,
+        statement.clone(),
+        statement_digest,
+        Vec::new(),
+    );
+    let validated = bootle_lantern_presentation_transaction_payload_v1(context, projection)?
+        .validate_privacy_transaction_intent_binding_v1()
+        .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::FinalIntentBinding)?;
+    if validated != statement.context.transaction_intent_digest {
+        return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::FinalIntentBinding);
+    }
+    Ok(validated)
+}
+
+#[derive(Clone, Copy)]
+struct BootleLanternPresentationPrivacyActionIntegrityV1 {
+    canonical_genesis_hash: [u8; 32],
+    issuer_policy_hash: [u8; 32],
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+}
+
+impl BootleLanternPreparedPresentationPrivacyActionV1 {
+    const fn integrity(&self) -> BootleLanternPresentationPrivacyActionIntegrityV1 {
+        BootleLanternPresentationPrivacyActionIntegrityV1 {
+            canonical_genesis_hash: self.canonical_genesis_hash,
+            issuer_policy_hash: self.issuer_policy_hash,
+            transaction_intent_digest: self.transaction_intent_digest,
+            statement_digest: self.statement_digest,
+            proof_envelope_hash: self.proof_envelope_hash,
+            statement_bytes: self.statement_bytes,
+            proof_bytes: self.proof_bytes,
+            encoded_proof_envelope_bytes: self.encoded_proof_envelope_bytes,
+        }
+    }
+}
+
+fn bootle_lantern_issuer_policy_hash_v1(
+    policy: &BootleLanternIssuerPolicyV1,
+) -> Result<[u8; 32], BootleLanternPresentationPrivacyActionBuildErrorV1> {
+    let encoding = norito::to_bytes(policy)
+        .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::IssuerPolicyEncoding)?;
+    Ok(*Hash::new(&encoding).as_ref())
+}
+
+fn validate_bootle_lantern_presentation_signing_authority_v1(
+    authority: &AccountId,
+    private_key: &PrivateKey,
+) -> Result<(), BootleLanternPresentationPrivacyActionBuildErrorV1> {
+    let expected = authority
+        .try_signatory()
+        .ok_or(BootleLanternPresentationPrivacyActionBuildErrorV1::UnsupportedAuthority)?;
+    let derived = PublicKey::from(private_key.clone());
+    if expected != &derived {
+        return Err(BootleLanternPresentationPrivacyActionBuildErrorV1::AuthorityKeyMismatch);
+    }
+    Ok(())
+}
+
+fn validate_bootle_lantern_presentation_payload_integrity_v1(
+    payload: &TransactionPayload,
+    policy: &BootleLanternIssuerPolicyV1,
+    expected: BootleLanternPresentationPrivacyActionIntegrityV1,
+) -> Result<(), ()> {
+    if expected.canonical_genesis_hash == [0; 32]
+        || validate_bootle_lantern_active_issuer_policy_v1(policy).is_err()
+    {
+        return Err(());
+    }
+    let policy_encoding = norito::to_bytes(policy).map_err(|_| ())?;
+    if *Hash::new(&policy_encoding).as_ref() != expected.issuer_policy_hash {
+        return Err(());
+    }
+    match payload.instructions() {
+        Executable::Instructions(instructions)
+            if instructions.len() == 1
+                && instructions[0]
+                    .as_any()
+                    .downcast_ref::<SubmitPrivacyProofV1>()
+                    .is_some() => {}
+        _ => return Err(()),
+    }
+    if payload.attachments.is_some() {
+        return Err(());
+    }
+    let (intent, submission) = payload
+        .privacy_transaction_intent_binding_if_present_v1()
+        .map_err(|_| ())?
+        .ok_or(())?;
+    if intent.as_bytes() != &expected.transaction_intent_digest {
+        return Err(());
+    }
+    let envelope = &submission.envelope;
+    envelope
+        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| ())?;
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+    )
+    .map_err(|_| ())?;
+    if envelope.protocol_id != profile.protocol_id
+        || envelope.proof_system_id != profile.proof_system_id
+        || envelope.engine_id != profile.engine_id
+        || envelope.parameter_id != profile.parameter_id
+        || envelope.parameter_digest != profile.parameter_digest
+        || envelope.verifier_digest != profile.verifier_digest
+        || envelope.statement_schema_digest != profile.statement_schema_digest
+        || envelope.engine_manifest_digest != profile.engine_manifest_digest
+        || envelope.statement_digest.as_bytes() != &expected.statement_digest
+    {
+        return Err(());
+    }
+    let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &envelope.statement else {
+        return Err(());
+    };
+    if statement.context.action_index != BOOTLE_LANTERN_PRESENTATION_PRIVACY_ACTION_INDEX_V1
+        || statement.context.transaction_intent_digest.as_bytes()
+            != &expected.transaction_intent_digest
+        || !bootle_lantern_statement_matches_policy_v1(statement, policy)
+    {
+        return Err(());
+    }
+    let statement_digest = envelope.statement.digest().map_err(|_| ())?;
+    if statement_digest.as_bytes() != &expected.statement_digest {
+        return Err(());
+    }
+    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| ())?;
+    if u32::try_from(statement_encoding.len()).map_err(|_| ())? != expected.statement_bytes {
+        return Err(());
+    }
+    let PrivacyProofV1::IrohaBootleLanternAnoncredV1(proof) = &envelope.proof else {
+        return Err(());
+    };
+    let fixed_proof_bytes = u32::try_from(super::codec::PROOF_BYTES_V1).map_err(|_| ())?;
+    if u32::try_from(proof.as_bytes().len()).map_err(|_| ())? != expected.proof_bytes
+        || expected.proof_bytes != fixed_proof_bytes
+    {
+        return Err(());
+    }
+    let decoded =
+        BootleLanternPresentationProofV1::decode_exact(proof.as_bytes(), fixed_proof_bytes)
+            .map_err(|_| ())?;
+    super::verify_bound_presentation_v1(
+        statement,
+        policy,
+        expected.canonical_genesis_hash,
+        &decoded,
+    )
+    .map_err(|_| ())?;
+    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| ())?;
+    if u32::try_from(envelope_encoding.len()).map_err(|_| ())?
+        != expected.encoded_proof_envelope_bytes
+        || *Hash::new(&envelope_encoding).as_ref() != expected.proof_envelope_hash
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
+    context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
+    issuer_policy: BootleLanternIssuerPolicyV1,
+    statement: IrohaBootleLanternAnoncredStatementV1,
+    proof: BootleLanternPresentationProofV1,
+    canonical_genesis_hash: [u8; 32],
+) -> Result<
+    BootleLanternPreparedPresentationPrivacyActionV1,
+    BootleLanternPresentationPrivacyActionBuildErrorV1,
+> {
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+    )
+    .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let typed_statement = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
+    typed_statement
+        .validate(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EnvelopeValidation)?;
+    let statement_digest = typed_statement
+        .digest()
+        .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::StatementDigest)?;
+    let statement_bytes = u32::try_from(
+        norito::to_bytes(&typed_statement)
+            .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::StatementEncoding)?
+            .len(),
+    )
+    .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
+    let proof_encoding = proof.encode();
+    if proof_encoding.len() != super::codec::PROOF_BYTES_V1 {
+        return Err(BootleLanternPresentationPrivacyActionBuildErrorV1::EncodedLengthOverflow);
+    }
+    let proof_bytes = u32::try_from(proof_encoding.len())
+        .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
+    let final_envelope = bootle_lantern_presentation_envelope_v1(
+        profile,
+        statement,
+        statement_digest,
+        proof_encoding,
+    );
+    final_envelope
+        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EnvelopeValidation)?;
+    let envelope_encoding = norito::to_bytes(&final_envelope)
+        .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EnvelopeEncoding)?;
+    let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
+        .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
+    let proof_envelope_hash = *Hash::new(&envelope_encoding).as_ref();
+    let issuer_policy_hash = bootle_lantern_issuer_policy_hash_v1(&issuer_policy)?;
+    let final_payload =
+        bootle_lantern_presentation_transaction_payload_v1(context, final_envelope)?;
+    let transaction_intent_digest = final_payload
+        .validate_privacy_transaction_intent_binding_v1()
+        .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::FinalIntentBinding)?;
+    let prepared = BootleLanternPreparedPresentationPrivacyActionV1 {
+        payload: final_payload,
+        canonical_genesis_hash,
+        issuer_policy,
+        issuer_policy_hash,
+        transaction_intent_digest: *transaction_intent_digest.as_bytes(),
+        statement_digest: *statement_digest.as_bytes(),
+        proof_envelope_hash,
+        statement_bytes,
+        proof_bytes,
+        encoded_proof_envelope_bytes,
+    };
+    validate_bootle_lantern_presentation_payload_integrity_v1(
+        &prepared.payload,
+        &prepared.issuer_policy,
+        prepared.integrity(),
+    )
+    .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::PreparedPayloadDrift)?;
+    Ok(prepared)
+}
+
+/// Prepare and prove one canonical Bootle/Lantern presentation with
+/// caller-provided cryptographically secure randomness.
+///
+/// The function accepts the final statement returned by
+/// [`prepare_bootle_lantern_presentation_transaction_intent_v1`], revalidates
+/// every public binding before the first random draw, proves the exact governed
+/// relation, and returns one sealed non-cloneable final payload.
+///
+/// # Errors
+///
+/// Returns a closed context, policy, statement, relation, witness, native
+/// proof, encoding, or integrity failure.
+pub fn prepare_bootle_lantern_presentation_privacy_action_with_rng_v1<R>(
+    context: BootleLanternPresentationPrivacyActionTransactionContextV1,
+    issuer_policy: BootleLanternIssuerPolicyV1,
+    statement: IrohaBootleLanternAnoncredStatementV1,
+    witness: &BootleLanternPresentationWitnessV1,
+    canonical_genesis_hash: [u8; 32],
+    rng: &mut R,
+) -> Result<
+    BootleLanternPreparedPresentationPrivacyActionV1,
+    BootleLanternPresentationPrivacyActionBuildErrorV1,
+>
+where
+    R: CryptoRng + RngCore,
+{
+    if canonical_genesis_hash == [0; 32] {
+        return Err(BootleLanternPresentationPrivacyActionBuildErrorV1::ZeroGenesisHash);
+    }
+    validate_bootle_lantern_presentation_transaction_intent_v1(
+        &context,
+        &issuer_policy,
+        &statement,
+    )?;
+    let proof = super::prove_bound_presentation_v1(
+        &statement,
+        &issuer_policy,
+        canonical_genesis_hash,
+        witness,
+        rng,
+    )?;
+    finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
+        &context,
+        issuer_policy,
+        statement,
+        proof,
+        canonical_genesis_hash,
+    )
+}
+
+/// Prepare and prove one canonical Bootle/Lantern presentation with operating
+/// system randomness.
+///
+/// # Errors
+///
+/// Returns the same closed failures as
+/// [`prepare_bootle_lantern_presentation_privacy_action_with_rng_v1`].
+pub fn prepare_bootle_lantern_presentation_privacy_action_v1(
+    context: BootleLanternPresentationPrivacyActionTransactionContextV1,
+    issuer_policy: BootleLanternIssuerPolicyV1,
+    statement: IrohaBootleLanternAnoncredStatementV1,
+    witness: &BootleLanternPresentationWitnessV1,
+    canonical_genesis_hash: [u8; 32],
+) -> Result<
+    BootleLanternPreparedPresentationPrivacyActionV1,
+    BootleLanternPresentationPrivacyActionBuildErrorV1,
+> {
+    prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
+        context,
+        issuer_policy,
+        statement,
+        witness,
+        canonical_genesis_hash,
+        &mut OsRng,
+    )
+}
+
+/// Consume and sign a payload returned by the canonical Bootle/Lantern
+/// presentation prover.
+///
+/// The complete proof, statement, envelope, active issuer policy, genesis
+/// binding, and proof-independent transaction intent are independently
+/// revalidated immediately before and after signing.
+///
+/// # Errors
+///
+/// Returns a closed failure for prepared drift, unsupported authority,
+/// authority/key mismatch, signing failure, or post-sign drift.
+pub fn sign_prepared_bootle_lantern_presentation_privacy_action_v1(
+    prepared: BootleLanternPreparedPresentationPrivacyActionV1,
+    private_key: &PrivateKey,
+) -> Result<
+    SignedBootleLanternPresentationPrivacyActionV1,
+    BootleLanternPresentationPrivacyActionBuildErrorV1,
+> {
+    validate_bootle_lantern_presentation_signing_authority_v1(
+        prepared.payload.authority(),
+        private_key,
+    )?;
+    let integrity = prepared.integrity();
+    validate_bootle_lantern_presentation_payload_integrity_v1(
+        &prepared.payload,
+        &prepared.issuer_policy,
+        integrity,
+    )
+    .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::PreparedPayloadDrift)?;
+    let BootleLanternPreparedPresentationPrivacyActionV1 {
+        payload,
+        issuer_policy,
+        ..
+    } = prepared;
+    let signed_transaction = TransactionBuilder::from_payload(payload)
+        .map_err(|_| {
+            BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext
+        })?
+        .try_sign(private_key)
+        .map_err(|error| match error {
+            TransactionSignatureError::UnsupportedMultisigAuthority => {
+                BootleLanternPresentationPrivacyActionBuildErrorV1::UnsupportedAuthority
+            }
+            TransactionSignatureError::AuthorityKeyMismatch => {
+                BootleLanternPresentationPrivacyActionBuildErrorV1::AuthorityKeyMismatch
+            }
+            TransactionSignatureError::InvalidFeePaymentIntent(_) => {
+                BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext
+                    .into()
+            }
+            _ => BootleLanternPresentationPrivacyActionBuildErrorV1::TransactionSigning,
+        })?;
+    validate_bootle_lantern_presentation_payload_integrity_v1(
+        signed_transaction.payload(),
+        &issuer_policy,
+        integrity,
+    )
+    .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::SignedIntentMismatch)?;
+    let transaction_hash = *signed_transaction.hash().as_ref();
+    let adaptive_signed_transaction_bytes =
+        u32::try_from(norito::codec::encode_adaptive(&signed_transaction).len()).map_err(|_| {
+            BootleLanternPresentationPrivacyActionBuildErrorV1::EncodedLengthOverflow
+        })?;
+    Ok(SignedBootleLanternPresentationPrivacyActionV1 {
+        signed_transaction,
+        transaction_hash,
+        adaptive_signed_transaction_bytes,
+        issuer_policy_hash: integrity.issuer_policy_hash,
+        transaction_intent_digest: integrity.transaction_intent_digest,
+        statement_digest: integrity.statement_digest,
+        proof_envelope_hash: integrity.proof_envelope_hash,
+        statement_bytes: integrity.statement_bytes,
+        proof_bytes: integrity.proof_bytes,
+        encoded_proof_envelope_bytes: integrity.encoded_proof_envelope_bytes,
+    })
+}
+
+/// Build, prove, bind, and sign one canonical Bootle/Lantern presentation with
+/// caller-provided cryptographically secure randomness.
+///
+/// Authority validation precedes all proof randomness and proof work.
+///
+/// # Errors
+///
+/// Returns a closed validation, proving, binding, or signing failure.
+pub fn build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1<R>(
+    context: BootleLanternPresentationPrivacyActionTransactionContextV1,
+    issuer_policy: BootleLanternIssuerPolicyV1,
+    statement: IrohaBootleLanternAnoncredStatementV1,
+    witness: &BootleLanternPresentationWitnessV1,
+    canonical_genesis_hash: [u8; 32],
+    private_key: &PrivateKey,
+    rng: &mut R,
+) -> Result<
+    SignedBootleLanternPresentationPrivacyActionV1,
+    BootleLanternPresentationPrivacyActionBuildErrorV1,
+>
+where
+    R: CryptoRng + RngCore,
+{
+    validate_bootle_lantern_presentation_signing_authority_v1(&context.authority, private_key)?;
+    let prepared = prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
+        context,
+        issuer_policy,
+        statement,
+        witness,
+        canonical_genesis_hash,
+        rng,
+    )?;
+    sign_prepared_bootle_lantern_presentation_privacy_action_v1(prepared, private_key)
+}
+
+/// Build, prove, bind, and sign one canonical Bootle/Lantern presentation with
+/// operating-system randomness.
+///
+/// # Errors
+///
+/// Returns the same closed failures as
+/// [`build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1`].
+pub fn build_signed_bootle_lantern_presentation_privacy_action_v1(
+    context: BootleLanternPresentationPrivacyActionTransactionContextV1,
+    issuer_policy: BootleLanternIssuerPolicyV1,
+    statement: IrohaBootleLanternAnoncredStatementV1,
+    witness: &BootleLanternPresentationWitnessV1,
+    canonical_genesis_hash: [u8; 32],
+    private_key: &PrivateKey,
+) -> Result<
+    SignedBootleLanternPresentationPrivacyActionV1,
+    BootleLanternPresentationPrivacyActionBuildErrorV1,
+> {
+    build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1(
+        context,
+        issuer_policy,
+        statement,
+        witness,
+        canonical_genesis_hash,
+        private_key,
+        &mut OsRng,
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use core::num::NonZeroU64;
     use std::sync::OnceLock;
 
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
@@ -1473,6 +2510,28 @@ mod tests {
         stuck: Option<u8>,
         period: Option<u8>,
     }
+
+    struct PanicRng;
+
+    impl RngCore for PanicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("Bootle/Lantern public preflight reached the random source")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("Bootle/Lantern public preflight reached the random source")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("Bootle/Lantern public preflight reached the random source")
+        }
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+            panic!("Bootle/Lantern public preflight reached the random source")
+        }
+    }
+
+    impl CryptoRng for PanicRng {}
 
     impl TestRng {
         const fn healthy(seed: u64) -> Self {
@@ -1569,6 +2628,13 @@ mod tests {
 
     fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
+    }
+
+    fn compiled_bootle_lantern_profile() -> crate::privacy_profiles::CompiledPrivacyProfileV1 {
+        crate::privacy_profiles::compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        )
+        .expect("compiled Bootle/Lantern profile")
     }
 
     fn matrix_seed() -> MatrixSeedV1 {
@@ -1704,6 +2770,114 @@ mod tests {
         })
     }
 
+    struct SealedIssuedFixture {
+        policy: BootleLanternIssuerPolicyV1,
+        statement: IrohaBootleLanternAnoncredStatementV1,
+        witness: BootleLanternPresentationWitnessV1,
+    }
+
+    fn sealed_statement_context() -> PrivacyStatementContextV1 {
+        let profile = compiled_bootle_lantern_profile();
+        PrivacyStatementContextV1 {
+            chain_id: ChainId::from("bootle-lantern-proof-test"),
+            action_index: 3,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(1)),
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
+        }
+    }
+
+    fn sealed_issued_fixture() -> &'static SealedIssuedFixture {
+        static FIXTURE: OnceLock<SealedIssuedFixture> = OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let mut keygen_rng = TestRng::healthy(0x6a09_e667_f3bc_c908);
+            let issuer_key_pair = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
+                PrivacyParameterIdV1::new(raw(13)),
+                &mut keygen_rng,
+            )
+            .expect("native sealed-fixture issuer key generation");
+            let policy = issuer_key_pair
+                .active_policy_v1(BootleLanternIssuerPolicyMetadataV1 {
+                    issuer_id: PrivacyIssuerIdV1::new(raw(11)),
+                    policy_id: PrivacyPolicyIdV1::new(raw(12)),
+                    epoch: 1,
+                    required_disclosure_bitmap: 0b0000_0010,
+                    allowed_values: (0..8)
+                        .map(|index| BootleLanternAllowedAttributeValuesV1 {
+                            values: if index == 1 {
+                                vec![BootleLanternAttributeValueV1::new([1; 8])]
+                            } else {
+                                Vec::new()
+                            },
+                        })
+                        .collect(),
+                })
+                .expect("active sealed-fixture issuer policy");
+            let context = sealed_statement_context();
+            let genesis_hash = [0x32; 32];
+            let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
+            let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
+            let authorization = issuer_authorize_blind_issuance_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash,
+                &policy,
+                [0x71; 32],
+                10,
+                20,
+                &issuance_store,
+                &mut authorization_rng,
+            )
+            .expect("sealed-fixture issuer authorization");
+            let mut attributes = [[0_u8; 8]; 8];
+            attributes[1] = [1; 8];
+            let mut holder_issuance_rng = TestRng::healthy(0xbb67_ae85_84ca_a73b);
+            let (request, state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
+                attributes,
+                &mut holder_issuance_rng,
+            )
+            .expect("sealed-fixture holder blind-issuance request");
+            let (p1_relation, p1_transcript) = request
+                .compile_transcript_v1(&context, genesis_hash, &policy, &authorization)
+                .expect("sealed-fixture P1 relation and transcript");
+            verify_blind_issuance_request_v1(&p1_relation, p1_transcript, request.proof_v1())
+                .expect("sealed-fixture P1 proof verifies before issuance");
+            let mut issuer_issuance_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
+            let response = issuer_blind_issue_once_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
+                &request,
+                11,
+                &issuance_store,
+                &mut issuer_issuance_rng,
+            )
+            .expect("sealed-fixture native blind issuance");
+            let credential =
+                holder_finalize_blind_issuance_v1(state, &context, genesis_hash, &policy, response)
+                    .expect("sealed-fixture holder issuance finalization");
+            let mut statement = statement(&policy);
+            statement.context = context;
+            let witness = credential
+                .presentation_witness_v1(&statement, &policy, genesis_hash)
+                .expect("sealed-fixture presentation witness");
+            SealedIssuedFixture {
+                policy,
+                statement,
+                witness,
+            }
+        })
+    }
+
     fn valid_witness() -> BootleLanternPresentationWitnessV1 {
         issued_fixture().witness.clone()
     }
@@ -1755,6 +2929,308 @@ mod tests {
 
     fn alternate_residue(residue: u64) -> u64 {
         if residue == 0 { 1 } else { 0 }
+    }
+
+    fn presentation_action_signer(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive Bootle/Lantern presentation signer")
+    }
+
+    fn presentation_action_context(
+        signer: &KeyPair,
+    ) -> BootleLanternPresentationPrivacyActionTransactionContextV1 {
+        BootleLanternPresentationPrivacyActionTransactionContextV1 {
+            chain_id: ChainId::from("bootle-lantern-proof-test"),
+            authority: AccountId::new(signer.public_key().clone()),
+            creation_time: Duration::from_millis(1_800_000_000_321),
+            time_to_live: Some(Duration::from_secs(60)),
+            nonce: NonZeroU32::new(17),
+            fee_payment: FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000_000)),
+            metadata: Metadata::default(),
+        }
+    }
+
+    fn presentation_action_statement(
+        context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
+        policy: &BootleLanternIssuerPolicyV1,
+    ) -> IrohaBootleLanternAnoncredStatementV1 {
+        prepare_bootle_lantern_presentation_transaction_intent_v1(
+            context,
+            policy,
+            sealed_issued_fixture().statement.disclosures.clone(),
+        )
+        .expect("derive canonical Bootle/Lantern presentation transaction intent")
+    }
+
+    fn clone_prepared_for_adversary(
+        prepared: &BootleLanternPreparedPresentationPrivacyActionV1,
+    ) -> BootleLanternPreparedPresentationPrivacyActionV1 {
+        BootleLanternPreparedPresentationPrivacyActionV1 {
+            payload: prepared.payload.clone(),
+            canonical_genesis_hash: prepared.canonical_genesis_hash,
+            issuer_policy: prepared.issuer_policy.clone(),
+            issuer_policy_hash: prepared.issuer_policy_hash,
+            transaction_intent_digest: prepared.transaction_intent_digest,
+            statement_digest: prepared.statement_digest,
+            proof_envelope_hash: prepared.proof_envelope_hash,
+            statement_bytes: prepared.statement_bytes,
+            proof_bytes: prepared.proof_bytes,
+            encoded_proof_envelope_bytes: prepared.encoded_proof_envelope_bytes,
+        }
+    }
+
+    fn replace_prepared_envelope_for_adversary(
+        prepared: &mut BootleLanternPreparedPresentationPrivacyActionV1,
+        context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
+        mutate: impl FnOnce(&mut PrivacyProofEnvelopeV1),
+    ) {
+        let mut envelope = prepared
+            .payload
+            .privacy_transaction_intent_binding_if_present_v1()
+            .expect("canonical prepared privacy scan")
+            .expect("one prepared Bootle/Lantern presentation")
+            .1
+            .envelope
+            .clone();
+        mutate(&mut envelope);
+        prepared.payload = bootle_lantern_presentation_transaction_payload_v1(context, envelope)
+            .expect("adversarial payload remains structurally constructible");
+    }
+
+    #[test]
+    fn sealed_presentation_builder_preflights_public_failures_before_randomness() {
+        let signer = presentation_action_signer(90);
+        let context = presentation_action_context(&signer);
+        let policy = sealed_issued_fixture().policy.clone();
+        let statement = presentation_action_statement(&context, &policy);
+        assert!(matches!(
+            prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
+                context,
+                policy,
+                statement,
+                &sealed_issued_fixture().witness,
+                [0; 32],
+                &mut PanicRng,
+            ),
+            Err(BootleLanternPresentationPrivacyActionBuildErrorV1::ZeroGenesisHash)
+        ));
+
+        let signer = presentation_action_signer(90);
+        let foreign = presentation_action_signer(91);
+        let context = presentation_action_context(&signer);
+        let policy = sealed_issued_fixture().policy.clone();
+        let statement = presentation_action_statement(&context, &policy);
+        assert!(matches!(
+            build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1(
+                context,
+                policy,
+                statement,
+                &sealed_issued_fixture().witness,
+                [0x32; 32],
+                foreign.private_key(),
+                &mut PanicRng,
+            ),
+            Err(BootleLanternPresentationPrivacyActionBuildErrorV1::AuthorityKeyMismatch)
+        ));
+
+        let signer = presentation_action_signer(90);
+        let context = presentation_action_context(&signer);
+        let mut revoked_policy = sealed_issued_fixture().policy.clone();
+        revoked_policy.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        revoked_policy.record_digest = revoked_policy
+            .computed_record_digest()
+            .expect("recompute adversarial revoked policy digest");
+        let mut statement =
+            presentation_action_statement(&context, &sealed_issued_fixture().policy);
+        statement.issuer_policy_record_digest = revoked_policy.record_digest;
+        assert!(matches!(
+            prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
+                context,
+                revoked_policy,
+                statement,
+                &sealed_issued_fixture().witness,
+                [0x32; 32],
+                &mut PanicRng,
+            ),
+            Err(BootleLanternPresentationPrivacyActionBuildErrorV1::Intent(
+                BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidIssuerPolicy
+            ))
+        ));
+
+        let signer = presentation_action_signer(90);
+        let context = presentation_action_context(&signer);
+        let policy = sealed_issued_fixture().policy.clone();
+        let mut disallowed = sealed_issued_fixture().statement.disclosures.clone();
+        disallowed[0].value = BootleLanternAttributeValueV1::new([2; 8]);
+        let statement = prepare_bootle_lantern_presentation_transaction_intent_v1(
+            &context, &policy, disallowed,
+        )
+        .expect("structural statement intent remains derivable");
+        assert!(matches!(
+            prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
+                context,
+                policy,
+                statement,
+                &sealed_issued_fixture().witness,
+                [0x32; 32],
+                &mut PanicRng,
+            ),
+            Err(BootleLanternPresentationPrivacyActionBuildErrorV1::Native(
+                super::super::BoundPresentationErrorV1::Relation(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn sealed_presentation_builder_revalidates_every_binding_before_and_after_signing() {
+        let signer = presentation_action_signer(90);
+        let context = presentation_action_context(&signer);
+        let policy = sealed_issued_fixture().policy.clone();
+        let statement = presentation_action_statement(&context, &policy);
+        let prepared = prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
+            context.clone(),
+            policy,
+            statement,
+            &sealed_issued_fixture().witness,
+            [0x32; 32],
+            &mut TestRng::healthy(0x510e_527f_ade6_82d1),
+        )
+        .expect("prepare sealed Bootle/Lantern presentation action");
+        assert_eq!(
+            prepared.effect(),
+            BootleLanternPresentationPrivacyActionEffectV1::PresentationVerificationAndFinalityOnly
+        );
+        assert_ne!(prepared.issuer_policy_hash(), [0; 32]);
+        assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
+        assert_ne!(prepared.statement_digest(), [0; 32]);
+        assert_ne!(prepared.proof_envelope_hash(), [0; 32]);
+        assert!(prepared.statement_bytes() > 0);
+        assert_eq!(
+            prepared.proof_bytes(),
+            u32::try_from(PROOF_BYTES_V1).expect("fixed proof length fits u32")
+        );
+        assert!(prepared.encoded_proof_envelope_bytes() > prepared.proof_bytes());
+        validate_bootle_lantern_presentation_payload_integrity_v1(
+            &prepared.payload,
+            &prepared.issuer_policy,
+            prepared.integrity(),
+        )
+        .expect("prepared presentation independently revalidates");
+        match prepared.payload.instructions() {
+            Executable::Instructions(instructions) => {
+                assert_eq!(instructions.len(), 1, "exactly one direct presentation");
+                assert!(
+                    instructions[0]
+                        .as_any()
+                        .downcast_ref::<SubmitPrivacyProofV1>()
+                        .is_some(),
+                    "the sole action is the typed privacy submission"
+                );
+            }
+            other => panic!("unexpected Bootle/Lantern executable: {other:?}"),
+        }
+        assert!(prepared.payload.attachments.is_none());
+        let prepared_debug = format!("{prepared:?}");
+        assert!(!prepared_debug.contains("TransactionPayload"));
+        assert!(!prepared_debug.contains("issuer_policy:"));
+        assert!(!prepared_debug.contains("canonical_genesis_hash"));
+
+        let expected_intent = prepared.transaction_intent_digest();
+        let expected_statement = prepared.statement_digest();
+        let expected_envelope = prepared.proof_envelope_hash();
+        let expected_policy = prepared.issuer_policy_hash();
+        let signed = sign_prepared_bootle_lantern_presentation_privacy_action_v1(
+            clone_prepared_for_adversary(&prepared),
+            signer.private_key(),
+        )
+        .expect("consume and sign sealed Bootle/Lantern presentation");
+        signed
+            .signed_transaction()
+            .verify_signature()
+            .expect("locally signed Bootle/Lantern transaction verifies");
+        assert_eq!(signed.transaction_intent_digest(), expected_intent);
+        assert_eq!(signed.statement_digest(), expected_statement);
+        assert_eq!(signed.proof_envelope_hash(), expected_envelope);
+        assert_eq!(signed.issuer_policy_hash(), expected_policy);
+        assert_eq!(
+            signed.transaction_hash(),
+            *signed.signed_transaction().hash().as_ref()
+        );
+        assert_eq!(
+            signed.adaptive_signed_transaction_bytes(),
+            u32::try_from(norito::codec::encode_adaptive(signed.signed_transaction()).len())
+                .expect("bounded signed Bootle/Lantern transaction")
+        );
+
+        let assert_drift = |candidate| {
+            assert!(matches!(
+                sign_prepared_bootle_lantern_presentation_privacy_action_v1(
+                    candidate,
+                    signer.private_key(),
+                ),
+                Err(BootleLanternPresentationPrivacyActionBuildErrorV1::PreparedPayloadDrift)
+            ));
+        };
+
+        let mut nonce_substitution = clone_prepared_for_adversary(&prepared);
+        nonce_substitution.payload.nonce = NonZeroU32::new(18);
+        assert_drift(nonce_substitution);
+
+        let mut genesis_substitution = clone_prepared_for_adversary(&prepared);
+        genesis_substitution.canonical_genesis_hash[0] ^= 1;
+        assert_drift(genesis_substitution);
+
+        let mut payload_substitution = clone_prepared_for_adversary(&prepared);
+        payload_substitution.payload.instructions = Executable::Instructions(Vec::new().into());
+        assert_drift(payload_substitution);
+
+        let mut statement_substitution = clone_prepared_for_adversary(&prepared);
+        replace_prepared_envelope_for_adversary(
+            &mut statement_substitution,
+            &context,
+            |envelope| {
+                let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) =
+                    &mut envelope.statement
+                else {
+                    unreachable!()
+                };
+                statement.issuer_policy_epoch = statement
+                    .issuer_policy_epoch
+                    .checked_add(1)
+                    .expect("fixture policy epoch increment");
+            },
+        );
+        assert_drift(statement_substitution);
+
+        let mut envelope_substitution = clone_prepared_for_adversary(&prepared);
+        replace_prepared_envelope_for_adversary(&mut envelope_substitution, &context, |envelope| {
+            envelope.engine_manifest_digest = PrivacyEngineManifestDigestV1::new([0xE1; 32]);
+        });
+        assert_drift(envelope_substitution);
+
+        let mut proof_substitution = clone_prepared_for_adversary(&prepared);
+        replace_prepared_envelope_for_adversary(&mut proof_substitution, &context, |envelope| {
+            let PrivacyProofV1::IrohaBootleLanternAnoncredV1(proof) = &envelope.proof else {
+                unreachable!()
+            };
+            let mut bytes = proof.as_bytes().to_vec();
+            bytes[PROOF_HEADER_BYTES_V1] ^= 1;
+            envelope.proof =
+                PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(bytes));
+        });
+        assert_drift(proof_substitution);
+
+        let mut policy_substitution = clone_prepared_for_adversary(&prepared);
+        policy_substitution.issuer_policy.epoch = policy_substitution
+            .issuer_policy
+            .epoch
+            .checked_add(1)
+            .expect("fixture policy epoch increment");
+        assert_drift(policy_substitution);
+
+        let mut integrity_substitution = clone_prepared_for_adversary(&prepared);
+        integrity_substitution.proof_envelope_hash[0] ^= 1;
+        assert_drift(integrity_substitution);
     }
 
     #[test]

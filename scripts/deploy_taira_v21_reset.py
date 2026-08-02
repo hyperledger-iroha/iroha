@@ -51,14 +51,16 @@ from typing import Any, Callable, NoReturn, Optional, Sequence
 
 try:
     from scripts import taira_rollout_admission as rollout_admission
+    from scripts import taira_constants
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
     import taira_rollout_admission as rollout_admission
+    import taira_constants
 
-PEER_COUNT = 4
-CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
-CHAIN_DISCRIMINANT = 369
+PEER_COUNT = taira_constants.PEER_COUNT
+CHAIN_ID = taira_constants.CHAIN_ID
+CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 IS_DATASPACE_ID = 6647857470246403404
 IS2_DATASPACE_ID = 8477022798449861195
 IS_ROUTE_ALIAS = "external-poc"
@@ -86,6 +88,8 @@ MAX_PROCESS_ARGUMENTS = 256
 DARWIN_CTL_KERN = 1
 DARWIN_KERN_PROCARGS2 = 49
 MAX_TERMINAL_UNHEALTHY_BYTES = 1024
+EXTERNAL_TOOL_UID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_UID"
+EXTERNAL_TOOL_GID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_GID"
 MAX_RESTART_LOG_DELTA_BYTES = 8 * 1024 * 1024
 RESTART_LOG_PREFIX_GUARD_BYTES = 4 * 1024
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024 * 1024
@@ -100,7 +104,7 @@ EMPTY_TREE_SHA256 = hashlib.sha256().hexdigest()
 LABELS = tuple(
     f"io.soramitsu.taira.validator-{index}" for index in range(1, PEER_COUNT + 1)
 )
-SLUGS = tuple(f"taira-validator-{index}" for index in range(1, PEER_COUNT + 1))
+SLUGS = taira_constants.SLUGS
 TORII_PORTS = tuple(29_080 + index for index in range(PEER_COUNT))
 P2P_PORTS = tuple(33_337 + index for index in range(PEER_COUNT))
 TOP_LEVEL_NAMES = {
@@ -110,7 +114,6 @@ TOP_LEVEL_NAMES = {
     "rendered",
     "reset-manifest.json",
     "validator-roster.toml",
-    "validator-secrets.toml",
 }
 VALIDATOR_NAMES = {"codec", "config.toml", "configs", "manifests", "runtime", "storage"}
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -857,6 +860,7 @@ def validate_bundle(
     expected_reset_manifest_sha256: str,
     expected_binary_sha256: str,
     expected_source_commit: str,
+    expected_dpn_validator_release_commit: str,
     minimum_free_bytes: int,
     maximum_fsync_latency_ms: int,
 ) -> BundlePlan:
@@ -897,6 +901,11 @@ def validate_bundle(
         fail("reset manifest is not the exact bounded Taira v21 projection")
     if manifest.get("source_commit") != expected_source_commit:
         fail("reset manifest source commit does not match verified admission")
+    if (
+        manifest.get("dpn_validator_release_commit")
+        != expected_dpn_validator_release_commit
+    ):
+        fail("reset manifest DPN release commit does not match verified admission")
     if manifest.get("irohad_sha256") != expected_binary_sha256:
         fail("reset manifest binary does not match the verified admission receipt")
     genesis_public_key = manifest.get("genesis_public_key")
@@ -1096,8 +1105,10 @@ class AdmissionPlan:
     authority_dir: Path
     replay_ledger: Path
     receipt_id: str
+    artifact_handoff_sha256: str
     archive_sha256: str
     source_commit: str
+    dpn_validator_release_commit: str
     cargo_lock_sha256: str
     workspace_source_manifest_sha256: str
     reset_manifest_sha256: str
@@ -1318,6 +1329,7 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
     before_archive = _stable_admission_file(archive, "admission archive")
     source = rollout_admission.SourceIdentity(
         commit=args.expected_source_commit,
+        dpn_validator_release_commit=args.expected_dpn_validator_release_commit,
         cargo_lock_sha256=args.expected_cargo_lock_sha256,
         workspace_source_manifest_sha256=(
             args.expected_workspace_source_manifest_sha256
@@ -1352,6 +1364,7 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
         fail("admission archive was substituted around verification")
 
     expected_fields = {
+        "artifact_handoff_sha256",
         "archive_sha256",
         "deployment_performed",
         "linux_authority_manifest_sha256",
@@ -1381,6 +1394,8 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
         or result["schema_version"] != rollout_admission.VERIFICATION_SCHEMA_VERSION
         or result["peer_count"] != PEER_COUNT
         or result["receipt_id"] != args.expected_receipt_id
+        or result["artifact_handoff_sha256"]
+        != args.expected_artifact_handoff_sha256
         or result["archive_sha256"] != before_archive.sha256
         or result["source"] != source.as_dict()
         or result["signer_fingerprint_sha256"]
@@ -1403,10 +1418,15 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
         authority_dir=authority_dir,
         replay_ledger=ledger,
         receipt_id=require_sha256(result["receipt_id"], "verified receipt ID"),
+        artifact_handoff_sha256=require_sha256(
+            result["artifact_handoff_sha256"],
+            "verified macOS build handoff SHA-256",
+        ),
         archive_sha256=require_sha256(
             result["archive_sha256"], "verified archive SHA-256"
         ),
         source_commit=args.expected_source_commit,
+        dpn_validator_release_commit=args.expected_dpn_validator_release_commit,
         cargo_lock_sha256=args.expected_cargo_lock_sha256,
         workspace_source_manifest_sha256=(
             args.expected_workspace_source_manifest_sha256
@@ -1450,15 +1470,17 @@ def require_inputs_match_admission(
 ) -> None:
     """Bind every deployable byte identity to the verified signed receipt."""
 
+    # The signed receipt attests the secret-free qualification topology.  A
+    # production reset is separately authenticated by its protected source and
+    # may intentionally contain different keys and endpoint configuration.
     if (
-        bundle.manifest_sha256 != admission.reset_manifest_sha256
-        or sources.binary_sha256 != admission.binary_sha256
+        sources.binary_sha256 != admission.binary_sha256
         or sources.supervisor_sha256 != admission.supervisor_sha256
         or bundle.manifest.get("source_commit") != admission.source_commit
-        or tuple((peer.slug, peer.config_sha256) for peer in bundle.peers)
-        != admission.validator_config_sha256
+        or bundle.manifest.get("dpn_validator_release_commit")
+        != admission.dpn_validator_release_commit
     ):
-        fail("deployment inputs do not match the verified admission receipt")
+        fail("deployment executable inputs do not match the verified qualification receipt")
 
 
 def require_admission_bound_inputs_unchanged(
@@ -2528,6 +2550,21 @@ def require_bundle_runtime_unchanged(bundle: BundlePlan) -> None:
     require_mutable_bundle_identities(bundle, phase="after preflight")
 
 
+def _drop_config_check_privileges(uid: int, gid: int) -> Callable[[], None]:
+    """Return the sole child setup permitted for hostile binary config checks."""
+
+    if uid <= 0 or gid <= 0:
+        fail("binary config validation requires a non-root runtime identity")
+
+    def drop() -> None:
+        os.setgroups([])
+        os.setgid(gid)
+        os.setuid(uid)
+        os.umask(0o077)
+
+    return drop
+
+
 def validate_installed_peer_configs(
     installed_binary: Path,
     bundle: BundlePlan,
@@ -2553,6 +2590,10 @@ def validate_installed_peer_configs(
                 capture_output=True,
                 timeout=CONFIG_CHECK_TIMEOUT_SECONDS,
                 env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+                preexec_fn=_drop_config_check_privileges(
+                    bundle.owner_uid,
+                    bundle.owner_gid,
+                ),
             )
         except subprocess.TimeoutExpired as error:
             raise DeploymentError(
@@ -2665,6 +2706,18 @@ def published_source_commit(status: dict[str, Any]) -> str:
         if isinstance(value, str) and COMMIT_RE.fullmatch(value.lower()):
             return value.lower()
     fail("/status omitted one full build Git commit")
+
+
+def published_dpn_validator_release_commit(status: dict[str, Any]) -> str:
+    """Read the exact DPN validator release commit from public node status."""
+
+    build = status.get("build")
+    if not isinstance(build, dict):
+        fail("/status omitted its build identity")
+    value = build.get("dpn_validator_release_commit")
+    if not isinstance(value, str) or COMMIT_RE.fullmatch(value) is None:
+        fail("/status omitted one full DPN validator release commit")
+    return value
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2870,6 +2923,7 @@ def validate_peer_health(
     peer: PeerPlan,
     bundle: BundlePlan,
     expected_source_commit: str,
+    expected_dpn_validator_release_commit: str,
     *,
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
@@ -2914,6 +2968,11 @@ def validate_peer_health(
     )
     if published_source_commit(status) != expected_source_commit:
         fail(f"{peer.label} publishes the wrong build source commit")
+    if (
+        published_dpn_validator_release_commit(status)
+        != expected_dpn_validator_release_commit
+    ):
+        fail(f"{peer.label} publishes the wrong DPN validator release commit")
 
     sumeragi = getter(f"{root}/v1/sumeragi/status", 2.0)
     if (
@@ -3050,6 +3109,7 @@ def validate_peer_health(
 def capture_fleet(
     bundle: BundlePlan,
     expected_source_commit: str,
+    expected_dpn_validator_release_commit: str,
     *,
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
@@ -3061,6 +3121,7 @@ def capture_fleet(
             peer,
             bundle,
             expected_source_commit,
+            expected_dpn_validator_release_commit,
             getter=getter,
             health_getter=health_getter,
         )
@@ -3095,6 +3156,7 @@ def capture_fleet(
 def wait_for_fleet_sample(
     bundle: BundlePlan,
     expected_source_commit: str,
+    expected_dpn_validator_release_commit: str,
     deadline: float,
     *,
     getter: HttpGetter = http_json,
@@ -3110,6 +3172,7 @@ def wait_for_fleet_sample(
             sample = capture_fleet(
                 bundle,
                 expected_source_commit,
+                expected_dpn_validator_release_commit,
                 getter=getter,
                 health_getter=health_getter,
             )
@@ -3125,6 +3188,7 @@ def wait_for_fleet_sample(
 def wait_for_advancement(
     bundle: BundlePlan,
     expected_source_commit: str,
+    expected_dpn_validator_release_commit: str,
     previous: FleetSample,
     deadline: float,
     *,
@@ -3141,6 +3205,7 @@ def wait_for_advancement(
             current = capture_fleet(
                 bundle,
                 expected_source_commit,
+                expected_dpn_validator_release_commit,
                 getter=getter,
                 health_getter=health_getter,
             )
@@ -3374,6 +3439,7 @@ def require_snapshot_backed_restart(cursor: RestartLogCursor) -> None:
 def restart_proof(
     bundle: BundlePlan,
     expected_source_commit: str,
+    expected_dpn_validator_release_commit: str,
     runtime_root: Path,
     plist_bodies: dict[str, bytes],
     installed_binary: Path,
@@ -3432,6 +3498,7 @@ def restart_proof(
     advanced = wait_for_advancement(
         bundle,
         expected_source_commit,
+        expected_dpn_validator_release_commit,
         baseline,
         deadline,
         getter=getter,
@@ -3684,6 +3751,7 @@ def apply_reset(
         baseline = wait_for_fleet_sample(
             bundle,
             args.expected_source_commit,
+            args.expected_dpn_validator_release_commit,
             health_deadline,
             getter=getter,
             health_getter=health_getter,
@@ -3692,6 +3760,7 @@ def apply_reset(
         advanced = wait_for_advancement(
             bundle,
             args.expected_source_commit,
+            args.expected_dpn_validator_release_commit,
             baseline,
             health_deadline,
             getter=getter,
@@ -3712,6 +3781,7 @@ def apply_reset(
         restart_result = restart_proof(
             bundle,
             args.expected_source_commit,
+            args.expected_dpn_validator_release_commit,
             runtime_root,
             plist_bodies,
             installed_binary,
@@ -3761,6 +3831,7 @@ def apply_reset(
         "restart_duration_ms": restart_result.duration_ms,
         "restart_proof": "passed",
         "source_commit": args.expected_source_commit,
+        "dpn_validator_release_commit": args.expected_dpn_validator_release_commit,
         "start_height": baseline.height,
         "supervisor": str(installed_supervisor),
         "supervisor_sha256": sources.supervisor_sha256,
@@ -3782,11 +3853,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SUPERVISOR_PYTHON,
     )
     parser.add_argument("--expected-source-commit", required=True)
+    parser.add_argument("--expected-dpn-validator-release-commit", required=True)
     parser.add_argument("--expected-cargo-lock-sha256", required=True)
     parser.add_argument(
         "--expected-workspace-source-manifest-sha256", required=True
     )
     parser.add_argument("--expected-receipt-id", required=True)
+    parser.add_argument("--expected-artifact-handoff-sha256", required=True)
+    parser.add_argument("--expected-production-reset-manifest-sha256", required=True)
     parser.add_argument("--trusted-signing-fingerprint", required=True)
     parser.add_argument("--release-manifest-verifier", type=Path, required=True)
     parser.add_argument(
@@ -3834,6 +3908,9 @@ def validate_arguments(args: argparse.Namespace) -> None:
     """Validate scalar inputs before reading deployment paths."""
 
     args.expected_source_commit = require_commit(args.expected_source_commit)
+    args.expected_dpn_validator_release_commit = require_commit(
+        args.expected_dpn_validator_release_commit
+    )
     args.expected_cargo_lock_sha256 = require_sha256(
         args.expected_cargo_lock_sha256, "expected Cargo.lock SHA-256"
     )
@@ -3843,6 +3920,14 @@ def validate_arguments(args: argparse.Namespace) -> None:
     )
     args.expected_receipt_id = require_sha256(
         args.expected_receipt_id, "expected receipt ID"
+    )
+    args.expected_artifact_handoff_sha256 = require_sha256(
+        args.expected_artifact_handoff_sha256,
+        "expected macOS build handoff SHA-256",
+    )
+    args.expected_production_reset_manifest_sha256 = require_sha256(
+        args.expected_production_reset_manifest_sha256,
+        "expected production reset-manifest SHA-256",
     )
     args.trusted_signing_fingerprint = require_sha256(
         args.trusted_signing_fingerprint, "trusted signing fingerprint"
@@ -3859,20 +3944,52 @@ def validate_arguments(args: argparse.Namespace) -> None:
         fail("--maximum-fsync-latency-ms must be positive and may not exceed 250")
 
 
+def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
+    """Require the controller-provided non-root identity before root verification."""
+
+    raw_uid = os.environ.get(EXTERNAL_TOOL_UID_ENV)
+    raw_gid = os.environ.get(EXTERNAL_TOOL_GID_ENV)
+    if (raw_uid is None) != (raw_gid is None):
+        fail("sealed external-tool identity is incomplete")
+    if raw_uid is None:
+        if os.geteuid() == 0:
+            fail("root deployment lacks the sealed external-tool identity")
+        return None
+    assert raw_gid is not None
+    if (
+        not raw_uid.isascii()
+        or not raw_uid.isdecimal()
+        or not raw_gid.isascii()
+        or not raw_gid.isdecimal()
+    ):
+        fail("sealed external-tool identity is noncanonical")
+    uid = int(raw_uid)
+    gid = int(raw_gid)
+    if raw_uid != str(uid) or raw_gid != str(gid) or uid <= 0 or gid <= 0:
+        fail("sealed external-tool identity must contain positive canonical IDs")
+    if os.geteuid() != 0 and (uid, gid) != (os.geteuid(), os.getegid()):
+        fail("sealed external-tool identity differs from the current identity")
+    return None if os.geteuid() != 0 else (uid, gid)
+
+
 def execute(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
 ) -> dict[str, Any]:
     """Run the read-only preflight and optional guarded apply transaction."""
 
+    require_sealed_external_tool_identity()
     validate_arguments(args)
     if args.apply and os.geteuid() != 0:
         fail("--apply requires root; no changes were made")
     admission = verify_deployment_admission(args)
     bundle = validate_bundle(
         args.bundle,
-        expected_reset_manifest_sha256=admission.reset_manifest_sha256,
+        expected_reset_manifest_sha256=args.expected_production_reset_manifest_sha256,
         expected_binary_sha256=admission.binary_sha256,
         expected_source_commit=admission.source_commit,
+        expected_dpn_validator_release_commit=(
+            admission.dpn_validator_release_commit
+        ),
         minimum_free_bytes=args.minimum_free_bytes,
         maximum_fsync_latency_ms=args.maximum_fsync_latency_ms,
     )
@@ -3907,6 +4024,9 @@ def execute(
             "peer_count": PEER_COUNT,
             "restart_generation": args.restart_generation,
             "source_commit": args.expected_source_commit,
+            "dpn_validator_release_commit": (
+                args.expected_dpn_validator_release_commit
+            ),
             "supervisor_sha256": sources.supervisor_sha256,
         }
     with exclusive_deployment_lock():

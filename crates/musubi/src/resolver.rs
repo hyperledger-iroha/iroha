@@ -251,6 +251,8 @@ struct PendingEdge {
     requirement: MusubiVersionReqV1,
     depth: u16,
     chain: Vec<ConflictStepV1>,
+    // The exact prior edge this task replaces, retained across parent-version backtracking.
+    origin: Option<PreviousEdge>,
 }
 
 impl PendingEdge {
@@ -269,10 +271,28 @@ impl PendingEdge {
     }
 }
 
+#[derive(Clone)]
+struct PreviousEdge {
+    selected: MusubiReleaseIdV1,
+}
+
+// Exact parent-local identity of one edge that selected the targeted locked node.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PreviousEdgeKey {
+    parent: ParentKey,
+    alias: Name,
+}
+
 #[derive(Clone, Default)]
 struct SearchState {
     selected: BTreeSet<MusubiReleaseIdV1>,
     edges: BTreeMap<ParentKey, BTreeMap<Name, MusubiExactDependencyEdgeV1>>,
+}
+
+#[derive(Default)]
+struct PreciseReplay {
+    paths: BTreeMap<(ParentKey, ParentKey), Vec<ConflictStepV1>>,
+    missing: BTreeMap<PreviousEdgeKey, Vec<ConflictStepV1>>,
 }
 
 #[derive(Clone, Copy)]
@@ -307,25 +327,60 @@ struct Solver {
     preserved: BTreeMap<ParentKey, BTreeMap<Name, MusubiExactDependencyEdgeV1>>,
     locked_nodes: BTreeMap<MusubiReleaseIdV1, MusubiVerificationNodeV1>,
     update: Option<UpdatePlan>,
+    precise_occurrences: BTreeSet<PreviousEdgeKey>,
+    // Bounded by the square of the V1 node limit and shared by every search leaf.
+    precise_target_descendants: BTreeMap<MusubiReleaseIdV1, BTreeSet<MusubiReleaseIdV1>>,
     mode: ResolveModeV1,
+    selection_policy: SelectionPolicyV1,
     limits: Limits,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionPolicyV1 {
+    PreserveConsumerLock,
+    FreshOnly,
 }
 
 /// Resolve the exact consumer graph using first-release deterministic policy.
 pub fn resolve(request: ResolveRequestV1) -> Result<ResolveOutcomeV1, ResolverError> {
-    resolve_with_limits(request, Limits::default())
+    resolve_with_policy(
+        request,
+        Limits::default(),
+        SelectionPolicyV1::PreserveConsumerLock,
+    )
+}
+
+/// Resolve a publication verification graph using only fresh-selectable rows.
+///
+/// Still-valid fresh lock edges retain their normal preference, but yanked,
+/// governed-unavailable, and below-quorum selections are treated as ordinary
+/// lock changes instead of being preserved for publication.
+pub fn resolve_fresh(request: ResolveRequestV1) -> Result<ResolveOutcomeV1, ResolverError> {
+    resolve_with_policy(request, Limits::default(), SelectionPolicyV1::FreshOnly)
 }
 
 fn resolve_with_limits(
     request: ResolveRequestV1,
     limits: Limits,
 ) -> Result<ResolveOutcomeV1, ResolverError> {
-    let solver = Solver::new(request, limits)?;
+    resolve_with_policy(request, limits, SelectionPolicyV1::PreserveConsumerLock)
+}
+
+fn resolve_with_policy(
+    request: ResolveRequestV1,
+    limits: Limits,
+    selection_policy: SelectionPolicyV1,
+) -> Result<ResolveOutcomeV1, ResolverError> {
+    let solver = Solver::new(request, limits, selection_policy)?;
     solver.run()
 }
 
 impl Solver {
-    fn new(mut request: ResolveRequestV1, limits: Limits) -> Result<Self, ResolverError> {
+    fn new(
+        mut request: ResolveRequestV1,
+        limits: Limits,
+        selection_policy: SelectionPolicyV1,
+    ) -> Result<Self, ResolverError> {
         if request.genesis_hash.iter().all(|byte| *byte == 0) {
             return Err(ResolverError::invalid("genesis hash must not be zero"));
         }
@@ -448,6 +503,19 @@ impl Solver {
         }
 
         let update = prepare_update(request.update, request.previous.as_ref())?;
+        let precise_occurrences =
+            prepare_precise_occurrences(request.previous.as_ref(), update.as_ref())?;
+        validate_precise_occurrence_roots(
+            request.previous.as_ref(),
+            &request.roots,
+            &precise_occurrences,
+        )?;
+        let precise_target_descendants = request
+            .previous
+            .as_ref()
+            .map_or_else(BTreeMap::new, |previous| {
+                precise_target_descendants(previous, &precise_occurrences)
+            });
         let mut by_package: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for release in rows.keys() {
             by_package
@@ -475,7 +543,10 @@ impl Solver {
             preserved,
             locked_nodes,
             update,
+            precise_occurrences,
+            precise_target_descendants,
             mode: request.mode,
+            selection_policy,
             limits,
         })
     }
@@ -522,6 +593,7 @@ impl Solver {
                         requirement: dependency.requirement.clone(),
                         depth: 1,
                         chain,
+                        origin: self.previous_edge(&parent, &dependency.alias, &dependency.package),
                     }
                 })
             })
@@ -534,6 +606,9 @@ impl Solver {
         mut pending: Vec<PendingEdge>,
     ) -> Result<SearchState, ResolverError> {
         if pending.is_empty() {
+            if let Some(conflict) = self.precise_conflict(&state) {
+                return Err(ResolverError::Conflict(Box::new(conflict)));
+            }
             return Ok(state);
         }
         let task = pending.remove(0);
@@ -543,6 +618,7 @@ impl Solver {
                 reason: ConflictReasonV1::DepthLimit,
             })));
         }
+        let preserved_candidate = self.preservable_locked_candidate(&task).cloned();
         let candidates = self.candidates(&state, &task);
         if candidates.is_empty() {
             return Err(ResolverError::Conflict(Box::new(ResolutionConflictV1 {
@@ -593,6 +669,10 @@ impl Solver {
             if is_new {
                 let row = self.rows.get(&candidate).expect("candidate row exists");
                 let parent = ParentKey::Release(candidate.clone());
+                let origin_parent = task
+                    .origin
+                    .as_ref()
+                    .map(|origin| ParentKey::Release(origin.selected.clone()));
                 for dependency in &row.dependencies {
                     let mut chain = task.chain.clone();
                     chain.push(PendingEdge::step(
@@ -609,13 +689,28 @@ impl Solver {
                         requirement: dependency.requirement.clone(),
                         depth: task.depth.saturating_add(1),
                         chain,
+                        origin: origin_parent.as_ref().and_then(|origin_parent| {
+                            self.previous_edge(
+                                origin_parent,
+                                &dependency.alias,
+                                &dependency.package,
+                            )
+                        }),
                     });
                 }
             }
             next_pending.extend(pending.iter().cloned());
             match self.search(next, next_pending) {
                 Ok(solution) => {
-                    if parallel_version_excess(&solution) == minimum_parallel_excess {
+                    // A successful still-valid locked branch wins over
+                    // duplicate-version minimization. If that branch cannot
+                    // resolve, normal candidate backtracking remains active.
+                    if preserved_candidate.as_ref() == Some(&candidate) {
+                        return Ok(solution);
+                    }
+                    if preserved_candidate.is_none()
+                        && parallel_version_excess(&solution) == minimum_parallel_excess
+                    {
                         return Ok(solution);
                     }
                     if best_solution.as_ref().is_none_or(|current| {
@@ -643,10 +738,11 @@ impl Solver {
 
     fn candidates(&self, state: &SearchState, task: &PendingEdge) -> Vec<MusubiReleaseIdV1> {
         let preserved = self.preserved_edge(task);
-        let update_edge = self
-            .update
-            .as_ref()
-            .is_some_and(|update| preserved.is_some_and(|edge| edge.selected == update.target));
+        let update_edge = self.update.as_ref().is_some_and(|update| {
+            task.origin
+                .as_ref()
+                .is_some_and(|origin| origin.selected == update.target)
+        });
         let precise = update_edge
             .then(|| {
                 self.update
@@ -739,6 +835,233 @@ impl Solver {
         candidates
     }
 
+    fn precise_target_release(&self) -> Option<MusubiReleaseIdV1> {
+        self.update.as_ref().and_then(|update| {
+            update.precise.as_ref().map(|version| {
+                MusubiReleaseIdV1::new(update.target.package.clone(), version.clone())
+            })
+        })
+    }
+
+    fn previous_edge(
+        &self,
+        parent: &ParentKey,
+        alias: &Name,
+        package: &MusubiPackageIdV1,
+    ) -> Option<PreviousEdge> {
+        self.preserved
+            .get(parent)
+            .and_then(|edges| edges.get(alias))
+            .filter(|edge| &edge.package == package)
+            .map(|edge| PreviousEdge {
+                selected: edge.selected.clone(),
+            })
+    }
+
+    fn precise_conflict(&self, state: &SearchState) -> Option<ResolutionConflictV1> {
+        let expected = self.precise_target_release()?;
+        let replay = self.precise_replay(state);
+        let mut best = None;
+
+        for occurrence in &self.precise_occurrences {
+            let mapped = replay
+                .paths
+                .iter()
+                .filter(|((previous, _), _)| previous == &occurrence.parent)
+                .map(|((_, current), chain)| (current, chain))
+                .collect::<Vec<_>>();
+            if mapped.is_empty() {
+                let chain = replay
+                    .missing
+                    .get(occurrence)
+                    .cloned()
+                    .expect("validated precise occurrence has a current structural break");
+                select_better_conflict(
+                    &mut best,
+                    ResolutionConflictV1 {
+                        chain,
+                        reason: ConflictReasonV1::NoCandidate,
+                    },
+                );
+                continue;
+            }
+
+            for (current, prefix) in mapped {
+                let selects_expected = state
+                    .edges
+                    .get(current)
+                    .and_then(|edges| edges.get(&occurrence.alias))
+                    .is_some_and(|edge| edge.selected == expected);
+                if selects_expected {
+                    continue;
+                }
+                let mut chain = prefix.clone();
+                chain.push(self.precise_terminal_step(current, occurrence, &expected));
+                select_better_conflict(
+                    &mut best,
+                    ResolutionConflictV1 {
+                        chain,
+                        reason: ConflictReasonV1::NoCandidate,
+                    },
+                );
+            }
+        }
+        best
+    }
+
+    fn precise_terminal_step(
+        &self,
+        parent: &ParentKey,
+        occurrence: &PreviousEdgeKey,
+        expected: &MusubiReleaseIdV1,
+    ) -> ConflictStepV1 {
+        ConflictStepV1 {
+            parent: parent.conflict_parent(),
+            alias: occurrence.alias.clone(),
+            package: expected.package.clone(),
+            requirement: MusubiVersionReqV1::Exact(expected.version.clone()),
+        }
+    }
+
+    fn precise_replay(&self, state: &SearchState) -> PreciseReplay {
+        let Some(previous) = self.previous.as_ref() else {
+            return PreciseReplay::default();
+        };
+        let current_paths = self.current_release_paths(state);
+        let mut replay = PreciseReplay::default();
+        let mut pending = BTreeSet::new();
+
+        for root in &previous.roots {
+            if self
+                .roots
+                .binary_search_by(|candidate| candidate.package.cmp(&root.package))
+                .is_ok()
+            {
+                let key = (
+                    ParentKey::Root(root.package.clone()),
+                    ParentKey::Root(root.package.clone()),
+                );
+                replay.paths.insert(key.clone(), Vec::new());
+                pending.insert(key);
+            }
+        }
+        for node in &previous.nodes {
+            if let Some(chain) = current_paths.get(&node.release) {
+                let key = (
+                    ParentKey::Release(node.release.clone()),
+                    ParentKey::Release(node.release.clone()),
+                );
+                if insert_better_chain(&mut replay.paths, key.clone(), chain.clone()) {
+                    pending.insert(key);
+                }
+            }
+        }
+
+        while let Some(key) = pending.pop_first() {
+            let chain = replay
+                .paths
+                .get(&key)
+                .expect("queued precise replay path exists")
+                .clone();
+            let (previous_parent, current_parent) = (&key.0, &key.1);
+            let previous_edges = previous_edges(previous, previous_parent);
+            let current_edges = state.edges.get(current_parent);
+            for previous_edge in previous_edges {
+                let Some(descendants) =
+                    self.precise_target_descendants.get(&previous_edge.selected)
+                else {
+                    continue;
+                };
+                let current_edge = current_edges
+                    .and_then(|edges| edges.get(&previous_edge.alias))
+                    .filter(|edge| edge.package == previous_edge.package);
+                let Some(current_edge) = current_edge else {
+                    let mut missing_chain = chain.clone();
+                    missing_chain.push(PendingEdge::step(
+                        current_parent,
+                        &previous_edge.alias,
+                        &previous_edge.package,
+                        &previous_edge.requirement,
+                    ));
+                    for target_parent in descendants {
+                        for occurrence in self.precise_occurrences.iter().filter(|occurrence| {
+                            occurrence.parent == ParentKey::Release(target_parent.clone())
+                        }) {
+                            insert_better_chain(
+                                &mut replay.missing,
+                                occurrence.clone(),
+                                missing_chain.clone(),
+                            );
+                        }
+                    }
+                    continue;
+                };
+
+                let mut next_chain = chain.clone();
+                next_chain.push(PendingEdge::step(
+                    current_parent,
+                    &current_edge.alias,
+                    &current_edge.package,
+                    &current_edge.requirement,
+                ));
+                let next = (
+                    ParentKey::Release(previous_edge.selected.clone()),
+                    ParentKey::Release(current_edge.selected.clone()),
+                );
+                if insert_better_chain(&mut replay.paths, next.clone(), next_chain) {
+                    pending.insert(next);
+                }
+            }
+        }
+        replay
+    }
+
+    fn current_release_paths(
+        &self,
+        state: &SearchState,
+    ) -> BTreeMap<MusubiReleaseIdV1, Vec<ConflictStepV1>> {
+        let mut paths = BTreeMap::new();
+        let mut pending = BTreeSet::new();
+        for root in &self.roots {
+            let parent = ParentKey::Root(root.package.clone());
+            if let Some(edges) = state.edges.get(&parent) {
+                for edge in edges.values() {
+                    let chain = vec![PendingEdge::step(
+                        &parent,
+                        &edge.alias,
+                        &edge.package,
+                        &edge.requirement,
+                    )];
+                    if insert_better_chain(&mut paths, edge.selected.clone(), chain) {
+                        pending.insert(edge.selected.clone());
+                    }
+                }
+            }
+        }
+        while let Some(release) = pending.pop_first() {
+            let chain = paths
+                .get(&release)
+                .expect("queued current release path exists")
+                .clone();
+            let parent = ParentKey::Release(release);
+            if let Some(edges) = state.edges.get(&parent) {
+                for edge in edges.values() {
+                    let mut next_chain = chain.clone();
+                    next_chain.push(PendingEdge::step(
+                        &parent,
+                        &edge.alias,
+                        &edge.package,
+                        &edge.requirement,
+                    ));
+                    if insert_better_chain(&mut paths, edge.selected.clone(), next_chain) {
+                        pending.insert(edge.selected.clone());
+                    }
+                }
+            }
+        }
+        paths
+    }
+
     fn preserved_edge(&self, task: &PendingEdge) -> Option<&MusubiExactDependencyEdgeV1> {
         self.preserved
             .get(&task.parent)
@@ -750,15 +1073,37 @@ impl Solver {
             })
     }
 
+    fn preservable_locked_candidate(&self, task: &PendingEdge) -> Option<&MusubiReleaseIdV1> {
+        let edge = self.preserved_edge(task)?;
+        if self
+            .update
+            .as_ref()
+            .is_some_and(|update| edge.selected == update.target)
+        {
+            return None;
+        }
+        self.rows
+            .get(&edge.selected)
+            .is_some_and(|row| self.locked_state_is_preservable(row))
+            .then_some(&edge.selected)
+    }
+
     fn locked_state_is_preservable(&self, row: &MusubiResolverReleaseRowV1) -> bool {
-        self.locked_nodes
+        let exact_locked_row = self
+            .locked_nodes
             .get(&row.release)
-            .is_some_and(|node| row_matches_locked_node(row, node))
-            && matches!(
-                &row.selection.governance,
-                MusubiArtifactGovernanceStateV1::Available
-            )
-            && row.selection.storage.availability != MusubiStorageAvailabilityV1::Unavailable
+            .is_some_and(|node| row_matches_locked_node(row, node));
+        exact_locked_row
+            && match self.selection_policy {
+                SelectionPolicyV1::PreserveConsumerLock => {
+                    matches!(
+                        &row.selection.governance,
+                        MusubiArtifactGovernanceStateV1::Available
+                    ) && row.selection.storage.availability
+                        != MusubiStorageAvailabilityV1::Unavailable
+                }
+                SelectionPolicyV1::FreshOnly => row.selection.fresh_selectable(),
+            }
     }
 
     fn would_cycle(
@@ -893,6 +1238,174 @@ fn prepare_update(
         target,
         precise: update.precise,
     }))
+}
+
+fn prepare_precise_occurrences(
+    previous: Option<&LockfileV1>,
+    update: Option<&UpdatePlan>,
+) -> Result<BTreeSet<PreviousEdgeKey>, ResolverError> {
+    let Some(update) = update.filter(|update| update.precise.is_some()) else {
+        return Ok(BTreeSet::new());
+    };
+    let previous = previous.ok_or_else(|| {
+        ResolverError::invalid("a precise targeted update requires an existing Musubi V1 lock")
+    })?;
+    let mut occurrences = BTreeSet::new();
+    for root in &previous.roots {
+        let parent = ParentKey::Root(root.package.clone());
+        for edge in &root.dependencies {
+            if edge.selected == update.target {
+                occurrences.insert(PreviousEdgeKey {
+                    parent: parent.clone(),
+                    alias: edge.alias.clone(),
+                });
+            }
+        }
+    }
+    for node in &previous.nodes {
+        let parent = ParentKey::Release(node.release.clone());
+        for edge in &node.dependencies {
+            if edge.selected == update.target {
+                occurrences.insert(PreviousEdgeKey {
+                    parent: parent.clone(),
+                    alias: edge.alias.clone(),
+                });
+            }
+        }
+    }
+    if occurrences.is_empty() {
+        return Err(ResolverError::invalid(format!(
+            "targeted release `{}` has no incoming edge in the existing lock",
+            update.target
+        )));
+    }
+    Ok(occurrences)
+}
+
+fn validate_precise_occurrence_roots(
+    previous: Option<&LockfileV1>,
+    roots: &[WorkspaceRootReqV1],
+    occurrences: &BTreeSet<PreviousEdgeKey>,
+) -> Result<(), ResolverError> {
+    if occurrences.is_empty() {
+        return Ok(());
+    }
+    let previous = previous.expect("precise occurrences require a previous lock");
+    let current_roots = roots
+        .iter()
+        .map(|root| root.package.clone())
+        .collect::<BTreeSet<_>>();
+    let mut reachable = BTreeSet::new();
+    let mut pending = previous
+        .roots
+        .iter()
+        .filter(|root| current_roots.contains(&root.package))
+        .flat_map(|root| root.dependencies.iter().map(|edge| edge.selected.clone()))
+        .collect::<Vec<_>>();
+    while let Some(release) = pending.pop() {
+        if !reachable.insert(release.clone()) {
+            continue;
+        }
+        pending.extend(
+            previous_edges(previous, &ParentKey::Release(release))
+                .iter()
+                .map(|edge| edge.selected.clone()),
+        );
+    }
+
+    for occurrence in occurrences {
+        let rooted = match &occurrence.parent {
+            ParentKey::Root(root) => current_roots.contains(root),
+            ParentKey::Release(release) => reachable.contains(release),
+        };
+        if !rooted {
+            return Err(ResolverError::invalid(format!(
+                "precise targeted occurrence `{}` / `{}` is not reachable from the selected workspace roots",
+                occurrence.parent.conflict_parent(),
+                occurrence.alias
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn previous_edges<'lock>(
+    previous: &'lock LockfileV1,
+    parent: &ParentKey,
+) -> &'lock [MusubiExactDependencyEdgeV1] {
+    match parent {
+        ParentKey::Root(root) => previous
+            .roots
+            .binary_search_by(|candidate| candidate.package.cmp(root))
+            .ok()
+            .and_then(|index| previous.roots.get(index))
+            .map_or(&[], |root| root.dependencies.as_slice()),
+        ParentKey::Release(release) => previous
+            .nodes
+            .binary_search_by(|candidate| candidate.release.cmp(release))
+            .ok()
+            .and_then(|index| previous.nodes.get(index))
+            .map_or(&[], |node| node.dependencies.as_slice()),
+    }
+}
+
+fn precise_target_descendants(
+    previous: &LockfileV1,
+    occurrences: &BTreeSet<PreviousEdgeKey>,
+) -> BTreeMap<MusubiReleaseIdV1, BTreeSet<MusubiReleaseIdV1>> {
+    // The validated lock is acyclic and contains at most 1,024 releases. Each
+    // stored ancestor/target-parent pair is unique, so retained replay state is
+    // deterministically bounded by the square of the V1 node limit.
+    let mut reverse = BTreeMap::<MusubiReleaseIdV1, BTreeSet<MusubiReleaseIdV1>>::new();
+    for node in &previous.nodes {
+        for edge in &node.dependencies {
+            reverse
+                .entry(edge.selected.clone())
+                .or_default()
+                .insert(node.release.clone());
+        }
+    }
+
+    let target_parents = occurrences
+        .iter()
+        .filter_map(|occurrence| match &occurrence.parent {
+            ParentKey::Root(_) => None,
+            ParentKey::Release(release) => Some(release.clone()),
+        })
+        .collect::<BTreeSet<_>>();
+    let mut descendants = BTreeMap::<_, BTreeSet<_>>::new();
+    for target_parent in target_parents {
+        let mut pending = vec![target_parent.clone()];
+        let mut seen = BTreeSet::new();
+        while let Some(release) = pending.pop() {
+            if !seen.insert(release.clone()) {
+                continue;
+            }
+            descendants
+                .entry(release.clone())
+                .or_default()
+                .insert(target_parent.clone());
+            if let Some(parents) = reverse.get(&release) {
+                pending.extend(parents.iter().cloned());
+            }
+        }
+    }
+    descendants
+}
+
+fn insert_better_chain<Key: Ord>(
+    paths: &mut BTreeMap<Key, Vec<ConflictStepV1>>,
+    key: Key,
+    candidate: Vec<ConflictStepV1>,
+) -> bool {
+    let replace = paths.get(&key).is_none_or(|current| {
+        candidate.len() < current.len()
+            || (candidate.len() == current.len() && candidate < *current)
+    });
+    if replace {
+        paths.insert(key, candidate);
+    }
+    replace
 }
 
 fn row_matches_locked_node(
@@ -1106,7 +1619,7 @@ mod tests {
                 reason: "fixture takedown"
                     .parse::<MusubiReasonV1>()
                     .expect("reason"),
-                enacted_at_height: row.index_revision,
+                applied_at_height: row.index_revision,
             });
         row
     }
@@ -1239,7 +1752,47 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_requirements_backtrack_to_one_compatible_version() {
+    fn publication_resolution_replaces_a_yanked_below_quorum_lock() {
+        let old_snapshot = snapshot(5);
+        let new_snapshot = snapshot(6);
+        let pkg = package("codec");
+        let roots = vec![root(vec![root_dependency(
+            "codec",
+            MusubiDependencyKindV1::Normal,
+            &pkg,
+            "*",
+        )])];
+        let previous = resolve(request(
+            roots.clone(),
+            vec![row(&pkg, "1.0.0", vec![], old_snapshot)],
+            old_snapshot,
+        ))
+        .expect("initial lock")
+        .lockfile;
+        let locked_row = yanked(with_storage(
+            row(&pkg, "1.0.0", vec![], new_snapshot),
+            MusubiStorageAvailabilityV1::BelowQuorum,
+        ));
+        let mut next = request(
+            roots,
+            vec![locked_row, row(&pkg, "2.0.0", vec![], new_snapshot)],
+            new_snapshot,
+        );
+        next.previous = Some(previous);
+
+        let outcome = resolve_fresh(next.clone()).expect("fresh publication graph");
+        assert!(outcome.changed);
+        assert_eq!(
+            root_selection(&outcome.lockfile, "codec").version,
+            version("2.0.0")
+        );
+
+        next.mode = ResolveModeV1::Locked;
+        assert_eq!(resolve_fresh(next), Err(ResolverError::LockChangeRequired));
+    }
+
+    #[test]
+    fn changed_root_ranges_keep_every_still_valid_locked_version() {
         let old_snapshot = snapshot(15);
         let new_snapshot = snapshot(16);
         let pkg = package("codec");
@@ -1275,17 +1828,133 @@ mod tests {
             new_snapshot,
         );
         next.previous = Some(previous);
-        let resolved = resolve(next).expect("overlapping requirements converge");
+        let resolved = resolve(next).expect("still-valid selections remain locked");
 
-        assert_eq!(resolved.lockfile.nodes.len(), 1);
+        assert!(
+            resolved.changed,
+            "changed requirements rewrite edge metadata"
+        );
+        assert_eq!(resolved.lockfile.nodes.len(), 2);
         assert_eq!(
             root_selection(&resolved.lockfile, "a-broad").version,
-            version("1.9.0")
+            version("1.8.0")
         );
         assert_eq!(
             root_selection(&resolved.lockfile, "b-high").version,
             version("1.9.0")
         );
+    }
+
+    #[test]
+    fn compatible_selected_version_does_not_discard_yanked_locked_release() {
+        let old_snapshot = snapshot(19);
+        let new_snapshot = snapshot(20);
+        let pkg = package("codec");
+        let previous = resolve(request(
+            vec![root(vec![
+                root_dependency("a-current", MusubiDependencyKindV1::Normal, &pkg, "=2.0.0"),
+                root_dependency("b-legacy", MusubiDependencyKindV1::Normal, &pkg, "=1.0.0"),
+            ])],
+            vec![
+                row(&pkg, "2.0.0", vec![], old_snapshot),
+                row(&pkg, "1.0.0", vec![], old_snapshot),
+            ],
+            old_snapshot,
+        ))
+        .expect("initial parallel lock")
+        .lockfile;
+
+        let locked_legacy = yanked(with_storage(
+            row(&pkg, "1.0.0", vec![], new_snapshot),
+            MusubiStorageAvailabilityV1::BelowQuorum,
+        ));
+        let mut next = request(
+            vec![root(vec![
+                root_dependency("a-current", MusubiDependencyKindV1::Normal, &pkg, "=2.0.0"),
+                root_dependency("b-legacy", MusubiDependencyKindV1::Normal, &pkg, "*"),
+            ])],
+            vec![row(&pkg, "2.0.0", vec![], new_snapshot), locked_legacy],
+            new_snapshot,
+        );
+        next.previous = Some(previous);
+
+        let resolved = resolve(next).expect("yanked locked release remains fixed");
+        assert_eq!(resolved.lockfile.nodes.len(), 2);
+        assert_eq!(
+            root_selection(&resolved.lockfile, "a-current").version,
+            version("2.0.0")
+        );
+        assert_eq!(
+            root_selection(&resolved.lockfile, "b-legacy").version,
+            version("1.0.0")
+        );
+    }
+
+    #[test]
+    fn unavailable_locked_descendant_allows_parent_candidate_backtracking() {
+        let old_snapshot = snapshot(21);
+        let new_snapshot = snapshot(22);
+        let parent = package("parent");
+        let child = package("child");
+        let roots = vec![root(vec![root_dependency(
+            "parent",
+            MusubiDependencyKindV1::Normal,
+            &parent,
+            "*",
+        )])];
+        let previous = resolve(request(
+            roots.clone(),
+            vec![
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("child", &child, "=1.0.0")],
+                    old_snapshot,
+                ),
+                row(&child, "1.0.0", vec![], old_snapshot),
+            ],
+            old_snapshot,
+        ))
+        .expect("initial lock")
+        .lockfile;
+
+        let mut next = request(
+            roots,
+            vec![
+                row(
+                    &parent,
+                    "2.0.0",
+                    vec![dependency("child", &child, "=2.0.0")],
+                    new_snapshot,
+                ),
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("child", &child, "=1.0.0")],
+                    new_snapshot,
+                ),
+                row(&child, "2.0.0", vec![], new_snapshot),
+                with_storage(
+                    row(&child, "1.0.0", vec![], new_snapshot),
+                    MusubiStorageAvailabilityV1::Unavailable,
+                ),
+            ],
+            new_snapshot,
+        );
+        next.previous = Some(previous);
+
+        let resolved = resolve(next).expect("failed locked branch backtracks to another parent");
+        assert!(resolved.changed);
+        assert_eq!(
+            root_selection(&resolved.lockfile, "parent").version,
+            version("2.0.0")
+        );
+        assert!(resolved.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(child.clone(), version("2.0.0"))
+        }));
+        assert!(!resolved.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(child.clone(), version("1.0.0"))
+        }));
     }
 
     #[test]
@@ -1352,6 +2021,32 @@ mod tests {
         assert_eq!(
             root_selection(&outcome.lockfile, "stable").version,
             version("1.0.0")
+        );
+    }
+
+    #[test]
+    fn comparator_prerelease_does_not_admit_a_different_core_prerelease() {
+        let snap = snapshot(23);
+        let pkg = package("codec");
+        let outcome = resolve(request(
+            vec![root(vec![root_dependency(
+                "codec",
+                MusubiDependencyKindV1::Normal,
+                &pkg,
+                ">=1.2.3-alpha.1,<2.0.0",
+            )])],
+            vec![
+                row(&pkg, "1.3.0-beta.1", vec![], snap),
+                row(&pkg, "1.2.3-beta.2", vec![], snap),
+                row(&pkg, "1.2.3-alpha.1", vec![], snap),
+            ],
+            snap,
+        ))
+        .expect("same-core prerelease resolution");
+
+        assert_eq!(
+            root_selection(&outcome.lockfile, "codec").version,
+            version("1.2.3-beta.2")
         );
     }
 
@@ -1646,6 +2341,512 @@ mod tests {
         assert!(!updated.lockfile.nodes.iter().any(|node| {
             node.release == MusubiReleaseIdV1::new(child.clone(), version("1.0.0"))
         }));
+    }
+
+    #[test]
+    fn precise_target_survives_parent_candidate_backtracking() {
+        let old_snapshot = snapshot(24);
+        let new_snapshot = snapshot(25);
+        let parent = package("parent");
+        let target = package("target");
+        let roots = vec![root(vec![root_dependency(
+            "parent",
+            MusubiDependencyKindV1::Normal,
+            &parent,
+            "*",
+        )])];
+        let previous = resolve(request(
+            roots.clone(),
+            vec![
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("target", &target, "=1.0.0")],
+                    old_snapshot,
+                ),
+                row(&target, "1.0.0", vec![], old_snapshot),
+            ],
+            old_snapshot,
+        ))
+        .expect("initial lock")
+        .lockfile;
+        let mut update = request(
+            roots,
+            vec![
+                row(
+                    &parent,
+                    "3.0.0",
+                    vec![dependency("target", &target, "=3.0.0")],
+                    new_snapshot,
+                ),
+                row(
+                    &parent,
+                    "2.0.0",
+                    vec![dependency("target", &target, ">=2.0.0,<4.0.0")],
+                    new_snapshot,
+                ),
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("target", &target, "=1.0.0")],
+                    new_snapshot,
+                ),
+                row(&target, "3.0.0", vec![], new_snapshot),
+                row(&target, "2.0.0", vec![], new_snapshot),
+                row(&target, "1.0.0", vec![], new_snapshot),
+            ],
+            new_snapshot,
+        );
+        update.previous = Some(previous);
+        update.update = Some(TargetedUpdateV1 {
+            package: target.clone(),
+            locked_version: Some(version("1.0.0")),
+            precise: Some(version("2.0.0")),
+        });
+
+        let updated = resolve(update).expect("precise update after parent backtracking");
+        assert_eq!(
+            root_selection(&updated.lockfile, "parent").version,
+            version("2.0.0")
+        );
+        assert!(updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(target.clone(), version("2.0.0"))
+        }));
+        assert!(!updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(target.clone(), version("3.0.0"))
+        }));
+    }
+
+    #[test]
+    fn sibling_parallel_selection_cannot_satisfy_a_precise_target_occurrence() {
+        let old_snapshot = snapshot(26);
+        let new_snapshot = snapshot(27);
+        let parent = package("parent");
+        let target = package("target");
+        let roots = vec![root(vec![root_dependency(
+            "parent",
+            MusubiDependencyKindV1::Normal,
+            &parent,
+            "*",
+        )])];
+        let previous = resolve(request(
+            roots.clone(),
+            vec![
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![
+                        dependency("a-targeted", &target, "=1.0.0"),
+                        dependency("b-already-precise", &target, "=2.0.0"),
+                        dependency("c-parallel", &target, "=4.0.0"),
+                    ],
+                    old_snapshot,
+                ),
+                row(&target, "4.0.0", vec![], old_snapshot),
+                row(&target, "2.0.0", vec![], old_snapshot),
+                row(&target, "1.0.0", vec![], old_snapshot),
+            ],
+            old_snapshot,
+        ))
+        .expect("initial parallel lock")
+        .lockfile;
+        let mut update = request(
+            roots,
+            vec![
+                row(
+                    &parent,
+                    "4.0.0",
+                    vec![
+                        dependency("b-already-precise", &target, "=2.0.0"),
+                        dependency("c-parallel", &target, "=4.0.0"),
+                    ],
+                    new_snapshot,
+                ),
+                row(
+                    &parent,
+                    "3.0.0",
+                    vec![
+                        dependency("a-targeted", &target, "=3.0.0"),
+                        dependency("b-already-precise", &target, "=2.0.0"),
+                        dependency("c-parallel", &target, "=4.0.0"),
+                    ],
+                    new_snapshot,
+                ),
+                row(
+                    &parent,
+                    "2.0.0",
+                    vec![
+                        dependency("a-targeted", &target, ">=2.0.0,<4.0.0"),
+                        dependency("b-already-precise", &target, "=2.0.0"),
+                        dependency("c-parallel", &target, "=4.0.0"),
+                    ],
+                    new_snapshot,
+                ),
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![
+                        dependency("a-targeted", &target, "=1.0.0"),
+                        dependency("b-already-precise", &target, "=2.0.0"),
+                        dependency("c-parallel", &target, "=4.0.0"),
+                    ],
+                    new_snapshot,
+                ),
+                row(&target, "4.0.0", vec![], new_snapshot),
+                row(&target, "3.0.0", vec![], new_snapshot),
+                row(&target, "2.0.0", vec![], new_snapshot),
+                row(&target, "1.0.0", vec![], new_snapshot),
+            ],
+            new_snapshot,
+        );
+        update.previous = Some(previous);
+        update.update = Some(TargetedUpdateV1 {
+            package: target.clone(),
+            locked_version: Some(version("1.0.0")),
+            precise: Some(version("2.0.0")),
+        });
+
+        let updated = resolve(update).expect("occurrence-bound precise update");
+        assert_eq!(
+            root_selection(&updated.lockfile, "parent").version,
+            version("2.0.0")
+        );
+        let selected_parent = root_selection(&updated.lockfile, "parent");
+        let parent_node = updated
+            .lockfile
+            .nodes
+            .iter()
+            .find(|node| &node.release == selected_parent)
+            .expect("selected parent node");
+        assert_eq!(
+            parent_node
+                .dependencies
+                .iter()
+                .find(|edge| edge.alias.as_ref() == "a-targeted")
+                .expect("targeted occurrence")
+                .selected
+                .version,
+            version("2.0.0")
+        );
+        assert_eq!(
+            parent_node
+                .dependencies
+                .iter()
+                .find(|edge| edge.alias.as_ref() == "b-already-precise")
+                .expect("unrelated precise sibling")
+                .selected
+                .version,
+            version("2.0.0")
+        );
+        assert_eq!(
+            parent_node
+                .dependencies
+                .iter()
+                .find(|edge| edge.alias.as_ref() == "c-parallel")
+                .expect("parallel sibling")
+                .selected
+                .version,
+            version("4.0.0")
+        );
+        assert!(!updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(target.clone(), version("3.0.0"))
+        }));
+    }
+
+    #[test]
+    fn precise_replay_treats_a_still_selected_old_parent_as_itself() {
+        let old_snapshot = snapshot(28);
+        let new_snapshot = snapshot(29);
+        let parent = package("parent");
+        let target = package("target");
+        let previous = resolve(request(
+            vec![root(vec![root_dependency(
+                "old-parent",
+                MusubiDependencyKindV1::Normal,
+                &parent,
+                "=1.0.0",
+            )])],
+            vec![
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("target", &target, "*")],
+                    old_snapshot,
+                ),
+                row(&target, "1.0.0", vec![], old_snapshot),
+            ],
+            old_snapshot,
+        ))
+        .expect("initial lock")
+        .lockfile;
+        let mut update = request(
+            vec![root(vec![root_dependency(
+                "new-parent",
+                MusubiDependencyKindV1::Normal,
+                &parent,
+                "=1.0.0",
+            )])],
+            vec![
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("target", &target, "*")],
+                    new_snapshot,
+                ),
+                row(&target, "2.0.0", vec![], new_snapshot),
+                row(&target, "1.0.0", vec![], new_snapshot),
+            ],
+            new_snapshot,
+        );
+        update.previous = Some(previous);
+        update.update = Some(TargetedUpdateV1 {
+            package: target.clone(),
+            locked_version: Some(version("1.0.0")),
+            precise: Some(version("2.0.0")),
+        });
+
+        let updated = resolve(update).expect("exact old parent is an implicit self mapping");
+        let selected_parent = root_selection(&updated.lockfile, "new-parent");
+        let parent_node = updated
+            .lockfile
+            .nodes
+            .iter()
+            .find(|node| &node.release == selected_parent)
+            .expect("selected parent node");
+        assert_eq!(
+            parent_node.dependencies[0].selected.version,
+            version("2.0.0")
+        );
+    }
+
+    #[test]
+    fn precise_replay_propagates_through_an_already_selected_parent() {
+        let old_snapshot = snapshot(30);
+        let new_snapshot = snapshot(31);
+        let parent = package("parent");
+        let middle = package("middle");
+        let target = package("target");
+        let roots = vec![root(vec![
+            root_dependency(
+                "a-current",
+                MusubiDependencyKindV1::Normal,
+                &parent,
+                "=2.0.0",
+            ),
+            root_dependency(
+                "b-targeted",
+                MusubiDependencyKindV1::Normal,
+                &parent,
+                "=1.0.0",
+            ),
+        ])];
+        let old_rows = vec![
+            row(
+                &parent,
+                "2.0.0",
+                vec![dependency("middle", &middle, "=2.0.0")],
+                old_snapshot,
+            ),
+            row(
+                &parent,
+                "1.0.0",
+                vec![dependency("middle", &middle, "=1.0.0")],
+                old_snapshot,
+            ),
+            row(
+                &middle,
+                "2.0.0",
+                vec![dependency("target", &target, "=2.0.0")],
+                old_snapshot,
+            ),
+            row(
+                &middle,
+                "1.0.0",
+                vec![dependency("target", &target, "=1.0.0")],
+                old_snapshot,
+            ),
+            row(&target, "2.0.0", vec![], old_snapshot),
+            row(&target, "1.0.0", vec![], old_snapshot),
+        ];
+        let previous = resolve(request(roots, old_rows, old_snapshot))
+            .expect("initial parallel lock")
+            .lockfile;
+        let mut update = request(
+            vec![root(vec![
+                root_dependency(
+                    "a-current",
+                    MusubiDependencyKindV1::Normal,
+                    &parent,
+                    "=2.0.0",
+                ),
+                root_dependency("b-targeted", MusubiDependencyKindV1::Normal, &parent, "*"),
+            ])],
+            vec![
+                row(
+                    &parent,
+                    "2.0.0",
+                    vec![dependency("middle", &middle, "=2.0.0")],
+                    new_snapshot,
+                ),
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("middle", &middle, "=1.0.0")],
+                    new_snapshot,
+                ),
+                row(
+                    &middle,
+                    "2.0.0",
+                    vec![dependency("target", &target, "=2.0.0")],
+                    new_snapshot,
+                ),
+                row(
+                    &middle,
+                    "1.0.0",
+                    vec![dependency("target", &target, "=1.0.0")],
+                    new_snapshot,
+                ),
+                row(&target, "2.0.0", vec![], new_snapshot),
+                row(&target, "1.0.0", vec![], new_snapshot),
+            ],
+            new_snapshot,
+        );
+        update.previous = Some(previous);
+        update.update = Some(TargetedUpdateV1 {
+            package: target.clone(),
+            locked_version: Some(version("1.0.0")),
+            precise: Some(version("2.0.0")),
+        });
+
+        let updated = resolve(update).expect("final graph replays through selected parent");
+        assert_eq!(
+            root_selection(&updated.lockfile, "b-targeted").version,
+            version("2.0.0")
+        );
+        assert!(!updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(target.clone(), version("1.0.0"))
+        }));
+    }
+
+    #[test]
+    fn precise_terminal_conflict_uses_the_selected_current_parent() {
+        let old_snapshot = snapshot(32);
+        let new_snapshot = snapshot(33);
+        let parent = package("parent");
+        let target = package("target");
+        let roots = vec![root(vec![root_dependency(
+            "parent",
+            MusubiDependencyKindV1::Normal,
+            &parent,
+            "*",
+        )])];
+        let previous = resolve(request(
+            roots.clone(),
+            vec![
+                row(
+                    &parent,
+                    "1.0.0",
+                    vec![dependency("target", &target, "=1.0.0")],
+                    old_snapshot,
+                ),
+                row(&target, "1.0.0", vec![], old_snapshot),
+            ],
+            old_snapshot,
+        ))
+        .expect("initial lock")
+        .lockfile;
+        let unavailable_parent = with_storage(
+            row(
+                &parent,
+                "1.0.0",
+                vec![dependency("target", &target, "=1.0.0")],
+                new_snapshot,
+            ),
+            MusubiStorageAvailabilityV1::Unavailable,
+        );
+        let mut update = request(
+            roots,
+            vec![
+                row(
+                    &parent,
+                    "2.0.0",
+                    vec![dependency("renamed-target", &target, "=3.0.0")],
+                    new_snapshot,
+                ),
+                unavailable_parent,
+                row(&target, "3.0.0", vec![], new_snapshot),
+                row(&target, "2.0.0", vec![], new_snapshot),
+                row(&target, "1.0.0", vec![], new_snapshot),
+            ],
+            new_snapshot,
+        );
+        update.previous = Some(previous);
+        update.update = Some(TargetedUpdateV1 {
+            package: target.clone(),
+            locked_version: Some(version("1.0.0")),
+            precise: Some(version("2.0.0")),
+        });
+
+        let ResolverError::Conflict(conflict) = resolve(update).expect_err("renamed occurrence")
+        else {
+            panic!("expected precise dependency conflict");
+        };
+        assert_eq!(conflict.chain.len(), 2);
+        assert!(matches!(
+            &conflict.chain[0].parent,
+            ConflictParentV1::Workspace(_)
+        ));
+        assert_eq!(
+            conflict.chain[1].parent,
+            ConflictParentV1::Release(MusubiReleaseIdV1::new(parent, version("2.0.0")))
+        );
+        assert_eq!(conflict.chain[1].alias.as_ref(), "target");
+        assert_eq!(
+            conflict.chain[1].requirement,
+            MusubiVersionReqV1::Exact(version("2.0.0"))
+        );
+    }
+
+    #[test]
+    fn precise_update_rejects_an_occurrence_under_an_omitted_lock_root() {
+        let old_snapshot = snapshot(34);
+        let new_snapshot = snapshot(35);
+        let target = package("target");
+        let previous = resolve(request(
+            vec![root(vec![root_dependency(
+                "target",
+                MusubiDependencyKindV1::Normal,
+                &target,
+                "*",
+            )])],
+            vec![row(&target, "1.0.0", vec![], old_snapshot)],
+            old_snapshot,
+        ))
+        .expect("initial lock")
+        .lockfile;
+        let mut update = request(
+            vec![WorkspaceRootReqV1 {
+                package: "test/other".parse().expect("other root selector"),
+                dependencies: Vec::new(),
+            }],
+            vec![
+                row(&target, "2.0.0", vec![], new_snapshot),
+                row(&target, "1.0.0", vec![], new_snapshot),
+            ],
+            new_snapshot,
+        );
+        update.previous = Some(previous);
+        update.update = Some(TargetedUpdateV1 {
+            package: target,
+            locked_version: Some(version("1.0.0")),
+            precise: Some(version("2.0.0")),
+        });
+
+        let ResolverError::InvalidInput(message) = resolve(update).expect_err("omitted root")
+        else {
+            panic!("expected invalid targeted update");
+        };
+        assert!(message.contains("not reachable from the selected workspace roots"));
     }
 
     #[test]

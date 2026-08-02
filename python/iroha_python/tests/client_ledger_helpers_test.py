@@ -21,7 +21,9 @@ from iroha_python import (
     ContractCallIntent,
     DataEventFilter,
     Ed25519KeyPair,
+    ExplorerCursorMeta,
     ExplorerRwaRecord,
+    ExplorerRwasPage,
     Instruction,
     KotodamaQuantity,
     LocalSigningContext,
@@ -635,35 +637,20 @@ def test_account_exists_falls_back_to_listing_on_route_unavailable() -> None:
     ]
 
 
-def test_asset_balance_tries_taira_prefix_variant_after_prefix_error() -> None:
-    session = FakeSession(
-        [
-            response(400, text="ERR_UNEXPECTED_NETWORK_PREFIX"),
-            response(
-                200,
-                {
-                    "items": [
-                        {
-                            "asset_id": "canonical-ds-id#sorau123",
-                            "asset_alias": "ds#wonderland.is",
-                            "quantity": "42.5",
-                        }
-                    ],
-                    "total": 1,
-                },
-            ),
-        ]
-    )
+def test_asset_balance_rejects_wrong_network_prefix_without_retry() -> None:
+    taira_account = account_address(0x6A, discriminant=369)
+    session = FakeSession([response(400, text="ERR_UNEXPECTED_NETWORK_PREFIX")])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    assert client.asset_balance(
-        "testu123",
-        "ds#wonderland.is",
-        include_taira_prefix_variant=True,
-    ) == Decimal("42.5")
-    assert [call["path"] for call in session.calls] == [
-        "/v1/accounts/testu123/assets",
-        "/v1/accounts/sorau123/assets",
+    with pytest.raises(RuntimeError, match="unexpected status 400"):
+        client.asset_balance(taira_account, "ds#wonderland.is")
+    assert session.calls == [
+        {
+            "method": "GET",
+            "path": f"/v1/accounts/{quote(taira_account, safe='')}/assets",
+            "params": None,
+            "data": None,
+        }
     ]
 
 
@@ -840,6 +827,93 @@ def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: obje
 
     with pytest.raises((TypeError, ValueError)):
         client.asset_balance("adult@is", "ds#wonderland.is")
+
+
+def test_explorer_rwa_list_uses_strict_cursor_contract() -> None:
+    cursor = base64.urlsafe_b64encode(b"canonical explorer cursor").rstrip(b"=").decode()
+    payload = {
+        "pagination": {"limit": 2, "next_cursor": cursor, "has_more": True},
+        "items": [
+            {
+                "id": "lot-001$commodities",
+                "owned_by": "account",
+                "quantity": "10",
+                "held_quantity": "2",
+                "primary_reference": "warehouse-1",
+                "status": None,
+                "is_frozen": False,
+                "metadata": {},
+            }
+        ],
+    }
+    session = FakeSession([response(200, payload)])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    page = client.list_explorer_rwas_typed(
+        cursor=cursor,
+        limit=2,
+        owned_by="account",
+        domain="commodities",
+    )
+
+    assert page.pagination == ExplorerCursorMeta(
+        limit=2,
+        next_cursor=cursor,
+        has_more=True,
+    )
+    assert [item.id for item in page.items] == ["lot-001$commodities"]
+    assert session.calls[0]["params"] == {
+        "cursor": cursor,
+        "limit": 2,
+        "owned_by": "account",
+        "domain": "commodities",
+    }
+
+
+@pytest.mark.parametrize("limit", [0, 101, True, 1.5])
+def test_explorer_rwa_list_rejects_invalid_limit_before_dispatch(limit: object) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.list_explorer_rwas(limit=limit)  # type: ignore[arg-type]
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("cursor", ["", "padded=", "a", "contains space"])
+def test_explorer_rwa_list_rejects_noncanonical_cursor_before_dispatch(cursor: str) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(ValueError, match="cursor"):
+        client.list_explorer_rwas(cursor=cursor)
+    assert session.calls == []
+
+
+def test_explorer_cursor_response_rejects_retired_or_inconsistent_fields() -> None:
+    with pytest.raises(TypeError, match="exactly"):
+        ExplorerCursorMeta.from_payload(
+            {"page": 1, "per_page": 25, "total_pages": 1, "total_items": 0}
+        )
+    with pytest.raises(ValueError, match="next_cursor"):
+        ExplorerCursorMeta.from_payload(
+            {"limit": 25, "next_cursor": None, "has_more": True}
+        )
+    with pytest.raises(TypeError, match="unknown"):
+        ExplorerRwasPage.from_payload(
+            {
+                "pagination": {"limit": 25, "next_cursor": None, "has_more": False},
+                "items": [],
+                "total_items": 0,
+            }
+        )
+
+
+def test_explorer_rwa_list_hard_cuts_retired_page_arguments() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        client.list_explorer_rwas(page=1, per_page=25)  # type: ignore[call-arg]
 
 
 def test_get_asset_definition_returns_none_for_missing_definition() -> None:
@@ -2693,7 +2767,6 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
             "18446744073709551616.25",
             ["dd" * 32],
             proof,
-            outputs=["ee" * 32],
             root_hint="ff" * 32,
         ),
         Instruction.verify_proof(proof),
@@ -2706,6 +2779,38 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
         Instruction.from_json(encoded[index]).to_json()
         for index in json_roundtrip_indexes
     ] == [encoded[index] for index in json_roundtrip_indexes]
+
+
+def test_unshield_instruction_uses_exact_output_free_wire_shape() -> None:
+    instruction = Instruction.unshield_prepared(
+        "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+        account_address(0x62),
+        "3",
+        ["dd" * 32],
+        canonical_proof_attachment(vk_name="vk_unshield"),
+        root_hint="ff" * 32,
+    )
+    instruction_json = json.loads(instruction.to_json())
+    unshield_payload = next(
+        nested["Unshield"]
+        for nested in instruction_json.values()
+        if isinstance(nested, dict) and "Unshield" in nested
+    )
+    assert set(unshield_payload) == {
+        "asset",
+        "to",
+        "public_amount",
+        "inputs",
+        "proof",
+        "root_hint",
+    }
+
+    roundtrip = Instruction.from_json(json.dumps(instruction_json))
+    assert roundtrip.to_norito_bytes() == instruction.to_norito_bytes()
+
+    unshield_payload["outputs"] = []
+    with pytest.raises(ValueError, match="invalid instruction JSON|unknown field.*outputs"):
+        Instruction.from_json(json.dumps(instruction_json))
 
 
 def test_legacy_zk_ace_instruction_and_client_surfaces_are_absent() -> None:
@@ -3364,11 +3469,11 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
                 "1",
                 ["aa" * 32],
                 canonical_proof_attachment(vk_name="vk_unshield"),
-                outputs=["bb" * 32, "bb" * 32],
+                outputs=["bb" * 32],
             ),
-            ValueError,
-            "duplicates",
-            id="unshield-duplicate-output",
+            TypeError,
+            "unexpected keyword argument.*outputs",
+            id="unshield-retired-output-field",
         ),
     ],
 )
@@ -3454,6 +3559,19 @@ def test_zk_instruction_helpers_reject_adversarial_inputs(
             "public_amount",
             id="unshield-negative-public-amount",
         ),
+        pytest.param(
+            lambda draft, asset, account, proof: draft.unshield_prepared(
+                asset,
+                account,
+                "1",
+                inputs=["aa" * 32],
+                proof=canonical_proof_attachment(vk_name="vk_unshield"),
+                outputs=["bb" * 32],
+            ),
+            TypeError,
+            "unexpected keyword argument.*outputs",
+            id="unshield-retired-output-field",
+        ),
     ],
 )
 def test_zk_transaction_draft_rejects_invalid_inputs(
@@ -3533,7 +3651,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         to_account_id=destination,
         public_amount="3",
         inputs=["dd" * 32],
-        outputs=["ee" * 32],
         proof=proof,
         root_hint="ff" * 32,
     ) == {"hash": "zk-4"}
@@ -3656,6 +3773,20 @@ def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
             ValueError,
             "backend",
             id="unshield-missing-proof-backend",
+        ),
+        pytest.param(
+            "unshield_prepared_and_wait",
+            {
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "to_account_id": account_address(0x6A),
+                "public_amount": "1",
+                "inputs": ["aa" * 32],
+                "proof": canonical_proof_attachment(vk_name="vk_unshield"),
+                "outputs": ["bb" * 32],
+            },
+            TypeError,
+            "unexpected keyword argument.*outputs",
+            id="unshield-retired-output-field",
         ),
     ],
 )

@@ -18742,6 +18742,7 @@ mod tests {
             secret_generation: 0,
             service_configs: BTreeMap::new(),
             service_secrets: BTreeMap::new(),
+            fhe_policy_records: BTreeMap::new(),
             service_lease,
             lease_volume_states: Vec::new(),
         }

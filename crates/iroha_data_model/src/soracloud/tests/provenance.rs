@@ -528,432 +528,110 @@
         assert_eq!(encoded, expected);
     }
 
+    fn sample_fhe_policy_reference() -> SoracloudFhePolicyReferenceV1 {
+        SoracloudFhePolicyReferenceV1 {
+            schema_version: SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1,
+            policy_name: "fhe_policy_med".parse().expect("valid policy name"),
+            version: NonZeroU32::new(2).expect("nonzero version"),
+            material_digest: sample_hash(93),
+        }
+    }
+
     #[test]
     fn fhe_job_run_provenance_payload_encodes_canonical_payload() {
         let job = sample_fhe_job_spec();
-        let policy = sample_fhe_execution_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let governance_tx_hash = sample_hash(21);
+        let policy_reference = sample_fhe_policy_reference();
         let encoded = encode_fhe_job_run_provenance_payload(
             "health_portal",
             "private_state",
             job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            None,
-            None,
+            policy_reference.clone(),
             None,
             None,
             Vec::new(),
-            governance_tx_hash,
         )
         .expect("encode payload");
         let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
             service_name: "health_portal",
             binding_name: "private_state",
             job,
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
-            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            full_bootstrap_circuit_artifacts:
-                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
-            ),
-            governance_tx_hash,
+            policy_reference,
+            public_key_proof: None,
+            bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_execution_proofs: Vec::new(),
         })
         .expect("encode payload");
         assert_eq!(encoded, expected);
     }
 
     #[test]
-    fn fhe_job_run_provenance_payload_binds_public_key_proof_option() {
+    fn fhe_job_run_provenance_payload_binds_public_and_bootstrap_proofs() {
         let job = sample_fhe_job_spec();
-        let policy = sample_fhe_execution_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
+        let reference = sample_fhe_policy_reference();
         let public_key_proof = sample_fhe_public_key_proof();
-        let governance_tx_hash = sample_hash(21);
-
-        let with_proof = encode_fhe_job_run_provenance_payload(
+        let bootstrap_proof = sample_fhe_bootstrap_key_proof();
+        let with_proofs = encode_fhe_job_run_provenance_payload(
             "health_portal",
             "private_state",
             job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Some(public_key_proof.clone()),
-            None,
-            None,
-            None,
+            reference.clone(),
+            Some(public_key_proof),
+            Some(bootstrap_proof),
             Vec::new(),
-            governance_tx_hash,
         )
-        .expect("encode public-key proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
-            service_name: "health_portal",
-            binding_name: "private_state",
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: Some(public_key_proof),
-            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            full_bootstrap_circuit_artifacts:
-                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
-            ),
-            governance_tx_hash,
-        })
-        .expect("encode public-key proof-carrying payload");
-        assert_eq!(with_proof, expected);
-
-        let without_proof = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            job,
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            governance_tx_hash,
-        )
-        .expect("encode stripped FHE job payload");
-        assert_ne!(
-            with_proof, without_proof,
-            "public-key proof attachment must be part of the signed FHE job payload"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_provenance_payload_binds_bootstrap_key_proof_option() {
-        let job = sample_fhe_job_spec();
-        let policy = sample_fhe_execution_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let bootstrap_key_zero_refresh_proof = sample_fhe_bootstrap_key_proof();
-        let governance_tx_hash = sample_hash(21);
-
-        let with_proof = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            None,
-            Some(bootstrap_key_zero_refresh_proof.clone()),
-            None,
-            None,
-            Vec::new(),
-            governance_tx_hash,
-        )
-        .expect("encode proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
-            service_name: "health_portal",
-            binding_name: "private_state",
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
-            bootstrap_key_zero_refresh_proof: Some(bootstrap_key_zero_refresh_proof),
-            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            full_bootstrap_circuit_artifacts:
-                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
-            ),
-            governance_tx_hash,
-        })
         .expect("encode proof-carrying payload");
-        assert_eq!(with_proof, expected);
-
-        let without_proof = encode_fhe_job_run_provenance_payload(
+        let without_proofs = encode_fhe_job_run_provenance_payload(
             "health_portal",
             "private_state",
             job,
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            None,
-            None,
+            reference,
             None,
             None,
             Vec::new(),
-            governance_tx_hash,
         )
-        .expect("encode stripped FHE job payload");
+        .expect("encode stripped payload");
+        assert_ne!(with_proofs, without_proofs);
+    }
+
+    #[test]
+    fn fhe_job_run_provenance_payload_binds_execution_proof_order() {
+        let first = sample_fhe_full_bootstrap_execution_proof();
+        let second = sample_fhe_full_bootstrap_execution_proof_with_statement(sample_hash(22));
+        let encoded = |proofs| {
+            encode_fhe_job_run_provenance_payload(
+                "health_portal",
+                "private_state",
+                sample_fhe_job_spec(),
+                sample_fhe_policy_reference(),
+                None,
+                None,
+                proofs,
+            )
+            .expect("encode execution proofs")
+        };
         assert_ne!(
-            with_proof, without_proof,
-            "bootstrap-key proof attachment must be part of the signed FHE job payload"
+            encoded(vec![first.clone(), second.clone()]),
+            encoded(vec![second, first]),
         );
     }
 
     #[test]
-    fn fhe_job_run_provenance_payload_binds_full_bootstrap_material_proof_option() {
-        let job = sample_fhe_job_spec();
-        let policy = sample_fhe_execution_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let full_bootstrap_material_proof = sample_fhe_full_bootstrap_material_proof();
-        let governance_tx_hash = sample_hash(21);
-
-        let with_proof = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            None,
-            None,
-            Some(full_bootstrap_material_proof.clone()),
-            None,
-            Vec::new(),
-            governance_tx_hash,
-        )
-        .expect("encode full-material proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
-            service_name: "health_portal",
-            binding_name: "private_state",
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
-            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            full_bootstrap_material_proof: Some(full_bootstrap_material_proof),
-            full_bootstrap_circuit_artifacts:
-                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
-            ),
-            governance_tx_hash,
-        })
-        .expect("encode full-material proof-carrying payload");
-        assert_eq!(with_proof, expected);
-
-        let without_proof = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            job,
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            governance_tx_hash,
-        )
-        .expect("encode stripped FHE job payload");
-        assert_ne!(
-            with_proof, without_proof,
-            "full-bootstrap material proof attachment must be part of the signed FHE job payload"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_provenance_payload_binds_full_bootstrap_artifact_bundle_option() {
-        let job = sample_fhe_job_spec();
-        let policy = sample_fhe_execution_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
-        let governance_tx_hash = sample_hash(21);
-
-        let with_artifacts = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            None,
-            None,
-            None,
-            Some(artifacts.clone()),
-            Vec::new(),
-            governance_tx_hash,
-        )
-        .expect("encode artifact-carrying FHE job payload");
-        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
-            service_name: "health_portal",
-            binding_name: "private_state",
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
-            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
-            ),
-            governance_tx_hash,
-        })
-        .expect("encode artifact-carrying payload");
-        assert_eq!(with_artifacts, expected);
-
-        let without_artifacts = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            job,
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            governance_tx_hash,
-        )
-        .expect("encode stripped FHE job payload");
-        assert_ne!(
-            with_artifacts, without_artifacts,
-            "full-bootstrap artifact bundle must be part of the signed FHE job payload"
-        );
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn fhe_job_run_provenance_payload_binds_full_bootstrap_execution_proof_vector() {
-        let job = sample_fhe_job_spec();
-        let policy = sample_fhe_execution_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let first_proof = sample_fhe_full_bootstrap_execution_proof();
-        let second_proof =
-            sample_fhe_full_bootstrap_execution_proof_with_statement(sample_hash(22));
-        let governance_tx_hash = sample_hash(21);
-
-        let with_proof = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            None,
-            None,
-            None,
-            None,
-            vec![first_proof.clone(), second_proof.clone()],
-            governance_tx_hash,
-        )
-        .expect("encode execution proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
-            service_name: "health_portal",
-            binding_name: "private_state",
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
-            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            full_bootstrap_circuit_artifacts:
-                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            full_bootstrap_execution_proofs: vec![first_proof.clone(), second_proof.clone()],
-            governance_tx_hash,
-        })
-        .expect("encode execution proof-carrying payload");
-        assert_eq!(with_proof, expected);
-
-        let without_proof = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            job,
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            governance_tx_hash,
-        )
-        .expect("encode stripped FHE job payload");
-        assert_ne!(
-            with_proof, without_proof,
-            "full-bootstrap execution proofs must be part of the signed FHE job payload"
-        );
-
-        let swapped_proof_order = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            sample_fhe_job_spec(),
-            sample_fhe_execution_policy(),
-            sample_fhe_param_set(),
-            sample_bfv_evaluation_key_bundle(),
-            sample_bfv_refresh_transcript(),
-            None,
-            None,
-            None,
-            None,
-            vec![second_proof.clone(), first_proof.clone()],
-            governance_tx_hash,
-        )
-        .expect("encode swapped execution proof vector");
-        assert_ne!(
-            with_proof, swapped_proof_order,
-            "full-bootstrap execution proof order must be part of the signed FHE job payload"
-        );
-
-        let surplus_proof = encode_fhe_job_run_provenance_payload(
-            "health_portal",
-            "private_state",
-            sample_fhe_job_spec(),
-            sample_fhe_execution_policy(),
-            sample_fhe_param_set(),
-            sample_bfv_evaluation_key_bundle(),
-            sample_bfv_refresh_transcript(),
-            None,
-            None,
-            None,
-            None,
-            vec![first_proof, second_proof.clone(), second_proof],
-            governance_tx_hash,
-        )
-        .expect("encode surplus execution proof vector");
-        assert_ne!(
-            with_proof, surplus_proof,
-            "full-bootstrap execution proof vector length must be part of the signed FHE job payload"
-        );
+    fn fhe_job_run_provenance_payload_binds_exact_policy_reference() {
+        let mut changed = sample_fhe_policy_reference();
+        changed.material_digest = sample_hash(94);
+        let encoded = |reference| {
+            encode_fhe_job_run_provenance_payload(
+                "health_portal",
+                "private_state",
+                sample_fhe_job_spec(),
+                reference,
+                None,
+                None,
+                Vec::new(),
+            )
+            .expect("encode reference")
+        };
+        assert_ne!(encoded(sample_fhe_policy_reference()), encoded(changed));
     }
 
     #[test]
@@ -1651,7 +1329,6 @@
             refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
             public_key_proof_statement_digest: Some(sample_hash(89)),
             bootstrap_key_zero_refresh_proof_statement_digest: Some(sample_hash(92)),
-            full_bootstrap_material_proof_statement_digest: None,
             full_bootstrap_release_audit_package: None,
             full_bootstrap_release_audit_package_digest: None,
             full_bootstrap_release_audit_trusted_reviewer_id: None,
@@ -1872,6 +1549,7 @@
             secret_generation: 0,
             service_configs: BTreeMap::new(),
             service_secrets: BTreeMap::new(),
+            fhe_policy_records: BTreeMap::new(),
             service_lease: None,
             lease_volume_states: Vec::new(),
         }
@@ -2443,4 +2121,3 @@
             }
         ));
     }
-

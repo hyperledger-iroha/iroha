@@ -72,6 +72,8 @@ unsafe extern "C" {
 const GOVERNANCE_DAG_SINK_FILESYSTEM: &str = "filesystem";
 const GOVERNANCE_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publish_index.v1";
+// Public index metadata is root-relative; the retained descriptor is the filesystem authority.
+const GOVERNANCE_DAG_LOGICAL_ROOT: &str = ".";
 const GOVERNANCE_CAR_QUEUE_FILE: &str = "car-queue.json";
 const GOVERNANCE_CAR_QUEUE_SCHEMA: &str = "sorafs.governance_dag.local_car_queue.v1";
 const GOVERNANCE_CAR_SEGMENT_SCHEMA: &str = "sorafs.governance_dag.local_car_segment.v1";
@@ -3365,7 +3367,7 @@ fn write_rooted_atomic_expected(
     root_guard.revalidate()
 }
 
-fn read_rooted_governance_state_file(
+pub(super) fn read_rooted_governance_state_file(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
     max_bytes: usize,
@@ -4418,7 +4420,7 @@ fn update_publish_index(
     labels: JsonMap,
 ) -> Result<PublishIndexEntryForCar, GovernancePublishError> {
     let index_path = root.join(GOVERNANCE_PUBLISH_INDEX_FILE);
-    let mut index = read_publish_index(root, &index_path)?;
+    let mut index = read_publish_index(&index_path)?;
     let mut entries = match index.remove("entries") {
         Some(JsonValue::Array(entries)) => entries,
         Some(_) => {
@@ -4459,7 +4461,7 @@ fn update_publish_index(
         entry.insert("labels".into(), labels);
         entries.push(JsonValue::Object(entry));
     }
-    rebuild_publish_index(root, root_guard, index, entries, &index_path)?;
+    rebuild_publish_index(root_guard, index, entries, &index_path)?;
     Ok(PublishIndexEntryForCar {
         position,
         payload_kind: payload_kind.to_owned(),
@@ -4470,7 +4472,7 @@ fn update_publish_index(
     })
 }
 
-fn read_publish_index(root: &Path, index_path: &Path) -> Result<JsonMap, GovernancePublishError> {
+fn read_publish_index(index_path: &Path) -> Result<JsonMap, GovernancePublishError> {
     match read_bounded_governance_state_file(index_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
         Ok(bytes) => {
             let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
@@ -4503,7 +4505,7 @@ fn read_publish_index(root: &Path, index_path: &Path) -> Result<JsonMap, Governa
                 "source".into(),
                 JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
             );
-            map.insert("root".into(), JsonValue::from(root.display().to_string()));
+            map.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
             map.insert("entries".into(), JsonValue::Array(Vec::new()));
             Ok(map)
         }
@@ -4512,7 +4514,6 @@ fn read_publish_index(root: &Path, index_path: &Path) -> Result<JsonMap, Governa
 }
 
 fn rebuild_publish_index(
-    root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
     mut index: JsonMap,
     mut entries: Vec<JsonValue>,
@@ -4566,7 +4567,7 @@ fn rebuild_publish_index(
         "source".into(),
         JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
     );
-    index.insert("root".into(), JsonValue::from(root.display().to_string()));
+    index.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
     index.insert(
         "generated_at".into(),
         JsonValue::from(current_unix_timestamp_seconds()),
@@ -4620,7 +4621,7 @@ fn ensure_governance_car_segment(
     entry: &PublishIndexEntryForCar,
 ) -> Result<(), GovernancePublishError> {
     let queue_path = root.join(GOVERNANCE_CAR_QUEUE_FILE);
-    let mut queue = read_car_queue(root, &queue_path)?;
+    let mut queue = read_car_queue(&queue_path)?;
     let mut segments = match queue.remove("segments") {
         Some(JsonValue::Array(segments)) => segments,
         Some(_) => {
@@ -4650,10 +4651,10 @@ fn ensure_governance_car_segment(
         Some(position) => segments[position] = JsonValue::Object(segment),
         None => segments.push(JsonValue::Object(segment)),
     }
-    rebuild_car_queue(root, root_guard, queue, segments, &queue_path)
+    rebuild_car_queue(root_guard, queue, segments, &queue_path)
 }
 
-fn read_car_queue(root: &Path, queue_path: &Path) -> Result<JsonMap, GovernancePublishError> {
+fn read_car_queue(queue_path: &Path) -> Result<JsonMap, GovernancePublishError> {
     match read_bounded_governance_state_file(queue_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
         Ok(bytes) => {
             let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
@@ -4684,7 +4685,7 @@ fn read_car_queue(root: &Path, queue_path: &Path) -> Result<JsonMap, GovernanceP
                 "source".into(),
                 JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
             );
-            map.insert("root".into(), JsonValue::from(root.display().to_string()));
+            map.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
             map.insert("segments".into(), JsonValue::Array(Vec::new()));
             Ok(map)
         }
@@ -4693,7 +4694,6 @@ fn read_car_queue(root: &Path, queue_path: &Path) -> Result<JsonMap, GovernanceP
 }
 
 fn rebuild_car_queue(
-    root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
     mut queue: JsonMap,
     mut segments: Vec<JsonValue>,
@@ -4701,6 +4701,7 @@ fn rebuild_car_queue(
 ) -> Result<(), GovernancePublishError> {
     let mut by_encoded_blake3 = JsonMap::new();
     let mut by_payload_kind = JsonMap::new();
+    let mut by_car_archive_blake3 = JsonMap::new();
     let mut assembled_count = 0u64;
 
     for (position, segment) in segments.iter_mut().enumerate() {
@@ -4742,6 +4743,16 @@ fn rebuild_car_queue(
             .and_then(JsonValue::as_str)
             .is_some_and(|status| status == "assembled")
         {
+            let Some(car_archive_blake3) = segment_map
+                .get("car_archive_blake3")
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned)
+            else {
+                return Err(GovernancePublishError::other(
+                    "assembled governance CAR queue segment is missing `car_archive_blake3`",
+                ));
+            };
+            append_index_position(&mut by_car_archive_blake3, &car_archive_blake3, position);
             assembled_count = assembled_count.saturating_add(1);
         }
     }
@@ -4754,7 +4765,7 @@ fn rebuild_car_queue(
         "source".into(),
         JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
     );
-    queue.insert("root".into(), JsonValue::from(root.display().to_string()));
+    queue.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
     queue.insert(
         "generated_at".into(),
         JsonValue::from(current_unix_timestamp_seconds()),
@@ -4771,6 +4782,10 @@ fn rebuild_car_queue(
         JsonValue::Object(by_encoded_blake3),
     );
     queue.insert("by_payload_kind".into(), JsonValue::Object(by_payload_kind));
+    queue.insert(
+        "by_car_archive_blake3".into(),
+        JsonValue::Object(by_car_archive_blake3),
+    );
     queue.insert("segments".into(), JsonValue::Array(segments));
 
     let body = json::to_json_pretty(&JsonValue::Object(queue)).map_err(|err| {
@@ -5172,7 +5187,7 @@ fn append_runtime_signed_dag_payload(
     validate_existing_runtime_dag_root(root, signer, checkpoint_store)?;
     root_guard.revalidate()?;
     let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-    let mut index = read_runtime_dag_index(root, signer, checkpoint_store, &index_path)?;
+    let mut index = read_runtime_dag_index(signer, checkpoint_store, &index_path)?;
     let mut blocks = match index.remove("blocks") {
         Some(JsonValue::Array(blocks)) => blocks,
         Some(_) => {
@@ -5347,9 +5362,7 @@ fn append_runtime_signed_dag_payload(
             .node
             .submission_provenance
             .as_ref()
-            .map(|provenance| {
-                JsonValue::from(hex::encode(provenance.publisher_account_digest))
-            })
+            .map(|provenance| JsonValue::from(hex::encode(provenance.publisher_account_digest)))
             .unwrap_or(JsonValue::Null),
     );
     entry.insert(
@@ -5422,7 +5435,6 @@ fn append_runtime_signed_dag_payload(
 }
 
 fn read_runtime_dag_index(
-    root: &Path,
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
     index_path: &Path,
@@ -5447,12 +5459,11 @@ fn read_runtime_dag_index(
                     "governance runtime DAG index uses an unsupported schema",
                 ));
             }
-            let expected_root = root.display().to_string();
             if map.get("source").and_then(JsonValue::as_str) != Some(GOVERNANCE_DAG_SINK_FILESYSTEM)
-                || map.get("root").and_then(JsonValue::as_str) != Some(expected_root.as_str())
+                || map.get("root").and_then(JsonValue::as_str) != Some(GOVERNANCE_DAG_LOGICAL_ROOT)
             {
                 return Err(GovernancePublishError::other(
-                    "governance runtime DAG index source or root binding is substituted",
+                    "governance runtime DAG index source or logical root marker is invalid",
                 ));
             }
             validate_runtime_dag_signer_fields(&map, signer)?;
@@ -5481,7 +5492,7 @@ fn read_runtime_dag_index(
                 "source".into(),
                 JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
             );
-            map.insert("root".into(), JsonValue::from(root.display().to_string()));
+            map.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
             insert_runtime_dag_signer_fields(&mut map, signer);
             insert_runtime_dag_checkpoint_store_fields(&mut map, store);
             map.insert("blocks".into(), JsonValue::Array(Vec::new()));
@@ -6007,7 +6018,7 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
         return Ok(Vec::new());
     }
 
-    let index = read_runtime_dag_index(root, signer, store, &index_path)?;
+    let index = read_runtime_dag_index(signer, store, &index_path)?;
     let current_binding = runtime_dag_provider_binding(signer, store);
     let indexed_blocks = index
         .get("blocks")
@@ -9424,7 +9435,7 @@ fn build_runtime_dag_index_bytes(
         "source".into(),
         JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
     );
-    index.insert("root".into(), JsonValue::from(root.display().to_string()));
+    index.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
     index.insert("generated_at".into(), JsonValue::from(head.generated_at));
     insert_runtime_dag_signer_fields(&mut index, signer);
     insert_runtime_dag_checkpoint_store_fields(&mut index, store);
@@ -14201,7 +14212,13 @@ mod tests {
     fn runtime_index(root: &Path) -> JsonValue {
         let bytes =
             fs::read(root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE)).expect("runtime index exists");
-        norito::json::from_slice(&bytes).expect("runtime index parses")
+        let index: JsonValue = norito::json::from_slice(&bytes).expect("runtime index parses");
+        assert_eq!(
+            index.get("root").and_then(JsonValue::as_str),
+            Some(GOVERNANCE_DAG_LOGICAL_ROOT),
+            "public runtime index must not disclose its host filesystem root"
+        );
+        index
     }
 
     fn runtime_blocks_from_index(root: &Path, index: &JsonValue) -> Vec<GovernanceDagBlockV1> {
@@ -18082,6 +18099,10 @@ mod tests {
             Some(GOVERNANCE_PUBLISH_INDEX_SCHEMA)
         );
         assert_eq!(
+            index.get("root").and_then(JsonValue::as_str),
+            Some(GOVERNANCE_DAG_LOGICAL_ROOT)
+        );
+        assert_eq!(
             index.get("entry_count").and_then(JsonValue::as_u64),
             Some(1)
         );
@@ -18146,6 +18167,10 @@ mod tests {
             Some(GOVERNANCE_CAR_QUEUE_SCHEMA)
         );
         assert_eq!(
+            queue.get("root").and_then(JsonValue::as_str),
+            Some(GOVERNANCE_DAG_LOGICAL_ROOT)
+        );
+        assert_eq!(
             queue.get("segment_count").and_then(JsonValue::as_u64),
             Some(1)
         );
@@ -18192,6 +18217,7 @@ mod tests {
         )
         .expect("resolve car path");
         let car_bytes = fs::read(&car_path).expect("read CAR segment");
+        let car_archive_digest_hex = blake3::hash(&car_bytes).to_hex().to_string();
         assert_eq!(
             segment.get("car_size").and_then(JsonValue::as_u64),
             Some(car_bytes.len() as u64)
@@ -18200,8 +18226,15 @@ mod tests {
             segment
                 .get("car_archive_blake3")
                 .and_then(JsonValue::as_str),
-            Some(blake3::hash(&car_bytes).to_hex().as_str())
+            Some(car_archive_digest_hex.as_str())
         );
+        let archive_positions = queue
+            .get("by_car_archive_blake3")
+            .and_then(JsonValue::as_object)
+            .and_then(|map| map.get(car_archive_digest_hex.as_str()))
+            .and_then(JsonValue::as_array)
+            .expect("CAR archive digest lookup");
+        assert_eq!(archive_positions.as_slice(), [JsonValue::from(0_u64)]);
         let car_digest =
             fs::read_to_string(digest_sidecar_path_for(&car_path)).expect("read car sidecar");
         assert_eq!(

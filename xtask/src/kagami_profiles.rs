@@ -582,7 +582,6 @@ expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
         sorafs_site_bindings = sorafs_site_bindings,
         taira_nexus_overrides = taira_nexus_overrides,
         taira_mcp_overrides = taira_mcp_overrides,
-        taira_offline_overrides = taira_offline_overrides,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,

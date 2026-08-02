@@ -75,7 +75,9 @@ pub use por::{
     DrandHttpRandomnessProvider, PorAutomationError, PorCoordinatorRuntime, PorStorage,
     RandomnessProvider, VerifiedVrfProvider, VrfError, VrfProvider,
 };
-pub use por::{PorCoordinator, PorCoordinatorError, PorStatusExportV1, PorStatusFilter};
+pub use por::{
+    PorCoordinator, PorCoordinatorError, PorStatusExportPageV1, PorStatusFilter, PorStatusPageV1,
+};
 #[cfg(feature = "app_api")]
 pub use potr_signing::{
     PotrAdmissionMaterialResolverV1, PotrAdmissionReaderError, PotrAdmissionReaderV1,

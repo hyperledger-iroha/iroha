@@ -146,11 +146,11 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
-    let charge_asset_id = AssetDefinitionId::new(
+    let charge_asset_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         Name::from_str("fee").expect("asset name"),
     );
-    let plan_id = AssetDefinitionId::new(
+    let plan_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         Name::from_str("subscription_plan").expect("asset name"),
     );
@@ -180,14 +180,26 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
     let domain = Domain::new(domain_id).build(&ALICE_ID);
     let provider_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let subscriber_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
-    let mut plan_definition =
-        AssetDefinition::new(plan_id, NumericSpec::integer()).build(&ALICE_ID);
+    let mut plan_definition = AssetDefinition::new(
+        plan_id,
+        "subscription_plan".to_owned(),
+        NumericSpec::integer(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     plan_definition.metadata.insert(
         Name::from_str(SUBSCRIPTION_PLAN_METADATA_KEY).expect("plan metadata key"),
         IrohaJson::new(build_subscription_plan(charge_asset_id.clone())),
     );
-    let charge_asset_definition =
-        AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&ALICE_ID);
+    let charge_asset_definition = AssetDefinition::new(
+        charge_asset_id.clone(),
+        "fee".to_owned(),
+        NumericSpec::integer(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     let nft = Nft::new(subscription_id.clone(), metadata).build(&BOB_ID);
     let mut world = World::with_assets(
         [domain],

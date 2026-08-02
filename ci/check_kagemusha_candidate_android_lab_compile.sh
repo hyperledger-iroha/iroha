@@ -76,15 +76,70 @@ def publish(relative: str, payload: bytes) -> None:
     path.write_bytes(payload)
     os.chmod(path, 0o600)
 
+manifest_payload = (nonce + ":manifest-v4\n").encode()
+qualification_receipt = (nonce + ":recursive-step-two-qualification-v4\n").encode()
 publish("evidence/candidate/candidate-v4.norito", candidate_payload)
-publish("evidence/candidate/manifest-v4.norito", (nonce + ":manifest-v4\n").encode())
+publish("evidence/candidate/manifest-v4.norito", manifest_payload)
 publish(
-    "evidence/candidate/candidate-validation-v1.json",
-    (json.dumps({"compile_only": True, "schema": "candidate-compile-fixture-v1"},
-                sort_keys=True, separators=(",", ":")) + "\n").encode(),
+    "evidence/candidate/recursive-step-two-qualification-v4.norito",
+    qualification_receipt,
 )
-for name in artifact_names:
-    publish(f"evidence/candidate/artifacts/{name}", (nonce + ":" + name + "\n").encode())
+artifact_reports = []
+artifact_roles = (
+    "step_eq_params_ipa",
+    "step_eq_proving_key",
+    "step_eq_verifying_key",
+    "step_eq_bootstrap_witness",
+    "step_ep_params_ipa",
+    "step_ep_proving_key",
+    "step_ep_verifying_key",
+    "step_ep_bootstrap_witness",
+)
+for index, (role, name) in enumerate(zip(artifact_roles, artifact_names), start=1):
+    payload = (nonce + ":" + name + "\n").encode()
+    publish(f"evidence/candidate/artifacts/{name}", payload)
+    artifact_reports.append({
+        "role": role,
+        "file_name": name,
+        "framed_size_bytes": len(payload),
+        "framed_sha256": hashlib.sha256(payload).hexdigest(),
+        "payload_size_bytes": len(payload) - 1,
+        "payload_sha256": hashlib.sha256(
+            f"{nonce}:payload:{index}:{name}".encode()
+        ).hexdigest(),
+    })
+receipt_sha = hashlib.sha256(qualification_receipt).hexdigest()
+qualified = hashlib.sha256(
+    b"iroha:kagemusha:recursive-spend-qualified-candidate:v4\0"
+    + bytes.fromhex(candidate_sha)
+    + bytes.fromhex(receipt_sha)
+).hexdigest()
+source_commit = "1" * 40
+source_tree_sha = hashlib.sha256((nonce + ":source-tree").encode()).hexdigest()
+validation_report = {
+    "schema": "iroha.kagemusha.recursive_spend.candidate_validation.v2",
+    "candidate_record_sha256": candidate_sha,
+    "candidate_manifest_sha256": hashlib.sha256(manifest_payload).hexdigest(),
+    "qualification_receipt_file_name": "recursive-step-two-qualification-v4.norito",
+    "qualification_receipt_sha256": receipt_sha,
+    "qualified_candidate_sha256": qualified,
+    "source_commit": source_commit,
+    "source_tree_sha256": source_tree_sha,
+    "source_repo_dirty": False,
+    "generation": nonce,
+    "generation_memory_limit_bytes": 6 * 1024 * 1024 * 1024,
+    "generation_memory_enforcement_profile": "self-physical-footprint-v1",
+    "bridge_abi_version": 21,
+    "artifact_count": len(artifact_reports),
+    "artifacts": artifact_reports,
+    "topup_finality_roster_file_name": "topup-finality-roster-v4.norito",
+    "topup_finality_roster_size_bytes": len(b"compile-roster"),
+    "topup_finality_roster_sha256": hashlib.sha256(b"compile-roster").hexdigest(),
+}
+publish(
+    "evidence/candidate/candidate-validation-v2.json",
+    (json.dumps(validation_report, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+)
 for name in scenario_names:
     publish(f"scenario/{name}", (nonce + ":" + name + "\n").encode())
 
@@ -92,7 +147,8 @@ relative_paths = sorted(
     (
         "evidence/candidate/candidate-v4.norito",
         "evidence/candidate/manifest-v4.norito",
-        "evidence/candidate/candidate-validation-v1.json",
+        "evidence/candidate/candidate-validation-v2.json",
+        "evidence/candidate/recursive-step-two-qualification-v4.norito",
         *(f"evidence/candidate/artifacts/{name}" for name in artifact_names),
         *(f"scenario/{name}" for name in scenario_names),
     ),
@@ -119,12 +175,10 @@ for entry in scenario_entries:
     scenario_digest.update(entry["size_bytes"].to_bytes(8, "big"))
     scenario_digest.update(bytes.fromhex(entry["sha256"]))
 
-source_commit = "1" * 40
-source_tree_sha = hashlib.sha256((nonce + ":source-tree").encode()).hexdigest()
 manifest = {
-    "schema": "iroha.kagemusha.android_candidate_stage_manifest.v1",
-    "version": 1,
-    "stage_manifest_path": "candidate-stage-manifest-v1.json",
+    "schema": "iroha.kagemusha.android_candidate_stage_manifest.v2",
+    "version": 2,
+    "stage_manifest_path": "candidate-stage-manifest-v2.json",
     "stage_manifest_mode": "0600",
     "stage_manifest_size_bytes": 0,
     "candidate_record_sha256": candidate_sha,
@@ -132,8 +186,10 @@ manifest = {
         (pending / "evidence/candidate/manifest-v4.norito").read_bytes()
     ).hexdigest(),
     "candidate_validation_report_sha256": hashlib.sha256(
-        (pending / "evidence/candidate/candidate-validation-v1.json").read_bytes()
+        (pending / "evidence/candidate/candidate-validation-v2.json").read_bytes()
     ).hexdigest(),
+    "qualification_receipt_sha256": receipt_sha,
+    "qualified_candidate_sha256": qualified,
     "scenario_inventory_sha256": scenario_digest.hexdigest(),
     "source_commit": source_commit,
     "source_tree_sha256": source_tree_sha,
@@ -167,7 +223,7 @@ while True:
     if manifest["stage_manifest_size_bytes"] == len(encoded):
         break
     manifest["stage_manifest_size_bytes"] = len(encoded)
-publish("candidate-stage-manifest-v1.json", encoded)
+publish("candidate-stage-manifest-v2.json", encoded)
 stage_sha = hashlib.sha256(encoded).hexdigest()
 evidence_root = candidate_parent / stage_sha
 pending.rename(evidence_root)

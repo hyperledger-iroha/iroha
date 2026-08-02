@@ -7878,15 +7878,57 @@ for (const { label, invoke, path } of invalidSorafsSignalCases) {
 
 test("getSorafsPorStatus returns Norito bytes", async () => {
   const responseBytes = Buffer.from([1, 2, 3, 4]);
-  const fetchImpl = async () =>
-    createResponse({
+  let capturedUrl;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
       status: 200,
       arrayData: responseBytes,
       headers: { "content-type": "application/x-norito" },
     });
+  };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const buffer = await client.getSorafsPorStatus({ providerHex: "f".repeat(64) });
+  const buffer = await client.getSorafsPorStatus({
+    providerHex: "f".repeat(64),
+    limit: 7,
+    maxBytes: 8_192,
+    cursor: "AA",
+  });
   assert(buffer.equals(responseBytes));
+  const params = new URL(capturedUrl).searchParams;
+  assert.equal(params.get("provider"), "f".repeat(64));
+  assert.equal(params.get("limit"), "7");
+  assert.equal(params.get("max_bytes"), "8192");
+  assert.equal(params.get("cursor"), "AA");
+});
+
+test("exportSorafsPorStatus normalizes an exact paired range and opaque cursor", async () => {
+  const responseBytes = Buffer.from([5, 6, 7, 8]);
+  let capturedUrl;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({ status: 200, arrayData: responseBytes });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const buffer = await client.exportSorafsPorStatus({
+    startEpoch: 41,
+    endEpoch: 43,
+    limit: 9,
+    maxBytes: 16_384,
+    cursor: "AA",
+  });
+  assert(buffer.equals(responseBytes));
+  const params = new URL(capturedUrl).searchParams;
+  assert.equal(params.get("start_epoch"), "41");
+  assert.equal(params.get("end_epoch"), "43");
+  assert.equal(params.get("limit"), "9");
+  assert.equal(params.get("max_bytes"), "16384");
+  assert.equal(params.get("cursor"), "AA");
+
+  await assert.rejects(
+    () => client.exportSorafsPorStatus({ startEpoch: 41 }),
+    /startEpoch and sorafsPorExport\.endEpoch must be supplied together/,
+  );
 });
 
 test("SoraFS registry helpers reject non-object options", async () => {
@@ -14783,7 +14825,7 @@ test("getGovernanceProposalTyped parses DeployContract variant", async () => {
   assert.equal(result.proposal?.kind.variant, "DeployContract");
   assert.equal(
     result.proposal?.kind.deploy_contract?.contract_address,
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   );
 
   const notFoundClient = new ToriiClient(BASE_URL, {
@@ -15352,7 +15394,7 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
     },
   });
   const result = await client.governanceProposeDeployContract({
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: `0x${"1a".repeat(32)}`,
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
@@ -15362,7 +15404,7 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
   });
   assert.equal(
     capturedBody.contract_address,
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   );
   assert.equal(capturedBody.code_hash, "1a".repeat(32));
   assert.equal(capturedBody.abi_hash, "bb".repeat(32));
@@ -15386,7 +15428,7 @@ test("governanceProposeDeployContract accepts byte-array hashes", async () => {
   });
 
   await client.governanceProposeDeployContract({
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: Array.from(Buffer.alloc(32, 0x1a)),
     abiHash: Array.from(Buffer.alloc(32, 0xbb)),
   });
@@ -15408,7 +15450,7 @@ test("governanceProposeDeployContract normalizes the supported voting-mode alias
     },
   });
   const base = {
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: `0x${"1a".repeat(32)}`,
     abiHash: Buffer.alloc(32, 0xbb),
   };
@@ -15470,7 +15512,7 @@ test("governanceProposeDeployContract rejects non-byte hash arrays", async () =>
   await assert.rejects(
     () =>
       client.governanceProposeDeployContract({
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         codeHash: [256],
         abiHash: Array.from(Buffer.alloc(32, 0xbb)),
       }),
@@ -15702,7 +15744,7 @@ test("governanceProposeDeployContract rejects invalid signal options", async () 
     () =>
       client.governanceProposeDeployContract(
         {
-          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           codeHash: "hash:DEMO",
           abiHash: Buffer.alloc(32, 0xaa),
           abiVersion: "1",
@@ -17285,7 +17327,7 @@ test("listNfts hits nft endpoint", async () => {
   assert.deepEqual(payload.items[0], { id: "nft#1" });
 });
 
-test("listExplorerNfts retains generic JSON parsing and encodes filters", async () => {
+test("listExplorerNfts validates cursor pagination and encodes filters", async () => {
   const calls = [];
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -17293,7 +17335,7 @@ test("listExplorerNfts retains generic JSON parsing and encodes filters", async 
     return createResponse({
       status: 200,
       jsonData: {
-        pagination: { page: 2, per_page: 5, total_pages: 3, total_items: 12 },
+        pagination: { limit: 5, next_cursor: "bmV4dC1uZnQ", has_more: true },
         items: [
           { id: "6HptcdrgYMsS3ARWDMaabCQJtqQd#1", owned_by: SAMPLE_ACCOUNT_ID, metadata: { role: "demo" } },
         ],
@@ -17305,7 +17347,7 @@ test("listExplorerNfts retains generic JSON parsing and encodes filters", async 
   const page = await client.listExplorerNfts({
     ownedBy: SAMPLE_ACCOUNT_ID,
     domainId: "wonderland",
-    offset: 5,
+    cursor: "c3RhcnQtbmZ0",
     limit: 5,
   });
   assert.equal(calls.length, 1);
@@ -17313,10 +17355,16 @@ test("listExplorerNfts retains generic JSON parsing and encodes filters", async 
   assert.equal(parsed.pathname, "/v1/explorer/nfts");
   assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
   assert.equal(parsed.searchParams.get("domain"), "wonderland");
-  assert.equal(parsed.searchParams.get("per_page"), "5");
-  assert.equal(parsed.searchParams.get("page"), "2");
+  assert.equal(parsed.searchParams.get("limit"), "5");
+  assert.equal(parsed.searchParams.get("cursor"), "c3RhcnQtbmZ0");
+  assert.equal(parsed.searchParams.get("page"), null);
+  assert.equal(parsed.searchParams.get("per_page"), null);
   assert.equal(parsed.searchParams.get("canonical_i105"), null);
-  assert.deepEqual(page.pagination, { page: 2, perPage: 5, totalPages: 3, totalItems: 12 });
+  assert.deepEqual(page.pagination, {
+    limit: 5,
+    nextCursor: "bmV4dC1uZnQ",
+    hasMore: true,
+  });
   assert.deepEqual(page.items[0], {
     id: "6HptcdrgYMsS3ARWDMaabCQJtqQd#1",
     ownedBy: SAMPLE_ACCOUNT_ID,
@@ -17324,28 +17372,100 @@ test("listExplorerNfts retains generic JSON parsing and encodes filters", async 
   });
 });
 
+test("world Explorer lists reject offset pagination and malformed cursor metadata", async () => {
+  let fetchCalls = 0;
+  const localClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  await assert.rejects(
+    () => localClient.listExplorerNfts({ page: 2 }),
+    /unsupported fields: page/u,
+  );
+  await assert.rejects(
+    () => localClient.listExplorerRwas({ cursor: "padded==" }),
+    /canonical base64url without padding/u,
+  );
+  await assert.rejects(
+    () => localClient.listExplorerNfts({ cursor: "AB" }),
+    /canonical base64url without padding/u,
+  );
+  await assert.rejects(
+    () => localClient.listExplorerNfts({ limit: 101 }),
+    /must be at most 100/u,
+  );
+  assert.equal(fetchCalls, 0);
+
+  const malformedClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: {
+        pagination: { limit: 25, next_cursor: null, has_more: true },
+        items: [],
+      },
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    () => malformedClient.listExplorerNfts(),
+    /has_more must match next_cursor availability/u,
+  );
+
+  const unknownFieldClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: {
+        pagination: { limit: 25, next_cursor: null, has_more: false, page: 1 },
+        items: [],
+      },
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    () => unknownFieldClient.listExplorerNfts(),
+    /contains unknown field page/u,
+  );
+
+  const oversizedPageClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: {
+        pagination: { limit: 1, next_cursor: null, has_more: false },
+        items: [{}, {}],
+      },
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    () => oversizedPageClient.listExplorerRwas(),
+    /items must not exceed pagination\.limit/u,
+  );
+});
+
 test("iterateAccountNfts walks explorer pagination and honours maxItems", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    const page = Number(parsed.searchParams.get("page") ?? 1);
-    const perPage = Number(parsed.searchParams.get("per_page") ?? 10);
+    const cursor = parsed.searchParams.get("cursor");
+    const limit = Number(parsed.searchParams.get("limit") ?? 25);
     const totalItems = 5;
-    const start = (page - 1) * perPage;
+    const start = cursor === null ? 0 : Number(Buffer.from(cursor, "base64url").toString("utf8"));
     const remaining = Math.max(0, totalItems - start);
-    const items = Array.from({ length: Math.min(perPage, remaining) }, (_, index) => ({
+    const items = Array.from({ length: Math.min(limit, remaining) }, (_, index) => ({
       id: `6HptcdrgYMsS3ARWDMaabCQJtqQd#${start + index + 1}`,
       owned_by: SAMPLE_ACCOUNT_ID,
-      metadata: { page, perPage },
+      metadata: { cursor, limit },
     }));
-    const totalPages = Math.ceil(totalItems / perPage);
+    const nextOffset = start + items.length;
+    const hasMore = nextOffset < totalItems;
     return createResponse({
       status: 200,
       jsonData: {
         pagination: {
-          page,
-          per_page: perPage,
-          total_pages: totalPages,
-          total_items: totalItems,
+          limit,
+          next_cursor: hasMore ? Buffer.from(String(nextOffset)).toString("base64url") : null,
+          has_more: hasMore,
         },
         items,
       },
@@ -17355,7 +17475,7 @@ test("iterateAccountNfts walks explorer pagination and honours maxItems", async 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
   for await (const nft of client.iterateAccountNfts(SAMPLE_ACCOUNT_ID, {
-    pageSize: 2,
+    limit: 2,
     maxItems: 3,
   })) {
     seen.push(nft.id);
@@ -17393,7 +17513,7 @@ test("listRwas hits rwa endpoint", async () => {
   assert.deepEqual(payload.items[0], { id: SAMPLE_RWA_ID });
 });
 
-test("listExplorerRwas encodes owner/domain filters and pagination", async () => {
+test("listExplorerRwas encodes owner/domain filters and cursor pagination", async () => {
   const calls = [];
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -17401,7 +17521,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
     return createResponse({
       status: 200,
       jsonData: {
-        pagination: { page: 2, per_page: 5, total_pages: 3, total_items: 12 },
+        pagination: { limit: 5, next_cursor: "bmV4dC1yd2E", has_more: true },
         items: [
           {
             id: SAMPLE_RWA_ID,
@@ -17422,7 +17542,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
   const page = await client.listExplorerRwas({
     ownedBy: SAMPLE_ACCOUNT_ID,
     domainId: "commodities",
-    offset: 5,
+    cursor: "c3RhcnQtcndh",
     limit: 5,
   });
   assert.equal(calls.length, 1);
@@ -17430,9 +17550,15 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
   assert.equal(parsed.pathname, "/v1/explorer/rwas");
   assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
   assert.equal(parsed.searchParams.get("domain"), "commodities");
-  assert.equal(parsed.searchParams.get("per_page"), "5");
-  assert.equal(parsed.searchParams.get("page"), "2");
-  assert.deepEqual(page.pagination, { page: 2, perPage: 5, totalPages: 3, totalItems: 12 });
+  assert.equal(parsed.searchParams.get("limit"), "5");
+  assert.equal(parsed.searchParams.get("cursor"), "c3RhcnQtcndh");
+  assert.equal(parsed.searchParams.get("page"), null);
+  assert.equal(parsed.searchParams.get("per_page"), null);
+  assert.deepEqual(page.pagination, {
+    limit: 5,
+    nextCursor: "bmV4dC1yd2E",
+    hasMore: true,
+  });
   assert.deepEqual(page.items[0], {
     id: SAMPLE_RWA_ID,
     ownedBy: SAMPLE_ACCOUNT_ID,
@@ -17527,7 +17653,10 @@ test("explorer RWA readbacks reject noncanonical quantity fields", async () => {
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () => createResponse({
         status: 200,
-        jsonData: { pagination: {}, items: [record] },
+        jsonData: {
+          pagination: { limit: 25, next_cursor: null, has_more: false },
+          items: [record],
+        },
         headers: { "content-type": "application/json" },
       }),
     });
@@ -17564,12 +17693,12 @@ test("queryRwas posts structured envelope", async () => {
 test("iterateAccountRwas walks explorer pagination and honours maxItems", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    const page = Number(parsed.searchParams.get("page") ?? 1);
-    const perPage = Number(parsed.searchParams.get("per_page") ?? 10);
+    const cursor = parsed.searchParams.get("cursor");
+    const limit = Number(parsed.searchParams.get("limit") ?? 25);
     const totalItems = 5;
-    const start = (page - 1) * perPage;
+    const start = cursor === null ? 0 : Number(Buffer.from(cursor, "base64url").toString("utf8"));
     const remaining = Math.max(0, totalItems - start);
-    const items = Array.from({ length: Math.min(perPage, remaining) }, (_, index) => ({
+    const items = Array.from({ length: Math.min(limit, remaining) }, (_, index) => ({
       id: `${SAMPLE_RWA_ID}:${start + index + 1}`,
       owned_by: SAMPLE_ACCOUNT_ID,
       quantity: "1",
@@ -17577,17 +17706,17 @@ test("iterateAccountRwas walks explorer pagination and honours maxItems", async 
       primary_reference: `vault-cert-${start + index + 1}`,
       status: null,
       is_frozen: false,
-      metadata: { page, perPage },
+      metadata: { cursor, limit },
     }));
-    const totalPages = Math.ceil(totalItems / perPage);
+    const nextOffset = start + items.length;
+    const hasMore = nextOffset < totalItems;
     return createResponse({
       status: 200,
       jsonData: {
         pagination: {
-          page,
-          per_page: perPage,
-          total_pages: totalPages,
-          total_items: totalItems,
+          limit,
+          next_cursor: hasMore ? Buffer.from(String(nextOffset)).toString("base64url") : null,
+          has_more: hasMore,
         },
         items,
       },
@@ -17597,7 +17726,7 @@ test("iterateAccountRwas walks explorer pagination and honours maxItems", async 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
   for await (const rwa of client.iterateAccountRwas(SAMPLE_ACCOUNT_ID, {
-    pageSize: 2,
+    limit: 2,
     maxItems: 3,
   })) {
     seen.push(rwa.id);
@@ -18589,7 +18718,7 @@ test("listContractActivity encodes contract activity filters", async () => {
             entrypoint_hash: "abc",
             result_ok: true,
             timestamp_ms: 123,
-            contract_address: "tairac1router",
+            contract_address: "irohac1router",
             contract_alias: "dlmm_router",
             contract_entrypoint: "route_swap",
             contract_payload: { amount_in: 100, min_out: 95 },
@@ -18634,7 +18763,7 @@ test("listContractActivity rejects camelCase payload aliases", async () => {
             {
               entrypoint_hash: "tx1",
               result_ok: true,
-              contract_address: "tairac1router",
+              contract_address: "irohac1router",
               contractPayload: {},
             },
           ],
@@ -18667,7 +18796,7 @@ test("listContractEvents encodes generic contract event filters", async () => {
             block_height: 9,
             block_hash_hex: "deadbeef",
             result_ok: true,
-            contract_address: "tairac1router",
+            contract_address: "irohac1router",
             contract_alias: "dlmm_router",
             module: "dlmm_router",
             event_kind: "route_swap",
@@ -18725,7 +18854,7 @@ test("contract query helpers reject padded selector filters before dispatch", as
   const asyncCases = [
     [
       "activity contractAddress",
-      () => client.listContractActivity({ contractAddress: " tairac1router" }),
+      () => client.listContractActivity({ contractAddress: " irohac1router" }),
       /contractAddress must not contain surrounding whitespace/u,
     ],
     [
@@ -18735,7 +18864,7 @@ test("contract query helpers reject padded selector filters before dispatch", as
     ],
     [
       "event contractAddress",
-      () => client.listContractEvents({ contractAddress: "tairac1router " }),
+      () => client.listContractEvents({ contractAddress: "irohac1router " }),
       /contractAddress must not contain surrounding whitespace/u,
     ],
     [
@@ -18781,7 +18910,7 @@ test("listContractEvents rejects camelCase payload aliases", async () => {
               block_height: 1,
               block_hash_hex: "deadbeef",
               result_ok: true,
-              contract_address: "tairac1router",
+              contract_address: "irohac1router",
               module: "router",
               event_kind: "route_swap",
               numericFields: {},
@@ -18802,7 +18931,7 @@ test("contract activity and event projections reject retired fee selectors", asy
   const activity = {
     entrypoint_hash: "tx1",
     result_ok: true,
-    contract_address: "tairac1router",
+    contract_address: "irohac1router",
   };
   const event = {
     event_id: "tx1:0",
@@ -18812,7 +18941,7 @@ test("contract activity and event projections reject retired fee selectors", asy
     block_height: 1,
     block_hash_hex: "deadbeef",
     result_ok: true,
-    contract_address: "tairac1router",
+    contract_address: "irohac1router",
     module: "router",
     event_kind: "route_swap",
   };
@@ -19257,7 +19386,7 @@ test("getGovernanceContract reads one governed binding", async () => {
       status: 200,
       jsonData: {
         found: true,
-        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         dataspace: "universal",
         code_hash_hex: fakeHashHex(0xaa),
       },
@@ -19266,12 +19395,12 @@ test("getGovernanceContract reads one governed binding", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getGovernanceContract(
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     canonicalReadOptions(),
   );
   assert.ok(
     calledUrl?.includes(
-      "/v1/gov/contracts/tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      "/v1/gov/contracts/irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     ),
   );
   assert.equal(result.found, true);
@@ -22613,7 +22742,7 @@ test("setContractAlias posts payload and returns response", async () => {
   let captured;
   const responsePayload = verifyingKeyDraftForPayload(Buffer.from([4, 5]), {
     contract_alias: "router::universal",
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     dataspace: "universal",
   });
   const fetchImpl = async (url, init) => {
@@ -22627,7 +22756,7 @@ test("setContractAlias posts payload and returns response", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.setContractAlias({
     authority: FIXTURE_ALICE_ID,
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     contractAlias: "router::universal",
     leaseExpiryMs: 1234,
   });
@@ -22635,7 +22764,7 @@ test("setContractAlias posts payload and returns response", async () => {
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
     authority: FIXTURE_ALICE_ID,
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     contract_alias: "router::universal",
     lease_expiry_ms: 1234,
   });
@@ -22649,7 +22778,7 @@ test("setContractAlias supports clear requests and rejects lease expiry without 
     return createResponse({
       status: 200,
       jsonData: verifyingKeyDraftForPayload(Buffer.from([4, 5]), {
-        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         dataspace: "universal",
       }),
       headers: { "content-type": "application/json" },
@@ -22658,12 +22787,12 @@ test("setContractAlias supports clear requests and rejects lease expiry without 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.setContractAlias({
     authority: FIXTURE_ALICE_ID,
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/aliases`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     authority: FIXTURE_ALICE_ID,
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     contract_alias: null,
   });
   assert.equal(result.contract_alias, null);
@@ -22672,7 +22801,7 @@ test("setContractAlias supports clear requests and rejects lease expiry without 
     () =>
       client.setContractAlias({
         authority: FIXTURE_ALICE_ID,
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         leaseExpiryMs: 1234,
       }),
     /setContractAlias\.leaseExpiryMs requires contractAlias/,
@@ -22690,7 +22819,7 @@ test("contract mutation drafts reject retired inline private-key fields", async 
       client.setContractAlias({
         authority: FIXTURE_ALICE_ID,
         privateKey: "secret",
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       }),
     /does not accept private-key fields/,
   );
@@ -22699,7 +22828,7 @@ test("contract mutation drafts reject retired inline private-key fields", async 
       client.prepareContractCall({
         authority: FIXTURE_ALICE_ID,
         private_key: "secret",
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         entrypoint: "increment",
         feePayment: authorityFeePayment(42),
       }),
@@ -22714,7 +22843,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
     ok: true,
     submitted: false,
     dataspace: "universal",
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     code_hash_hex: "1".repeat(64),
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: null,
@@ -22731,7 +22860,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
       transport: "torii",
       dataspace: "universal",
       contract_alias: null,
-      contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       code_hash_hex: "1".repeat(64),
       abi_hash_hex: "2".repeat(64),
       tx_hash_hex: null,
@@ -22755,7 +22884,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
   const payload = { value: 7, labels: ["a", "b"] };
   const result = await client.prepareContractCall({
     authority: FIXTURE_ALICE_ID,
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "increment",
     payload,
     feePayment,
@@ -22764,7 +22893,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
     authority: FIXTURE_ALICE_ID,
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "increment",
     payload,
     fee_payment: feePayment,
@@ -22773,7 +22902,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
     ok: true,
     submitted: false,
     dataspace: "universal",
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     code_hash_hex: "1".repeat(64),
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: null,
@@ -22797,7 +22926,7 @@ test("prepareContractCall rejects a submitted response", async () => {
         ok: true,
         submitted: true,
         dataspace: "universal",
-        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         code_hash_hex: "1".repeat(64),
         abi_hash_hex: "2".repeat(64),
         tx_hash_hex: txHash,
@@ -22818,7 +22947,7 @@ test("prepareContractCall rejects a submitted response", async () => {
           transport: "torii",
           dataspace: "universal",
           contract_alias: null,
-          contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           code_hash_hex: "1".repeat(64),
           abi_hash_hex: "2".repeat(64),
           tx_hash_hex: txHash,
@@ -22837,7 +22966,7 @@ test("prepareContractCall rejects a submitted response", async () => {
     () =>
       client.prepareContractCall({
         authority: FIXTURE_ALICE_ID,
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         entrypoint: "increment",
         feePayment: authorityFeePayment(42),
       }),
@@ -22866,7 +22995,7 @@ test("callContract response requires operation_receipt", async () => {
     () =>
       client.prepareContractCall({
         authority: FIXTURE_ALICE_ID,
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         entrypoint: "increment",
         feePayment: authorityFeePayment(42),
       }),
@@ -22876,7 +23005,7 @@ test("callContract response requires operation_receipt", async () => {
 
 test("callContract rejects coercible, non-canonical, or unexpected response fields", async () => {
   const contractAddress =
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
   const makePayload = () => ({
     ok: true,
     submitted: false,
@@ -22975,7 +23104,7 @@ test("callContract rejects missing feePayment", async () => {
     () =>
       client.prepareContractCall({
         authority: FIXTURE_ALICE_ID,
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         entrypoint: "ping",
       }),
     /contractCall\.fee_payment must be an object/,
@@ -22992,7 +23121,7 @@ test("callContract rejects a zero feePayment gas limit", async () => {
     () =>
       client.prepareContractCall({
         authority: FIXTURE_ALICE_ID,
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         entrypoint: "ping",
         feePayment: authorityFeePayment(0),
       }),
@@ -23010,7 +23139,7 @@ test("callContract rejects an implicit entrypoint", async () => {
     () =>
       client.prepareContractCall({
         authority: FIXTURE_ALICE_ID,
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         feePayment: authorityFeePayment(42),
       }),
     /contractCall\.entrypoint/,
@@ -23028,7 +23157,7 @@ test("callContract rejects non-object options", async () => {
       client.prepareContractCall(
         {
           authority: FIXTURE_ALICE_ID,
-          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           entrypoint: "ping",
         },
         "invalid",
@@ -23048,7 +23177,7 @@ test("callContract rejects unsupported option fields", async () => {
       client.prepareContractCall(
         {
           authority: FIXTURE_ALICE_ID,
-          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           entrypoint: "ping",
         },
         { signal: new AbortController().signal, retry: true },
@@ -23477,7 +23606,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   const result = await client.proposeMultisigContractCall({
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "execute",
     payload: { amount: "10" },
     feePayment: authorityFeePayment(5),
@@ -23487,7 +23616,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   assert.deepEqual(body, {
     multisig_account_alias: "cbdc@banka",
     signer_account_id: FIXTURE_ALICE_ID,
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "execute",
     payload: { amount: "10" },
     fee_payment: authorityFeePayment(5),
@@ -23504,7 +23633,7 @@ test("multisig contract call request builders reject retired sponsor aliases", (
     () => buildMultisigContractCallProposeRequest({
       multisigAccountAlias: "cbdc@hbl.sbp",
       signerAccountId: FIXTURE_ALICE_ID,
-      contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       entrypoint: "execute",
       trigger: "probe",
       payload: { amount: "10" },
@@ -23875,7 +24004,7 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
         jsonData: {
           ok: true,
           dataspace: "universal",
-          contract_address: "tairac1routerfixture",
+          contract_address: "irohac1routerfixture",
           code_hash_hex: "11".repeat(32),
           abi_hash_hex: "22".repeat(32),
           entrypoint: "route_swap",
@@ -24788,7 +24917,7 @@ test("IVM proof job attachments enforce structural hashes and rolling wire compa
 test("simulateContractCall rejects fail-open ok coercion and inconsistent errors", async () => {
   const baseResponse = {
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: "11".repeat(32),
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -26203,7 +26332,7 @@ test("getGovernanceContract mirrors response handling", async () => {
       status: 200,
       jsonData: {
         found: true,
-        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         dataspace: "universal",
         code_hash_hex: "1".repeat(64),
       },
@@ -26212,18 +26341,18 @@ test("getGovernanceContract mirrors response handling", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getGovernanceContract(
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     canonicalReadOptions(),
   );
   assert.ok(calledUrl?.includes("/v1/gov/contracts/"));
-  assert.equal(result.contract_address, "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7");
+  assert.equal(result.contract_address, "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw");
   assert.equal(result.dataspace, "universal");
   assert.equal(result.code_hash_hex, "1".repeat(64));
 });
 
 test("getGovernanceContract rejects coercible, non-canonical, or unexpected fields", async () => {
   const contractAddress =
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
   const cases = [
     [
       "string boolean",
@@ -26283,7 +26412,7 @@ test("getGovernanceContract rejects unsupported option keys", async () => {
   await assert.rejects(
     () =>
       client.getGovernanceContract(
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         canonicalReadOptions({ cursor: "abc" }),
       ),
     /getGovernanceContract options contains unsupported fields: cursor/,

@@ -170,7 +170,7 @@ fn main() {
             .parse()
             .expect("Bob public key"),
     );
-    let asset = AssetDefinitionId::new(
+    let asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("example domain"),
         "rose".parse().expect("example asset name"),
     );

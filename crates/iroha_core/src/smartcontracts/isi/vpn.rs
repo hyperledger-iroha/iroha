@@ -124,7 +124,7 @@ fn xor_asset_definition_id() -> AssetDefinitionId {
     let domain =
         DomainId::parse_fully_qualified("universal.universal").expect("static XOR domain id");
     let name = Name::from_str("xor").expect("static XOR asset name");
-    AssetDefinitionId::new(domain, name)
+    AssetDefinitionId::derive_from_components(domain, name)
 }
 
 fn ensure_xor_asset(asset_definition: &AssetDefinitionId) -> Result<(), Error> {
@@ -385,10 +385,7 @@ impl Execute for OpenVpnLeaseEscrow {
             earned_fee: Quantity::zero(),
             refunded_fee: Quantity::zero(),
         };
-        state_transaction
-            .world
-            .vpn_leases
-            .insert(record.lease_id, record);
+        state_transaction.world.put_vpn_lease(record);
         Ok(())
     }
 }
@@ -452,10 +449,7 @@ impl Execute for SettleVpnLease {
         record.settled_relay_receipt = Some(self.relay_receipt);
         record.earned_fee = earned_fee;
         record.refunded_fee = refund_fee;
-        state_transaction
-            .world
-            .vpn_leases
-            .insert(record.lease_id, record);
+        state_transaction.world.put_vpn_lease(record);
         Ok(())
     }
 }
@@ -497,10 +491,7 @@ impl Execute for RefundExpiredVpnLease {
         record.status = VpnLeaseStatusV1::Refunded;
         record.refunded_at_ms = Some(now_ms);
         record.refunded_fee = record.lease_fee.clone();
-        state_transaction
-            .world
-            .vpn_leases
-            .insert(record.lease_id, record);
+        state_transaction.world.put_vpn_lease(record);
         Ok(())
     }
 }

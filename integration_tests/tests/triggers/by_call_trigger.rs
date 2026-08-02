@@ -269,7 +269,7 @@ async fn call_execute_trigger() -> Result<()> {
     network.ensure_blocks_with(|h| h.total >= 1).await?;
 
     run_or_skip(stringify!(call_execute_trigger), || async {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );
@@ -327,7 +327,7 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
     Box::pin(run_or_skip(
         stringify!(execute_trigger_should_produce_event),
         move || async move {
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "rose".parse()?,
             );
@@ -400,7 +400,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
     run_or_skip(
         stringify!(trigger_failure_should_not_cancel_other_triggers_execution),
         || async {
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "rose".parse()?,
             );
@@ -548,7 +548,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
     run_or_skip(
         stringify!(trigger_should_not_be_executed_with_zero_repeats_count),
         || async {
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "rose".parse()?,
             );
@@ -658,7 +658,7 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
     run_or_skip(
         stringify!(trigger_should_be_able_to_modify_its_own_repeats_count),
         || async {
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "rose".parse()?,
             );
@@ -1042,7 +1042,7 @@ async fn trigger_in_genesis() -> Result<()> {
     let test_client = network.client();
 
     run_or_skip(stringify!(trigger_in_genesis), || async {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );
@@ -1100,7 +1100,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
     run_or_skip(
         stringify!(trigger_should_be_able_to_modify_other_trigger),
         || async {
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "rose".parse()?,
             );
@@ -1250,7 +1250,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
             }
         }
 
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );
@@ -1515,7 +1515,7 @@ async fn call_execute_trigger_with_args() -> Result<()> {
     network.ensure_blocks_with(|h| h.total >= 1).await?;
 
     run_or_skip(stringify!(call_execute_trigger_with_args), || async {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );

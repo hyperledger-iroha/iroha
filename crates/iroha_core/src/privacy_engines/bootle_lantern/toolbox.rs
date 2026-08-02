@@ -1259,8 +1259,7 @@ mod tests {
 
     #[test]
     fn oversized_projection_is_rejected_before_arithmetic_allocation_or_transcript_work() {
-        let transcript = projection_test_transcript();
-        let core = transcript.proof_core();
+        let core = projection_test_transcript();
         let expected =
             ToolboxErrorV1::Transcript(TranscriptErrorV1::FixedProfileCapacityExceeded {
                 field: "ternary_columns",

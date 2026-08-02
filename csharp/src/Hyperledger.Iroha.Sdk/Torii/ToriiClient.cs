@@ -5136,12 +5136,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
             new KeyValuePair<string, string?>("with_asset", NormalizeOptionalExactValue(query.WithAsset, nameof(query.WithAsset))),
         ]);
@@ -5154,12 +5154,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
         ]);
     }
@@ -5171,13 +5171,13 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("owning_domain", NormalizeOptionalExactValue(query.OwningDomain, nameof(query.OwningDomain))),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
         ]);
     }
@@ -5189,12 +5189,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
             new KeyValuePair<string, string?>("definition", NormalizeOptionalExactValue(query.Definition, nameof(query.Definition))),
             new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(query.AssetId, nameof(query.AssetId))),
@@ -5208,12 +5208,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
             new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
         ]);
@@ -5226,12 +5226,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
             new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
         ]);
@@ -7915,6 +7915,33 @@ public sealed partial class ToriiClient : IDisposable
         if (query.PerPage == 0)
         {
             throw new ArgumentOutOfRangeException(paramName, "Explorer per-page values must be positive when provided.");
+        }
+    }
+
+    private static void ValidateExplorerCursor(ToriiExplorerCursorQuery query, string paramName)
+    {
+        if (query.Cursor is not null)
+        {
+            try
+            {
+                ToriiExplorerDirectMetadata.RequireCanonicalExplorerCursor(query.Cursor, nameof(query.Cursor));
+            }
+            catch (ArgumentException exception)
+            {
+                throw new ArgumentException(exception.Message, paramName, exception);
+            }
+        }
+
+        if (query.Limit.HasValue)
+        {
+            try
+            {
+                ToriiExplorerDirectMetadata.RequireExplorerCursorLimit(query.Limit.Value, nameof(query.Limit));
+            }
+            catch (ArgumentOutOfRangeException exception)
+            {
+                throw new ArgumentOutOfRangeException(paramName, exception.Message);
+            }
         }
     }
 

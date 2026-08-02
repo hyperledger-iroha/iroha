@@ -199,7 +199,7 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
             .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
     let authorization_secret_key = Zeroizing::new(authorization_keys.secret_key().to_vec());
 
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").map_err(|_| PqMaspReleaseFixtureErrorV1)?,
         Name::from_str("pq_note").map_err(|_| PqMaspReleaseFixtureErrorV1)?,
     );

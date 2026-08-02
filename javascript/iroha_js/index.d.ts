@@ -5,6 +5,7 @@ import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
+export * from "./bootle-lantern-issuance.js";
 
 export type JsonValue =
   | null
@@ -1570,32 +1571,26 @@ export interface AssetHolderIteratorOptions extends PaginationIteratorOptions {
 }
 
 export interface ExplorerNftListOptions {
-  page?: NumericLike;
-  perPage?: NumericLike;
   limit?: NumericLike;
-  offset?: NumericLike;
+  cursor?: string;
   ownedBy?: string;
   domainId?: string;
   signal?: AbortSignal;
 }
 
 export interface ExplorerNftIteratorOptions extends ExplorerNftListOptions {
-  pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
 
 export interface ExplorerRwaListOptions {
-  page?: NumericLike;
-  perPage?: NumericLike;
   limit?: NumericLike;
-  offset?: NumericLike;
+  cursor?: string;
   ownedBy?: string;
   domainId?: string;
   signal?: AbortSignal;
 }
 
 export interface ExplorerRwaIteratorOptions extends ExplorerRwaListOptions {
-  pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
 
@@ -2478,6 +2473,13 @@ export interface ToriiExplorerPaginationMeta {
   totalItems: number;
 }
 
+/** Seek-pagination metadata for canonical Explorer world collections. */
+export interface ToriiExplorerCursorMeta {
+  limit: number;
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export interface ToriiExplorerNft {
   id: string;
   ownedBy: string;
@@ -2485,7 +2487,7 @@ export interface ToriiExplorerNft {
 }
 
 export interface ToriiExplorerNftsPage {
-  pagination: ToriiExplorerPaginationMeta;
+  pagination: ToriiExplorerCursorMeta;
   items: ReadonlyArray<ToriiExplorerNft>;
 }
 
@@ -2502,7 +2504,7 @@ export interface ToriiExplorerRwa {
 }
 
 export interface ToriiExplorerRwasPage {
-  pagination: ToriiExplorerPaginationMeta;
+  pagination: ToriiExplorerCursorMeta;
   items: ReadonlyArray<ToriiExplorerRwa>;
 }
 
@@ -7398,11 +7400,14 @@ interface RegisterAssetDefinitionAndMintInputBase {
   authority: string;
   assetDefinition: {
     assetDefinitionId: string;
+    /** Immutable ownership intent; null means intentionally unowned global. */
+    owningDomain: string | null;
     metadata?: object;
     mintable?: string;
     logo?: string | null;
     spec?: object;
     confidentialPolicy?: object;
+    balanceScopePolicy: string;
   };
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -7652,7 +7657,6 @@ export interface UnshieldInstructionInput {
   destinationAccountId: string;
   publicAmount: QuantityInput;
   inputs: ReadonlyArray<BinaryLike>;
-  outputs?: ReadonlyArray<BinaryLike>;
   proof: ProofAttachmentInput;
   rootHint?: BinaryLike | null;
 }
@@ -8664,13 +8668,17 @@ export interface SorafsPorStatusOptions {
   epoch?: NumericLike;
   status?: string;
   limit?: NumericLike;
-  pageTokenHex?: string | null;
+  maxBytes?: NumericLike;
+  cursor?: string | null;
   signal?: AbortSignal;
 }
 
 export interface SorafsPorExportOptions {
   startEpoch?: NumericLike;
   endEpoch?: NumericLike;
+  limit?: NumericLike;
+  maxBytes?: NumericLike;
+  cursor?: string | null;
   signal?: AbortSignal;
 }
 
@@ -10030,6 +10038,69 @@ export interface ToriiBrowserRequestOptions {
   successStatuses?: ReadonlyArray<number>;
 }
 
+export interface ToriiBrowserExplorerCursorOptions {
+  cursor?: string;
+  limit?: NumericLike;
+  signal?: AbortSignal;
+}
+
+export interface ToriiBrowserExplorerAccountsOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  domain?: string;
+  withAsset?: string;
+  addressFormat?: string;
+}
+
+export interface ToriiBrowserExplorerDomainsOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  ownedBy?: string;
+}
+
+export interface ToriiBrowserExplorerAssetDefinitionsOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  owningDomain?: string;
+  owning_domain?: string;
+  ownedBy?: string;
+}
+
+export interface ToriiBrowserExplorerAssetsOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  ownedBy?: string;
+  definition?: string;
+  assetId?: string;
+}
+
+export interface ToriiBrowserExplorerOwnedDomainOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  ownedBy?: string;
+  domain?: string;
+}
+
+export interface ToriiBrowserExplorerCursorMeta {
+  limit: number;
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface ToriiBrowserExplorerCursorPage<T = unknown> {
+  pagination: ToriiBrowserExplorerCursorMeta;
+  items: ReadonlyArray<T>;
+}
+
+export interface ToriiBrowserExplorerAssetDefinition {
+  readonly id: string;
+  /** Null denotes an intentionally unowned global definition. */
+  readonly owning_domain: string | null;
+  readonly mintable: string;
+  readonly logo: string | null;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly owned_by: string;
+  readonly assets: number;
+  readonly total_quantity: string;
+  readonly locked_quantity: string | null;
+  readonly circulating_quantity: string | null;
+}
+
 export interface ToriiLedgerHeadersOptions {
   from?: number | string | bigint;
   limit?: number | string | bigint;
@@ -10336,17 +10407,23 @@ export declare class ToriiBrowserClient {
     operationId: string,
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaOperationStatus>;
-  listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAccounts<T = unknown>(
+    options?: ToriiBrowserExplorerAccountsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAccount(
     accountId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerDomains(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerDomains<T = unknown>(
+    options?: ToriiBrowserExplorerDomainsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerDomain(
     domainId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssets(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAssets<T = unknown>(
+    options?: ToriiBrowserExplorerAssetsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAsset(
     assetId: string,
     options?: Record<string, unknown>,
@@ -10400,9 +10477,9 @@ export declare class ToriiBrowserClient {
     aliasOrRequest: string | Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssetDefinitions(
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  listExplorerAssetDefinitions<T = ToriiBrowserExplorerAssetDefinition>(
+    options?: ToriiBrowserExplorerAssetDefinitionsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAssetDefinitionEconometrics(
     assetDefinitionId: string,
     options?: Record<string, unknown>,
@@ -10411,12 +10488,16 @@ export declare class ToriiBrowserClient {
     assetDefinitionId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerNfts(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerNfts<T = unknown>(
+    options?: ToriiBrowserExplorerOwnedDomainOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerNft(
     nftId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerRwas(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerRwas<T = unknown>(
+    options?: ToriiBrowserExplorerOwnedDomainOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerRwa(
     rwaId: string,
     options?: Record<string, unknown>,
@@ -13138,8 +13219,10 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   mintable?: string;
   mintOnce?: boolean;
   metadata?: object | null;
-  balanceScopePolicy?: string;
+  balanceScopePolicy: string;
   balance_scope_policy?: string;
+  /** Immutable ownership intent; null means intentionally unowned global. */
+  owningDomain: string | null;
   confidentialPolicy?: object;
   confidential_policy?: object;
 }): object;

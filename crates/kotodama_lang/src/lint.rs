@@ -2736,10 +2736,11 @@ fn main() { subscription_bill(); }"#,
                 .parse()
                 .expect("public key"),
         );
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def, account);
         let isi = InstructionBox::from(Mint::asset_quantity(1u32, asset_id));
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
@@ -2792,10 +2793,11 @@ fn main() { subscription_bill(); }"#,
                 .parse()
                 .expect("public key"),
         );
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def, account);
         let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
             asset_id,

@@ -140,6 +140,8 @@ pub enum IrohaRuntimeProviderSlotV1 {
     ModerationCheckpointStore = 52,
     /// Evidence-viewer signed monotonic transparency-head publisher.
     EvidenceViewerTransparencyPublisher = 53,
+    /// Native Bootle/Lantern issuer and opaque-client authentication registry.
+    BootleLanternIssuanceProviderRegistry = 54,
 }
 
 impl IrohaRuntimeProviderSlotV1 {
@@ -157,6 +159,8 @@ pub struct IrohaRuntimeProviderBindingV1 {
     handle: String,
     revision: Option<u64>,
     policy_digest: Option<[u8; 32]>,
+    bootle_lantern_issuance_bindings:
+        Option<iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1>,
     stream_token_signer_public_key: Option<[u8; 32]>,
     appeal_finance_signer_binding:
         Option<iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding>,
@@ -266,6 +270,7 @@ impl IrohaRuntimeProviderBindingV1 {
             handle,
             revision,
             policy_digest,
+            bootle_lantern_issuance_bindings: None,
             stream_token_signer_public_key: None,
             appeal_finance_signer_binding: None,
             appeal_finance_checkpoint_binding: None,
@@ -294,6 +299,18 @@ impl IrohaRuntimeProviderBindingV1 {
             governance_request_auth_public_key: None,
             governance_request_auth_max_body_bytes: None,
         })
+    }
+
+    fn try_new_bootle_lantern_issuance(
+        handle: impl Into<String>,
+        revision: u64,
+        policy_digest: [u8; 32],
+        bindings: iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let slot = IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry;
+        let mut projected = Self::try_new(slot, handle, Some(revision), Some(policy_digest))?;
+        projected.bootle_lantern_issuance_bindings = Some(bindings);
+        Ok(projected)
     }
 
     fn try_new_governance_dag_signer(
@@ -879,6 +896,14 @@ impl IrohaRuntimeProviderBindingV1 {
         self.policy_digest
     }
 
+    /// Return the complete public Bootle/Lantern issuer resolution inputs.
+    pub(crate) const fn bootle_lantern_issuance_bindings(
+        &self,
+    ) -> Option<iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1>
+    {
+        self.bootle_lantern_issuance_bindings
+    }
+
     /// Return the exact configured stream-token Ed25519 verification key.
     #[must_use]
     pub const fn stream_token_signer_public_key(&self) -> Option<[u8; 32]> {
@@ -1126,6 +1151,36 @@ impl IrohaRuntimeProviderBindingsV1 {
         Ok(Self {
             chain_id: config.common.chain.to_string(),
             bindings,
+        })
+    }
+
+    /// Construct the exact one-slot catalog for a standalone Bootle/Lantern issuer broker.
+    ///
+    /// This is the only standalone constructor for slot 54. It deliberately
+    /// cannot attach another runtime role, so the broker server's exact-set
+    /// check rejects accidental co-location or a partially provisioned node
+    /// catalog.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-production handle, zero revision or policy digest, or
+    /// invalid issuer, policy, or authorization-lifetime bindings.
+    pub fn try_from_bootle_lantern_issuance_service(
+        chain_id: &iroha_data_model::ChainId,
+        handle: impl Into<String>,
+        revision: u64,
+        policy_digest: [u8; 32],
+        bindings: iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let binding = IrohaRuntimeProviderBindingV1::try_new_bootle_lantern_issuance(
+            handle,
+            revision,
+            policy_digest,
+            bindings,
+        )?;
+        Ok(Self {
+            chain_id: chain_id.to_string(),
+            bindings: vec![binding],
         })
     }
 
@@ -1503,6 +1558,7 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     {
         return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
     }
+    qualify_bootle_lantern_issuance_dependency(bindings, &dependencies)?;
     qualify_fenced_privacy_dependencies(bindings, &dependencies)?;
     qualify_governance_dag_signer_dependency(bindings, &dependencies)?;
     qualify_governance_request_auth_dependencies(bindings, &dependencies)?;
@@ -1517,6 +1573,36 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     qualify_evidence_viewer_archive_dependency(bindings, &dependencies)?;
     qualify_evidence_viewer_transparency_publisher_dependency(bindings, &dependencies)?;
     Ok(dependencies)
+}
+
+fn qualify_bootle_lantern_issuance_dependency(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    use iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1 as ProviderError;
+
+    let slot = IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry;
+    let Some(expected) = bindings.iter().find(|binding| binding.slot() == slot) else {
+        return Ok(());
+    };
+    let provider = dependencies
+        .bootle_lantern_issuance_provider_registry
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    if provider.handle() != expected.handle() {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    let qualification = provider.qualification().map_err(|error| match error {
+        ProviderError::Unavailable => IrohaRuntimeProviderRegistryErrorV1::Unavailable,
+        ProviderError::StaleOrRevoked => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+        ProviderError::RejectedBindings => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+    })?;
+    if Some(qualification.revision) != expected.revision()
+        || Some(qualification.policy_digest) != expected.policy_digest()
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    Ok(())
 }
 
 fn map_soracloud_runtime_signer_qualification_error(
@@ -2629,6 +2715,77 @@ mod tests {
     use super::*;
     use iroha_config_base::{toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+
+    fn standalone_bootle_lantern_bindings()
+    -> iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1 {
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
+            iroha_data_model::privacy::PrivacyIssuerIdV1::new([0x91; 32]),
+            iroha_data_model::privacy::PrivacyPolicyIdV1::new([0x92; 32]),
+            64,
+        )
+        .expect("valid standalone Bootle/Lantern bindings")
+    }
+
+    #[test]
+    fn standalone_bootle_lantern_catalog_is_exactly_one_qualified_slot() {
+        let chain_id = iroha_data_model::ChainId::from("taira");
+        let exact = standalone_bootle_lantern_bindings();
+        let catalog = IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
+            &chain_id,
+            "runtime://privacy/bootle-lantern/taira-primary",
+            7,
+            [0x93; 32],
+            exact,
+        )
+        .expect("construct exact standalone slot-54 catalog");
+
+        assert_eq!(catalog.chain_id(), "taira");
+        assert_eq!(catalog.len(), 1);
+        let binding = catalog.iter().next().expect("one exact slot");
+        assert_eq!(
+            binding.slot(),
+            IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
+        );
+        assert_eq!(
+            binding.handle(),
+            "runtime://privacy/bootle-lantern/taira-primary"
+        );
+        assert_eq!(binding.revision(), Some(7));
+        assert_eq!(binding.policy_digest(), Some([0x93; 32]));
+        assert_eq!(binding.bootle_lantern_issuance_bindings(), Some(exact));
+    }
+
+    #[test]
+    fn standalone_bootle_lantern_catalog_rejects_unqualified_or_test_bindings() {
+        let chain_id = iroha_data_model::ChainId::from("taira");
+        let exact = standalone_bootle_lantern_bindings();
+        for (handle, revision, digest) in [
+            ("runtime://privacy/bootle-lantern/test", 7, [0x93; 32]),
+            (
+                "runtime://privacy/bootle-lantern/taira-primary",
+                0,
+                [0x93; 32],
+            ),
+            ("runtime://privacy/bootle-lantern/taira-primary", 7, [0; 32]),
+        ] {
+            assert!(
+                IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
+                    &chain_id, handle, revision, digest, exact,
+                )
+                .is_err(),
+                "must reject standalone binding {handle:?}/{revision}/{digest:?}"
+            );
+        }
+        assert!(
+            iroha_torii::privacy_issuance_api::
+                BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
+                    iroha_data_model::privacy::PrivacyIssuerIdV1::new([0; 32]),
+                    iroha_data_model::privacy::PrivacyPolicyIdV1::new([0x92; 32]),
+                    64,
+                )
+                .is_err()
+        );
+    }
 
     struct EmptyRegistry;
 

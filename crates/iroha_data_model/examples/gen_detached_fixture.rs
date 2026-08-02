@@ -26,7 +26,7 @@ fn main() {
         KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::Ed25519).expect("placeholder key");
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let contract_address =
-        ContractAddress::from_str("tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
+        ContractAddress::from_str("irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh")
             .expect("fixture contract address");
     let merchant = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     let expected_code_hash = Hash::new(b"detached-fixture-contract-code");

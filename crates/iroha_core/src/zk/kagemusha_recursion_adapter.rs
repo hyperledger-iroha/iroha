@@ -10,10 +10,11 @@
 //! release manifest at V4. It fixes both parities at degree 17, exposes one
 //! 66-element commitment column, keeps the exact 138-`u32`
 //! predecessor/result state boundary private, and caps each processed proving
-//! key at 5 GiB. Production retains authenticated proving keys as file-backed
-//! spools and verifier keys as bounded raw bytes. It parses Eq and Ep one at a
-//! time, then materializes terminal verifier domains only after both proving
-//! keys and populated circuits have been released.
+//! key at 5 GiB. Proving paths retain authenticated proving keys as file-backed
+//! spools and parse Eq and Ep one at a time, then materialize terminal verifier
+//! domains only after both proving keys and populated circuits have been
+//! released. Receipt-only verification instead authenticates and structurally
+//! scans each spool with fixed scratch because it never consumes a proving key.
 //!
 //! The production wire carries the current Eq/Fp and Ep/Fq proofs together.
 //! The fixed verifier derives every transcript challenge, residual coefficient,
@@ -32,6 +33,8 @@ use iroha_data_model::offline::{
     KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5, KAGEMUSHA_COMPACT_PROFILE_VERSION_V5,
     KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5, KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4,
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4, KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4,
@@ -82,7 +85,7 @@ pub const KAGEMUSHA_PASTA_PARENT_STATES_OFFSET_V4: usize =
     KAGEMUSHA_PASTA_PARENT_COUNT_OFFSET_V4 + 1;
 /// Exact stride of one parent/result state.
 pub const KAGEMUSHA_PASTA_STATE_STRIDE_V4: usize =
-    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2;
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5;
 /// First result-state limb.
 pub const KAGEMUSHA_PASTA_RESULT_STATE_OFFSET_V4: usize = KAGEMUSHA_PASTA_PARENT_STATES_OFFSET_V4
     + KAGEMUSHA_PASTA_PARENT_SLOTS_V1 * KAGEMUSHA_PASTA_STATE_STRIDE_V4;
@@ -223,23 +226,101 @@ const KAGEMUSHA_GENERATION_GRAPH_TRANSIENT_DIVISOR_V5: u64 = 4;
 const KAGEMUSHA_GENERATION_V1_PLANNER_RESERVE_BYTES_V5: u64 = 64 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_PROCESS_RESERVE_BYTES_V5: u64 = 2 * 1024 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_RAYON_THREADS_V5: usize = 1;
-const RESOURCE_GUARD_AUTH_FD_ENV_V4: &str = "IROHA_RESOURCE_GUARD_AUTH_FD";
-const RESOURCE_GUARD_AUTH_TOKEN_ENV_V4: &str = "IROHA_RESOURCE_GUARD_AUTH_TOKEN";
-const RESOURCE_GUARD_AUTH_MAGIC_V4: &str = "IROHA_RESOURCE_GUARD_AUTH_V1";
-const RESOURCE_GUARD_AUTH_TOKEN_HEX_BYTES_V4: usize = 64;
-const RESOURCE_GUARD_AUTH_RECORD_MAX_BYTES_V4: usize = 128;
-static KAGEMUSHA_GENERATION_GUARD_CLAIMED_V4: std::sync::atomic::AtomicBool =
+const KAGEMUSHA_GENERATION_MEMORY_POLL_INTERVAL_V4: std::time::Duration =
+    std::time::Duration::from_millis(100);
+static KAGEMUSHA_GENERATION_MEMORY_GUARD_STARTED_V4: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// One-shot proof that the V4 generator inherited the active resource guard.
+/// One-shot proof that the mandatory in-process memory monitor is active.
 ///
-/// Construction consumes the guard's inherited pipe capability. The value is
-/// deliberately neither cloneable nor constructible by callers, so the
-/// allocation-heavy generator cannot be invoked through an ordinary library
-/// call or a stale environment marker.
+/// The effective limit is derived inside Core from physical RAM and the fixed
+/// 64-GiB ceiling. A caller may lower it, but cannot raise or disable it.
 #[derive(Debug)]
-pub struct KagemushaGenerationSupervisorPermitV4 {
-    _not_copy: std::cell::Cell<()>,
+pub struct KagemushaGenerationMemoryGuardV4 {
+    effective_memory_limit_bytes: u64,
+    _private: (),
+}
+
+impl KagemushaGenerationMemoryGuardV4 {
+    /// Exact ceiling enforced by the in-process physical-footprint monitor.
+    #[must_use]
+    pub const fn effective_memory_limit_bytes(&self) -> u64 {
+        self.effective_memory_limit_bytes
+    }
+
+    /// Exact enforcement profile committed by generated release metadata.
+    #[must_use]
+    pub const fn memory_enforcement_profile(&self) -> &'static str {
+        KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum KagemushaQualificationMemoryContractModeV4<'guard> {
+    Operator(&'guard KagemushaGenerationMemoryGuardV4),
+    RuntimeCatalog { max_decoded_bytes: u64 },
+}
+
+/// Unforgeable memory-enforcement authority for qualification-role verification.
+///
+/// External operator paths can construct this contract only from an active
+/// [`KagemushaGenerationMemoryGuardV4`]. Core's runtime catalog uses its
+/// separately validated decoded-resident budget through a crate-private
+/// constructor.
+#[derive(Debug)]
+pub struct KagemushaQualificationMemoryContractV4<'guard> {
+    mode: KagemushaQualificationMemoryContractModeV4<'guard>,
+}
+
+impl<'guard> KagemushaQualificationMemoryContractV4<'guard> {
+    /// Bind an operator qualification pass to an active in-process memory guard.
+    #[must_use]
+    pub const fn for_operator(memory_guard: &'guard KagemushaGenerationMemoryGuardV4) -> Self {
+        Self {
+            mode: KagemushaQualificationMemoryContractModeV4::Operator(memory_guard),
+        }
+    }
+
+    pub(crate) fn for_runtime_catalog(max_decoded_bytes: u64) -> Result<Self, String> {
+        if max_decoded_bytes == 0 {
+            return Err(
+                "Kagemusha V4 runtime qualification requires a nonzero decoded-memory budget"
+                    .to_owned(),
+            );
+        }
+        Ok(Self {
+            mode: KagemushaQualificationMemoryContractModeV4::RuntimeCatalog { max_decoded_bytes },
+        })
+    }
+
+    fn validate_candidate(
+        &self,
+        candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<(), String> {
+        match self.mode {
+            KagemushaQualificationMemoryContractModeV4::Operator(memory_guard) => {
+                if candidate.manifest.generation_memory_limit_bytes
+                    != memory_guard.effective_memory_limit_bytes()
+                    || candidate.manifest.generation_memory_enforcement_profile
+                        != memory_guard.memory_enforcement_profile()
+                {
+                    return Err(
+                        "Kagemusha V4 candidate memory contract differs from the active operator guard"
+                            .to_owned(),
+                    );
+                }
+            }
+            KagemushaQualificationMemoryContractModeV4::RuntimeCatalog { max_decoded_bytes } => {
+                if max_decoded_bytes == 0 {
+                    return Err(
+                        "Kagemusha V4 runtime qualification lost its decoded-memory budget"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -627,118 +708,638 @@ fn preflight_kagemusha_generation_v4(
     })
 }
 
-fn validate_kagemusha_generation_guard_token_v4(token: &str) -> Result<(), String> {
-    if token.len() != RESOURCE_GUARD_AUTH_TOKEN_HEX_BYTES_V4
-        || !token
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err("Kagemusha V4 resource-guard token is invalid".to_owned());
+fn select_kagemusha_generation_memory_limit_v4(
+    physical_memory_bytes: u64,
+    requested_memory_limit_bytes: Option<u64>,
+) -> Result<u64, String> {
+    let host_half = physical_memory_bytes / 2;
+    let safety_ceiling =
+        host_half.min(KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4);
+    if safety_ceiling == 0 {
+        return Err(
+            "Kagemusha V4 physical-memory capacity is too small to derive a safe ceiling"
+                .to_owned(),
+        );
     }
-    Ok(())
+    match requested_memory_limit_bytes {
+        None => Ok(safety_ceiling),
+        Some(0) => Err("Kagemusha V4 requested memory ceiling must be nonzero".to_owned()),
+        Some(requested) if requested > safety_ceiling => Err(format!(
+            "Kagemusha V4 requested memory ceiling {requested} exceeds the in-process safety ceiling {safety_ceiling}"
+        )),
+        Some(requested) => Ok(requested),
+    }
 }
 
-fn validate_kagemusha_generation_guard_record_v4(record: &[u8], token: &str) -> Result<(), String> {
-    validate_kagemusha_generation_guard_token_v4(token)?;
-    let expected = format!("{RESOURCE_GUARD_AUTH_MAGIC_V4}:{token}\n");
-    if record != expected.as_bytes() {
-        return Err("Kagemusha V4 resource-guard capability is invalid".to_owned());
-    }
-    Ok(())
+/// Versioned schema emitted by the source-sealed memory-capacity query.
+pub const KAGEMUSHA_GENERATION_MEMORY_CAPACITY_SCHEMA_V1: &str =
+    "iroha.kagemusha.memory-capacity.v1";
+/// Exact first-release policy used to derive the generation safety ceiling.
+pub const KAGEMUSHA_GENERATION_MEMORY_CAPACITY_POLICY_V1: &str =
+    "half-effective-physical-cap-absolute-v1";
+
+/// Authoritative memory-policy result derived by the in-process guard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KagemushaGenerationMemoryCapacityV1 {
+    effective_physical_capacity_bytes: u64,
+    safety_ceiling_bytes: u64,
 }
 
-/// Consume the one-shot capability installed by the guarded V4 launcher.
-///
-/// The inherited descriptor is accepted only when it is a pipe containing the
-/// exact nonce-bound guard record and immediate EOF. It is made nonblocking
-/// before the read so malformed direct invocations fail instead of hanging.
-pub fn claim_kagemusha_generation_supervisor_permit_v4()
--> Result<KagemushaGenerationSupervisorPermitV4, String> {
-    if KAGEMUSHA_GENERATION_GUARD_CLAIMED_V4.swap(true, std::sync::atomic::Ordering::AcqRel) {
-        return Err("Kagemusha V4 resource-guard capability was already consumed".to_owned());
+impl KagemushaGenerationMemoryCapacityV1 {
+    /// Physical capacity visible to this process after container limits.
+    #[must_use]
+    pub const fn effective_physical_capacity_bytes(self) -> u64 {
+        self.effective_physical_capacity_bytes
     }
 
-    #[cfg(not(unix))]
-    {
-        Err("Kagemusha V4 guarded generation requires Unix process supervision".to_owned())
+    /// Maximum memory limit accepted by the in-process guard.
+    #[must_use]
+    pub const fn safety_ceiling_bytes(self) -> u64 {
+        self.safety_ceiling_bytes
     }
 
-    #[cfg(unix)]
+    /// Return the bounded canonical record consumed by the guarded launcher.
+    #[must_use]
+    pub fn canonical_record(self) -> String {
+        format!(
+            "{KAGEMUSHA_GENERATION_MEMORY_CAPACITY_SCHEMA_V1} physical={} ceiling={} absolute={} profile={} policy={KAGEMUSHA_GENERATION_MEMORY_CAPACITY_POLICY_V1}",
+            self.effective_physical_capacity_bytes,
+            self.safety_ceiling_bytes,
+            KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4,
+        )
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_memory_kib_v4(contents: &str, field: &str) -> Result<u64, String> {
+    let value = contents
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name == field).then_some(value)
+        })
+        .ok_or_else(|| format!("Linux {field} memory counter is unavailable"))?;
+    let mut parts = value.split_ascii_whitespace();
+    let kibibytes = parts
+        .next()
+        .ok_or_else(|| format!("Linux {field} memory counter is empty"))?
+        .parse::<u64>()
+        .map_err(|_| format!("Linux {field} memory counter is invalid"))?;
+    if parts.next() != Some("kB") || parts.next().is_some() || kibibytes == 0 {
+        return Err(format!("Linux {field} memory counter has an invalid unit"));
+    }
+    kibibytes
+        .checked_mul(1024)
+        .ok_or_else(|| format!("Linux {field} memory counter overflows bytes"))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_bounded_linux_text_file_v4(
+    path: &std::path::Path,
+    maximum_bytes: u64,
+) -> Result<String, String> {
+    use std::io::Read as _;
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if u64::try_from(bytes.len())
+        .ok()
+        .is_none_or(|length| length == 0 || length > maximum_bytes)
     {
-        use std::{
-            fs::File,
-            io::{ErrorKind, Read as _},
-            os::unix::fs::FileTypeExt as _,
+        return Err(format!("{} is empty or oversized", path.display()));
+    }
+    String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", path.display()))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_bounded_linux_proc_text_v4(path: &str) -> Result<String, String> {
+    const MAX_PROC_MEMORY_TEXT_BYTES: u64 = 1024 * 1024;
+    read_bounded_linux_text_file_v4(std::path::Path::new(path), MAX_PROC_MEMORY_TEXT_BYTES)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum LinuxMemoryCgroupVersionV4 {
+    V1,
+    V2,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinuxMemoryCgroupMembershipV4 {
+    version: LinuxMemoryCgroupVersionV4,
+    path: std::path::PathBuf,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinuxMemoryCgroupMountV4 {
+    version: LinuxMemoryCgroupVersionV4,
+    hierarchy_root: std::path::PathBuf,
+    mount_point: std::path::PathBuf,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_kernel_absolute_path_v4(
+    value: &str,
+    label: &str,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::Component;
+
+    if value.is_empty() || value.len() > 16 * 1024 {
+        return Err(format!("Linux {label} path is empty or oversized"));
+    }
+    let path = std::path::PathBuf::from(value);
+    let mut components = path.components();
+    if !matches!(components.next(), Some(Component::RootDir))
+        || components.any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("Linux {label} path is not canonical and absolute"));
+    }
+    Ok(path)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_memory_cgroup_memberships_v4(
+    contents: &str,
+) -> Result<Vec<LinuxMemoryCgroupMembershipV4>, String> {
+    const MAX_CGROUP_MEMBERSHIP_LINES: usize = 256;
+
+    let mut memberships = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if index >= MAX_CGROUP_MEMBERSHIP_LINES {
+            return Err("Linux cgroup membership contains too many lines".to_owned());
+        }
+        let mut fields = line.splitn(3, ':');
+        let hierarchy = fields
+            .next()
+            .ok_or_else(|| "Linux cgroup membership hierarchy is missing".to_owned())?;
+        let controllers = fields
+            .next()
+            .ok_or_else(|| "Linux cgroup membership controllers are missing".to_owned())?;
+        let path = fields
+            .next()
+            .ok_or_else(|| "Linux cgroup membership path is missing".to_owned())?;
+        if hierarchy.is_empty()
+            || !hierarchy.bytes().all(|byte| byte.is_ascii_digit())
+            || path.contains('\0')
+        {
+            return Err("Linux cgroup membership line is malformed".to_owned());
+        }
+        let version = if hierarchy == "0" && controllers.is_empty() {
+            Some(LinuxMemoryCgroupVersionV4::V2)
+        } else if controllers
+            .split(',')
+            .any(|controller| controller == "memory")
+        {
+            Some(LinuxMemoryCgroupVersionV4::V1)
+        } else {
+            None
         };
-
-        let descriptor_text = std::env::var(RESOURCE_GUARD_AUTH_FD_ENV_V4).map_err(|_| {
-            "Kagemusha V4 generation must run through scripts/run_kagemusha_v4_generation.py"
-                .to_owned()
-        })?;
-        if descriptor_text.is_empty() || !descriptor_text.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return Err("Kagemusha V4 resource-guard descriptor is invalid".to_owned());
+        if let Some(version) = version {
+            let path = parse_linux_kernel_absolute_path_v4(path, "cgroup membership")?;
+            if memberships
+                .iter()
+                .any(|membership: &LinuxMemoryCgroupMembershipV4| membership.version == version)
+            {
+                return Err("Linux memory cgroup membership is duplicated".to_owned());
+            }
+            memberships.push(LinuxMemoryCgroupMembershipV4 { version, path });
         }
-        let descriptor = descriptor_text
-            .parse::<i32>()
-            .ok()
-            .filter(|descriptor| *descriptor >= 3 && descriptor.to_string() == descriptor_text)
-            .ok_or_else(|| "Kagemusha V4 resource-guard descriptor is invalid".to_owned())?;
-        let token = std::env::var(RESOURCE_GUARD_AUTH_TOKEN_ENV_V4)
-            .map_err(|_| "Kagemusha V4 resource-guard token is missing".to_owned())?;
-        validate_kagemusha_generation_guard_token_v4(&token)?;
+    }
+    if memberships.is_empty() {
+        return Err("Linux process has no discoverable memory cgroup membership".to_owned());
+    }
+    Ok(memberships)
+}
 
-        // Opening `/dev/fd` safely duplicates the inherited pipe without an
-        // unsafe raw-descriptor ownership conversion. Reading the duplicate
-        // consumes the shared one-shot record; the process-global claim above
-        // prevents a second library call from reusing the inherited endpoint.
-        let mut capability = File::open(format!("/dev/fd/{descriptor}"))
-            .map_err(|_| "Kagemusha V4 resource-guard descriptor is unavailable".to_owned())?;
-        if !capability
-            .metadata()
-            .map_err(|_| "Kagemusha V4 resource-guard descriptor is unavailable".to_owned())?
-            .file_type()
-            .is_fifo()
-        {
-            return Err("Kagemusha V4 resource-guard descriptor is not a pipe".to_owned());
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn decode_linux_mountinfo_path_v4(value: &str, label: &str) -> Result<std::path::PathBuf, String> {
+    use std::{os::unix::ffi::OsStringExt as _, path::Component};
+
+    let input = value.as_bytes();
+    if input.is_empty() || input.len() > 16 * 1024 {
+        return Err(format!("Linux {label} mount path is empty or oversized"));
+    }
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'\\' {
+            let octal = input
+                .get(index + 1..index + 4)
+                .ok_or_else(|| format!("Linux {label} mount path has a truncated escape"))?;
+            if !octal.iter().all(|byte| matches!(byte, b'0'..=b'7')) {
+                return Err(format!("Linux {label} mount path has a non-octal escape"));
+            }
+            let value = u16::from(octal[0] - b'0') * 64
+                + u16::from(octal[1] - b'0') * 8
+                + u16::from(octal[2] - b'0');
+            let byte = u8::try_from(value)
+                .map_err(|_| format!("Linux {label} mount path escape exceeds one byte"))?;
+            if byte == 0 {
+                return Err(format!("Linux {label} mount path contains NUL"));
+            }
+            decoded.push(byte);
+            index += 4;
+        } else {
+            decoded.push(input[index]);
+            index += 1;
         }
-        let flags = rustix::fs::fcntl_getfl(&capability).map_err(|_| {
-            "Kagemusha V4 resource-guard descriptor flags are unavailable".to_owned()
-        })?;
-        rustix::fs::fcntl_setfl(&capability, flags | rustix::fs::OFlags::NONBLOCK)
-            .map_err(|_| "Kagemusha V4 resource-guard descriptor cannot be bounded".to_owned())?;
+    }
+    let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(decoded));
+    let mut components = path.components();
+    if !matches!(components.next(), Some(Component::RootDir))
+        || components.any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "Linux {label} mount path is not canonical and absolute"
+        ));
+    }
+    Ok(path)
+}
 
-        let mut record = Vec::with_capacity(RESOURCE_GUARD_AUTH_RECORD_MAX_BYTES_V4);
-        let mut chunk = [0_u8; 64];
-        loop {
-            match capability.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(length) => {
-                    if record
-                        .len()
-                        .checked_add(length)
-                        .is_none_or(|length| length > RESOURCE_GUARD_AUTH_RECORD_MAX_BYTES_V4)
-                    {
-                        return Err(
-                            "Kagemusha V4 resource-guard capability is oversized".to_owned()
-                        );
-                    }
-                    record.extend_from_slice(&chunk[..length]);
-                }
-                Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    return Err("Kagemusha V4 resource-guard capability is incomplete".to_owned());
-                }
-                Err(_) => {
-                    return Err("Kagemusha V4 resource-guard capability is unreadable".to_owned());
-                }
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_memory_cgroup_mounts_v4(
+    contents: &str,
+) -> Result<Vec<LinuxMemoryCgroupMountV4>, String> {
+    const MAX_MOUNTINFO_LINES: usize = 16 * 1024;
+
+    let mut mounts = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if index >= MAX_MOUNTINFO_LINES {
+            return Err("Linux mountinfo contains too many lines".to_owned());
+        }
+        let Some((left, right)) = line.split_once(" - ") else {
+            return Err("Linux mountinfo line has no filesystem separator".to_owned());
+        };
+        let left_fields = left.split_ascii_whitespace().collect::<Vec<_>>();
+        let right_fields = right.split_ascii_whitespace().collect::<Vec<_>>();
+        if left_fields.len() < 6 || right_fields.len() < 3 {
+            return Err("Linux mountinfo line has too few fields".to_owned());
+        }
+        let version = match right_fields[0] {
+            "cgroup2" => Some(LinuxMemoryCgroupVersionV4::V2),
+            "cgroup"
+                if right_fields[2]
+                    .split(',')
+                    .any(|controller| controller == "memory") =>
+            {
+                Some(LinuxMemoryCgroupVersionV4::V1)
+            }
+            _ => None,
+        };
+        if let Some(version) = version {
+            let hierarchy_root = decode_linux_mountinfo_path_v4(left_fields[3], "cgroup root")?;
+            let mount_point = decode_linux_mountinfo_path_v4(left_fields[4], "cgroup point")?;
+            mounts.push(LinuxMemoryCgroupMountV4 {
+                version,
+                hierarchy_root,
+                mount_point,
+            });
+            if mounts.len() > 16 {
+                return Err("Linux has too many memory cgroup mounts".to_owned());
             }
         }
-        validate_kagemusha_generation_guard_record_v4(&record, &token)?;
-        Ok(KagemushaGenerationSupervisorPermitV4 {
-            _not_copy: std::cell::Cell::new(()),
-        })
     }
+    if mounts.is_empty() {
+        return Err("Linux memory cgroup filesystem is not mounted".to_owned());
+    }
+    Ok(mounts)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_cgroup_memory_limit_v4(
+    contents: &str,
+    version: LinuxMemoryCgroupVersionV4,
+) -> Result<Option<u64>, String> {
+    let value = contents
+        .strip_suffix('\n')
+        .ok_or_else(|| "Linux cgroup memory limit has no final newline".to_owned())?;
+    if value.contains('\n') || value.contains('\r') || value.is_empty() {
+        return Err("Linux cgroup memory limit is not one canonical line".to_owned());
+    }
+    if version == LinuxMemoryCgroupVersionV4::V2 && value == "max" {
+        return Ok(None);
+    }
+    if !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err("Linux cgroup memory limit is not canonical decimal".to_owned());
+    }
+    let bytes = value
+        .parse::<u64>()
+        .map_err(|_| "Linux cgroup memory limit overflows u64".to_owned())?;
+    if bytes == 0 {
+        return Err("Linux cgroup memory limit must be nonzero".to_owned());
+    }
+    // Cgroup v1 represents `unlimited` as a page-rounded value near signed
+    // LONG_MAX rather than a keyword. One exbibyte is above any supported host
+    // while remaining well below every kernel unlimited sentinel.
+    if version == LinuxMemoryCgroupVersionV4::V1 && bytes >= (1_u64 << 60) {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_optional_linux_cgroup_limit_v4(
+    path: &std::path::Path,
+    version: LinuxMemoryCgroupVersionV4,
+) -> Result<Option<Option<u64>>, String> {
+    const MAX_CGROUP_LIMIT_BYTES: u64 = 128;
+
+    match read_bounded_linux_text_file_v4(path, MAX_CGROUP_LIMIT_BYTES) {
+        Ok(contents) => parse_linux_cgroup_memory_limit_v4(&contents, version).map(Some),
+        Err(error) => match std::fs::symlink_metadata(path) {
+            Err(metadata_error) if metadata_error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            _ => Err(error),
+        },
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn kagemusha_cgroup_memory_limit_bytes_v4() -> Result<Option<u64>, String> {
+    use std::collections::BTreeSet;
+
+    let memberships = parse_linux_memory_cgroup_memberships_v4(&read_bounded_linux_proc_text_v4(
+        "/proc/self/cgroup",
+    )?)?;
+    let mounts = parse_linux_memory_cgroup_mounts_v4(&read_bounded_linux_proc_text_v4(
+        "/proc/self/mountinfo",
+    )?)?;
+    let mut candidates = BTreeSet::new();
+    for membership in &memberships {
+        let mut mapped = false;
+        for mount in mounts
+            .iter()
+            .filter(|mount| mount.version == membership.version)
+        {
+            let Ok(relative) = membership.path.strip_prefix(&mount.hierarchy_root) else {
+                continue;
+            };
+            mapped = true;
+            let leaf = mount.mount_point.join(relative);
+            let file_name = match membership.version {
+                LinuxMemoryCgroupVersionV4::V1 => "memory.limit_in_bytes",
+                LinuxMemoryCgroupVersionV4::V2 => "memory.max",
+            };
+            let mut directory = leaf.as_path();
+            loop {
+                if !directory.starts_with(&mount.mount_point) {
+                    return Err("Linux cgroup path escaped its mounted hierarchy".to_owned());
+                }
+                candidates.insert((membership.version, directory.join(file_name)));
+                if directory == mount.mount_point {
+                    break;
+                }
+                directory = directory.parent().ok_or_else(|| {
+                    "Linux cgroup path lost its mounted hierarchy parent".to_owned()
+                })?;
+            }
+        }
+        if !mapped {
+            return Err("Linux memory cgroup membership has no matching mount".to_owned());
+        }
+    }
+
+    let mut found_limit_file = false;
+    let mut effective_limit: Option<u64> = None;
+    for (version, path) in candidates {
+        if let Some(limit) = read_optional_linux_cgroup_limit_v4(&path, version)? {
+            found_limit_file = true;
+            if let Some(limit) = limit {
+                effective_limit = Some(effective_limit.map_or(limit, |current| current.min(limit)));
+            }
+        }
+    }
+    if !found_limit_file {
+        return Err("Linux memory cgroup exposes no readable limit file".to_owned());
+    }
+    Ok(effective_limit)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn select_linux_physical_capacity_v4(
+    host_memory: u64,
+    cgroup_limit: Option<u64>,
+) -> Result<u64, String> {
+    let capacity = cgroup_limit.map_or(host_memory, |limit| host_memory.min(limit));
+    if capacity == 0 {
+        return Err("Linux effective physical-memory capacity is zero".to_owned());
+    }
+    Ok(capacity)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
+    let host_memory = parse_linux_memory_kib_v4(
+        &read_bounded_linux_proc_text_v4("/proc/meminfo")?,
+        "MemTotal",
+    )?;
+    select_linux_physical_capacity_v4(host_memory, kagemusha_cgroup_memory_limit_bytes_v4()?)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
+    parse_linux_memory_kib_v4(
+        &read_bounded_linux_proc_text_v4("/proc/self/status")?,
+        "VmRSS",
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
+    use std::{ffi::CString, os::raw::c_void};
+
+    unsafe extern "C" {
+        fn sysctlbyname(
+            name: *const std::os::raw::c_char,
+            old_value: *mut c_void,
+            old_length: *mut usize,
+            new_value: *mut c_void,
+            new_length: usize,
+        ) -> std::os::raw::c_int;
+    }
+
+    let name = CString::new("hw.memsize").map_err(|_| "invalid macOS sysctl name".to_owned())?;
+    let mut value = 0_u64;
+    let mut length = std::mem::size_of::<u64>();
+    // SAFETY: `name` is NUL terminated, the output points to a live `u64`, and
+    // `length` advertises exactly that allocation. No input buffer is supplied.
+    let status = unsafe {
+        sysctlbyname(
+            name.as_ptr(),
+            std::ptr::addr_of_mut!(value).cast(),
+            std::ptr::addr_of_mut!(length),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0 || length != std::mem::size_of::<u64>() || value == 0 {
+        return Err("macOS physical-memory introspection failed".to_owned());
+    }
+    Ok(value)
+}
+
+#[cfg(target_os = "macos")]
+fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct TaskVmInfoRev1 {
+        virtual_size: u64,
+        region_count: i32,
+        page_size: i32,
+        resident_size: u64,
+        resident_size_peak: u64,
+        device: u64,
+        device_peak: u64,
+        internal: u64,
+        internal_peak: u64,
+        external: u64,
+        external_peak: u64,
+        reusable: u64,
+        reusable_peak: u64,
+        purgeable_volatile_pmap: u64,
+        purgeable_volatile_resident: u64,
+        purgeable_volatile_virtual: u64,
+        compressed: u64,
+        compressed_peak: u64,
+        compressed_lifetime: u64,
+        phys_footprint: u64,
+    }
+
+    unsafe extern "C" {
+        static mach_task_self_: u32;
+        fn task_info(task: u32, flavor: i32, info: *mut i32, count: *mut u32) -> i32;
+    }
+
+    const TASK_VM_INFO: i32 = 22;
+    let mut info = TaskVmInfoRev1::default();
+    let required_count =
+        u32::try_from(std::mem::size_of::<TaskVmInfoRev1>() / std::mem::size_of::<i32>())
+            .map_err(|_| "macOS task-info size does not fit Mach message count".to_owned())?;
+    let mut count = required_count;
+    // SAFETY: `mach_task_self_` names this task, `info` is a live C-layout
+    // buffer, and `count` is its exact size in Mach integer units.
+    let status = unsafe {
+        task_info(
+            mach_task_self_,
+            TASK_VM_INFO,
+            std::ptr::addr_of_mut!(info).cast(),
+            std::ptr::addr_of_mut!(count),
+        )
+    };
+    if status != 0 || count < required_count || info.phys_footprint == 0 {
+        return Err("macOS physical-footprint introspection failed".to_owned());
+    }
+    Ok(info.phys_footprint)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
+    Err("Kagemusha V4 physical-memory introspection is unsupported on this platform".to_owned())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
+    Err("Kagemusha V4 process-footprint introspection is unsupported on this platform".to_owned())
+}
+
+/// Query the exact first-release memory policy without starting the monitor.
+///
+/// The source-sealed bundle exposes this through its read-only
+/// `memory-capacity-v1` operation so external supervision applies the same
+/// container-aware capacity and fixed absolute ceiling as the in-process guard.
+pub fn kagemusha_generation_memory_capacity_v1()
+-> Result<KagemushaGenerationMemoryCapacityV1, String> {
+    let effective_physical_capacity_bytes = kagemusha_physical_memory_bytes_v4()?;
+    let safety_ceiling_bytes =
+        select_kagemusha_generation_memory_limit_v4(effective_physical_capacity_bytes, None)?;
+    Ok(KagemushaGenerationMemoryCapacityV1 {
+        effective_physical_capacity_bytes,
+        safety_ceiling_bytes,
+    })
+}
+
+fn start_kagemusha_generation_memory_monitor_v4(
+    effective_memory_limit_bytes: u64,
+    footprint: fn() -> Result<u64, String>,
+) -> Result<(), String> {
+    let (initialized_sender, initialized_receiver) = std::sync::mpsc::sync_channel(0);
+    std::thread::Builder::new()
+        .name("kagemusha-memory-v4".to_owned())
+        .spawn(move || {
+            let initial = footprint().and_then(|bytes| {
+                if bytes > effective_memory_limit_bytes {
+                    Err(format!(
+                        "Kagemusha V4 process footprint {bytes} already exceeds the effective {effective_memory_limit_bytes}-byte ceiling"
+                    ))
+                } else {
+                    Ok(())
+                }
+            });
+            let monitoring_active = initial.is_ok();
+            if initialized_sender.send(initial).is_err() || !monitoring_active {
+                return;
+            }
+            loop {
+                std::thread::sleep(KAGEMUSHA_GENERATION_MEMORY_POLL_INTERVAL_V4);
+                match footprint() {
+                    Ok(bytes) if bytes <= effective_memory_limit_bytes => {}
+                    Ok(bytes) => {
+                        eprintln!(
+                            "Kagemusha V4 mandatory memory monitor aborting: physical footprint {bytes} exceeds the effective {effective_memory_limit_bytes}-byte ceiling"
+                        );
+                        std::process::abort();
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "Kagemusha V4 mandatory memory monitor aborting after introspection failure: {error}"
+                        );
+                        std::process::abort();
+                    }
+                }
+            }
+        })
+        .map_err(|error| format!("failed to start mandatory Kagemusha memory monitor: {error}"))?;
+    initialized_receiver
+        .recv()
+        .map_err(|_| "mandatory Kagemusha memory monitor exited during initialization".to_owned())?
+}
+
+/// Start the mandatory one-shot in-process physical-memory monitor.
+///
+/// The effective ceiling is `min(64 GiB, physical RAM / 2)`. A caller-provided
+/// value can only lower that ceiling. Neither an inherited descriptor nor an
+/// environment variable grants authority to disable or raise enforcement.
+pub fn start_kagemusha_generation_memory_guard_v4(
+    requested_memory_limit_bytes: Option<u64>,
+) -> Result<KagemushaGenerationMemoryGuardV4, String> {
+    if KAGEMUSHA_GENERATION_MEMORY_GUARD_STARTED_V4.swap(true, std::sync::atomic::Ordering::AcqRel)
+    {
+        return Err("Kagemusha V4 in-process memory monitor was already claimed".to_owned());
+    }
+    let capacity = kagemusha_generation_memory_capacity_v1()?;
+    let effective_memory_limit_bytes = select_kagemusha_generation_memory_limit_v4(
+        capacity.effective_physical_capacity_bytes(),
+        requested_memory_limit_bytes,
+    )?;
+    start_kagemusha_generation_memory_monitor_v4(
+        effective_memory_limit_bytes,
+        kagemusha_process_physical_footprint_bytes_v4,
+    )?;
+    Ok(KagemushaGenerationMemoryGuardV4 {
+        effective_memory_limit_bytes,
+        _private: (),
+    })
 }
 
 fn validate_kagemusha_generated_payload_size_v4(
@@ -2300,11 +2901,11 @@ impl KagemushaSemanticBoundaryV4 {
         require_lexicographic_parent_state_order: bool,
         require_deferred_audit_joins: bool,
     ) -> Result<(), String> {
-        use super::kagemusha_v2::KagemushaRecursiveSpendStateVectorV2;
+        use super::kagemusha_v2::KagemushaRecursiveSpendStateVectorV5;
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
         };
 
         let parent_count = usize::try_from(self.parent_count)
@@ -2319,10 +2920,10 @@ impl KagemushaSemanticBoundaryV4 {
             || self
                 .parent_states
                 .iter()
-                .any(|state| state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2)
-            || self.result_state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
+                .any(|state| state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5)
+            || self.result_state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5
             || self.result_state.first().copied()
-                != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2)
+                != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5)
         {
             return Err("Kagemusha exact-state public-instance shape mismatch".to_owned());
         }
@@ -2333,7 +2934,7 @@ impl KagemushaSemanticBoundaryV4 {
             let ep_digest = self.parent_ep_deferred_sha256[slot];
             if present {
                 if state.first().copied()
-                    != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2)
+                    != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5)
                     || state == &self.result_state
                     || if require_deferred_audit_joins {
                         eq_digest == [0; 8] || ep_digest == [0; 8] || eq_digest == ep_digest
@@ -2356,7 +2957,7 @@ impl KagemushaSemanticBoundaryV4 {
         {
             return Err("Kagemusha parent states are not in canonical order".to_owned());
         }
-        let result_vector = KagemushaRecursiveSpendStateVectorV2 {
+        let result_vector = KagemushaRecursiveSpendStateVectorV5 {
             limbs: self
                 .result_state
                 .clone()
@@ -2372,7 +2973,7 @@ impl KagemushaSemanticBoundaryV4 {
         let mut maximum_parent_step = 0_u32;
         let mut maximum_parent_hop = 0_u32;
         for state in self.parent_states.iter().take(parent_count) {
-            let vector = KagemushaRecursiveSpendStateVectorV2 {
+            let vector = KagemushaRecursiveSpendStateVectorV5 {
                 limbs: state
                     .clone()
                     .try_into()
@@ -3450,6 +4051,8 @@ const KAGEMUSHA_HALO2_UNCOMPRESSED_SELECTORS_V4: u8 = 0;
 const KAGEMUSHA_HALO2_VK_HEADER_BYTES_V4: u64 = 10;
 const KAGEMUSHA_HALO2_PK_VECTOR_HEADERS_BYTES_V4: u64 = 4 * 4;
 const KAGEMUSHA_HALO2_LENGTH_PREFIX_BYTES_V4: u64 = 4;
+/// Fixed scratch used while authenticating release-sized proving-key spools.
+pub(crate) const KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KagemushaProcessedKeyShapeV4 {
@@ -6102,14 +6705,12 @@ fn kagemusha_ep_succinct_vk_v4(
 /// a promoted release throughout loading.
 enum KagemushaArtifactSpoolBindingV5<'a> {
     AuthenticatedRelease(&'a KagemushaAuthenticatedReleaseV4),
-    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     CandidateEvidenceLab {
         candidate: &'a iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
         manifest_sha256: [u8; 32],
     },
 }
 
-#[cfg(feature = "kagemusha-candidate-evidence-lab")]
 fn validate_kagemusha_candidate_spool_identity_v5(
     candidate_sha256: [u8; 32],
     manifest_sha256: [u8; 32],
@@ -6142,7 +6743,6 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
         Ok(Self::AuthenticatedRelease(release))
     }
 
-    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     fn candidate_evidence_lab(
         candidate: &'a iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
         expected_candidate_sha256: [u8; 32],
@@ -6169,7 +6769,6 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
     fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest(),
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidenceLab { candidate, .. } => &candidate.manifest,
         }
     }
@@ -6177,7 +6776,6 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
     fn manifest_sha256(&self) -> [u8; 32] {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest_sha256(),
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidenceLab {
                 manifest_sha256, ..
             } => *manifest_sha256,
@@ -6211,7 +6809,6 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
             Self::AuthenticatedRelease(_) => {
                 header.validate_against_manifest(self.manifest(), descriptor)
             }
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidenceLab { .. } => {
                 header.validate_against_candidate_manifest(self.manifest(), descriptor)
             }
@@ -6350,7 +6947,7 @@ impl KagemushaProvingKeySpoolV5 {
         let mut framed = Sha256::new();
         let mut payload = Sha256::new();
         let mut offset = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = [0_u8; KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5];
         while offset < self.framed_size {
             let remaining = self.framed_size - offset;
             let requested = usize::try_from(remaining.min(buffer.len() as u64))
@@ -6426,7 +7023,7 @@ impl KagemushaProvingKeyPayloadReaderV5 {
             .map_err(|error| format!("failed to rewind parsed Kagemusha V5 PK: {error}"))?;
         let mut hasher = Sha256::new();
         let mut remaining = self.length;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = [0_u8; KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5];
         while remaining != 0 {
             let requested = usize::try_from(remaining.min(buffer.len() as u64))
                 .expect("bounded PK hash chunk fits usize");
@@ -6611,6 +7208,85 @@ fn validate_kagemusha_processed_pk_reader_v5(
     Ok(())
 }
 
+fn hash_kagemusha_pk_embedded_vk_prefix_v5(
+    reader: &mut dyn std::io::Read,
+    prefix_bytes: u64,
+    role: &str,
+) -> Result<[u8; 32], String> {
+    if prefix_bytes == 0 {
+        return Err(format!(
+            "Kagemusha V5 {role} embedded verifier-key length is zero"
+        ));
+    }
+    let mut hasher = Sha256::new();
+    let mut remaining = prefix_bytes;
+    let mut buffer = [0_u8; KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5];
+    while remaining != 0 {
+        let requested = usize::try_from(remaining.min(buffer.len() as u64))
+            .expect("bounded PK prefix chunk fits usize");
+        std::io::Read::read_exact(reader, &mut buffer[..requested]).map_err(|error| {
+            format!("failed to hash Kagemusha V5 {role} embedded verifier key: {error}")
+        })?;
+        hasher.update(&buffer[..requested]);
+        remaining -= requested as u64;
+    }
+    Ok(hasher.finalize().into())
+}
+
+/// Authenticate one receipt-only proving-key role without materializing its
+/// multi-gigabyte polynomial vectors.
+fn authenticate_kagemusha_receipt_pk_spool_v5(
+    source: &KagemushaProvingKeySpoolV5,
+    circuit_params: &KagemushaStepCircuitParamsV4,
+    parity: KagemushaPastaCycleParityV1,
+    expected_verifying_key_bytes: u64,
+    expected_verifying_key_sha256: [u8; 32],
+) -> Result<(), String> {
+    use std::io::Seek as _;
+
+    let (shape, role) = match parity {
+        KagemushaPastaCycleParityV1::StepEq => (
+            kagemusha_processed_key_shape_v4::<halo2_proofs::halo2curves::pasta::EqAffine>(
+                circuit_params,
+                "Eq",
+            )?,
+            "Eq",
+        ),
+        KagemushaPastaCycleParityV1::StepEp => (
+            kagemusha_processed_key_shape_v4::<halo2_proofs::halo2curves::pasta::EpAffine>(
+                circuit_params,
+                "Ep",
+            )?,
+            "Ep",
+        ),
+    };
+    let embedded_verifying_key_bytes = shape.verifier_key_bytes(role)?;
+    if expected_verifying_key_sha256 == [0; 32]
+        || expected_verifying_key_bytes != embedded_verifying_key_bytes
+    {
+        return Err(format!(
+            "Kagemusha V5 {role} standalone verifier-key descriptor does not match the authenticated shape"
+        ));
+    }
+
+    let mut reader = source.open_payload()?;
+    validate_kagemusha_processed_pk_reader_v5(&mut reader, shape, role)?;
+    reader
+        .seek(std::io::SeekFrom::Start(0))
+        .map_err(|error| format!("failed to rewind Kagemusha V5 {role} PK prefix: {error}"))?;
+    let embedded_verifying_key_sha256 =
+        hash_kagemusha_pk_embedded_vk_prefix_v5(&mut reader, embedded_verifying_key_bytes, role)?;
+    if embedded_verifying_key_sha256 != expected_verifying_key_sha256 {
+        return Err(format!(
+            "Kagemusha V5 {role} proving key embeds a different verifier key"
+        ));
+    }
+    reader
+        .seek(std::io::SeekFrom::End(0))
+        .map_err(|error| format!("failed to finish Kagemusha V5 {role} PK scan: {error}"))?;
+    reader.finish()
+}
+
 fn parse_kagemusha_eq_pk_spool_v5(
     source: &KagemushaProvingKeySpoolV5,
     circuit_params: KagemushaStepCircuitParamsV4,
@@ -6759,7 +7435,6 @@ impl KagemushaPastaCycleProverV4 {
     }
 
     /// Parse candidate evidence without conferring production-release trust.
-    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     pub(crate) fn from_candidate_artifact_spool_loader<F>(
         candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
         expected_candidate_sha256: [u8; 32],
@@ -7174,7 +7849,7 @@ impl KagemushaPastaCycleProverV4 {
                 || {
                     vec![
                         0;
-                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
+                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5
                     ]
                 },
                 Clone::clone,
@@ -8328,7 +9003,7 @@ impl KagemushaPastaCycleSourceBackedProverV4 {
         let parents = self.decode_parent_pairs_v4(parent_pair_bytes)?;
         for (pair, opening) in parents.iter().zip(parent_state_openings) {
             if opening.len()
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5
             {
                 return Err("Kagemusha V4 parent state opening has invalid length".to_owned());
             }
@@ -8357,7 +9032,7 @@ impl KagemushaPastaCycleSourceBackedProverV4 {
                 || {
                     vec![
                         0;
-                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
+                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5
                     ]
                 },
                 Clone::clone,
@@ -12546,6 +13221,142 @@ fn kagemusha_calibration_membership_path_v4(
     }
 }
 
+const KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4: &str = "kagemusha-fixed-padding-payer";
+const KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4: u128 = 1;
+const KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4: u32 = 0;
+const KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4: [u8; 32] = [0x46; 32];
+const KAGEMUSHA_INITIALIZATION_RELATION_RHO_V4: [u8; 32] = [0x47; 32];
+const KAGEMUSHA_INITIALIZATION_RELATION_OPERATION_ID_V4: [u8; 32] = [0x48; 32];
+
+struct KagemushaInitializationRelationV4 {
+    topup: super::confidential_v2::KagemushaTopUpShieldPublicInputsV2,
+    secure: super::confidential_v2::KagemushaStepSecureWitnessV3,
+    output_membership: super::kagemusha_v2::KagemushaOutputMembershipWitnessV4,
+}
+
+fn kagemusha_initialization_diversifier_v4() -> [u8; 32] {
+    let repr = Fp::from(4).to_repr();
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(repr.as_ref());
+    bytes
+}
+
+/// Build the deterministic, satisfying initialization relation shared by key
+/// calibration and exact-candidate recursive qualification.
+fn kagemusha_initialization_relation_v4(
+    chain_id: &iroha_data_model::ChainId,
+    asset_definition_id: &str,
+    asset_scale: u32,
+) -> Result<KagemushaInitializationRelationV4, String> {
+    use super::{confidential_v2, kagemusha_v2};
+
+    let diversifier = kagemusha_initialization_diversifier_v4();
+    let empty_path = confidential_v2::compute_confidential_merkle_path_v3(&[], 0)?;
+    let secure = confidential_v2::prepare_kagemusha_step_topup_witness_v3(
+        chain_id,
+        asset_definition_id,
+        KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4,
+        KAGEMUSHA_INITIALIZATION_RELATION_OPERATION_ID_V4,
+        KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        asset_scale,
+        &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
+        KAGEMUSHA_INITIALIZATION_RELATION_RHO_V4,
+        diversifier,
+        KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4,
+        &empty_path,
+    )?;
+
+    let asset_tag = confidential_v2::derive_confidential_asset_tag_v3(asset_definition_id)?;
+    let chain_tag = confidential_v2::derive_confidential_chain_tag_v3(chain_id.as_str())?;
+    let payer_tag = confidential_v2::derive_kagemusha_topup_payer_tag_v3(
+        KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4,
+    )?;
+    let operation_tag = confidential_v2::derive_kagemusha_topup_operation_tag_v3(
+        &KAGEMUSHA_INITIALIZATION_RELATION_OPERATION_ID_V4,
+    )?;
+    let owner_tag = confidential_v2::derive_confidential_owner_tag_v3_with_diversifier(
+        &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
+        diversifier,
+    )?;
+    let output_commitment = confidential_v2::derive_confidential_note_v3(
+        asset_tag,
+        KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        KAGEMUSHA_INITIALIZATION_RELATION_RHO_V4,
+        owner_tag,
+    )?;
+    let spend_nullifier = confidential_v2::derive_confidential_nullifier_v3(
+        &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
+        KAGEMUSHA_INITIALIZATION_RELATION_RHO_V4,
+        asset_tag,
+        chain_tag,
+    )?;
+    let initial_root = confidential_v2::compute_confidential_root_v3(&[])?;
+    let final_commitments = [output_commitment];
+    let final_root = confidential_v2::compute_confidential_root_v3(&final_commitments)?;
+    if empty_path.root != initial_root {
+        return Err("Kagemusha V4 initialization empty path/root mismatch".to_owned());
+    }
+
+    let recipient_update_path = kagemusha_calibration_membership_path_v4(empty_path.clone());
+    let recipient_membership_path = kagemusha_calibration_membership_path_v4(
+        confidential_v2::compute_confidential_merkle_path_v3(&final_commitments, 0)?,
+    );
+    let dummy_leaf_index = KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4
+        .checked_add(1)
+        .ok_or_else(|| "Kagemusha V4 initialization dummy index overflow".to_owned())?;
+    let dummy_path = kagemusha_calibration_membership_path_v4(
+        confidential_v2::compute_confidential_merkle_path_v3(
+            &final_commitments,
+            usize::try_from(dummy_leaf_index)
+                .map_err(|_| "Kagemusha V4 initialization dummy index does not fit usize")?,
+        )?,
+    );
+    let output_membership = kagemusha_v2::KagemushaOutputMembershipWitnessV4 {
+        operation: kagemusha_v2::KagemushaOutputMembershipOperationV4::Init,
+        initial_root,
+        final_root,
+        recipient: Some(kagemusha_v2::KagemushaOutputMembershipLeafV4 {
+            commitment: output_commitment,
+            leaf_index: KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4,
+            update_path: recipient_update_path,
+            membership_path: recipient_membership_path,
+        }),
+        change: None,
+        dummy_leaf_index,
+        dummy_path,
+    };
+    kagemusha_v2::KagemushaOutputMembershipCircuitV4::new(output_membership.clone())?;
+    let topup = confidential_v2::KagemushaTopUpShieldPublicInputsV2 {
+        output_commitment,
+        spend_nullifier,
+        initial_root,
+        finalized_root: final_root,
+        atomic_amount: iroha_data_model::offline::kagemusha_confidential_amount_encoding_v2(
+            KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        ),
+        asset_scale: {
+            let mut encoded = [0_u8; 32];
+            encoded[..4].copy_from_slice(&asset_scale.to_le_bytes());
+            encoded
+        },
+        leaf_index: {
+            let mut encoded = [0_u8; 32];
+            encoded[..4]
+                .copy_from_slice(&KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4.to_le_bytes());
+            encoded
+        },
+        asset_tag,
+        chain_tag,
+        payer_tag,
+        operation_tag,
+    };
+    Ok(KagemushaInitializationRelationV4 {
+        topup,
+        secure,
+        output_membership,
+    })
+}
+
 /// Build one deterministic, satisfying initialization relation for key
 /// calibration and the measured live pair.  None of these values is an
 /// authenticated release identity: the exporter supplies that layer after the
@@ -12557,87 +13368,28 @@ fn kagemusha_generation_calibration_v4(
     use halo2_proofs::halo2curves::pasta::Fp;
     use iroha_data_model::ChainId;
 
-    use super::{confidential_v2, kagemusha_v2};
+    use super::kagemusha_v2;
 
     const ASSET_DEFINITION: &str = "kagemusha-fixed-padding#internal";
     const CHAIN: &str = "kagemusha-fixed-padding-chain";
-    const PAYER: &str = "kagemusha-fixed-padding-payer";
-    const AMOUNT: u128 = 1;
     const ASSET_SCALE: u32 = 0;
-    const LEAF_INDEX: u32 = 0;
 
     let chain_id = ChainId::from(CHAIN);
-    let spend_key = [0x46_u8; 32];
-    let rho = [0x47_u8; 32];
-    let operation_id = [0x48_u8; 32];
-    let diversifier = {
-        let repr = Fp::from(4).to_repr();
-        let mut bytes = [0_u8; 32];
-        bytes.copy_from_slice(repr.as_ref());
-        bytes
-    };
-
-    let empty_path = confidential_v2::compute_confidential_merkle_path_v3(&[], 0)?;
-    let secure = confidential_v2::prepare_kagemusha_step_topup_witness_v3(
-        &chain_id,
-        ASSET_DEFINITION,
-        PAYER,
-        operation_id,
-        AMOUNT,
-        ASSET_SCALE,
-        &spend_key,
-        rho,
-        diversifier,
-        LEAF_INDEX,
-        &empty_path,
-    )?;
-
-    let asset_tag = confidential_v2::derive_confidential_asset_tag_v3(ASSET_DEFINITION)?;
-    let chain_tag = confidential_v2::derive_confidential_chain_tag_v3(CHAIN)?;
-    let payer_tag = confidential_v2::derive_kagemusha_topup_payer_tag_v3(PAYER)?;
-    let operation_tag = confidential_v2::derive_kagemusha_topup_operation_tag_v3(&operation_id)?;
-    let owner_tag = confidential_v2::derive_confidential_owner_tag_v3_with_diversifier(
-        &spend_key,
-        diversifier,
-    )?;
-    let output_commitment =
-        confidential_v2::derive_confidential_note_v3(asset_tag, AMOUNT, rho, owner_tag)?;
-    let spend_nullifier =
-        confidential_v2::derive_confidential_nullifier_v3(&spend_key, rho, asset_tag, chain_tag)?;
-    let initial_root = confidential_v2::compute_confidential_root_v3(&[])?;
-    let final_commitments = [output_commitment];
-    let final_root = confidential_v2::compute_confidential_root_v3(&final_commitments)?;
-    if empty_path.root != initial_root {
-        return Err("Kagemusha V4 calibration empty path/root mismatch".to_owned());
-    }
-
-    let recipient_update_path = kagemusha_calibration_membership_path_v4(empty_path.clone());
-    let recipient_membership_path = kagemusha_calibration_membership_path_v4(
-        confidential_v2::compute_confidential_merkle_path_v3(&final_commitments, 0)?,
-    );
-    let dummy_leaf_index = 1_u32;
-    let dummy_path = kagemusha_calibration_membership_path_v4(
-        confidential_v2::compute_confidential_merkle_path_v3(
-            &final_commitments,
-            usize::try_from(dummy_leaf_index)
-                .map_err(|_| "Kagemusha V4 calibration dummy index does not fit usize")?,
-        )?,
-    );
-    let output_membership = kagemusha_v2::KagemushaOutputMembershipWitnessV4 {
-        operation: kagemusha_v2::KagemushaOutputMembershipOperationV4::Init,
-        initial_root,
-        final_root,
-        recipient: Some(kagemusha_v2::KagemushaOutputMembershipLeafV4 {
-            commitment: output_commitment,
-            leaf_index: LEAF_INDEX,
-            update_path: recipient_update_path,
-            membership_path: recipient_membership_path,
-        }),
-        change: None,
-        dummy_leaf_index,
-        dummy_path,
-    };
-    kagemusha_v2::KagemushaOutputMembershipCircuitV4::new(output_membership.clone())?;
+    let KagemushaInitializationRelationV4 {
+        topup,
+        secure,
+        output_membership,
+    } = kagemusha_initialization_relation_v4(&chain_id, ASSET_DEFINITION, ASSET_SCALE)?;
+    let asset_tag = topup.asset_tag;
+    let chain_tag = topup.chain_tag;
+    let payer_tag = topup.payer_tag;
+    let operation_tag = topup.operation_tag;
+    let output_commitment = topup.output_commitment;
+    let spend_nullifier = topup.spend_nullifier;
+    let initial_root = topup.initial_root;
+    let final_root = topup.finalized_root;
+    let operation_id = KAGEMUSHA_INITIALIZATION_RELATION_OPERATION_ID_V4;
+    let amount = KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4;
 
     let statement_digest = [0x11_u8; 32];
     let topup_anchor_digest = [0x31_u8; 32];
@@ -12663,7 +13415,7 @@ fn kagemusha_generation_calibration_v4(
         kagemusha_v2::I_TRANSFER_AMOUNT_LO,
         kagemusha_v2::I_RECIPIENT_AMOUNT_LO,
     ] {
-        fields[index] = Fp::from_u128(AMOUNT);
+        fields[index] = Fp::from_u128(amount);
     }
     for (index, bytes, role) in [
         (kagemusha_v2::I_INITIAL_ROOT, initial_root, "initial root"),
@@ -12734,9 +13486,9 @@ fn kagemusha_generation_calibration_v4(
     let operation = KagemushaStepOperationVectorV4::from_fields(fields);
 
     let mut result_state =
-        vec![0_u32; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
+        vec![0_u32; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
     result_state[kagemusha_v2::S_VERSION] =
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
     result_state[kagemusha_v2::S_CHAIN_TAG..kagemusha_v2::S_CHAIN_TAG + 8]
         .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(chain_tag));
     result_state[kagemusha_v2::S_ASSET_TAG..kagemusha_v2::S_ASSET_TAG + 8]
@@ -12757,7 +13509,7 @@ fn kagemusha_generation_calibration_v4(
     for (target, limb) in result_state
         [kagemusha_v2::S_CURRENT_AMOUNT..kagemusha_v2::S_CURRENT_AMOUNT + 4]
         .iter_mut()
-        .zip(AMOUNT.to_le_bytes().chunks_exact(4))
+        .zip(amount.to_le_bytes().chunks_exact(4))
     {
         *target = u32::from_le_bytes(
             limb.try_into()
@@ -12781,7 +13533,7 @@ fn kagemusha_generation_calibration_v4(
         operation,
         parent_count: 0,
         parent_states: std::array::from_fn(|_| {
-            vec![0; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2]
+            vec![0; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5]
         }),
         result_state,
         manifest_sha256: kagemusha_calibration_exact_limbs_v4(manifest_sha256),
@@ -12803,6 +13555,1171 @@ fn kagemusha_generation_calibration_v4(
         secure,
         output_membership,
     })
+}
+
+const KAGEMUSHA_CANDIDATE_STEP_TWO_KEY_SET_DOMAIN_V4: &[u8] =
+    b"iroha:kagemusha:candidate-recursive-step-two-key-set:v4";
+
+fn kagemusha_candidate_step_two_key_set_sha256_v4(
+    candidate_sha256: [u8; 32],
+    manifest_sha256: [u8; 32],
+    role_digests: [[u8; 32]; 8],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(KAGEMUSHA_CANDIDATE_STEP_TWO_KEY_SET_DOMAIN_V4);
+    hasher.update([0]);
+    hasher.update(candidate_sha256);
+    hasher.update(manifest_sha256);
+    for digest in role_digests {
+        hasher.update(digest);
+    }
+    hasher.finalize().into()
+}
+
+fn kagemusha_candidate_step_two_role_digests_v4(
+    manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+) -> Result<[[u8; 32]; 8], String> {
+    let descriptor = |parity, kind| {
+        manifest
+            .profiles
+            .iter()
+            .find(|profile| profile.parity == parity)
+            .and_then(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .find(|descriptor| descriptor.kind == kind)
+            })
+            .ok_or_else(|| "Kagemusha V4 candidate key role is absent".to_owned())
+    };
+    let step_eq_pk = descriptor(
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+    )?;
+    let step_eq_vk = descriptor(
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+    )?;
+    let step_ep_pk = descriptor(
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+    )?;
+    let step_ep_vk = descriptor(
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+    )?;
+    Ok([
+        step_eq_pk.sha256,
+        step_eq_pk.payload_sha256,
+        step_eq_vk.sha256,
+        step_eq_vk.payload_sha256,
+        step_ep_pk.sha256,
+        step_ep_pk.payload_sha256,
+        step_ep_vk.sha256,
+        step_ep_vk.payload_sha256,
+    ])
+}
+
+/// Strict proof that an exact unsigned candidate completed a real step-one to
+/// step-two recursion and both pairs passed a freshly loaded terminal verifier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaCandidateRecursiveStepTwoEvidenceV4 {
+    /// Canonical candidate-record identity.
+    candidate_sha256: [u8; 32],
+    /// Canonical unsigned-manifest identity selected by both proofs.
+    manifest_sha256: [u8; 32],
+    /// Exact framed Eq proving-key bytes staged in the candidate.
+    step_eq_proving_key_framed_sha256: [u8; 32],
+    /// Exact Eq proving-key payload staged in the candidate.
+    step_eq_proving_key_payload_sha256: [u8; 32],
+    /// Exact framed Eq verifying-key bytes staged in the candidate.
+    step_eq_verifying_key_framed_sha256: [u8; 32],
+    /// Exact Eq verifying-key payload staged in the candidate.
+    step_eq_verifying_key_payload_sha256: [u8; 32],
+    /// Exact framed Ep proving-key bytes staged in the candidate.
+    step_ep_proving_key_framed_sha256: [u8; 32],
+    /// Exact Ep proving-key payload staged in the candidate.
+    step_ep_proving_key_payload_sha256: [u8; 32],
+    /// Exact framed Ep verifying-key bytes staged in the candidate.
+    step_ep_verifying_key_framed_sha256: [u8; 32],
+    /// Exact Ep verifying-key payload staged in the candidate.
+    step_ep_verifying_key_payload_sha256: [u8; 32],
+    /// Key-set identity used while proving initialization.
+    initialization_key_set_sha256: [u8; 32],
+    /// Key-set identity used while proving the recursive child.
+    append_key_set_sha256: [u8; 32],
+    /// Key-set identity freshly loaded for terminal verification.
+    terminal_key_set_sha256: [u8; 32],
+    /// SHA-256 of the exact canonical step-one opaque pair.
+    initialization_pair_sha256: [u8; 32],
+    /// Canonical semantic bundle digest containing the exact step-one pair.
+    initialization_bundle_digest: [u8; 32],
+    /// SHA-256 of the exact canonical step-two opaque pair.
+    append_pair_sha256: [u8; 32],
+    /// Parent bundle digest publicly bound by the step-two operation.
+    append_bound_parent_bundle_digest: [u8; 32],
+    /// Proof-step counter decoded from the step-one pair.
+    initialization_proof_step_count: u32,
+    /// Parent count decoded from the step-one pair.
+    initialization_parent_count: u32,
+    /// Proof-step counter decoded from the step-two pair.
+    append_proof_step_count: u32,
+    /// Parent count decoded from the step-two pair.
+    append_parent_count: u32,
+    /// Number of pairs accepted by the freshly loaded terminal verifier.
+    terminal_verified_pair_count: u32,
+}
+
+impl KagemushaCandidateRecursiveStepTwoEvidenceV4 {
+    fn role_digests(&self) -> [[u8; 32]; 8] {
+        [
+            self.step_eq_proving_key_framed_sha256,
+            self.step_eq_proving_key_payload_sha256,
+            self.step_eq_verifying_key_framed_sha256,
+            self.step_eq_verifying_key_payload_sha256,
+            self.step_ep_proving_key_framed_sha256,
+            self.step_ep_proving_key_payload_sha256,
+            self.step_ep_verifying_key_framed_sha256,
+            self.step_ep_verifying_key_payload_sha256,
+        ]
+    }
+
+    /// Enforce the exact two-step, one-parent, one-key-set terminal evidence
+    /// contract consumed by candidate publication.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero or substituted identity, any counter other
+    /// than step `1/0 parents` followed by step `2/1 parent`, a child not bound
+    /// to the canonical step-one bundle, or fewer/more than two terminal
+    /// decisions.
+    pub fn validate(&self) -> Result<(), String> {
+        let role_digests = self.role_digests();
+        let expected_key_set = kagemusha_candidate_step_two_key_set_sha256_v4(
+            self.candidate_sha256,
+            self.manifest_sha256,
+            role_digests,
+        );
+        if self.candidate_sha256 == [0; 32]
+            || self.manifest_sha256 == [0; 32]
+            || role_digests.iter().any(|digest| *digest == [0; 32])
+            || self.initialization_key_set_sha256 != expected_key_set
+            || self.append_key_set_sha256 != expected_key_set
+            || self.terminal_key_set_sha256 != expected_key_set
+            || self.initialization_pair_sha256 == [0; 32]
+            || self.append_pair_sha256 == [0; 32]
+            || self.initialization_pair_sha256 == self.append_pair_sha256
+            || self.initialization_bundle_digest == [0; 32]
+            || self.append_bound_parent_bundle_digest != self.initialization_bundle_digest
+            || self.initialization_proof_step_count != 1
+            || self.initialization_parent_count != 0
+            || self.append_proof_step_count != 2
+            || self.append_parent_count != 1
+            || self.terminal_verified_pair_count != 2
+        {
+            return Err(
+                "Kagemusha V4 candidate does not carry exact verified step-one to step-two evidence"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Rebind this result to the exact canonical candidate and its staged
+    /// proving/verifying-key descriptors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the candidate is invalid or any candidate,
+    /// manifest, framed-key, or key-payload identity differs from the evidence.
+    pub fn validate_for_candidate(
+        &self,
+        candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<(), String> {
+        self.validate()?;
+        candidate.validate().map_err(|error| error.to_string())?;
+        let candidate_sha256 = candidate.sha256().map_err(|error| error.to_string())?;
+        let manifest_sha256: [u8; 32] = Sha256::digest(
+            norito::encode_canonical(&candidate.manifest)
+                .map_err(|error| format!("failed to encode Kagemusha V4 candidate: {error}"))?,
+        )
+        .into();
+        let role_digests = kagemusha_candidate_step_two_role_digests_v4(&candidate.manifest)?;
+        if self.candidate_sha256 != candidate_sha256
+            || self.manifest_sha256 != manifest_sha256
+            || self.role_digests() != role_digests
+        {
+            return Err(
+                "Kagemusha V4 recursive-step evidence identifies different staged candidate bytes"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn kagemusha_candidate_qualification_init_statement_v4(
+    candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    manifest_sha256: [u8; 32],
+    relation: &KagemushaInitializationRelationV4,
+) -> Result<KagemushaRecursiveSpendPublicStatementV4, String> {
+    use iroha_data_model::offline::{
+        KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaRecursiveSpendArtifactBindingV4,
+        KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+        KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+        kagemusha_recursive_spend_verifier_key_id_v4,
+    };
+
+    let manifest = &candidate.manifest;
+    let anchor_digest = [0x31_u8; 32];
+    let anchor_ref = KagemushaRecursiveSpendTopUpAnchorRefV2 {
+        topup_operation_id: KAGEMUSHA_INITIALIZATION_RELATION_OPERATION_ID_V4,
+        anchor_digest,
+    };
+    anchor_ref.validate().map_err(|error| error.to_string())?;
+    let amount = KagemushaScaledAmountV2::new(
+        KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        manifest.asset_scale,
+    )
+    .map_err(|error| error.to_string())?;
+    let artifact_binding = KagemushaRecursiveSpendArtifactBindingV4 {
+        version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+        generation: manifest.generation.clone(),
+        manifest_sha256,
+    };
+    let statement = KagemushaRecursiveSpendPublicStatementV4 {
+        chain_id: manifest.chain_id.clone(),
+        asset: manifest.asset.clone(),
+        asset_scale: manifest.asset_scale,
+        final_root: relation.topup.finalized_root,
+        next_zero_leaf_index: relation.output_membership.dummy_leaf_index,
+        topup_anchor_refs: vec![anchor_ref],
+        proof_step_count: 1,
+        peer_hop_count: 0,
+        current_note: KagemushaSpendableNoteDescriptorV2 {
+            chain_id: manifest.chain_id.clone(),
+            asset: manifest.asset.clone(),
+            note_commitment: relation.topup.output_commitment,
+            spend_nullifier: relation.topup.spend_nullifier,
+            amount,
+        },
+        branch_claims: vec![
+            KagemushaRecursiveSpendBranchClaimV2::root(anchor_digest)
+                .map_err(|error| error.to_string())?,
+        ],
+        transition: None,
+        verifier_key_id: kagemusha_recursive_spend_verifier_key_id_v4(
+            KagemushaPastaCycleParityV1::StepEq,
+            manifest_sha256,
+        ),
+        artifact_binding,
+    };
+    statement
+        .validate_public_binding()
+        .map_err(|error| error.to_string())?;
+    Ok(statement)
+}
+
+fn kagemusha_candidate_qualification_bundle_v4(
+    candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    manifest_sha256: [u8; 32],
+    statement: KagemushaRecursiveSpendPublicStatementV4,
+    operation: &KagemushaStepOperationVectorV4,
+    pair_bytes: Vec<u8>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV4, String> {
+    use iroha_data_model::{
+        offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+            KagemushaPastaCycleProofEnvelopeV4, KagemushaRecursiveSpendBundleV4,
+            KagemushaRecursiveSpendProofV4, KagemushaRecursiveSpendStateBoundaryV5,
+        },
+        proof::ProofBox,
+    };
+
+    let manifest = &candidate.manifest;
+    let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+        return Err("Kagemusha V4 candidate does not have exactly two profiles".to_owned());
+    };
+    let verifier_key_sha256 =
+        |profile: &iroha_data_model::offline::KagemushaPastaCycleProofProfileV4| {
+            profile
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::VerifyingKey)
+                .map(|artifact| artifact.payload_sha256)
+                .ok_or_else(|| "Kagemusha V4 candidate verifier key is absent".to_owned())
+        };
+    let state =
+        super::kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&statement)?;
+    let proof_backend = manifest.proof_backend.parse().map_err(|_| {
+        format!(
+            "invalid Kagemusha V4 proof backend `{}`",
+            manifest.proof_backend
+        )
+    })?;
+    let proof_envelope = KagemushaPastaCycleProofEnvelopeV4 {
+        version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+        proof_backend: manifest.proof_backend.clone(),
+        transcript_profile: manifest.transcript_profile.clone(),
+        step_eq_circuit_id: step_eq.circuit_id.clone(),
+        step_ep_circuit_id: step_ep.circuit_id.clone(),
+        artifact_generation: manifest.generation.clone(),
+        manifest_sha256,
+        step_eq_parameter_generation: step_eq.parameter_generation.clone(),
+        step_ep_parameter_generation: step_ep.parameter_generation.clone(),
+        step_eq_circuit_params_sha256: step_eq
+            .circuit_params_sha256()
+            .map_err(|error| error.to_string())?,
+        step_ep_circuit_params_sha256: step_ep
+            .circuit_params_sha256()
+            .map_err(|error| error.to_string())?,
+        step_eq_verifier_key_sha256: verifier_key_sha256(step_eq)?,
+        step_ep_verifier_key_sha256: verifier_key_sha256(step_ep)?,
+        state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state.limbs.to_vec())
+            .map_err(|error| error.to_string())?,
+        proof: ProofBox::new(proof_backend, pair_bytes),
+    };
+    proof_envelope
+        .validate_against_candidate_manifest(manifest)
+        .map_err(|error| error.to_string())?;
+    let public_statement_digest = statement.digest().map_err(|error| error.to_string())?;
+    let verifier_key_id = statement.verifier_key_id.clone();
+    let bundle = KagemushaRecursiveSpendBundleV4 {
+        statement,
+        operation: operation.into(),
+        recursive_proof: KagemushaRecursiveSpendProofV4 {
+            verifier_key_id,
+            public_statement_digest,
+            proof_envelope,
+        },
+    };
+    bundle
+        .validate_public_binding()
+        .map_err(|error| error.to_string())?;
+    Ok(bundle)
+}
+
+fn kagemusha_candidate_private_path_v4(
+    path: &iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
+) -> super::confidential_v2::ConfidentialMerklePathV2 {
+    super::confidential_v2::ConfidentialMerklePathV2 {
+        siblings: path.siblings.clone(),
+        directions: path.directions.clone(),
+        witness_nodes: Vec::new(),
+        root: path.root,
+    }
+}
+
+struct KagemushaCandidateQualificationAppendV4 {
+    initialization_bundle_digest: [u8; 32],
+    bound_parent_bundle_digest: [u8; 32],
+    statement: KagemushaRecursiveSpendPublicStatementV4,
+    operation: KagemushaStepOperationVectorV4,
+    secure: super::confidential_v2::KagemushaStepSecureWitnessV3,
+    output_membership: super::kagemusha_v2::KagemushaOutputMembershipWitnessV4,
+    parent_state: Vec<u32>,
+}
+
+#[allow(clippy::too_many_lines)]
+fn kagemusha_candidate_qualification_append_v4(
+    candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    manifest_sha256: [u8; 32],
+    relation: &KagemushaInitializationRelationV4,
+    init_statement: &KagemushaRecursiveSpendPublicStatementV4,
+    init_operation: &KagemushaStepOperationVectorV4,
+    init_pair: &[u8],
+) -> Result<KagemushaCandidateQualificationAppendV4, String> {
+    use super::{confidential_v2, kagemusha_v2};
+    use iroha_data_model::offline::{
+        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendInputBranchV2,
+        KagemushaRecursiveSpendSplitIntentV4, KagemushaScaledAmountV2,
+        KagemushaSpendableNoteDescriptorV2,
+    };
+
+    let init_bundle = kagemusha_candidate_qualification_bundle_v4(
+        candidate,
+        manifest_sha256,
+        init_statement.clone(),
+        init_operation,
+        init_pair.to_vec(),
+    )?;
+    let initialization_bundle_digest = init_bundle.digest().map_err(|error| error.to_string())?;
+    let input_leaf = relation
+        .output_membership
+        .recipient
+        .as_ref()
+        .ok_or_else(|| "Kagemusha V4 qualification init has no output leaf".to_owned())?;
+    let input_path = confidential_v2::validate_confidential_membership_path_v3(
+        input_leaf.commitment,
+        usize::try_from(input_leaf.leaf_index)
+            .map_err(|_| "Kagemusha V4 qualification input leaf does not fit usize")?,
+        &kagemusha_candidate_private_path_v4(&input_leaf.membership_path),
+    )?;
+    let next_zero_leaf_index = usize::try_from(relation.output_membership.dummy_leaf_index)
+        .map_err(|_| "Kagemusha V4 qualification frontier does not fit usize")?;
+    let next_zero_path = confidential_v2::validate_confidential_next_zero_path_v3(
+        next_zero_leaf_index,
+        &kagemusha_candidate_private_path_v4(&relation.output_membership.dummy_path),
+    )?;
+    let recipient_spend_key = [0x61_u8; 32];
+    let recipient_rho = [0x62_u8; 32];
+    let recipient_diversifier = confidential_v2::derive_confidential_diversifier_v2(
+        b"iroha:kagemusha:candidate-recursive-step-two-recipient:v4",
+    );
+    let recipient_owner_tag = confidential_v2::derive_confidential_owner_tag_v3_with_diversifier(
+        &recipient_spend_key,
+        recipient_diversifier,
+    )?;
+    let recipient_commitment = confidential_v2::derive_confidential_note_v3(
+        relation.topup.asset_tag,
+        KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        recipient_rho,
+        recipient_owner_tag,
+    )?;
+    let recipient_nullifier = confidential_v2::derive_confidential_nullifier_v3(
+        &recipient_spend_key,
+        recipient_rho,
+        relation.topup.asset_tag,
+        relation.topup.chain_tag,
+    )?;
+    let append_paths = confidential_v2::derive_confidential_sequential_append_paths_v3(
+        next_zero_leaf_index,
+        &next_zero_path,
+        &[recipient_commitment],
+    )?;
+    let [recipient_paths] = append_paths.leaves.as_slice() else {
+        return Err("Kagemusha V4 qualification append did not derive one output".to_owned());
+    };
+    let output_membership = kagemusha_v2::KagemushaOutputMembershipWitnessV4 {
+        operation: kagemusha_v2::KagemushaOutputMembershipOperationV4::Split,
+        initial_root: append_paths.initial_root,
+        final_root: append_paths.final_root,
+        recipient: Some(kagemusha_v2::KagemushaOutputMembershipLeafV4 {
+            commitment: recipient_commitment,
+            leaf_index: u32::try_from(recipient_paths.leaf_index)
+                .map_err(|_| "Kagemusha V4 qualification recipient leaf does not fit u32")?,
+            update_path: kagemusha_calibration_membership_path_v4(
+                recipient_paths.update_path.clone(),
+            ),
+            membership_path: kagemusha_calibration_membership_path_v4(
+                recipient_paths.membership_path.clone(),
+            ),
+        }),
+        change: None,
+        dummy_leaf_index: u32::try_from(append_paths.next_zero_leaf_index)
+            .map_err(|_| "Kagemusha V4 qualification next frontier does not fit u32")?,
+        dummy_path: kagemusha_calibration_membership_path_v4(append_paths.next_zero_path.clone()),
+    };
+    kagemusha_v2::KagemushaOutputMembershipCircuitV4::new(output_membership.clone())?;
+    let amount = KagemushaScaledAmountV2::new(
+        KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        candidate.manifest.asset_scale,
+    )
+    .map_err(|error| error.to_string())?;
+    let recipient_note = KagemushaSpendableNoteDescriptorV2 {
+        chain_id: candidate.manifest.chain_id.clone(),
+        asset: candidate.manifest.asset.clone(),
+        note_commitment: recipient_commitment,
+        spend_nullifier: recipient_nullifier,
+        amount,
+    };
+    let split = KagemushaRecursiveSpendSplitIntentV4 {
+        chain_id: candidate.manifest.chain_id.clone(),
+        asset: candidate.manifest.asset.clone(),
+        inputs: vec![KagemushaRecursiveSpendInputBranchV2 {
+            bundle_digest: initialization_bundle_digest,
+            input_note: init_statement.current_note.clone(),
+            branch_claims: init_statement.branch_claims.clone(),
+            input_root: init_statement.final_root,
+            proof_step_count: init_statement.proof_step_count,
+            peer_hop_count: init_statement.peer_hop_count,
+        }],
+        topup_anchor_refs: init_statement.topup_anchor_refs.clone(),
+        asset_scale: candidate.manifest.asset_scale,
+        output_artifact_binding: init_statement.artifact_binding.clone(),
+        transfer_amount: amount,
+        recipient_output: recipient_note,
+        change_output: None,
+        recipient_request_digest: [0xA6; 32],
+        operation_id: [0xA8; 32],
+    };
+    split
+        .validate_public_binding()
+        .map_err(|error| error.to_string())?;
+    let statement = kagemusha_v2::kagemusha_recursive_spend_append_statement_v4(
+        &split,
+        KagemushaRecursiveSpendBranchV2::Recipient,
+        output_membership.final_root,
+        output_membership.dummy_leaf_index,
+    )?;
+    let transfer_public = super::kagemusha_step_transition::KagemushaStepTransferPublicV4 {
+        input_commitments: [init_statement.current_note.note_commitment, [0; 32]],
+        input_nullifiers: [init_statement.current_note.spend_nullifier, [0; 32]],
+        output_commitments: [recipient_commitment, [0; 32]],
+        root: init_statement.final_root,
+        asset_tag: relation.topup.asset_tag,
+        chain_tag: relation.topup.chain_tag,
+    };
+    let operation = KagemushaStepOperationVectorV4::from_append_v4(
+        &split,
+        &statement,
+        &transfer_public,
+        &output_membership,
+    )?;
+    let input_paths = vec![input_path, next_zero_path];
+    let inputs = vec![confidential_v2::ConfidentialTransferInputV2 {
+        amount: KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        rho: KAGEMUSHA_INITIALIZATION_RELATION_RHO_V4,
+        diversifier: kagemusha_initialization_diversifier_v4(),
+        leaf_index: usize::try_from(KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4)
+            .map_err(|_| "Kagemusha V4 qualification leaf index does not fit usize")?,
+    }];
+    let outputs = vec![confidential_v2::ConfidentialTransferOutputV2 {
+        amount: KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        rho: recipient_rho,
+        owner_tag: recipient_owner_tag,
+    }];
+    let secure = confidential_v2::prepare_kagemusha_step_transfer_witness_v3_with_paths(
+        &candidate.manifest.chain_id,
+        &candidate.manifest.asset.to_string(),
+        &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
+        &input_paths,
+        &inputs,
+        &outputs,
+        init_statement.final_root,
+    )?;
+    let parent_state =
+        kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(init_statement)?
+            .limbs
+            .to_vec();
+    Ok(KagemushaCandidateQualificationAppendV4 {
+        initialization_bundle_digest,
+        bound_parent_bundle_digest: split.inputs[0].bundle_digest,
+        statement,
+        operation,
+        secure,
+        output_membership,
+        parent_state,
+    })
+}
+
+/// Prove and terminally verify a genuine recursive child with the exact
+/// proving and verifying keys staged in one unsigned candidate.
+///
+/// This is a pre-promotion qualification boundary. It authenticates candidate
+/// bytes and proves the real Step relation, but it does not confer release
+/// authority or bypass attestation, review, benchmark, or finality gates.
+///
+/// # Errors
+///
+/// Returns an error when the candidate or a staged role changes, a proving key
+/// does not embed the exact staged verifying key, either proof fails, the
+/// second proof is not the sole child of the first canonical bundle, or the
+/// freshly loaded terminal verifier does not accept exactly both pairs.
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn generate_candidate_recursive_step_two_receipt_v4<F>(
+    candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    expected_candidate_sha256: [u8; 32],
+    expected_manifest_sha256: [u8; 32],
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    step_eq_proving_key_file: std::fs::File,
+    step_ep_proving_key_file: std::fs::File,
+    mut load: F,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendQualificationReceiptV4, String>
+where
+    F: FnMut(
+        KagemushaPastaCycleParityV1,
+        KagemushaPastaCycleArtifactKindV4,
+    )
+        -> Result<super::kagemusha_artifact_v4::KagemushaValidatedArtifactPayloadV4, String>,
+{
+    use iroha_data_model::offline::{
+        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendInputBranchV2,
+        KagemushaRecursiveSpendSplitIntentV4, KagemushaScaledAmountV2,
+        KagemushaSpendableNoteDescriptorV2,
+    };
+
+    use super::{confidential_v2, kagemusha_v2};
+
+    candidate.validate().map_err(|error| error.to_string())?;
+    KagemushaQualificationMemoryContractV4::for_operator(memory_guard)
+        .validate_candidate(candidate)?;
+    let candidate_sha256 = candidate.sha256().map_err(|error| error.to_string())?;
+    let manifest_sha256: [u8; 32] = Sha256::digest(
+        norito::encode_canonical(&candidate.manifest)
+            .map_err(|error| format!("failed to encode Kagemusha V4 candidate: {error}"))?,
+    )
+    .into();
+    validate_kagemusha_candidate_spool_identity_v5(
+        candidate_sha256,
+        manifest_sha256,
+        expected_candidate_sha256,
+        expected_manifest_sha256,
+    )?;
+    let role_digests = kagemusha_candidate_step_two_role_digests_v4(&candidate.manifest)?;
+    let key_set_sha256 = kagemusha_candidate_step_two_key_set_sha256_v4(
+        candidate_sha256,
+        manifest_sha256,
+        role_digests,
+    );
+    let terminal_binding = KagemushaArtifactSpoolBindingV5::candidate_evidence_lab(
+        candidate,
+        expected_candidate_sha256,
+        expected_manifest_sha256,
+    )?;
+
+    let relation = kagemusha_initialization_relation_v4(
+        &candidate.manifest.chain_id,
+        &candidate.manifest.asset.to_string(),
+        candidate.manifest.asset_scale,
+    )?;
+    let init_statement =
+        kagemusha_candidate_qualification_init_statement_v4(candidate, manifest_sha256, &relation)?;
+    let init_operation = KagemushaStepOperationVectorV4::from_candidate_qualification_init_v4(
+        &init_statement,
+        &relation.topup,
+        &relation.output_membership,
+        KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4,
+    )?;
+
+    // The constructor authenticates both framed proving-key spools, parses the
+    // exact candidate verifier payloads, and rejects a PK whose embedded VK
+    // differs byte-for-byte from that staged VK.
+    let prover = KagemushaPastaCycleProverV4::from_candidate_artifact_spool_loader(
+        candidate,
+        expected_candidate_sha256,
+        expected_manifest_sha256,
+        step_eq_proving_key_file,
+        step_ep_proving_key_file,
+        |parity, kind| load(parity, kind),
+    )?;
+    let init_public_inputs = kagemusha_v2::kagemusha_public_inputs_for_statement_v4(
+        &init_statement,
+        init_operation.clone(),
+        manifest_sha256,
+        prover.step_eq_compiled_protocol_sha256(),
+        prover.step_ep_compiled_protocol_sha256(),
+    )?;
+    let init_pair = prover.prove_operation_encoded_v4(
+        init_public_inputs,
+        1,
+        &[],
+        &[],
+        &relation.secure,
+        &relation.output_membership,
+    )?;
+    let init_bundle = kagemusha_candidate_qualification_bundle_v4(
+        candidate,
+        manifest_sha256,
+        init_statement.clone(),
+        &init_operation,
+        init_pair.clone(),
+    )?;
+    let initialization_bundle_digest = init_bundle.digest().map_err(|error| error.to_string())?;
+    drop(init_bundle);
+
+    let input_leaf = relation
+        .output_membership
+        .recipient
+        .as_ref()
+        .ok_or_else(|| "Kagemusha V4 qualification init has no output leaf".to_owned())?;
+    let input_path = confidential_v2::validate_confidential_membership_path_v3(
+        input_leaf.commitment,
+        usize::try_from(input_leaf.leaf_index)
+            .map_err(|_| "Kagemusha V4 qualification input leaf does not fit usize")?,
+        &kagemusha_candidate_private_path_v4(&input_leaf.membership_path),
+    )?;
+    let next_zero_leaf_index = usize::try_from(relation.output_membership.dummy_leaf_index)
+        .map_err(|_| "Kagemusha V4 qualification frontier does not fit usize")?;
+    let next_zero_path = confidential_v2::validate_confidential_next_zero_path_v3(
+        next_zero_leaf_index,
+        &kagemusha_candidate_private_path_v4(&relation.output_membership.dummy_path),
+    )?;
+
+    let recipient_spend_key = [0x61_u8; 32];
+    let recipient_rho = [0x62_u8; 32];
+    let recipient_diversifier = confidential_v2::derive_confidential_diversifier_v2(
+        b"iroha:kagemusha:candidate-recursive-step-two-recipient:v4",
+    );
+    let recipient_owner_tag = confidential_v2::derive_confidential_owner_tag_v3_with_diversifier(
+        &recipient_spend_key,
+        recipient_diversifier,
+    )?;
+    let recipient_commitment = confidential_v2::derive_confidential_note_v3(
+        relation.topup.asset_tag,
+        KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        recipient_rho,
+        recipient_owner_tag,
+    )?;
+    let recipient_nullifier = confidential_v2::derive_confidential_nullifier_v3(
+        &recipient_spend_key,
+        recipient_rho,
+        relation.topup.asset_tag,
+        relation.topup.chain_tag,
+    )?;
+    let append_paths = confidential_v2::derive_confidential_sequential_append_paths_v3(
+        next_zero_leaf_index,
+        &next_zero_path,
+        &[recipient_commitment],
+    )?;
+    let [recipient_paths] = append_paths.leaves.as_slice() else {
+        return Err("Kagemusha V4 qualification append did not derive one output".to_owned());
+    };
+    let append_membership = kagemusha_v2::KagemushaOutputMembershipWitnessV4 {
+        operation: kagemusha_v2::KagemushaOutputMembershipOperationV4::Split,
+        initial_root: append_paths.initial_root,
+        final_root: append_paths.final_root,
+        recipient: Some(kagemusha_v2::KagemushaOutputMembershipLeafV4 {
+            commitment: recipient_commitment,
+            leaf_index: u32::try_from(recipient_paths.leaf_index)
+                .map_err(|_| "Kagemusha V4 qualification recipient leaf does not fit u32")?,
+            update_path: kagemusha_calibration_membership_path_v4(
+                recipient_paths.update_path.clone(),
+            ),
+            membership_path: kagemusha_calibration_membership_path_v4(
+                recipient_paths.membership_path.clone(),
+            ),
+        }),
+        change: None,
+        dummy_leaf_index: u32::try_from(append_paths.next_zero_leaf_index)
+            .map_err(|_| "Kagemusha V4 qualification next frontier does not fit u32")?,
+        dummy_path: kagemusha_calibration_membership_path_v4(append_paths.next_zero_path.clone()),
+    };
+    kagemusha_v2::KagemushaOutputMembershipCircuitV4::new(append_membership.clone())?;
+
+    let amount = KagemushaScaledAmountV2::new(
+        KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        candidate.manifest.asset_scale,
+    )
+    .map_err(|error| error.to_string())?;
+    let recipient_note = KagemushaSpendableNoteDescriptorV2 {
+        chain_id: candidate.manifest.chain_id.clone(),
+        asset: candidate.manifest.asset.clone(),
+        note_commitment: recipient_commitment,
+        spend_nullifier: recipient_nullifier,
+        amount,
+    };
+    let split = KagemushaRecursiveSpendSplitIntentV4 {
+        chain_id: candidate.manifest.chain_id.clone(),
+        asset: candidate.manifest.asset.clone(),
+        inputs: vec![KagemushaRecursiveSpendInputBranchV2 {
+            bundle_digest: initialization_bundle_digest,
+            input_note: init_statement.current_note.clone(),
+            branch_claims: init_statement.branch_claims.clone(),
+            input_root: init_statement.final_root,
+            proof_step_count: init_statement.proof_step_count,
+            peer_hop_count: init_statement.peer_hop_count,
+        }],
+        topup_anchor_refs: init_statement.topup_anchor_refs.clone(),
+        asset_scale: candidate.manifest.asset_scale,
+        output_artifact_binding: init_statement.artifact_binding.clone(),
+        transfer_amount: amount,
+        recipient_output: recipient_note,
+        change_output: None,
+        recipient_request_digest: [0xA6; 32],
+        operation_id: [0xA8; 32],
+    };
+    split
+        .validate_public_binding()
+        .map_err(|error| error.to_string())?;
+    let append_statement = kagemusha_v2::kagemusha_recursive_spend_append_statement_v4(
+        &split,
+        KagemushaRecursiveSpendBranchV2::Recipient,
+        append_membership.final_root,
+        append_membership.dummy_leaf_index,
+    )?;
+    let transfer_public = super::kagemusha_step_transition::KagemushaStepTransferPublicV4 {
+        input_commitments: [init_statement.current_note.note_commitment, [0; 32]],
+        input_nullifiers: [init_statement.current_note.spend_nullifier, [0; 32]],
+        output_commitments: [recipient_commitment, [0; 32]],
+        root: init_statement.final_root,
+        asset_tag: relation.topup.asset_tag,
+        chain_tag: relation.topup.chain_tag,
+    };
+    let append_operation = KagemushaStepOperationVectorV4::from_append_v4(
+        &split,
+        &append_statement,
+        &transfer_public,
+        &append_membership,
+    )?;
+    let input_paths = vec![input_path, next_zero_path];
+    let inputs = vec![confidential_v2::ConfidentialTransferInputV2 {
+        amount: KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        rho: KAGEMUSHA_INITIALIZATION_RELATION_RHO_V4,
+        diversifier: kagemusha_initialization_diversifier_v4(),
+        leaf_index: usize::try_from(KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4)
+            .map_err(|_| "Kagemusha V4 qualification leaf index does not fit usize")?,
+    }];
+    let outputs = vec![confidential_v2::ConfidentialTransferOutputV2 {
+        amount: KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
+        rho: recipient_rho,
+        owner_tag: recipient_owner_tag,
+    }];
+    let append_secure = confidential_v2::prepare_kagemusha_step_transfer_witness_v3_with_paths(
+        &candidate.manifest.chain_id,
+        &candidate.manifest.asset.to_string(),
+        &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
+        &input_paths,
+        &inputs,
+        &outputs,
+        init_statement.final_root,
+    )?;
+    let append_public_inputs = kagemusha_v2::kagemusha_public_inputs_for_statement_v4(
+        &append_statement,
+        append_operation.clone(),
+        manifest_sha256,
+        prover.step_eq_compiled_protocol_sha256(),
+        prover.step_ep_compiled_protocol_sha256(),
+    )?;
+    let parent_state =
+        kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&init_statement)?;
+    let append_pair = prover.prove_operation_encoded_v4(
+        append_public_inputs,
+        2,
+        &[init_pair.as_slice()],
+        &[parent_state.limbs.to_vec()],
+        &append_secure,
+        &append_membership,
+    )?;
+
+    let (
+        initialization_proof_step_count,
+        initialization_parent_count,
+        append_proof_step_count,
+        append_parent_count,
+    ) = {
+        let init_decoded = KagemushaPastaCycleProofPairV4::decode_authenticated(
+            &init_pair,
+            &prover.step_eq_circuit_params,
+            &prover.step_ep_circuit_params,
+            prover.max_pair_bytes,
+        )?;
+        let append_decoded = KagemushaPastaCycleProofPairV4::decode_authenticated(
+            &append_pair,
+            &prover.step_eq_circuit_params,
+            &prover.step_ep_circuit_params,
+            prover.max_pair_bytes,
+        )?;
+        (
+            init_decoded.proof_step_count,
+            init_decoded.public_inputs.parent_count()?,
+            append_decoded.proof_step_count,
+            append_decoded.public_inputs.parent_count()?,
+        )
+    };
+    drop(prover);
+
+    // Reopen the bounded verifier roles after all proving-key state has been
+    // dropped. Every role is rebound to the same unsigned candidate before it
+    // is parsed, then both semantic statements receive a full terminal decision.
+    let terminal = KagemushaPastaCycleTerminalVerifierV4::from_validated_artifact_loader(
+        &candidate.manifest,
+        |parity, kind| {
+            let payload = load(parity, kind)?;
+            terminal_binding.validate_payload(&payload, parity, kind)?;
+            Ok(payload)
+        },
+    )?;
+    let init_state =
+        kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&init_statement)?;
+    let append_state =
+        kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&append_statement)?;
+    let manifest_limbs = kagemusha_exact_u32_public_limbs(manifest_sha256);
+    terminal.verify_encoded_pair_binding(
+        &init_pair,
+        &init_statement,
+        &init_operation,
+        kagemusha_exact_u32_public_limbs(
+            init_statement.digest().map_err(|error| error.to_string())?,
+        ),
+        &init_state.limbs,
+        1,
+        manifest_limbs,
+    )?;
+    terminal.verify_encoded_pair_binding(
+        &append_pair,
+        &append_statement,
+        &append_operation,
+        kagemusha_exact_u32_public_limbs(
+            append_statement
+                .digest()
+                .map_err(|error| error.to_string())?,
+        ),
+        &append_state.limbs,
+        2,
+        manifest_limbs,
+    )?;
+
+    let evidence = KagemushaCandidateRecursiveStepTwoEvidenceV4 {
+        candidate_sha256,
+        manifest_sha256,
+        step_eq_proving_key_framed_sha256: role_digests[0],
+        step_eq_proving_key_payload_sha256: role_digests[1],
+        step_eq_verifying_key_framed_sha256: role_digests[2],
+        step_eq_verifying_key_payload_sha256: role_digests[3],
+        step_ep_proving_key_framed_sha256: role_digests[4],
+        step_ep_proving_key_payload_sha256: role_digests[5],
+        step_ep_verifying_key_framed_sha256: role_digests[6],
+        step_ep_verifying_key_payload_sha256: role_digests[7],
+        initialization_key_set_sha256: key_set_sha256,
+        append_key_set_sha256: key_set_sha256,
+        terminal_key_set_sha256: key_set_sha256,
+        initialization_pair_sha256: Sha256::digest(&init_pair).into(),
+        initialization_bundle_digest,
+        append_pair_sha256: Sha256::digest(&append_pair).into(),
+        append_bound_parent_bundle_digest: split.inputs[0].bundle_digest,
+        initialization_proof_step_count,
+        initialization_parent_count,
+        append_proof_step_count,
+        append_parent_count,
+        terminal_verified_pair_count: 2,
+    };
+    evidence.validate_for_candidate(candidate)?;
+    iroha_data_model::offline::KagemushaRecursiveSpendQualificationReceiptV4::new(
+        candidate,
+        init_pair,
+        append_pair,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Reauthenticate and terminally verify the exact proof pairs stored in a
+/// candidate qualification receipt.
+///
+/// This verifier never proves again. It authenticates all eight framed
+/// candidate roles (including each proving key's embedded verifier key),
+/// reconstructs the deterministic initialization and exact one-parent append,
+/// derives counters from the stored proof bytes, then obtains fresh terminal
+/// decisions for both pairs.
+///
+/// # Errors
+///
+/// Returns an error for any candidate, role, receipt, proof, semantic parent,
+/// counter, or terminal-verifier mismatch.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn verify_candidate_recursive_step_two_receipt_v4<F>(
+    candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    expected_candidate_sha256: [u8; 32],
+    expected_manifest_sha256: [u8; 32],
+    receipt: &iroha_data_model::offline::KagemushaRecursiveSpendQualificationReceiptV4,
+    qualification_memory_contract: &KagemushaQualificationMemoryContractV4<'_>,
+    step_eq_proving_key_file: std::fs::File,
+    step_ep_proving_key_file: std::fs::File,
+    mut load: F,
+) -> Result<KagemushaCandidateRecursiveStepTwoEvidenceV4, String>
+where
+    F: FnMut(
+        KagemushaPastaCycleParityV1,
+        KagemushaPastaCycleArtifactKindV4,
+    )
+        -> Result<super::kagemusha_artifact_v4::KagemushaValidatedArtifactPayloadV4, String>,
+{
+    use super::kagemusha_v2;
+
+    candidate.validate().map_err(|error| error.to_string())?;
+    qualification_memory_contract.validate_candidate(candidate)?;
+    receipt
+        .validate_against_candidate(candidate)
+        .map_err(|error| error.to_string())?;
+    let candidate_sha256 = candidate.sha256().map_err(|error| error.to_string())?;
+    let manifest_sha256: [u8; 32] = Sha256::digest(
+        norito::encode_canonical(&candidate.manifest)
+            .map_err(|error| format!("failed to encode Kagemusha V4 candidate: {error}"))?,
+    )
+    .into();
+    validate_kagemusha_candidate_spool_identity_v5(
+        candidate_sha256,
+        manifest_sha256,
+        expected_candidate_sha256,
+        expected_manifest_sha256,
+    )?;
+    if receipt.candidate_sha256() != candidate_sha256
+        || receipt.manifest_sha256() != manifest_sha256
+        || receipt.artifact_role_digests()
+            != candidate
+                .artifact_role_digests()
+                .map_err(|e| e.to_string())?
+    {
+        return Err("Kagemusha V4 qualification receipt substituted candidate roles".to_owned());
+    }
+
+    let role_digests = kagemusha_candidate_step_two_role_digests_v4(&candidate.manifest)?;
+    let key_set_sha256 = kagemusha_candidate_step_two_key_set_sha256_v4(
+        candidate_sha256,
+        manifest_sha256,
+        role_digests,
+    );
+    let terminal_binding = KagemushaArtifactSpoolBindingV5::candidate_evidence_lab(
+        candidate,
+        expected_candidate_sha256,
+        expected_manifest_sha256,
+    )?;
+
+    // Receipt verification never proves. Authenticate the two release-sized PK
+    // roles with fixed scratch, scan their exact processed-key geometry, and
+    // bind each embedded VK prefix to the separately authenticated VK. Full
+    // `ProvingKey` materialization remains confined to proving paths.
+    let step_eq_profile = candidate
+        .manifest
+        .profiles
+        .first()
+        .filter(|profile| profile.parity == KagemushaPastaCycleParityV1::StepEq)
+        .ok_or_else(|| "Kagemusha V4 qualification Eq profile is absent".to_owned())?;
+    let step_ep_profile = candidate
+        .manifest
+        .profiles
+        .get(1)
+        .filter(|profile| profile.parity == KagemushaPastaCycleParityV1::StepEp)
+        .ok_or_else(|| "Kagemusha V4 qualification Ep profile is absent".to_owned())?;
+    let step_eq_verifying_key = terminal_binding.descriptor(
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+    )?;
+    let step_ep_verifying_key = terminal_binding.descriptor(
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+    )?;
+    let step_eq_proving_key_spool = KagemushaProvingKeySpoolV5::authenticate(
+        step_eq_proving_key_file,
+        &terminal_binding,
+        KagemushaPastaCycleParityV1::StepEq,
+    )?;
+    authenticate_kagemusha_receipt_pk_spool_v5(
+        &step_eq_proving_key_spool,
+        &step_eq_profile.circuit_params,
+        KagemushaPastaCycleParityV1::StepEq,
+        step_eq_verifying_key.payload_size_bytes,
+        step_eq_verifying_key.payload_sha256,
+    )?;
+    drop(step_eq_proving_key_spool);
+    let step_ep_proving_key_spool = KagemushaProvingKeySpoolV5::authenticate(
+        step_ep_proving_key_file,
+        &terminal_binding,
+        KagemushaPastaCycleParityV1::StepEp,
+    )?;
+    authenticate_kagemusha_receipt_pk_spool_v5(
+        &step_ep_proving_key_spool,
+        &step_ep_profile.circuit_params,
+        KagemushaPastaCycleParityV1::StepEp,
+        step_ep_verifying_key.payload_size_bytes,
+        step_ep_verifying_key.payload_sha256,
+    )?;
+    drop(step_ep_proving_key_spool);
+
+    // Parse each of the remaining six bounded roles once and retain the
+    // resulting terminal verifier for both stored proof pairs.
+    let terminal = KagemushaPastaCycleTerminalVerifierV4::from_validated_artifact_loader(
+        &candidate.manifest,
+        |parity, kind| {
+            let payload = load(parity, kind)?;
+            terminal_binding.validate_payload(&payload, parity, kind)?;
+            Ok(payload)
+        },
+    )?;
+    let init_decoded = KagemushaPastaCycleProofPairV4::decode_authenticated(
+        receipt.initialization_pair(),
+        &terminal.step_eq_circuit_params,
+        &terminal.step_ep_circuit_params,
+        terminal.max_pair_bytes,
+    )?;
+    let append_decoded = KagemushaPastaCycleProofPairV4::decode_authenticated(
+        receipt.append_pair(),
+        &terminal.step_eq_circuit_params,
+        &terminal.step_ep_circuit_params,
+        terminal.max_pair_bytes,
+    )?;
+    let initialization_proof_step_count = init_decoded.proof_step_count;
+    let initialization_parent_count = init_decoded.public_inputs.parent_count()?;
+    let append_proof_step_count = append_decoded.proof_step_count;
+    let append_parent_count = append_decoded.public_inputs.parent_count()?;
+    drop(init_decoded);
+    drop(append_decoded);
+
+    let relation = kagemusha_initialization_relation_v4(
+        &candidate.manifest.chain_id,
+        &candidate.manifest.asset.to_string(),
+        candidate.manifest.asset_scale,
+    )?;
+    let init_statement =
+        kagemusha_candidate_qualification_init_statement_v4(candidate, manifest_sha256, &relation)?;
+    let init_operation = KagemushaStepOperationVectorV4::from_candidate_qualification_init_v4(
+        &init_statement,
+        &relation.topup,
+        &relation.output_membership,
+        KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4,
+    )?;
+    let append = kagemusha_candidate_qualification_append_v4(
+        candidate,
+        manifest_sha256,
+        &relation,
+        &init_statement,
+        &init_operation,
+        receipt.initialization_pair(),
+    )?;
+    if append.bound_parent_bundle_digest != append.initialization_bundle_digest {
+        return Err(
+            "Kagemusha V4 qualification append is not the exact child of initialization".to_owned(),
+        );
+    }
+
+    let init_state =
+        kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&init_statement)?;
+    let append_state =
+        kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&append.statement)?;
+    let manifest_limbs = kagemusha_exact_u32_public_limbs(manifest_sha256);
+    terminal.verify_encoded_pair_binding(
+        receipt.initialization_pair(),
+        &init_statement,
+        &init_operation,
+        kagemusha_exact_u32_public_limbs(
+            init_statement.digest().map_err(|error| error.to_string())?,
+        ),
+        &init_state.limbs,
+        1,
+        manifest_limbs,
+    )?;
+    terminal.verify_encoded_pair_binding(
+        receipt.append_pair(),
+        &append.statement,
+        &append.operation,
+        kagemusha_exact_u32_public_limbs(
+            append
+                .statement
+                .digest()
+                .map_err(|error| error.to_string())?,
+        ),
+        &append_state.limbs,
+        2,
+        manifest_limbs,
+    )?;
+
+    let evidence = KagemushaCandidateRecursiveStepTwoEvidenceV4 {
+        candidate_sha256,
+        manifest_sha256,
+        step_eq_proving_key_framed_sha256: role_digests[0],
+        step_eq_proving_key_payload_sha256: role_digests[1],
+        step_eq_verifying_key_framed_sha256: role_digests[2],
+        step_eq_verifying_key_payload_sha256: role_digests[3],
+        step_ep_proving_key_framed_sha256: role_digests[4],
+        step_ep_proving_key_payload_sha256: role_digests[5],
+        step_ep_verifying_key_framed_sha256: role_digests[6],
+        step_ep_verifying_key_payload_sha256: role_digests[7],
+        initialization_key_set_sha256: key_set_sha256,
+        append_key_set_sha256: key_set_sha256,
+        terminal_key_set_sha256: key_set_sha256,
+        initialization_pair_sha256: Sha256::digest(receipt.initialization_pair()).into(),
+        initialization_bundle_digest: append.initialization_bundle_digest,
+        append_pair_sha256: Sha256::digest(receipt.append_pair()).into(),
+        append_bound_parent_bundle_digest: append.bound_parent_bundle_digest,
+        initialization_proof_step_count,
+        initialization_parent_count,
+        append_proof_step_count,
+        append_parent_count,
+        terminal_verified_pair_count: 2,
+    };
+    evidence.validate_for_candidate(candidate)?;
+    Ok(evidence)
 }
 
 struct KagemushaEqBootstrapSeedV4 {
@@ -13625,7 +15542,7 @@ pub fn run_kagemusha_k17_shape_probe_v5(
     initial_advice_columns: u32,
     initial_lookup_columns: u32,
     maximum_iterations: usize,
-    supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
 ) -> Result<(), String> {
     if initial_advice_columns == 0 || initial_lookup_columns == 0 || maximum_iterations == 0 {
         return Err("Kagemusha k17 shape probe arguments must be non-zero".to_owned());
@@ -13645,7 +15562,7 @@ pub fn run_kagemusha_k17_shape_probe_v5(
             initial_advice_columns,
             initial_lookup_columns,
             maximum_iterations,
-            supervisor_permit,
+            memory_guard,
         )
     })
 }
@@ -13655,7 +15572,7 @@ fn run_kagemusha_k17_shape_probe_in_pool_v5(
     initial_advice_columns: u32,
     initial_lookup_columns: u32,
     maximum_iterations: usize,
-    _supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    _memory_guard: &KagemushaGenerationMemoryGuardV4,
 ) -> Result<(), String> {
     let _scope = KagemushaK17ShapeProbeScopeV5::enter()?;
     let mut candidate = (initial_advice_columns, initial_lookup_columns);
@@ -13912,14 +15829,14 @@ where
         })
     };
     report("kagemusha-v5.generator.begin")?;
-    let supervisor_permit = claim_kagemusha_generation_supervisor_permit_v4()?;
+    let memory_guard = start_kagemusha_generation_memory_guard_v4(None)?;
     let mut step_eq_proving_key = KagemushaInfallibleArtifactSpoolWriterV4::new("Eq proving key")?;
     let mut step_ep_proving_key = KagemushaInfallibleArtifactSpoolWriterV4::new("Ep proving key")?;
     report("kagemusha-v5.generator.core.begin")?;
     let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
         step_eq_circuit_params,
         step_ep_circuit_params,
-        supervisor_permit,
+        &memory_guard,
         &mut step_eq_proving_key,
         &mut step_ep_proving_key,
     )?;
@@ -13975,7 +15892,7 @@ where
 pub fn generate_kagemusha_pasta_cycle_artifacts_v4(
     step_eq_circuit_params: KagemushaStepCircuitParamsV4,
     step_ep_circuit_params: KagemushaStepCircuitParamsV4,
-    supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
     step_eq_proving_key_sink: &mut (dyn std::io::Write + Send),
     step_ep_proving_key_sink: &mut (dyn std::io::Write + Send),
 ) -> Result<KagemushaGeneratedPastaCycleArtifactsV4, String> {
@@ -13995,7 +15912,7 @@ pub fn generate_kagemusha_pasta_cycle_artifacts_v4(
         generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
             step_eq_circuit_params,
             step_ep_circuit_params,
-            supervisor_permit,
+            memory_guard,
             step_eq_proving_key_sink,
             step_ep_proving_key_sink,
         )
@@ -14005,7 +15922,7 @@ pub fn generate_kagemusha_pasta_cycle_artifacts_v4(
 fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
     mut step_eq_circuit_params: KagemushaStepCircuitParamsV4,
     mut step_ep_circuit_params: KagemushaStepCircuitParamsV4,
-    _supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
     step_eq_proving_key_sink: &mut (dyn std::io::Write + Send),
     step_ep_proving_key_sink: &mut (dyn std::io::Write + Send),
 ) -> Result<KagemushaGeneratedPastaCycleArtifactsV4, String> {
@@ -14018,6 +15935,13 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
 
     let preflight =
         preflight_kagemusha_generation_v4(&step_eq_circuit_params, &step_ep_circuit_params)?;
+    if preflight.estimated_peak_bytes > memory_guard.effective_memory_limit_bytes() {
+        return Err(format!(
+            "Kagemusha V5 reviewed peak estimate {} exceeds the active in-process {}-byte physical-memory ceiling",
+            preflight.estimated_peak_bytes,
+            memory_guard.effective_memory_limit_bytes(),
+        ));
+    }
     debug_assert!(preflight.estimated_peak_bytes <= KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4);
     debug_assert!(
         preflight.estimated_peak_bytes <= KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5
@@ -15276,6 +17200,71 @@ mod tests {
         norito::to_bytes(value).expect("encode alternate-layout Kagemusha recursion value")
     }
 
+    fn candidate_step_two_evidence_fixture() -> KagemushaCandidateRecursiveStepTwoEvidenceV4 {
+        let candidate_sha256 = [0x01; 32];
+        let manifest_sha256 = [0x02; 32];
+        let role_digests = [
+            [0x11; 32], [0x12; 32], [0x13; 32], [0x14; 32], [0x15; 32], [0x16; 32], [0x17; 32],
+            [0x18; 32],
+        ];
+        let key_set_sha256 = kagemusha_candidate_step_two_key_set_sha256_v4(
+            candidate_sha256,
+            manifest_sha256,
+            role_digests,
+        );
+        KagemushaCandidateRecursiveStepTwoEvidenceV4 {
+            candidate_sha256,
+            manifest_sha256,
+            step_eq_proving_key_framed_sha256: role_digests[0],
+            step_eq_proving_key_payload_sha256: role_digests[1],
+            step_eq_verifying_key_framed_sha256: role_digests[2],
+            step_eq_verifying_key_payload_sha256: role_digests[3],
+            step_ep_proving_key_framed_sha256: role_digests[4],
+            step_ep_proving_key_payload_sha256: role_digests[5],
+            step_ep_verifying_key_framed_sha256: role_digests[6],
+            step_ep_verifying_key_payload_sha256: role_digests[7],
+            initialization_key_set_sha256: key_set_sha256,
+            append_key_set_sha256: key_set_sha256,
+            terminal_key_set_sha256: key_set_sha256,
+            initialization_pair_sha256: [0x21; 32],
+            initialization_bundle_digest: [0x22; 32],
+            append_pair_sha256: [0x23; 32],
+            append_bound_parent_bundle_digest: [0x22; 32],
+            initialization_proof_step_count: 1,
+            initialization_parent_count: 0,
+            append_proof_step_count: 2,
+            append_parent_count: 1,
+            terminal_verified_pair_count: 2,
+        }
+    }
+
+    #[test]
+    fn candidate_step_two_evidence_gate_rejects_shape_key_and_parent_substitution() {
+        let evidence = candidate_step_two_evidence_fixture();
+        evidence.validate().expect("exact two-step evidence");
+
+        let mut substitutions = Vec::new();
+        let mut wrong_init_parent_count = evidence.clone();
+        wrong_init_parent_count.initialization_parent_count = 1;
+        substitutions.push(wrong_init_parent_count);
+        let mut wrong_append_step = evidence.clone();
+        wrong_append_step.append_proof_step_count = 3;
+        substitutions.push(wrong_append_step);
+        let mut wrong_key_set = evidence.clone();
+        wrong_key_set.append_key_set_sha256[0] ^= 1;
+        substitutions.push(wrong_key_set);
+        let mut wrong_parent = evidence.clone();
+        wrong_parent.append_bound_parent_bundle_digest[0] ^= 1;
+        substitutions.push(wrong_parent);
+        let mut incomplete_terminal_verification = evidence;
+        incomplete_terminal_verification.terminal_verified_pair_count = 1;
+        substitutions.push(incomplete_terminal_verification);
+
+        for substituted in substitutions {
+            assert!(substituted.validate().is_err());
+        }
+    }
+
     #[test]
     fn source_runtime_heavy_residency_is_strictly_eq_then_ep() {
         let residency = KagemushaSourceRuntimeHeavyResidencyV4::default();
@@ -15604,6 +17593,88 @@ mod tests {
             assert!(parser.contains("catch_unwind"));
             assert!(parser.contains("proving-key reader panicked"));
         }
+    }
+
+    #[test]
+    fn receipt_pk_authentication_is_streaming_and_confined_to_the_catalog_budget() {
+        struct TrackingReader {
+            bytes: Vec<u8>,
+            position: usize,
+            largest_request: usize,
+        }
+
+        impl std::io::Read for TrackingReader {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                self.largest_request = self.largest_request.max(output.len());
+                let available = self.bytes.len().saturating_sub(self.position);
+                let count = available.min(output.len());
+                output[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
+                self.position += count;
+                Ok(count)
+            }
+        }
+
+        let prefix_len = 2 * KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5 + 17;
+        let bytes = (0..prefix_len)
+            .map(|index| u8::try_from(index % 251).expect("test byte fits u8"))
+            .collect::<Vec<_>>();
+        let expected: [u8; 32] = Sha256::digest(&bytes).into();
+        let mut reader = TrackingReader {
+            bytes: bytes.clone(),
+            position: 0,
+            largest_request: 0,
+        };
+        assert_eq!(
+            hash_kagemusha_pk_embedded_vk_prefix_v5(
+                &mut reader,
+                u64::try_from(prefix_len).expect("test prefix length fits u64"),
+                "test",
+            )
+            .expect("hash bounded embedded VK prefix"),
+            expected
+        );
+        assert!(
+            reader.largest_request <= KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5,
+            "receipt PK authentication must never request PK-sized memory"
+        );
+
+        let mut truncated = std::io::Cursor::new(&bytes[..bytes.len() - 1]);
+        assert!(
+            hash_kagemusha_pk_embedded_vk_prefix_v5(
+                &mut truncated,
+                u64::try_from(prefix_len).expect("test prefix length fits u64"),
+                "truncated",
+            )
+            .is_err(),
+            "a truncated embedded VK prefix must fail closed"
+        );
+
+        let source = include_str!("kagemusha_recursion_adapter.rs");
+        let receipt_verifier = source
+            .split_once("pub fn verify_candidate_recursive_step_two_receipt_v4<F>(")
+            .expect("receipt verifier")
+            .1
+            .split_once("struct KagemushaEqBootstrapSeedV4")
+            .expect("end receipt verifier")
+            .0;
+        assert_eq!(
+            receipt_verifier
+                .matches("authenticate_kagemusha_receipt_pk_spool_v5(")
+                .count(),
+            2,
+            "both PK roles must use the bounded receipt authenticator"
+        );
+        assert!(!receipt_verifier.contains("from_candidate_artifact_spool_loader("));
+        assert!(!receipt_verifier.contains("parse_kagemusha_eq_pk_spool_v5("));
+        assert!(!receipt_verifier.contains("parse_kagemusha_ep_pk_spool_v5("));
+        assert!(!receipt_verifier.contains("ProvingKey::read"));
+        assert_eq!(
+            receipt_verifier
+                .matches("KagemushaPastaCycleTerminalVerifierV4::from_validated_artifact_loader(")
+                .count(),
+            1,
+            "the six bounded roles must be parsed once"
+        );
     }
 
     #[test]
@@ -16267,27 +18338,29 @@ mod tests {
     fn v5_generation_preflight_pins_compact_k17_key_sizes_before_allocation() {
         use halo2_proofs::halo2curves::pasta::EqAffine;
 
-        let token = "0123456789abcdef".repeat(4);
-        validate_kagemusha_generation_guard_record_v4(
-            format!("{RESOURCE_GUARD_AUTH_MAGIC_V4}:{token}\n").as_bytes(),
-            &token,
-        )
-        .expect("the exact guard record is accepted");
-        assert!(
-            validate_kagemusha_generation_guard_record_v4(
-                format!("{RESOURCE_GUARD_AUTH_MAGIC_V4}:{token}").as_bytes(),
-                &token,
-            )
-            .is_err(),
-            "a partial guard record must fail closed"
+        let absolute = KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4;
+        assert_eq!(
+            select_kagemusha_generation_memory_limit_v4(absolute * 4, None)
+                .expect("omitted lowering selects the absolute ceiling"),
+            absolute
+        );
+        assert_eq!(
+            select_kagemusha_generation_memory_limit_v4(absolute, None)
+                .expect("omitted lowering selects half of physical RAM"),
+            absolute / 2
+        );
+        assert_eq!(
+            select_kagemusha_generation_memory_limit_v4(absolute, Some(absolute / 4))
+                .expect("an operator can lower the ceiling"),
+            absolute / 4
         );
         assert!(
-            validate_kagemusha_generation_guard_record_v4(
-                format!("{RESOURCE_GUARD_AUTH_MAGIC_V4}:{}\n", "A".repeat(64)).as_bytes(),
-                &"A".repeat(64),
-            )
-            .is_err(),
-            "the capability token must use canonical lowercase hex"
+            select_kagemusha_generation_memory_limit_v4(absolute, Some(absolute / 2 + 1)).is_err(),
+            "an operator cannot raise the in-process ceiling"
+        );
+        assert!(
+            select_kagemusha_generation_memory_limit_v4(absolute, Some(0)).is_err(),
+            "zero cannot disable the in-process ceiling"
         );
         assert!(
             checked_kagemusha_generation_product_v4(&[u64::MAX, 2], "test")
@@ -16327,6 +18400,248 @@ mod tests {
         let mut stale = reviewed;
         stale.version = 4;
         assert!(preflight_kagemusha_generation_v4(&stale, &stale).is_err());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn linux_memory_capacity_is_cgroup_aware_and_strictly_parsed() {
+        let memberships = parse_linux_memory_cgroup_memberships_v4(
+            "0::/tenant.slice/iroha\n7:cpu,cpuacct:/tenant.slice/iroha\n",
+        )
+        .expect("parse cgroup-v2 membership");
+        assert_eq!(
+            memberships,
+            vec![LinuxMemoryCgroupMembershipV4 {
+                version: LinuxMemoryCgroupVersionV4::V2,
+                path: std::path::PathBuf::from("/tenant.slice/iroha"),
+            }]
+        );
+        let legacy = parse_linux_memory_cgroup_memberships_v4(
+            "4:memory,blkio:/containers/iroha\n5:cpu:/containers/iroha\n",
+        )
+        .expect("parse cgroup-v1 memory membership");
+        assert_eq!(legacy[0].version, LinuxMemoryCgroupVersionV4::V1);
+
+        let mounts = parse_linux_memory_cgroup_mounts_v4(
+            "36 25 0:32 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n\
+             37 25 0:33 /containers /sys/fs/cgroup/memory rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw,memory\n",
+        )
+        .expect("parse cgroup mountinfo");
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0].version, LinuxMemoryCgroupVersionV4::V2);
+        assert_eq!(mounts[1].version, LinuxMemoryCgroupVersionV4::V1);
+
+        assert_eq!(
+            parse_linux_cgroup_memory_limit_v4("8589934592\n", LinuxMemoryCgroupVersionV4::V2,)
+                .expect("finite v2 limit"),
+            Some(8 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            parse_linux_cgroup_memory_limit_v4("max\n", LinuxMemoryCgroupVersionV4::V2)
+                .expect("unlimited v2 limit"),
+            None
+        );
+        assert_eq!(
+            parse_linux_cgroup_memory_limit_v4(
+                "9223372036854771712\n",
+                LinuxMemoryCgroupVersionV4::V1,
+            )
+            .expect("unlimited v1 sentinel"),
+            None
+        );
+        for malformed in ["", "0\n", "01\n", "8", "8 \n", "8\n9\n"] {
+            assert!(
+                parse_linux_cgroup_memory_limit_v4(malformed, LinuxMemoryCgroupVersionV4::V2,)
+                    .is_err(),
+                "malformed cgroup limit must fail closed: {malformed:?}"
+            );
+        }
+
+        let host = 128 * 1024 * 1024 * 1024;
+        let cgroup = 8 * 1024 * 1024 * 1024;
+        assert_eq!(
+            select_linux_physical_capacity_v4(host, Some(cgroup))
+                .expect("finite cgroup lowers host capacity"),
+            cgroup
+        );
+        assert_eq!(
+            select_linux_physical_capacity_v4(host, None)
+                .expect("unlimited cgroup retains host capacity"),
+            host
+        );
+
+        let capacity = KagemushaGenerationMemoryCapacityV1 {
+            effective_physical_capacity_bytes: cgroup,
+            safety_ceiling_bytes: select_kagemusha_generation_memory_limit_v4(cgroup, None)
+                .expect("derive cgroup-aware generation ceiling"),
+        };
+        assert_eq!(capacity.safety_ceiling_bytes(), 4 * 1024 * 1024 * 1024);
+        assert_eq!(
+            capacity.canonical_record(),
+            "iroha.kagemusha.memory-capacity.v1 physical=8589934592 ceiling=4294967296 absolute=68719476736 profile=self-physical-footprint-v1 policy=half-effective-physical-cap-absolute-v1"
+        );
+    }
+
+    #[test]
+    fn v4_memory_monitor_initialization_failure_is_fail_closed() {
+        fn unavailable_footprint() -> Result<u64, String> {
+            Err("injected footprint failure".to_owned())
+        }
+
+        let error = start_kagemusha_generation_memory_monitor_v4(
+            KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            unavailable_footprint,
+        )
+        .expect_err("a monitor without a first physical-footprint sample must fail");
+        assert!(error.contains("injected footprint failure"));
+    }
+
+    #[test]
+    fn v4_memory_monitor_refuses_an_initial_sample_over_the_ceiling() {
+        fn oversized_footprint() -> Result<u64, String> {
+            Ok(2_048)
+        }
+
+        let error = start_kagemusha_generation_memory_monitor_v4(1_024, oversized_footprint)
+            .expect_err("an already-oversized process must not receive a memory guard");
+        assert!(error.contains("already exceeds"));
+    }
+
+    static POST_HANDSHAKE_OVER_CAP_SAMPLES_V4: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static POST_HANDSHAKE_FAILURE_SAMPLES_V4: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    fn post_handshake_over_cap_sampler_v4() -> Result<u64, String> {
+        if POST_HANDSHAKE_OVER_CAP_SAMPLES_V4.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+        {
+            Ok(1)
+        } else {
+            Ok(2_048)
+        }
+    }
+
+    fn post_handshake_failure_sampler_v4() -> Result<u64, String> {
+        if POST_HANDSHAKE_FAILURE_SAMPLES_V4.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+        {
+            Ok(1)
+        } else {
+            Err("injected post-handshake sampler failure".to_owned())
+        }
+    }
+
+    #[test]
+    fn v4_memory_monitor_post_handshake_failures_abort_the_process() {
+        const CHILD_MODE_ENV: &str = "IROHA_TEST_KAGEMUSHA_MEMORY_MONITOR_CHILD_V4";
+        if let Ok(mode) = std::env::var(CHILD_MODE_ENV) {
+            let sampler: fn() -> Result<u64, String> = match mode.as_str() {
+                "over-cap" => post_handshake_over_cap_sampler_v4,
+                "sampler-failure" => post_handshake_failure_sampler_v4,
+                _ => panic!("unknown memory-monitor child mode"),
+            };
+            start_kagemusha_generation_memory_monitor_v4(1_024, sampler)
+                .expect("the child monitor must complete its first handshake");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            panic!("the mandatory monitor did not abort after {mode}");
+        }
+
+        for mode in ["over-cap", "sampler-failure"] {
+            let status = std::process::Command::new(
+                std::env::current_exe().expect("current unit-test executable"),
+            )
+            .arg("v4_memory_monitor_post_handshake_failures_abort_the_process")
+            .arg("--nocapture")
+            .env(CHILD_MODE_ENV, mode)
+            .status()
+            .expect("spawn isolated memory-monitor regression child");
+            assert!(!status.success(), "{mode} child must terminate fail-closed");
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt as _;
+                assert_eq!(status.signal(), Some(6), "{mode} child must abort");
+            }
+        }
+    }
+
+    #[test]
+    fn qualification_verifier_callers_have_a_static_memory_contract() {
+        let adapter = include_str!("kagemusha_recursion_adapter.rs");
+        let verifier_signature = adapter
+            .split_once("pub fn verify_candidate_recursive_step_two_receipt_v4")
+            .expect("qualification verifier definition")
+            .1
+            .split_once("where")
+            .expect("qualification verifier generic boundary")
+            .0;
+        assert!(verifier_signature.contains("qualification_memory_contract"));
+        let generator_signature = adapter
+            .split_once("pub fn generate_candidate_recursive_step_two_receipt_v4")
+            .expect("qualification generator definition")
+            .1
+            .split_once("where")
+            .expect("qualification generator generic boundary")
+            .0;
+        assert!(generator_signature.contains("memory_guard"));
+
+        let bundle = include_str!("../bin/kagemusha_recursive_spend_v4_bundle.rs");
+        let catalog =
+            include_str!("../smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs");
+        let kagami = include_str!("../../../iroha_kagami/src/kagemusha.rs");
+        for (role, source) in [
+            ("bundle", bundle),
+            ("runtime catalog", catalog),
+            ("Kagami", kagami),
+        ] {
+            let calls = source
+                .split("verify_candidate_recursive_step_two_receipt_v4(")
+                .skip(1)
+                .collect::<Vec<_>>();
+            assert_eq!(calls.len(), 1, "unexpected {role} verifier caller count");
+            let call_prefix = calls[0].chars().take(800).collect::<String>();
+            assert!(
+                call_prefix.contains("qualification_memory_contract"),
+                "{role} verifier caller must pass an explicit memory contract"
+            );
+        }
+        assert_eq!(
+            bundle
+                .matches("start_kagemusha_generation_memory_guard_v4(")
+                .count(),
+            1,
+            "the bundle command dispatcher must start exactly one guard"
+        );
+        for operator_path in [
+            "fn build_candidate(",
+            "fn publish_staged_candidate(",
+            "fn validate_candidate(",
+            "fn finalize_release(",
+        ] {
+            let signature = bundle
+                .split_once(operator_path)
+                .unwrap_or_else(|| panic!("missing guarded operator path {operator_path}"))
+                .1
+                .split_once(") ->")
+                .expect("operator-path signature boundary")
+                .0;
+            assert!(
+                signature.contains("memory_guard"),
+                "{operator_path} must receive the active memory guard"
+            );
+        }
+        assert_eq!(
+            kagami
+                .matches("start_kagemusha_generation_memory_guard_v4(")
+                .count(),
+            2,
+            "Kagami verify and promote must each start a guard"
+        );
+        assert_eq!(
+            catalog
+                .matches("KagemushaQualificationMemoryContractV4::for_runtime_catalog(")
+                .count(),
+            1,
+            "the runtime catalog must use its separate decoded-memory contract"
+        );
     }
 
     #[test]
@@ -16947,7 +19262,7 @@ mod tests {
         assert!(parent_count <= 2);
         let k = valid_step_circuit_params_v4().k;
         let mut parent_states = std::array::from_fn(|_| {
-            vec![0; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2]
+            vec![0; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5]
         });
         let mut parent_eq_deferred_sha256 = [[0; 8]; KAGEMUSHA_PASTA_PARENT_SLOTS_V1];
         let mut parent_ep_deferred_sha256 = [[0; 8]; KAGEMUSHA_PASTA_PARENT_SLOTS_V1];
@@ -18064,9 +20379,9 @@ mod tests {
 
     fn exact_state(step: u32) -> Vec<u32> {
         let mut state =
-            vec![0; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
+            vec![0; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
         state[0] =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
         state[1] = step;
         for (index, limb) in state.iter_mut().enumerate().skip(2) {
             *limb = step
@@ -18074,7 +20389,7 @@ mod tests {
                 .wrapping_add(u32::try_from(index).expect("state-vector index fits u32"));
         }
         let offset = |field: &str| {
-            crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V2
+            crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5
                 .iter()
                 .find_map(|(name, start, _)| (*name == field).then_some(*start))
                 .expect("state fixture field exists")

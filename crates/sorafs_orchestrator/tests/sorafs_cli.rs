@@ -20,6 +20,7 @@ use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
 use norito::{
     codec::Encode as _,
     decode_from_bytes,
+    derive::NoritoSerialize,
     json::{Map, Value, from_slice, to_vec},
     to_bytes,
 };
@@ -33,14 +34,16 @@ use sorafs_manifest::{
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceDagSubmissionOriginV1,
     GovernanceDagSubmissionProvenanceV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
     GovernanceLogSignatureV1, GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder,
-    ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
-    PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
-    PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
-    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1,
-    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SoraFsAppealFinanceAccountFlowV1,
-    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
-    StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
+    ManifestV1, POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_CHALLENGE_STATUS_VERSION_V1,
+    POR_WEEKLY_REPORT_VERSION_V1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
+    PorProviderSummaryV1, PorReportIsoWeek, PorSlashingEventV1, PorWeeklyReportV1,
+    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+    ReputationSnapshotV1, ReputationWeightsV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+    SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1, StorageClass, StreamTokenBodyV1,
+    StreamTokenV1, XorQuantity, build_reputation_snapshot,
     governance_dag_submission_account_digest_v1, validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
@@ -73,6 +76,51 @@ struct CanonicalTempDir {
 impl CanonicalTempDir {
     fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct TestPorStatusPageV1 {
+    version: u8,
+    snapshot_generation: u64,
+    record_limit: u32,
+    canonical_byte_limit: u64,
+    canonical_bytes: u64,
+    has_more: bool,
+    #[norito(default)]
+    next_cursor: Option<String>,
+    statuses: Vec<PorChallengeStatusV1>,
+}
+
+#[derive(NoritoSerialize)]
+struct TestPorStatusExportPageV1 {
+    version: u8,
+    #[norito(default)]
+    start_epoch: Option<u64>,
+    #[norito(default)]
+    end_epoch: Option<u64>,
+    page: TestPorStatusPageV1,
+}
+
+fn test_por_status_page(
+    statuses: Vec<PorChallengeStatusV1>,
+    next_cursor: Option<String>,
+) -> TestPorStatusPageV1 {
+    let canonical_bytes = statuses
+        .iter()
+        .map(|status| to_bytes(status).expect("encode PoR status fixture").len())
+        .sum::<usize>();
+    TestPorStatusPageV1 {
+        version: 1,
+        snapshot_generation: 1,
+        record_limit: u32::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1)
+            .expect("PoR page limit fits u32"),
+        canonical_byte_limit: u64::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("PoR byte limit fits u64"),
+        canonical_bytes: u64::try_from(canonical_bytes).expect("fixture byte total fits u64"),
+        has_more: next_cursor.is_some(),
+        next_cursor,
+        statuses,
     }
 }
 
@@ -362,7 +410,7 @@ fn por_status_outputs_table() {
         failure_reason: None,
         verifier_latency_ms: None,
     };
-    let body = to_bytes(&vec![status]).expect("encode status list");
+    let body = to_bytes(&test_por_status_page(vec![status], None)).expect("encode status page");
     let manifest_hex = hex_encode([0x22; 32]);
     server.mock(|when, then| {
         when.method(GET)
@@ -410,7 +458,7 @@ fn por_status_outputs_json() {
         failure_reason: None,
         verifier_latency_ms: Some(1200),
     };
-    let body = to_bytes(&vec![status]).expect("encode status list");
+    let body = to_bytes(&test_por_status_page(vec![status], None)).expect("encode status page");
     server.mock(|when, then| {
         when.method(GET).path("/v1/sorafs/por/status");
         then.status(200)
@@ -432,6 +480,65 @@ fn por_status_outputs_json() {
     assert!(
         stdout.contains("\"forced\": true"),
         "expected JSON output to include forced=true flag:\n{stdout}"
+    );
+}
+
+#[test]
+fn por_status_rejects_record_outside_requested_filters_before_output() {
+    let server = MockServer::start();
+    let status = PorChallengeStatusV1 {
+        version: POR_CHALLENGE_STATUS_VERSION_V1,
+        challenge_id: [0x31; 32],
+        manifest_digest: [0x99; 32],
+        provider_id: [0x33; 32],
+        epoch_id: 42,
+        drand_round: 100,
+        status: PorChallengeOutcome::Pending,
+        sample_count: 64,
+        forced: false,
+        issued_at: 1_700_000_000,
+        responded_at: None,
+        proof_digest: None,
+        repair_task_id: None,
+        failure_reason: None,
+        verifier_latency_ms: None,
+    };
+    let body = to_bytes(&test_por_status_page(vec![status], None))
+        .expect("encode substituted-filter status page");
+    let manifest_hex = hex_encode([0x22; 32]);
+    let provider_hex = hex_encode([0x33; 32]);
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/sorafs/por/status")
+            .query_param("manifest", manifest_hex.as_str())
+            .query_param("provider", provider_hex.as_str())
+            .query_param("epoch", "42")
+            .query_param("status", "pending");
+        then.status(200)
+            .header("content-type", "application/x-norito")
+            .body(body);
+    });
+
+    let output = sorafs_cli_cmd()
+        .arg("por")
+        .arg("status")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--manifest={manifest_hex}"))
+        .arg(format!("--provider={provider_hex}"))
+        .arg("--epoch=42")
+        .arg("--status=pending")
+        .output()
+        .expect("command executes");
+
+    assert!(!output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "untrusted status must not be output"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("does not match the requested manifest filter"),
+        "unexpected stderr: {stderr}"
     );
 }
 
@@ -470,23 +577,48 @@ fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
 #[test]
 fn por_export_writes_file() {
     let server = MockServer::start();
-    let payload = b"PARQUET".to_vec();
+    let status = PorChallengeStatusV1 {
+        version: POR_CHALLENGE_STATUS_VERSION_V1,
+        challenge_id: [0x41; 32],
+        manifest_digest: [0x42; 32],
+        provider_id: [0x43; 32],
+        epoch_id: 10,
+        drand_round: 101,
+        status: PorChallengeOutcome::Pending,
+        sample_count: 32,
+        forced: false,
+        issued_at: 1_700_000_200,
+        responded_at: None,
+        proof_digest: None,
+        repair_task_id: None,
+        failure_reason: None,
+        verifier_latency_ms: None,
+    };
+    let payload = to_bytes(&TestPorStatusExportPageV1 {
+        version: 1,
+        start_epoch: Some(10),
+        end_epoch: Some(10),
+        page: test_por_status_page(vec![status], None),
+    })
+    .expect("encode bounded PoR export page");
     server.mock(|when, then| {
         when.method(GET)
             .path("/v1/sorafs/por/export")
-            .query_param("start_epoch", "10");
+            .query_param("start_epoch", "10")
+            .query_param("end_epoch", "10");
         then.status(200)
             .header("content-type", "application/octet-stream")
             .body(payload.clone());
     });
 
     let tempdir = tempdir().expect("tempdir");
-    let out_path = tempdir.path().join("report.parquet");
+    let out_path = tempdir.path().join("por-export.norito");
     let output = sorafs_cli_cmd()
         .arg("por")
         .arg("export")
         .arg(format!("--torii-url={}", server.base_url()))
         .arg("--start-epoch=10")
+        .arg("--end-epoch=10")
         .arg(format!("--out={}", out_path.display()))
         .assert()
         .success()
@@ -500,6 +632,68 @@ fn por_export_writes_file() {
     );
     let written = fs::read(&out_path).expect("read export file");
     assert_eq!(written, payload);
+}
+
+#[test]
+fn por_export_rejects_noncanonical_response_cursor_without_writing() {
+    let server = MockServer::start();
+    let status = PorChallengeStatusV1 {
+        version: POR_CHALLENGE_STATUS_VERSION_V1,
+        challenge_id: [0x51; 32],
+        manifest_digest: [0x52; 32],
+        provider_id: [0x53; 32],
+        epoch_id: 10,
+        drand_round: 102,
+        status: PorChallengeOutcome::Pending,
+        sample_count: 32,
+        forced: false,
+        issued_at: 1_700_000_300,
+        responded_at: None,
+        proof_digest: None,
+        repair_task_id: None,
+        failure_reason: None,
+        verifier_latency_ms: None,
+    };
+    let payload = to_bytes(&TestPorStatusExportPageV1 {
+        version: 1,
+        start_epoch: Some(10),
+        end_epoch: Some(10),
+        page: test_por_status_page(
+            vec![status],
+            Some("AB".to_owned()), // Decodes like `AA`, but has non-zero trailing bits.
+        ),
+    })
+    .expect("encode malformed-cursor export page");
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/sorafs/por/export")
+            .query_param("start_epoch", "10")
+            .query_param("end_epoch", "10");
+        then.status(200)
+            .header("content-type", "application/octet-stream")
+            .body(payload);
+    });
+
+    let tempdir = tempdir().expect("tempdir");
+    let out_path = tempdir.path().join("malformed-export.norito");
+    let stderr = sorafs_cli_cmd()
+        .arg("por")
+        .arg("export")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--start-epoch=10")
+        .arg("--end-epoch=10")
+        .arg(format!("--out={}", out_path.display()))
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(
+        String::from_utf8(stderr)
+            .expect("stderr utf8")
+            .contains("canonical unpadded base64url")
+    );
+    assert!(!out_path.exists());
 }
 
 #[test]
@@ -2713,7 +2907,9 @@ fn governance_fixture_node_cid_display() -> String {
     let node: GovernanceLogNodeV1 =
         decode_from_bytes(&bytes).expect("decode governance node fixture");
     match std::str::from_utf8(&node.node_cid) {
-        Ok(value) if !value.is_empty() && value.chars().all(|character| !character.is_control()) => {
+        Ok(value)
+            if !value.is_empty() && value.chars().all(|character| !character.is_control()) =>
+        {
             value.to_owned()
         }
         _ => format!("hex:{}", hex_encode(node.node_cid)),

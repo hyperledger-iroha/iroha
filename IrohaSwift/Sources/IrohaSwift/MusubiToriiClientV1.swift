@@ -16,7 +16,7 @@ private final class MusubiV1RejectRedirectDelegate: NSObject, URLSessionTaskDele
     }
 }
 
-/// Signer-free read-only client for the nine typed Musubi first-release queries.
+/// Signer-free read-only client for the eleven typed Musubi first-release queries.
 public final class MusubiToriiClientV1: @unchecked Sendable {
     public static let exactPackagePath = "/v1/musubi/queries/exact-package"
     public static let exactReleasePath = "/v1/musubi/queries/exact-release"
@@ -24,9 +24,11 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
     public static let versionsPath = "/v1/musubi/queries/versions"
     public static let maintainersPath = "/v1/musubi/queries/maintainers"
     public static let archiveLocationsPath = "/v1/musubi/queries/archive-locations"
+    public static let archiveRetentionPath = "/v1/musubi/queries/archive-retention"
     public static let aliasPath = "/v1/musubi/queries/alias"
     public static let aliasHistoryPath = "/v1/musubi/queries/alias-history"
     public static let orderedPrefixPath = "/v1/musubi/queries/ordered-prefix"
+    public static let searchPath = "/v1/musubi/queries/search"
 
     private static let requestMaximumBytes = 64 * 1024
     private static let responseMaximumBytes = 8 * 1024 * 1024
@@ -73,18 +75,30 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
         try await post(Self.versionsPath, request: request)
     }
 
-    /// Lists accepted owners and maintainers for a package.
+    /// Lists accepted owners/maintainers and pending invitations for a package.
     public func findMaintainers(
         _ request: MusubiPackagePageQueryV1
-    ) async throws -> MusubiPageV1<MusubiPackageMemberV1> {
+    ) async throws -> MusubiPageV1<MusubiMaintainerDirectoryEntryV1> {
         try await post(Self.maintainersPath, request: request)
     }
 
     /// Lists renewable SoraFS locations for an archive.
     public func findArchiveLocations(
         _ request: MusubiArchiveLocationQueryV1
-    ) async throws -> MusubiPageV1<MusubiArchiveLocationV1> {
+    ) async throws -> MusubiArchiveLocationPageV1 {
         try await post(Self.archiveLocationsPath, request: request)
+    }
+
+    /// Classifies a bounded exact archive batch for fail-closed cache retention.
+    public func findArchiveRetention(
+        _ request: MusubiArchiveRetentionQueryV1
+    ) async throws -> MusubiArchiveRetentionPageV1 {
+        let page: MusubiArchiveRetentionPageV1 = try await post(
+            Self.archiveRetentionPath,
+            request: request
+        )
+        try page.requireMatches(request)
+        return page
     }
 
     /// Resolves one paid permanent global alias.
@@ -104,6 +118,11 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
         _ request: MusubiOrderedPrefixQueryV1
     ) async throws -> MusubiOrderedPrefixPageV1 {
         try await post(Self.orderedPrefixPath, request: request)
+    }
+
+    /// Searches the rebuildable finalized-event package metadata projection.
+    public func search(_ request: MusubiSearchQueryV1) async throws -> MusubiSearchPageV1 {
+        try await post(Self.searchPath, request: request)
     }
 
     private func post<Request: Encodable, Response: Decodable>(

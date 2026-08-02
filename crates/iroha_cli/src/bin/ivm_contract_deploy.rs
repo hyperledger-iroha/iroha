@@ -855,7 +855,7 @@ mod tests {
         let fee_payment = test_fee_payment();
         let metadata = Metadata::default();
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            DEFAULT_CHAIN_DISCRIMINANT_TAIRA,
+            &chain_id,
             &authority,
             11,
             DataSpaceId::UNIVERSAL,
@@ -1042,8 +1042,9 @@ mod tests {
         let code = (0..(3 * 1024 * 1024 + 17))
             .map(|index| (index % 251) as u8)
             .collect::<Vec<_>>();
+        let chain_id = ChainId::from("ivm-contract-deploy-large-native-register-test");
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            DEFAULT_CHAIN_DISCRIMINANT_TAIRA,
+            &chain_id,
             &authority,
             11,
             DataSpaceId::UNIVERSAL,
@@ -1053,7 +1054,7 @@ mod tests {
             deployment_transaction_metadata(&contract_address, &[authority.to_string()])?;
         let plan = build_native_upload_transaction_plan(
             &TransactionSigningContext {
-                chain_id: &ChainId::from("ivm-contract-deploy-large-native-register-test"),
+                chain_id: &chain_id,
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 transaction_ttl: Some(Duration::from_secs(30)),
@@ -1276,8 +1277,9 @@ mod tests {
     fn every_real_deployment_transaction_carries_identical_governance_metadata() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
+        let chain = ChainId::from("ivm-contract-deploy-metadata-test");
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            DEFAULT_CHAIN_DISCRIMINANT_TAIRA,
+            &chain,
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -1286,7 +1288,6 @@ mod tests {
         let approvers = vec![authority.to_string()];
         let metadata = deployment_transaction_metadata(&contract_address, &approvers)?;
         let fee_payment = test_fee_payment();
-        let chain = ChainId::from("ivm-contract-deploy-metadata-test");
         let code = vec![0x44; SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
         let signing = TransactionSigningContext {
             chain_id: &chain,
@@ -1355,7 +1356,7 @@ mod tests {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            DEFAULT_CHAIN_DISCRIMINANT_TAIRA,
+            &ChainId::from("ivm-contract-deploy-metadata-validation-test"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -1445,7 +1446,7 @@ fn main() -> Result<()> {
         .checked_add(1)
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
     let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-        args.chain_discriminant,
+        &client.chain,
         &authority,
         deploy_nonce,
         dataspace_id,

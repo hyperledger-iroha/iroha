@@ -5490,6 +5490,13 @@ impl Telemetry {
         self.enabled.store(enabled, Ordering::Relaxed);
     }
 
+    /// Record one bounded Musubi finalized-query cursor failure.
+    pub fn record_musubi_cursor_failure(&self, reason: MusubiCursorFailureReasonV1) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.musubi.inc_cursor_failure(reason);
+        }
+    }
+
     /// Enable telemetry observations at runtime.
     #[inline]
     pub fn enable(&self) {
@@ -11771,10 +11778,11 @@ mod tests {
     fn confidential_tree_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("sora", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let label = asset_id.to_string();
 
         let initial = ConfidentialTreeStats {
@@ -11923,10 +11931,11 @@ mod tests {
     fn confidential_tree_metrics_skip_when_disabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
-        let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("sora", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let label = asset_id.to_string();
         let stats = ConfidentialTreeStats {
             commitments: 5,
@@ -13431,7 +13440,7 @@ mod tests {
 
         telemetry.record_manifest_activation(None, "manifest_inserted");
         let activation = GovernanceManifestActivation {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .to_string(),
             code_hash_hex: "deadbeef".to_string(),
             abi_hash_hex: Some("cafebabe".to_string()),
@@ -14165,10 +14174,11 @@ mod tests {
         let sut = SystemUnderTest::new();
 
         let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
-        let missing_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("ghost", "universal").unwrap(),
-            "ghost".parse().unwrap(),
-        );
+        let missing_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("ghost", "universal").unwrap(),
+                "ghost".parse().unwrap(),
+            );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
         let action = Action::new(
             [Transfer::asset_quantity(

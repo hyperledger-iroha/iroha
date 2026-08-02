@@ -1191,7 +1191,7 @@ mod tests {
 
     #[test]
     fn poseidon_digest_matches_known_vector() {
-        let asset = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1234,7 +1234,7 @@ mod tests {
 
     #[test]
     fn poseidon_digest_scratch_matches_canonical_oracle() {
-        let asset = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -2089,7 +2089,7 @@ mod tests {
     }
 
     fn sample_transcript() -> TransferTranscript {
-        let asset = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );

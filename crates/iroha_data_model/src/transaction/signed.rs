@@ -2523,7 +2523,7 @@ mod tests {
     }
 
     fn sample_fee_asset() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "universal").expect("valid fee domain"),
             "xor".parse().expect("valid fee asset name"),
         )
@@ -2566,16 +2566,23 @@ mod tests {
                     engine_manifest_digest,
                     transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
                 },
-                polynomial_commitments: vec![PrivacyJindoLatticeCommitmentV1::new(vec![
-                    6;
-                    IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1
-                ])],
+                polynomial_commitments: (6_i32..10)
+                    .map(|coefficient| {
+                        let mut encoding = vec![0; IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1];
+                        encoding[..4].copy_from_slice(&coefficient.to_le_bytes());
+                        PrivacyJindoLatticeCommitmentV1::new(encoding)
+                    })
+                    .collect(),
                 evaluation_point: PrivacyJindoFieldElementV1::new(
                     [7; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1],
                 ),
-                claimed_evaluations: vec![PrivacyJindoFieldElementV1::new(
-                    [8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1],
-                )],
+                claimed_evaluations: (8_u8..12)
+                    .map(|value| {
+                        let mut encoding = [0; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1];
+                        encoding[0] = value;
+                        PrivacyJindoFieldElementV1::new(encoding)
+                    })
+                    .collect(),
             },
         );
         SubmitPrivacyProofV1::new(PrivacyProofEnvelopeV1 {
@@ -2788,7 +2795,7 @@ mod tests {
     fn privacy_test_contract_call() -> ContractInvocation {
         ContractInvocation {
             contract_address: crate::smart_contract::ContractAddress::derive(
-                0,
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &privacy_test_authority(),
                 0,
                 crate::nexus::DataSpaceId::UNIVERSAL,
@@ -3894,7 +3901,7 @@ mod tests {
                 .parse()
                 .expect("private key");
         let contract_address = crate::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             crate::nexus::DataSpaceId::UNIVERSAL,
@@ -4089,7 +4096,7 @@ mod tests {
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let invocation = crate::transaction::executable::ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"builder-batch-contract"),

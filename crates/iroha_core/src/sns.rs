@@ -3144,7 +3144,13 @@ mod tests {
         let domain_id = DomainId::try_new("issuer", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let definition = AssetDefinition::numeric(definition_id).build(&authority);
+        let definition = AssetDefinition::numeric(
+            definition_id,
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         World::with([domain], [account], [definition])
     }
 
@@ -4336,7 +4342,7 @@ mod tests {
             Some(AccountAliasDomain::new(domain_id.name().clone())),
             DataSpaceId::UNIVERSAL,
         );
-        let payment_asset = AssetDefinitionId::new(
+        let payment_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("assets", "universal").expect("asset domain"),
             "xor".parse().expect("asset name"),
         );

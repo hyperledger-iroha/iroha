@@ -167,7 +167,7 @@ def test_build_and_submit_transaction_forwards_wait_scope(
 
     envelope_out, result = client.build_and_submit_transaction(
         "00000000-0000-0000-0000-000000000000",
-        "testu-authority",
+        "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         b"\x11" * 32,
         fee_payment={
             "payer": "authority",

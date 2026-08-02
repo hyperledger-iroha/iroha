@@ -4,7 +4,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STALE_DEPLOY_RESPONSE = (
     '{ "ok": true, "contract_alias": "router::universal", '
-    '"contract_address": "tairac1…", "previous_contract_address": "tairac1…"? , '
+    '"contract_address": "irohac1…", "previous_contract_address": "irohac1…"? , '
     '"kaizen": false, "dataspace": "universal", "deploy_nonce": 0, '
     '"tx_hash_hex": "…", "code_hash_hex": "…", "abi_hash_hex": "…" }'
 )

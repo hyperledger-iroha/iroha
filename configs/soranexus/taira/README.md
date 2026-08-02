@@ -116,6 +116,19 @@ into multi-second stalls.
   unless its handle, authority key, revision, and public-policy digest exactly
   match the rendered binding.
 - `genesis.json`: NPoS genesis with DA enabled.
+- `privacy_bootstrap_plan.json`: public, secret-free first-release privacy
+  activation contract. It fixes the exact-12 order, retired labels, genesis
+  authority and heights, and the stock broker slot used by the designated
+  Bootle/Lantern issuer. Empty digest fields are an intentional staging gate,
+  not placeholders that a validator may ignore.
+- `validate_privacy_bootstrap.py`: strict staging/release validator for the
+  privacy plan, genesis authority, validator config, exact-12 matrix, canonical
+  broker public export, encoded instruction inventory, and complete
+  provider/issuer-policy bindings. Release mode requires `--broker-public`.
+- `privacy_bootstrap_validation_test.py`: negative and adversarial bootstrap
+  tests, including SIS alias injection, partial activation inventories,
+  governance-grant substitution, provider drift, dormant bindings, malformed
+  base64, duplicate JSON keys, and symlinked input.
 - `dns_records.json`: DNS targets for the convenience host, explorer host, and
   direct per-validator Torii hostnames.
 - `explorer.runtime-config.json`: runtime config example for the Explorer
@@ -124,11 +137,29 @@ into multi-second stalls.
 - `sorafs_sites.json`: optional host-to-manifest bindings for Torii-served static sites. Keep `taira.sora.org` out of this file. Enable it only through the rendered validator config's `[sorafs.gateway.site_bindings]` table; Torii reads, validates, and caches the document once at startup.
 - `taira-irohad.service`: sample systemd unit that starts the validator from
   the shipped Taira config and genesis.
+- `taira-bootle-lantern-broker.service`: peer-1-only systemd unit for the
+  native slot-54 issuer broker. It loads exactly three encrypted systemd
+  credentials into the unit's private credential directory, publishes the
+  fixed local socket as the same `iroha` UID as Torii, and does not restart
+  past an uninspected crash.
+- `taira-bootle-lantern-broker.env.example`: public reviewed policy-digest
+  latch for the broker unit. It contains no credential material.
+- `taira-irohad-peer1-privacy.conf`: peer-1-only systemd drop-in. Its
+  `BindsTo`/`After` contract prevents Torii from running after loss of its sole
+  local issuer broker and waits for broker readiness during startup.
+- `wait_taira_bootle_lantern_broker_ready.sh`: bounded same-UID, mode, type,
+  link-count, and parent-directory readiness gate for the fixed broker socket.
 - `taira-irohad.env.example`: sample `/etc/default/taira-irohad` overrides for
   pointing the systemd unit at a rendered validator config.
 - `docker-compose.validator.yml`: sample containerized validator deployment
   for local development; it mounts one rendered validator config plus
   persistent `/storage` and is not a first-release publication target.
+- `docker-compose.peer1-privacy.yml` and
+  `taira-validator-peer1-privacy.sh`: opt-in peer-1 container override and
+  two-process fail-together supervisor. The broker and validator have numeric
+  UID/GID 1001, share only the hardened pathname socket, and receive three
+  read-only bind-mounted credential files. The ordinary compose file remains
+  broker-free for peers 2–4.
 - `taira-validator-container.compose.env.example`: sample compose env file for
   a local containerized validator host using an explicitly built image.
 - `taira-validator-container.sh`: plain-`docker` wrapper for hosts that do not
@@ -140,15 +171,36 @@ into multi-second stalls.
   canonical `addr:...#CRC16` literals for shared-bridge Docker validation.
 - `taira-canary-client.example.toml`: runtime-only example signer config for
   the signed rollout canary.
-- `build_taira_rollout_bundle.sh`: packages the exact checked-out `irohad` /
+- `build_taira_rollout_bundle.sh`: produces an unsigned archive from the exact
+  checked-out `irohad` /
   `iroha` / `sorafs_manifest_builder` / `sorafs_tx_stdin_builder` build plus the
   checked-in Taira config bundle into one timestamped rollout artifact. It
   builds `irohad` with the exact production
   `embedded-soracloud-runtime,zk-stark` features, separately builds the native
   privacy evidence runner with `privacy-release-evidence`, produces and
-  re-verifies native evidence only after the validator build, runs the focused
+  re-verifies native evidence only after the validator build, rejects an
+  incomplete privacy bootstrap before building a release, runs the focused
   SoraSwap regressions, and records the frozen workspace-source identity plus
-  release checks in `rollout.manifest.json`.
+  release checks in `rollout.manifest.json`. It never accepts or inherits a
+  release signer, signing key, trusted fingerprint, or native manifest
+  verifier.
+- `scripts/finalize_taira_rollout_authority.py`: authenticates one completed
+  unsigned Linux archive and creates its portable signed authority in a
+  separate post-build process. It never invokes Cargo, Git, Kagami, the
+  validator, the evidence runner, or another source-built executable; its only
+  child executables are the reviewed external signer and checksum-pinned
+  `sorafs-validate`. It verifies the root-owned controller closure and includes
+  that closure's canonical manifest in the signed authority.
+- `scripts/seal_taira_release_controllers.py`: is the source used by trusted
+  configuration management to build the versioned release-controller bundle.
+  The workflow never installs or refreshes that bundle. Each authority runner
+  is preprovisioned with the fixed root-owned launcher
+  `/usr/local/libexec/iroha-taira-release-controller-v1`, the immutable closure
+  below `/usr/local/libexec/iroha-taira-release-controller-v1.d`, and a
+  canonical root-owned host/role installation record. The launcher attests
+  those installed bytes and then exposes only role-specific operations with
+  exact flag contracts; it never accepts a script path, shell, or unrestricted
+  privileged argument vector.
 - `scripts/render_taira_edge_nginx_conf.py`: renders the shared-edge nginx
   config directly from the same validator roster used for per-validator
   `config.toml` generation so public Torii ingress cannot drift onto stale
@@ -227,6 +279,157 @@ into multi-second stalls.
 
 ## Native privacy release evidence
 
+### First-release activation and issuance bootstrap
+
+The checked-in genesis grants the exact genesis authority
+`CanEnactGovernance`, but deliberately carries no partial privacy activation
+set. A release renderer must obtain all 12 compiled profiles from one
+qualified native candidate and encode exactly 12
+`RegisterPrivacyProtocolActivationV1` instruction boxes in canonical matrix
+order. Every record starts as `Proposed` at genesis height 1, schedules height
+301, and uses the protocol's canonical compiled-profile digest and bounds.
+The 300-block delay is consensus-enforced; no bootstrap shortcut or already
+active lifecycle is accepted.
+
+`sis-with-hints`, `sis-hints-anoncred-pq-v0`, and the other retired labels are
+retirement evidence only. They have no activation row, compatibility alias,
+or fallback engine. Jindo, ZK-AMS, Vega, and the other canonical rows are the
+only release identities.
+
+Bootle/Lantern issuance uses stock local runtime-provider broker slot 54. The
+deployment-owned broker backend supplies opaque bearer authentication and
+bounded native Falcon operations. Torii remains the sole durable one-shot
+authorization-state authority. Issuer trapdoors, bearer credentials, backend
+endpoints, and credential loaders are forbidden from the plan, genesis,
+validator config, and rendered bundle.
+
+Only `taira-validator-1` is the first-release issuance endpoint. The edge must
+route both issuance paths to that validator rather than round-robin them
+across the fleet, because its Torii store is intentionally local:
+
+- `/v1/privacy/bootle-lantern/issuance/authorize`
+- `/v1/privacy/bootle-lantern/issuance/issue`
+
+The shared config keeps issuance disabled. Enabling the peer-1 rendered config
+requires the explicit first-release admission bound `max_inflight = 2` (the
+field has no enabled-mode default) and all of the following public material
+from the qualified deployment provider: its exact non-zero
+qualification-policy digest, the matching Falcon public issuer matrix and
+issuer-parameter identity/digest, the governed issuer-policy record and record
+digest, and the canonical Norito registration instruction. The issuer-policy
+instruction follows the 12 activation instructions in genesis. Other
+validators remain disabled and must contain no dormant issuer/provider binding
+fields.
+
+The native `taira_bootle_lantern_broker export-public` command is the sole
+producer of that public issuer material. Its JSON contains the complete Falcon
+public matrix and governed policy, parameter identity and digest, policy
+record digest, provider qualification, stable public principal commitment,
+and a canonical boxed registration instruction. The
+`registration_instruction_norito_hex` value is the exact canonical
+`InstructionBox` payload consumed by genesis; the matching
+`registration_instruction_norito_sha256` is SHA-256 over those exact bytes.
+Neither field is a bare instruction encoding.
+
+Release composition uses Kagami's native
+`privacy-bootstrap render-taira-release-v1` command. The operator supplies one
+reviewed broker `export-public` JSON document as an explicit input; the
+composer consumes it as an immutable snapshot and emits four fresh,
+peer-1-enabled, secret-free artifacts: the privacy plan, validator config,
+genesis, and a byte-identical verified broker public export. The plan's
+`bootle_lantern_issuer.public_export_sha256` binds that fourth artifact; it is
+null in staging and mandatory in release. Use the emitted validator config as
+the `config.toml` input to `render_taira_validator_bundle.py`: it is the exact
+peer-1 release template. The bundle renderer preserves that complete binding
+only for `taira-validator-1`; it deterministically disables issuance on peers
+2–4, removes every dormant issuer/provider binding there, and assigns each
+peer its own issuer state directory. Partial or fleet-wide bindings fail
+closed. Do not manually splice matrix rows or individual digests, and do not
+treat an unreviewed path as a bundle default. Run the command with `--help`
+from the exact release binary for its required input/output arguments, then
+run the release validator over the four emitted files before packaging:
+
+```bash
+kagami privacy-bootstrap render-taira-release-v1 --help
+python3 configs/soranexus/taira/validate_privacy_bootstrap.py --mode release \
+  --plan /absolute/reviewed/privacy_bootstrap_plan.json \
+  --config /absolute/reviewed/taira-validator-1/config.toml \
+  --genesis /absolute/reviewed/genesis.json \
+  --broker-public /absolute/reviewed/broker-public.verified.json
+```
+
+For the bare-metal peer-1 process, install the bundled broker binary and the
+four systemd artifacts listed above. Install the drop-in only as
+`/etc/systemd/system/taira-irohad.service.d/peer1-privacy.conf` on
+`taira-validator-1`; peers 2–4 must not install or enable the broker unit.
+Copy the example public environment file to
+`/etc/default/taira-bootle-lantern-broker` and replace its two digest latches
+from the same reviewed export.
+
+Provision the issuer seed (exactly 32 random bytes), opaque bearer (32–4096
+random bytes), and stable-principal seed (exactly 32 independent random bytes)
+as three separately encrypted systemd credentials under
+`/etc/credstore.encrypted/`. Use the exact credential names in the unit and
+bind encryption to the deployment host/TPM with `systemd-creds encrypt`.
+Plaintext provisioning files are not rollout-bundle inputs and must be removed
+through the operator's approved secret-destruction workflow after encryption.
+At activation, the broker accepts only singly linked regular files of exact
+mode 0400, with canonical no-symlink paths and immutable opened-file
+snapshots. The owner must be the effective service UID. Root ownership is
+accepted only for the three exact credential names beneath
+`/run/credentials/taira-bootle-lantern-broker.service/`, where systemd may
+retain root ownership and grant the unit user read access through its private
+credential-delivery ACL; root-owned files at every other path are rejected.
+
+After reviewing `systemd-analyze verify` output, activate peer 1 with:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable taira-irohad.service
+sudo systemctl restart taira-irohad.service
+sudo systemctl is-active taira-bootle-lantern-broker.service taira-irohad.service
+sudo stat -Lc '%u:%g:%a:%h:%F' /run/iroha/runtime-provider-broker-v1.sock
+```
+
+The expected socket is owned by the numeric `iroha` UID/GID, mode 0660,
+single-linked, and of type `socket`. A broker crash stops peer-1 Torii via
+`BindsTo`; it is intentionally not auto-restarted across a potentially stale
+socket. Inspect the failed unit and endpoint identity before operator-directed
+recovery.
+
+For container-only peer-1 testing, prepare one canonical host credential
+directory owned by numeric UID/GID 1001, mode 0700, with distinct singly
+linked 0400 files named `issuer-seed`, `bearer-token`, and `principal-seed`.
+Set the three `TAIRA_BOOTLE_LANTERN_*` values documented in the compose env
+example and apply the override explicitly:
+
+```bash
+docker compose --env-file /etc/default/taira-validator-container.compose.env \
+  -f configs/soranexus/taira/docker-compose.validator.yml \
+  -f configs/soranexus/taira/docker-compose.peer1-privacy.yml up -d
+```
+
+The peer-1 supervisor starts Torii only after the exact socket is ready and
+sends SIGTERM to both processes when either exits. Never apply this override
+to peers 2–4.
+
+Validate the safe checked-in staging state and its adversarial suite with:
+
+```bash
+python3 configs/soranexus/taira/validate_privacy_bootstrap.py --mode staging
+python3 configs/soranexus/taira/privacy_bootstrap_validation_test.py -v
+```
+
+The final bundle gate uses `--mode release --broker-public <verified-export>`.
+It fails closed until the plan
+contains exactly 12 canonical activation instruction digests, the complete
+public provider and governed issuer-policy digests, the exact canonical broker
+export SHA-256, the peer-1 config is enabled with exact matching bindings, and
+genesis contains exactly those 12 Norito instructions followed by the
+issuer-policy instruction. Native genesis
+decoding and the exact-12 release-evidence runner remain mandatory alongside
+this public-input validator.
+
 Every first-release Taira archive authority must carry native end-to-end
 evidence for the exact 12 privacy protocols. This evidence is a post-build
 release gate, not a source-schema or pre-bundle report:
@@ -271,19 +474,24 @@ uploads a non-publishing provenance archive. It never pushes, deploys, or
 modifies `Cargo.lock`; a failed or partial run must be discarded rather than
 reused.
 
-The Linux authority job reconstructs one reviewed source closure from the exact
+The Linux build job reconstructs one reviewed source closure from the exact
 Iroha commit, DPN source commit, `Cargo.lock`, and canonical workspace-source
-manifest. It builds directly on a native Linux/aarch64 runner, generates and
-verifies the exact-12 evidence after the final validator binary exists, signs
-the archive authority, and transfers both without rebuilding or translating
-the evidence on another platform.
+manifest. It builds directly on an untrusted native Linux/aarch64 runner and
+generates and verifies the exact-12 evidence after the final validator binary
+exists. A fresh Linux authority job, with no checkout or product execution,
+copies the hostile handoff through the installed controller's descriptor-based
+inspector and signs only the frozen staged bytes.
 
-The macOS validation job independently reconstructs the same source identity
-and rejects any byte difference before it builds. The resulting macOS/arm64
-binary must complete the exact-four-peer validation and every-peer restart
-proof described below. The final candidate embeds that receipt and the signed
-Linux authority; admission therefore authenticates both native targets and one
-source identity before publication.
+The untrusted macOS build job reconstructs the same source identity and emits
+only inert macOS/arm64 binaries. A separate secret-free qualification runner
+uses a qualification-only reset bundle and signer to execute the built
+validator, complete the exact-four-peer validation and every-peer restart
+proof, and bind the inspected macOS handoff digest into the receipt. It has no
+production reset, release signer, registry, or deployment authority. A fresh
+candidate authority job then authenticates that receipt and the Linux
+authority without executing the product. The final candidate therefore binds
+both native targets, both installed-controller digests, one source identity,
+and the exact inspected binary handoff before deployment or publication.
 
 The bundle stores these files under `provenance/privacy-native/` and includes
 the runner as `bin/taira_privacy_release_runner`. `rollout.manifest.json` and
@@ -322,8 +530,9 @@ must not be attached to a Taira rollout ticket as though it were.
 ## Signed release authority
 
 A release-profile archive is not a Taira release candidate until its portable
-Ed25519 authority tuple passes. Production builders require five paths/pins
-provisioned outside the checkout:
+Ed25519 authority tuple passes. The native builder is deliberately unsigned
+and must not receive any of the authority values below. The separate
+post-build finalizer requires five paths/pins provisioned outside the checkout:
 
 - `TAIRA_RELEASE_EXTERNAL_SIGNER_PATH`: reviewed signer accepting the canonical
   manifest path and one create-new raw-signature path;
@@ -336,16 +545,33 @@ provisioned outside the checkout:
 
 Every file variable must use its canonical physical absolute path, without
 symlinked or `..` path components, and must resolve outside the checkout.
-No private key path or signing seed is accepted. Linux authority builds emit
-`<bundle>.authority/`, and the final macOS candidate carries an independently
-signed top-level authority tuple. Each contains
+No private key path or signing seed is accepted. The unsigned build emits the
+evidence directory and matching `.tar.gz`; only
+`scripts/finalize_taira_rollout_authority.py` may emit
+`<bundle>.authority/`. The final macOS candidate carries an independently
+signed top-level authority tuple. Each authority contains
 `release_manifest.json`, its raw `.sig` and `.pub`, and an `artifacts/`
 directory holding the canonical exact-12 authority, `SHA256SUMS`, the pinned
-native verifier, and the portable authority validator. The signed payload has
-no build-host absolute path. It binds the full workspace-source identity,
+native verifier, the portable authority validator, and
+`authority-controller-v1.json`. The signed payload has no build-host absolute
+path. It binds the full workspace-source identity and controller digest,
 exact-12 registry and retired-label set, validator, evidence runner, Cargo
 lock, matrix, all authoritative Norito evidence and mandatory JSON
 projections, and the exact archive digest.
+
+The Linux workflow enforces three separate roles. First, a no-checkout public-
+input authority runs only the preinstalled controller as root. It descriptor-
+snapshots exactly the four documented secret-free files from
+`TAIRA_PRIVACY_RELEASE_INPUT_DIR`, rejects links, special files, mode or inode
+drift, and freezes a root-owned `0555` handoff with `0444` files. Second, the
+untrusted archive builder runs beneath `env -i` and receives only the downloaded
+public bytes plus public source-provenance paths; it receives no protected input
+path, signer, public-key, fingerprint, reset input, or native-verifier value.
+Third, the no-checkout Linux authority copies both hostile handoffs into its
+persistent root-owned staging tree. The finalizer byte-compares every composed
+privacy input with the trusted public snapshot before and after signing, replays
+the authority subject and manifest, and rejects any archive, evidence, helper,
+verifier, or closed-inventory drift.
 
 Admission must first verify `release_manifest.json.sig` with the separately
 reviewed signer fingerprint and verifier digest, then run
@@ -367,7 +593,7 @@ fingerprint=<reviewed-release-signing-public-key-sha256>
 verifier_sha=<reviewed-sorafs-validate-sha256>
 
 actual_verifier_sha="$(
-  python3 -S -c \
+  python3 -I -S -c \
     'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
     "${authority}/artifacts/sorafs-validate"
 )"
@@ -377,7 +603,7 @@ test "${actual_verifier_sha}" = "${verifier_sha}"
   --public-key "${authority}/release_manifest.json.pub" \
   --public-key-fingerprint "${fingerprint}" \
   --signature "${authority}/release_manifest.json.sig"
-python3 -S "${authority}/artifacts/taira_release_authority.py" verify \
+python3 -I -S "${authority}/artifacts/taira_release_authority.py" verify \
   --evidence-root "${bundle}" \
   --commit "${commit}" \
   --signing-fingerprint "${fingerprint}" \
@@ -420,14 +646,18 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 
 The bundle also contains one shared unsigned `genesis.json` whose dedicated
 topology transaction is rebuilt from the public roster and PoPs, plus
-`genesis-signing-command.txt`. Set `TAIRA_GENESIS_PRIVATE_KEY` only in the
-operator shell and run that command. `kagami genesis sign --config` executes
-genesis in a disposable state block, replaces the template Nexus/AMX and
-execution-policy context hashes with the exact staged values, recomputes the
-consensus fingerprint, atomically replaces only the rendered `genesis.json`
-with that bound manifest, and then writes `genesis.signed.nrt`. Never copy the
-genesis signer or validator private keys into the checked-in template or
-rendered genesis JSON.
+`genesis-signing-command.txt`. Provision `TAIRA_GENESIS_EXTERNAL_SIGNER` as an
+independently built, reviewed executable outside the checkout and run that
+command. The fixed protocol passes only `--unsigned-genesis`, `--peer-config`,
+`--bound-manifest-out`, `--signed-genesis-out`, and `--expected-hash-out`.
+The signer owns its HSM or key-provider access internally; it must never accept
+a private-key path or key bytes through argv, environment, or the rendered
+tree. Source-built Kagami is not a genesis signer in this release path. The
+external signer binds the staged Nexus/AMX and execution-policy context,
+recomputes the consensus fingerprint, atomically replaces only the rendered
+`genesis.json`, and writes `genesis.signed.nrt`. Never copy the genesis signer,
+genesis key, or validator private keys into the checkout, template, rendered
+genesis JSON, or Actions storage.
 
 ## Optional Kagemusha application proof material
 
@@ -693,34 +923,89 @@ are not part of the first-release operator workflow.
 The first Taira release is archive-only. The manual
 `.github/workflows/publish_taira_validator.yml` workflow does not build or push
 an OCI image and has no image or legacy publication fallback. OCI is used only
-as an immutable generic-artifact transport for authenticated archive bytes.
+as an immutable generic-artifact transport for secret-free admission evidence.
+The dispatch has no arbitrary checkout input. Each job validates the exact
+lowercase 40-hex DPN source-closure commit independently, validates the
+immutable `${{ github.sha }}` workflow commit before checkout, checks out only
+that commit with persisted Git credentials disabled, and runs with
+`contents: read` permission.
 
 One dispatch performs these two native builds from one authenticated source
 identity:
 
 - The `[self-hosted, Linux, ARM64, iroha2]` job reconstructs the reviewed DPN
-  source closure and exact `Cargo.lock`, checks the canonical workspace-source
-  manifest, then builds and signs the Linux/aarch64 rollout archive and its
-  exact-12 native privacy authority. An amd64 or emulated build is rejected.
+  source closure and exact `Cargo.lock` only after sealing its controller
+  closure, checks the canonical workspace-source manifest, snapshots exactly
+  four secret-free privacy inputs, then builds the unsigned Linux/aarch64
+  rollout archive in a scrubbed environment. Only after compilation and native
+  evidence generation finish does the sealed finalizer authenticate the
+  immutable archive and sign its exact-12 authority plus controller manifest.
+  An amd64 or emulated build is rejected.
 - The `[self-hosted, macOS, ARM64, taira-release]` job reconstructs that same
-  commit, lock, and source manifest independently. It byte-compares the source
-  identity transferred from Linux before compiling the macOS/arm64 `irohad`
-  and `kagami`. The exact binary then boots exactly four native peers, proves
-  consensus advancement, replaces each peer child in turn through the shipped
-  supervisor, and proves fleet advancement after every restart. Both the
-  candidate binary and supervisor run from temporary root-controlled,
-  content-addressed validation paths so a child cannot rewrite its own harness.
+  commit, lock, and source manifest independently after sealing its controller
+  closure. It byte-compares the source identity transferred from Linux before
+  compiling the macOS/arm64 `irohad` and the public-only onboarding-token hash
+  tool. No source-built genesis signer is compiled or invoked. The exact binary
+  then boots exactly four native peers, proves consensus advancement, replaces
+  each peer child in turn through the shipped supervisor, and proves fleet
+  advancement after every restart. Both the candidate binary and supervisor
+  run from temporary root-controlled, content-addressed validation paths so a
+  child cannot rewrite its own harness.
+
+Neither source reconstruction nor either native Cargo step receives protected
+authority, privacy-source, reset-source, staging-root, or external-genesis-signer
+environment variables; both native compilation phases construct an explicit
+`env -i` allowlist. The macOS reset and external-signer path/digest values are
+introduced only in the private reset preparation step, captured into
+non-exported shell locals, and removed from the reset composer's environment.
+The composer digest-pins and snapshots the reviewed external signer, then
+invokes it with a minimal environment and no key material. Release signer and
+verifier values are introduced only in authentication/signing steps; the Linux
+finalizer similarly unsets their exported names before invoking its single
+audited command with explicit arguments.
+
+Both jobs seal their complete privileged-controller closures before source
+reconstruction. The bootstrap stable-reads the sealer, compares those bytes to
+`git show <workflow-commit>:scripts/seal_taira_release_controllers.py` using
+`/usr/bin/git` with system/global configuration disabled, and only then runs
+the reviewed bytes as root. All reconstruction, finalization, reset, capture,
+candidate, deployment, health, admission, manifest, and receipt-signing helpers
+execute from the sealed closure. The Linux physical root is
+`/var/tmp/iroha-taira-controller-linux.*`; macOS uses the canonical physical
+`/private/var/tmp/iroha-taira-controller-macos.*` path. The controller digest
+is signed into the Linux authority, reset manifest, and final macOS candidate.
 
 `capture_taira_macos_four_peer_receipt.py` emits the canonical receipt only
 after all four restart proofs pass and the original reset inputs are unchanged.
 `build_taira_rollout_candidate.py` binds that receipt, the exact binary,
-supervisor, four configurations, deterministic deploy payload, and signed
-Linux authority into the final Mac archive. The workflow signs its canonical
-release manifest and requires `scripts/taira_rollout_admission.py verify` to
-accept it before any registry mutation. It then uploads and downloads the
-pre-publication set through Actions storage, byte-compares every file, and
-repeats admission to ensure that the bytes crossing the job boundary remain
-authoritative.
+the sealed macOS controller manifest, and signed Linux authority into the final
+secret-free Mac admission archive. The private reset bundle, validator secrets,
+external genesis signer and its internal key/HSM state, validator binary, and
+supervisor never enter Actions artifact storage or OCI. After the
+candidate authority is assembled, the protected macOS runner passes the local
+private bundle and candidate directly to `scripts/deploy_taira_v21_reset.py`,
+first without `--apply` for read-only preflight and then with `--apply` for the
+guarded four-validator cutover. The same job then requires the public Torii
+root and all four protected direct-validator roots to report the exact full
+source commit and three advancing aligned fleet samples before publication.
+
+The live bundle is never composed beneath `RUNNER_TEMP`: launchd retains its
+bundle-local config, genesis, runtime-sidecar, and storage paths after the job
+ends. `TAIRA_MACOS_RESET_STAGING_ROOT` therefore names canonical persistent
+storage outside both the checkout and runner temp, owned by the runner user at
+exact mode 0700. Each dispatch creates one fresh child whose 64-hex name binds
+the exact workflow commit, DPN source-closure commit, reconstructed source
+manifest, run ID, and attempt. Do not remove that child while its cohort is
+live. The separate `TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256` protected value
+pins the complete authenticated source-reset tree passed to the native reset
+composer; a path alone is not an authority.
+
+Only the admission archive and its `release_manifest.json`, public key, and
+signature are staged. The workflow records those exact four files in a
+canonical byte inventory, uploads and downloads that secret-free set through
+Actions storage, byte-compares every file, and repeats admission before any
+registry mutation. Including the inventory itself, the Actions handoff has
+exactly five files; the inventory is metadata and is not an OCI layer.
 
 Registry publication uses ORAS `1.3.2` through
 `oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6` and the
@@ -731,7 +1016,6 @@ and layers use these fixed types:
 
 - `application/vnd.hyperledger.iroha.taira.rollout-admission.v1`
 - `application/vnd.hyperledger.iroha.taira.rollout-admission.archive.v1+tar+gzip`
-- `application/vnd.hyperledger.iroha.taira.macos-arm64.deploy.v1+tar+gzip`
 - `application/vnd.hyperledger.iroha.release-manifest.v1+json`
 - `application/vnd.hyperledger.iroha.release-manifest.signature.v1+ed25519`
 - `application/vnd.hyperledger.iroha.ed25519-public-key.v1`
@@ -742,9 +1026,10 @@ The mutable-looking source tag is only a publication locator. The workflow
 accepts the digest returned by `oras push` only after `oras resolve` agrees,
 the raw OCI manifest hashes to that same digest, and every descriptor matches
 the expected path, media type, size, and SHA-256. It then performs a pull by digest
-into a fresh directory, byte-compares the candidate, authority tuple,
-and deploy payload, and reruns admission. Deploy automation must consume the
-reported `repository@sha256:...` immutable reference, never the tag.
+into a fresh directory, byte-compares the admission archive and three-file
+authority tuple, and reruns admission. The resulting
+`repository@sha256:...` reference is an immutable evidence reference, not a
+deployment payload; deployment has already consumed the private local bundle.
 
 Finally, the workflow creates a canonical receipt binding the source identity,
 admission result, immutable primary manifest digest, every layer, and exact ORAS
@@ -755,12 +1040,34 @@ is the handoff record for testnet rollout.
 
 The protected `taira-validator-publish` environment must provision canonical,
 non-symlinked paths outside the checkout for the external signer, raw public
-key, pinned `sorafs-validate`, macOS reset bundle, operator identity, and
-genesis private key. It also supplies the public genesis key and command
-authority, `TAIRA_OCI_REPOSITORY`, and the `TAIRA_OCI_USERNAME` and
-`TAIRA_OCI_PASSWORD` secrets. The dispatch requires the exact 40-character DPN
-release commit; `artifact_suffix`, when present, is restricted to a short
-lowercase OCI-safe component.
+key, pinned `sorafs-validate`, the four-file secret-free
+`TAIRA_PRIVACY_RELEASE_INPUT_DIR`, macOS reset bundle, operator identity, and
+the independently built external genesis signer. Pin the latter with
+`TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256`; its path is
+`TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH`. No genesis private-key path or
+bytes may be configured in Actions. The protected privacy path is visible only
+to the inline snapshot step; native build steps see only its copied public
+bytes. The environment also supplies the public genesis key and command
+authority, the public Torii root, exactly four direct validator Torii roots,
+the canonical owner-private `TAIRA_MACOS_RESET_STAGING_ROOT`, the exact
+`TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256`, `TAIRA_OCI_REPOSITORY`, and the
+`TAIRA_OCI_USERNAME` and
+`TAIRA_OCI_PASSWORD` secrets. Protected release-signer, verifier, reset, and
+external-genesis-signer paths are step-scoped; the OCI username and password are exposed only within the two
+exact login-and-publish steps and are removed by step-local traps plus the
+always-run residual logout cleanup. The dispatch
+requires the exact 40-character DPN release commit; `artifact_suffix`, when
+present, is restricted to a short lowercase OCI-safe component.
+
+Both protected runner accounts require non-interactive sudo for the exact
+`/usr/bin/python3 -I -S` controller-seal/cleanup invocation. The macOS account
+also requires the already documented exact reset capture and deploy invocations
+through `/usr/bin/python3 -E -S`; do not grant a shell, wildcard command, or
+workspace-script sudo rule. `/var/tmp` (physical `/private/var/tmp` on macOS)
+must retain root ownership and the operating system's standard sticky-directory
+policy; the sealed child tree itself is root-owned mode `0555`. A runner that
+cannot create, verify, and always clean its exact controller closure is not
+release-capable.
 
 ## Minimum viable topology
 

@@ -164,7 +164,7 @@ fn enforce_public_xor_binding(
     profile: GenesisProfile,
 ) -> Result<()> {
     let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
-    let synthetic_stake_asset_id = AssetDefinitionId::new(
+    let synthetic_stake_asset_id = AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified("nexus.universal")?,
         "xor".parse()?,
     );
@@ -231,13 +231,6 @@ fn enforce_public_xor_binding(
     if public_xor_asset_definition_id == synthetic_stake_asset_id {
         return Err(eyre!(
             "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to synthetic `nexus.universal/xor`; use the real canonical XOR asset definition",
-            profile
-        ));
-    }
-
-    if !public_xor_asset_definition_id.is_opaque_canonical() {
-        return Err(eyre!(
-            "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to domain-derived `{public_xor_asset_definition_id}`; use an explicit canonical Base58 asset definition id",
             profile
         ));
     }
@@ -386,9 +379,14 @@ mod tests {
             .into_builder()
             .next_transaction()
             .append_instruction(Register::asset_definition(
-                AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
-                    .with_name("xor".to_owned())
-                    .with_metadata(Metadata::default()),
+                AssetDefinition::new(
+                    asset_definition_id.clone(),
+                    "xor".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .with_metadata(Metadata::default()),
             ))
             .append_instruction(SetAssetDefinitionAlias::bind(
                 asset_definition_id,
@@ -629,7 +627,7 @@ mod tests {
             Some(seed),
         )
         .expect("generate profile manifest");
-        let synthetic_xor = AssetDefinitionId::new(
+        let synthetic_xor = AssetDefinitionId::derive_from_components(
             DomainId::parse_fully_qualified("nexus.universal").expect("valid domain"),
             "xor".parse().expect("valid asset name"),
         );
@@ -672,7 +670,7 @@ mod tests {
             Some(seed),
         )
         .expect("generate profile manifest");
-        let domain_derived_xor = AssetDefinitionId::new(
+        let domain_derived_xor = AssetDefinitionId::derive_from_components(
             DomainId::parse_fully_qualified("universal.universal").expect("valid domain"),
             "xor".parse().expect("valid asset name"),
         );

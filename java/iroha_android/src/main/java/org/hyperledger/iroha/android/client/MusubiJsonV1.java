@@ -12,13 +12,25 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasHistoryEntry;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocation;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocationPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocationQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveAvailability;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionDecision;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionDisposition;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionPage;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveCommitment;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRecord;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ChunkerProfileHandle;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ComparatorOp;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Digest32;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactPackageQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactReleaseQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.FinalizedCursor;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.MaintainerDirectoryEntry;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.MaintainerInvitation;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Namespace;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.NamespaceBinding;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPackageEntry;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixPage;
@@ -39,6 +51,17 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverReleaseRow;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SeedIngressReceipt;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SeedIngressReceiptApproval;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SeedIngressReceiptBinding;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SeedIngressReceiptPayload;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchCursor;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchHit;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchPage;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchPageRequest;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchSnapshot;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.StorageAvailability;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Version;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionComparator;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionReq;
@@ -93,12 +116,53 @@ final class MusubiJsonV1 {
     return parsePage(parse(payload, "Musubi versions response"), "response", MusubiJsonV1::parseVersion);
   }
 
-  static Page<PackageMember> parseMaintainerPage(final byte[] payload) {
-    return parsePage(parse(payload, "Musubi maintainers response"), "response", MusubiJsonV1::parseMember);
+  static Page<MaintainerDirectoryEntry> parseMaintainerPage(final byte[] payload) {
+    return parsePage(
+        parse(payload, "Musubi maintainers response"),
+        "response",
+        MusubiJsonV1::parseMaintainerDirectoryEntry);
   }
 
-  static Page<ArchiveLocation> parseArchiveLocationPage(final byte[] payload) {
-    return parsePage(parse(payload, "Musubi archive-locations response"), "response", MusubiJsonV1::parseArchiveLocation);
+  static ArchiveLocationPage parseArchiveLocationPage(final byte[] payload) {
+    final Map<String, Object> root =
+        exactObject(
+            parse(payload, "Musubi archive-locations response"),
+            "response",
+            keys("chain_id", "genesis_hash", "archive", "items", "next_cursor", "snapshot"));
+    final List<Object> raw = list(root.get("items"), "response.items");
+    final List<ArchiveLocation> items = new ArrayList<>();
+    for (int index = 0; index < raw.size(); index++) {
+      items.add(parseArchiveLocation(raw.get(index), "response.items[" + index + "]"));
+    }
+    final RegistrySnapshot snapshot = parseSnapshot(root.get("snapshot"), "response.snapshot");
+    final FinalizedCursor cursor = root.get("next_cursor") == null
+        ? null : parseCursor(root.get("next_cursor"), "response.next_cursor");
+    return new ArchiveLocationPage(
+        string(root.get("chain_id"), "response.chain_id"),
+        fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
+        parseArchiveRecord(root.get("archive"), "response.archive"),
+        items,
+        cursor,
+        snapshot);
+  }
+
+  static ArchiveRetentionPage parseArchiveRetentionPage(final byte[] payload) {
+    final Map<String, Object> root =
+        exactObject(
+            parse(payload, "Musubi archive-retention response"),
+            "response",
+            keys("chain_id", "genesis_hash", "items", "snapshot"));
+    final List<Object> raw = list(root.get("items"), "response.items");
+    final List<ArchiveRetentionDecision> items = new ArrayList<>();
+    for (int index = 0; index < raw.size(); index++) {
+      items.add(parseArchiveRetentionDecision(
+          raw.get(index), "response.items[" + index + "]"));
+    }
+    return new ArchiveRetentionPage(
+        string(root.get("chain_id"), "response.chain_id"),
+        fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
+        items,
+        parseSnapshot(root.get("snapshot"), "response.snapshot"));
   }
 
   static AliasRecord parseAlias(final byte[] payload) {
@@ -114,7 +178,9 @@ final class MusubiJsonV1 {
         exactObject(
             parse(payload, "Musubi ordered-prefix response"),
             "response",
-            keys("chain_id", "genesis_hash", "items", "next_cursor", "snapshot"));
+            keys(
+                "chain_id", "genesis_hash", "namespace_binding", "items", "next_cursor",
+                "snapshot"));
     final List<Object> raw = list(root.get("items"), "response.items");
     final List<OrderedPackageEntry> items = new ArrayList<>();
     for (int index = 0; index < raw.size(); index++) {
@@ -126,9 +192,28 @@ final class MusubiJsonV1 {
     return new OrderedPrefixPage(
         string(root.get("chain_id"), "response.chain_id"),
         fixedBytes(root.get("genesis_hash"), "response.genesis_hash"),
+        parseNamespaceBinding(root.get("namespace_binding"), "response.namespace_binding"),
         items,
         cursor,
         snapshot);
+  }
+
+  static SearchPage parseSearchPage(final byte[] payload) {
+    final Map<String, Object> root =
+        exactObject(
+            parse(payload, "Musubi search response"),
+            "response",
+            keys("items", "next_cursor", "snapshot"));
+    final List<Object> raw = list(root.get("items"), "response.items");
+    final List<SearchHit> items = new ArrayList<>();
+    for (int index = 0; index < raw.size(); index++) {
+      items.add(parseSearchHit(raw.get(index), "response.items[" + index + "]"));
+    }
+    final SearchSnapshot snapshot =
+        parseSearchSnapshot(root.get("snapshot"), "response.snapshot");
+    final SearchCursor cursor = root.get("next_cursor") == null
+        ? null : parseSearchCursor(root.get("next_cursor"), "response.next_cursor");
+    return new SearchPage(items, cursor, snapshot);
   }
 
   static WireValue decodeQuery(final String path, final Object value) {
@@ -163,6 +248,20 @@ final class MusubiJsonV1 {
             digest(root.get("archive_id"), "request.archive_id"),
             parsePageRequest(root.get("page"), "request.page"));
       }
+      case MusubiToriiClientV1.ARCHIVE_RETENTION_PATH: {
+        final Map<String, Object> root =
+            exactObject(value, "request", keys("archive_ids", "expected_snapshot"));
+        final List<Object> raw = list(root.get("archive_ids"), "request.archive_ids");
+        final List<Digest32> archiveIds = new ArrayList<>();
+        for (int index = 0; index < raw.size(); index++) {
+          archiveIds.add(digest(raw.get(index), "request.archive_ids[" + index + "]"));
+        }
+        return new ArchiveRetentionQuery(
+            archiveIds,
+            root.get("expected_snapshot") == null
+                ? null : parseSnapshot(
+                    root.get("expected_snapshot"), "request.expected_snapshot"));
+      }
       case MusubiToriiClientV1.ALIAS_PATH:
       case MusubiToriiClientV1.ALIAS_HISTORY_PATH: {
         final Map<String, Object> root = exactObject(value, "request", keys("alias", "page"));
@@ -175,6 +274,12 @@ final class MusubiJsonV1 {
         return new OrderedPrefixQuery(
             newtypeText(root.get("prefix"), "request.prefix"),
             parsePageRequest(root.get("page"), "request.page"));
+      }
+      case MusubiToriiClientV1.SEARCH_PATH: {
+        final Map<String, Object> root = exactObject(value, "request", keys("query", "page"));
+        return new SearchQuery(
+            string(root.get("query"), "request.query"),
+            parseSearchPageRequest(root.get("page"), "request.page"));
       }
       default: throw new IllegalArgumentException("unsupported Musubi V1 query path: " + path);
     }
@@ -189,9 +294,11 @@ final class MusubiJsonV1 {
       case MusubiToriiClientV1.VERSIONS_PATH: return parseVersionPage(payload);
       case MusubiToriiClientV1.MAINTAINERS_PATH: return parseMaintainerPage(payload);
       case MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH: return parseArchiveLocationPage(payload);
+      case MusubiToriiClientV1.ARCHIVE_RETENTION_PATH: return parseArchiveRetentionPage(payload);
       case MusubiToriiClientV1.ALIAS_PATH: return parseAlias(payload);
       case MusubiToriiClientV1.ALIAS_HISTORY_PATH: return parseAliasHistoryPage(payload);
       case MusubiToriiClientV1.ORDERED_PREFIX_PATH: return parseOrderedPackagePage(payload);
+      case MusubiToriiClientV1.SEARCH_PATH: return parseSearchPage(payload);
       default: throw new IllegalArgumentException("unsupported Musubi V1 query path: " + path);
     }
   }
@@ -214,6 +321,20 @@ final class MusubiJsonV1 {
     }
     if ("Domain".equals(kind)) return PackageScope.domain(string(root.get("value"), field + ".value"));
     throw new IllegalArgumentException(field + ".kind is unsupported in Musubi V1");
+  }
+
+  private static NamespaceBinding parseNamespaceBinding(
+      final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys("namespace", "home_dataspace", "scope", "generation"));
+    return new NamespaceBinding(
+        new Namespace(newtypeText(root.get("namespace"), field + ".namespace")),
+        u64(root.get("home_dataspace"), field + ".home_dataspace"),
+        parseScope(root.get("scope"), field + ".scope"),
+        nonZeroU64(root.get("generation"), field + ".generation"));
   }
 
   private static PackageSelector parseSelector(final Object value, final String field) {
@@ -329,6 +450,36 @@ final class MusubiJsonV1 {
         root.get("cursor") == null ? null : parseCursor(root.get("cursor"), field + ".cursor"));
   }
 
+  private static SearchSnapshot parseSearchSnapshot(final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys("finalized_height", "finalized_block_hash", "projection_revision"));
+    return new SearchSnapshot(
+        u64(root.get("finalized_height"), field + ".finalized_height"),
+        fixedBytes(root.get("finalized_block_hash"), field + ".finalized_block_hash"),
+        u64(root.get("projection_revision"), field + ".projection_revision"));
+  }
+
+  private static SearchCursor parseSearchCursor(final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(value, field, keys("snapshot", "query_hash", "last_package"));
+    return new SearchCursor(
+        parseSearchSnapshot(root.get("snapshot"), field + ".snapshot"),
+        digest(root.get("query_hash"), field + ".query_hash"),
+        parsePackage(root.get("last_package"), field + ".last_package"));
+  }
+
+  private static SearchPageRequest parseSearchPageRequest(
+      final Object value, final String field) {
+    final Map<String, Object> root = exactObject(value, field, keys("limit", "cursor"));
+    return new SearchPageRequest(
+        u32(root.get("limit"), field + ".limit"),
+        root.get("cursor") == null
+            ? null : parseSearchCursor(root.get("cursor"), field + ".cursor"));
+  }
+
   private static PackageRecord parsePackageRecord(final Object value, final String field) {
     final Map<String, Object> root =
         exactObject(
@@ -439,10 +590,10 @@ final class MusubiJsonV1 {
       return;
     }
     if ("TakenDown".equals(kind)) {
-      final Map<String, Object> payload = exactObject(root.get("value"), field + ".value", keys("action_digest", "reason", "enacted_at_height"));
+      final Map<String, Object> payload = exactObject(root.get("value"), field + ".value", keys("action_digest", "reason", "applied_at_height"));
       digest(payload.get("action_digest"), field + ".value.action_digest");
       newtypeText(payload.get("reason"), field + ".value.reason");
-      nonZeroU64(payload.get("enacted_at_height"), field + ".value.enacted_at_height");
+      nonZeroU64(payload.get("applied_at_height"), field + ".value.applied_at_height");
       return;
     }
     throw new IllegalArgumentException(field + ".kind is unsupported in Musubi V1");
@@ -485,25 +636,147 @@ final class MusubiJsonV1 {
     validateGovernance(root.get("governance"), field + ".governance");
   }
 
+  private static MaintainerDirectoryEntry parseMaintainerDirectoryEntry(
+      final Object value, final String field) {
+    final Map<String, Object> root = tagged(value, field);
+    final String kind = string(root.get("kind"), field + ".kind");
+    if ("Accepted".equals(kind)) {
+      return MaintainerDirectoryEntry.accepted(
+          parseMember(root.get("value"), field + ".value"));
+    }
+    if ("PendingInvitation".equals(kind)) {
+      return MaintainerDirectoryEntry.pendingInvitation(
+          parseMaintainerInvitation(root.get("value"), field + ".value"));
+    }
+    throw new IllegalArgumentException(field + ".kind is unsupported in Musubi V1");
+  }
+
   private static PackageMember parseMember(final Object value, final String field) {
     final Map<String, Object> root =
         exactObject(value, field, keys("package", "account", "role", "accepted_at_height", "governance_revision"));
-    final Map<String, Object> role = tagged(root.get("role"), field + ".role");
-    final String kind = string(role.get("kind"), field + ".role.kind");
-    if ("Owner".equals(kind)) {
-      require(role.get("value") == null, field + ".role.value must be null");
-    } else if ("Maintainer".equals(kind)) {
-      final Map<String, Object> permissions =
-          exactObject(role.get("value"), field + ".role.value", keys("publish", "yank", "metadata", "archive_locations"));
-      for (final Map.Entry<String, Object> entry : permissions.entrySet()) {
-        bool(entry.getValue(), field + ".role.value." + entry.getKey());
-      }
-    } else {
-      throw new IllegalArgumentException(field + ".role.kind is unsupported in Musubi V1");
-    }
+    final String kind = parsePackageRole(root.get("role"), field + ".role");
     return new PackageMember(
         parsePackage(root.get("package"), field + ".package"),
         string(root.get("account"), field + ".account"), kind, root);
+  }
+
+  private static MaintainerInvitation parseMaintainerInvitation(
+      final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys(
+                "invite_id", "package", "invited_by", "invited_account", "role",
+                "expected_governance_revision", "expires_at_height", "state"));
+    final Digest32 inviteId = digest(root.get("invite_id"), field + ".invite_id");
+    require(
+        !Arrays.equals(inviteId.bytes(), new byte[32]),
+        field + ".invite_id must not be inert");
+    final String state =
+        taggedUnit(root.get("state"), field + ".state", keys("Pending"));
+    return new MaintainerInvitation(
+        inviteId,
+        parsePackage(root.get("package"), field + ".package"),
+        string(root.get("invited_by"), field + ".invited_by"),
+        string(root.get("invited_account"), field + ".invited_account"),
+        parsePackageRole(root.get("role"), field + ".role"),
+        nonZeroU64(
+            root.get("expected_governance_revision"),
+            field + ".expected_governance_revision"),
+        nonZeroU64(root.get("expires_at_height"), field + ".expires_at_height"),
+        state,
+        root);
+  }
+
+  private static String parsePackageRole(final Object value, final String field) {
+    final Map<String, Object> role = tagged(value, field);
+    final String kind = string(role.get("kind"), field + ".kind");
+    if ("Owner".equals(kind)) {
+      require(role.get("value") == null, field + ".value must be null");
+      return kind;
+    }
+    if ("Maintainer".equals(kind)) {
+      final Map<String, Object> permissions =
+          exactObject(
+              role.get("value"),
+              field + ".value",
+              keys("publish", "yank", "metadata", "archive_locations"));
+      boolean grantsPermission = false;
+      for (final Map.Entry<String, Object> entry : permissions.entrySet()) {
+        grantsPermission |= bool(entry.getValue(), field + ".value." + entry.getKey());
+      }
+      require(grantsPermission, field + ".value must grant at least one permission");
+      return kind;
+    }
+    throw new IllegalArgumentException(field + ".kind is unsupported in Musubi V1");
+  }
+
+  private static ArchiveRetentionDecision parseArchiveRetentionDecision(
+      final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys(
+                "archive_id", "disposition", "active_releases", "yanked_releases",
+                "taken_down_releases", "storage"));
+    final String kind = taggedUnit(
+        root.get("disposition"),
+        field + ".disposition",
+        keys(
+            "RetainUnknown", "RetainReferenced", "PruneUnreferenced",
+            "PruneGovernedTakedown"));
+    final ArchiveRetentionDisposition disposition;
+    switch (kind) {
+      case "RetainUnknown":
+        disposition = ArchiveRetentionDisposition.RETAIN_UNKNOWN;
+        break;
+      case "RetainReferenced":
+        disposition = ArchiveRetentionDisposition.RETAIN_REFERENCED;
+        break;
+      case "PruneUnreferenced":
+        disposition = ArchiveRetentionDisposition.PRUNE_UNREFERENCED;
+        break;
+      default:
+        disposition = ArchiveRetentionDisposition.PRUNE_GOVERNED_TAKEDOWN;
+        break;
+    }
+    return new ArchiveRetentionDecision(
+        digest(root.get("archive_id"), field + ".archive_id"),
+        disposition,
+        u16(root.get("active_releases"), field + ".active_releases"),
+        u16(root.get("yanked_releases"), field + ".yanked_releases"),
+        u16(root.get("taken_down_releases"), field + ".taken_down_releases"),
+        root.get("storage") == null
+            ? null : parseArchiveAvailability(root.get("storage"), field + ".storage"));
+  }
+
+  private static ArchiveAvailability parseArchiveAvailability(
+      final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys(
+                "archive_id", "availability", "healthy_replicas", "active_locations",
+                "finalized_height", "finalized_block_hash", "index_revision"));
+    final String kind = taggedUnit(
+        root.get("availability"),
+        field + ".availability",
+        keys("Selectable", "BelowQuorum", "Unavailable"));
+    final StorageAvailability availability;
+    if ("Selectable".equals(kind)) availability = StorageAvailability.SELECTABLE;
+    else if ("BelowQuorum".equals(kind)) availability = StorageAvailability.BELOW_QUORUM;
+    else availability = StorageAvailability.UNAVAILABLE;
+    return new ArchiveAvailability(
+        digest(root.get("archive_id"), field + ".archive_id"),
+        availability,
+        u16(root.get("healthy_replicas"), field + ".healthy_replicas"),
+        u8(root.get("active_locations"), field + ".active_locations"),
+        nonZeroU64(root.get("finalized_height"), field + ".finalized_height"),
+        fixedBytes(root.get("finalized_block_hash"), field + ".finalized_block_hash"),
+        nonZeroU64(root.get("index_revision"), field + ".index_revision"));
   }
 
   private static ArchiveLocation parseArchiveLocation(final Object value, final String field) {
@@ -525,6 +798,119 @@ final class MusubiJsonV1 {
     final BigInteger revision = nonZeroU64(root.get("revision"), field + ".revision");
     final String state = taggedUnit(root.get("state"), field + ".state", keys("Pending", "Healthy", "Degraded", "Retired"));
     return new ArchiveLocation(locationId, archiveId, revision, state, root);
+  }
+
+  private static ArchiveRecord parseArchiveRecord(final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys(
+                "archive_id", "commitment", "staging_receipt", "registered_by",
+                "registered_at_height", "location_revision", "location_ids"));
+    final List<Object> rawIds = list(root.get("location_ids"), field + ".location_ids");
+    final List<Digest32> locationIds = new ArrayList<>();
+    for (int index = 0; index < rawIds.size(); index++) {
+      locationIds.add(digest(rawIds.get(index), field + ".location_ids[" + index + "]"));
+    }
+    return new ArchiveRecord(
+        digest(root.get("archive_id"), field + ".archive_id"),
+        parseArchiveCommitment(root.get("commitment"), field + ".commitment"),
+        parseSeedIngressReceipt(root.get("staging_receipt"), field + ".staging_receipt"),
+        string(root.get("registered_by"), field + ".registered_by"),
+        nonZeroU64(root.get("registered_at_height"), field + ".registered_at_height"),
+        nonZeroU64(root.get("location_revision"), field + ".location_revision"),
+        locationIds);
+  }
+
+  private static ArchiveCommitment parseArchiveCommitment(
+      final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys(
+                "root_cid", "chunker", "chunk_plan_digest", "por_root", "content_length",
+                "car_digest", "car_size", "bundle_digest", "source_tree_digest",
+                "descriptor_digest", "file_count", "chunk_count"));
+    final Map<String, Object> chunker =
+        exactObject(
+            root.get("chunker"),
+            field + ".chunker",
+            keys("profile_id", "namespace", "name", "semver", "multihash_code"));
+    final ChunkerProfileHandle profile =
+        new ChunkerProfileHandle(
+            u32(chunker.get("profile_id"), field + ".chunker.profile_id"),
+            string(chunker.get("namespace"), field + ".chunker.namespace"),
+            string(chunker.get("name"), field + ".chunker.name"),
+            string(chunker.get("semver"), field + ".chunker.semver"),
+            u64(chunker.get("multihash_code"), field + ".chunker.multihash_code"));
+    return new ArchiveCommitment(
+        byteArray(root.get("root_cid"), field + ".root_cid", 36),
+        profile,
+        digest(root.get("chunk_plan_digest"), field + ".chunk_plan_digest"),
+        digest(root.get("por_root"), field + ".por_root"),
+        u64(root.get("content_length"), field + ".content_length"),
+        digest(root.get("car_digest"), field + ".car_digest"),
+        u64(root.get("car_size"), field + ".car_size"),
+        digest(root.get("bundle_digest"), field + ".bundle_digest"),
+        digest(root.get("source_tree_digest"), field + ".source_tree_digest"),
+        digest(root.get("descriptor_digest"), field + ".descriptor_digest"),
+        u32(root.get("file_count"), field + ".file_count"),
+        u32(root.get("chunk_count"), field + ".chunk_count"));
+  }
+
+  private static SeedIngressReceipt parseSeedIngressReceipt(
+      final Object value, final String field) {
+    final Map<String, Object> root = exactObject(value, field, keys("payload", "approvals"));
+    final Map<String, Object> payload =
+        exactObject(
+            root.get("payload"),
+            field + ".payload",
+            keys("version", "binding", "issued_at_ms", "expires_at_ms"));
+    require(u8(payload.get("version"), field + ".payload.version") == 1,
+        field + ".payload.version is unsupported in Musubi V1");
+    final Map<String, Object> binding =
+        exactObject(
+            payload.get("binding"),
+            field + ".payload.binding",
+            keys(
+                "chain_id", "genesis_block_hash", "publisher", "ingress_broker",
+                "seed_provider", "semantic_release_manifest_digest", "archive_id",
+                "car_body_digest", "car_body_length", "nonce"));
+    final SeedIngressReceiptBinding typedBinding =
+        new SeedIngressReceiptBinding(
+            string(binding.get("chain_id"), field + ".payload.binding.chain_id"),
+            fixedBytes(
+                binding.get("genesis_block_hash"),
+                field + ".payload.binding.genesis_block_hash"),
+            string(binding.get("publisher"), field + ".payload.binding.publisher"),
+            string(binding.get("ingress_broker"), field + ".payload.binding.ingress_broker"),
+            newtypeText(binding.get("seed_provider"), field + ".payload.binding.seed_provider"),
+            digest(
+                binding.get("semantic_release_manifest_digest"),
+                field + ".payload.binding.semantic_release_manifest_digest"),
+            digest(binding.get("archive_id"), field + ".payload.binding.archive_id"),
+            digest(binding.get("car_body_digest"), field + ".payload.binding.car_body_digest"),
+            u64(binding.get("car_body_length"), field + ".payload.binding.car_body_length"),
+            fixedBytes(binding.get("nonce"), field + ".payload.binding.nonce"));
+    final SeedIngressReceiptPayload typedPayload =
+        new SeedIngressReceiptPayload(
+            typedBinding,
+            u64(payload.get("issued_at_ms"), field + ".payload.issued_at_ms"),
+            u64(payload.get("expires_at_ms"), field + ".payload.expires_at_ms"));
+    final List<Object> rawApprovals = list(root.get("approvals"), field + ".approvals");
+    final List<SeedIngressReceiptApproval> approvals = new ArrayList<>();
+    for (int index = 0; index < rawApprovals.size(); index++) {
+      final String approvalField = field + ".approvals[" + index + "]";
+      final Map<String, Object> approval =
+          exactObject(rawApprovals.get(index), approvalField, keys("public_key", "signature"));
+      approvals.add(
+          new SeedIngressReceiptApproval(
+              string(approval.get("public_key"), approvalField + ".public_key"),
+              string(approval.get("signature"), approvalField + ".signature")));
+    }
+    return new SeedIngressReceipt(typedPayload, approvals);
   }
 
   private static AliasRecord parseAliasRecord(final Object value, final String field) {
@@ -564,6 +950,28 @@ final class MusubiJsonV1 {
         nonZeroU64(root.get("index_revision"), field + ".index_revision"));
   }
 
+  private static SearchHit parseSearchHit(final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys(
+                "package", "claimed_namespace", "description", "keywords",
+                "metadata_revision"));
+    final List<Object> rawKeywords = list(root.get("keywords"), field + ".keywords");
+    final List<String> keywords = new ArrayList<>();
+    for (int index = 0; index < rawKeywords.size(); index++) {
+      keywords.add(newtypeText(rawKeywords.get(index), field + ".keywords[" + index + "]"));
+    }
+    return new SearchHit(
+        parsePackage(root.get("package"), field + ".package"),
+        new Namespace(newtypeText(root.get("claimed_namespace"), field + ".claimed_namespace")),
+        root.get("description") == null
+            ? null : newtypeText(root.get("description"), field + ".description"),
+        keywords,
+        nonZeroU64(root.get("metadata_revision"), field + ".metadata_revision"));
+  }
+
   private interface ItemParser<T extends WireValue> {
     T parse(Object value, String field);
   }
@@ -589,9 +997,13 @@ final class MusubiJsonV1 {
   }
 
   private static byte[] fixedBytes(final Object value, final String field) {
+    return byteArray(value, field, 32);
+  }
+
+  private static byte[] byteArray(final Object value, final String field, final int size) {
     final List<Object> raw = list(value, field);
-    require(raw.size() == 32, field + " must contain exactly 32 bytes");
-    final byte[] bytes = new byte[32];
+    require(raw.size() == size, field + " must contain exactly " + size + " bytes");
+    final byte[] bytes = new byte[size];
     for (int index = 0; index < bytes.length; index++) {
       bytes[index] = (byte) u8(raw.get(index), field + "[" + index + "]");
     }

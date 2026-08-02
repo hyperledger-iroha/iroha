@@ -1,0 +1,3 @@
+extends = ["minimal_with_trusted_peers.toml"]
+
+chain_discriminant = 777

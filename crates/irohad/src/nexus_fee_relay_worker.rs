@@ -1613,7 +1613,7 @@ mod tests {
                 "relay".parse().expect("valid sponsor program name"),
             ),
             program_revision: 1,
-            asset_definition_id: AssetDefinitionId::new(
+            asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("universal", "universal").expect("valid universal domain"),
                 "xor".parse().expect("valid fee asset name"),
             ),
@@ -1992,7 +1992,7 @@ mod tests {
             sponsor,
             "relay".parse().expect("valid sponsor program name"),
         );
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("universal", "universal").expect("valid universal domain"),
             "xor".parse().expect("valid fee asset name"),
         );

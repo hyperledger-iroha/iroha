@@ -474,6 +474,7 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
                 .expect("canonical contract deployment nonce")
         })
         .unwrap_or(0);
+    let chain_id = state_view.chain_id().clone();
     drop(state_view);
 
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
@@ -482,13 +483,9 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         "universal",
     )
     .expect("construct contract alias");
-    let contract_address = ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
-        authority,
-        deploy_nonce,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("derive contract address");
+    let contract_address =
+        ContractAddress::derive(&chain_id, authority, deploy_nonce, DataSpaceId::UNIVERSAL)
+            .expect("derive contract address");
     let total_size = u64::try_from(artifact.len()).expect("artifact size fits u64");
     let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))
         .expect("contract upload chunk count fits u32");
@@ -650,9 +647,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 others: iroha_primitives::unique_vec::UniqueVec::new(),
                 pops: std::collections::BTreeMap::new(),
             }),
-            default_account_domain_label: WithOrigin::inline(
-                iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned(),
-            ),
             chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
         },
         network: A::Network {
@@ -1285,10 +1279,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             stark: A::Stark::default(),
             sccp: A::Sccp::default(),
-            root_history_cap: defaults::zk::ledger::ROOT_HISTORY_CAP,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
-            empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
-            merkle_depth: defaults::zk::ledger::EMPTY_ROOT_DEPTH,
             preverify_max_bytes: defaults::zk::preverify::MAX_BYTES,
             preverify_budget_bytes: defaults::zk::preverify::BUDGET_BYTES,
             proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
@@ -1453,8 +1444,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             scheduler_stack_bytes: defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: defaults::concurrency::PROVER_STACK_BYTES,
             sumeragi_stack_bytes: defaults::concurrency::SUMERAGI_STACK_BYTES,
-            guest_stack_bytes: defaults::concurrency::GUEST_STACK_BYTES,
-            gas_to_stack_multiplier: defaults::concurrency::GAS_TO_STACK_MULTIPLIER,
         },
         confidential: A::Confidential {
             enabled: defaults::confidential::ENABLED,

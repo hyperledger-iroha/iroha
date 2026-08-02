@@ -10,7 +10,11 @@
     clippy::match_same_arms,
     clippy::unnecessary_debug_formatting
 )]
-use std::io::{BufWriter, Write, stdout};
+use std::{
+    fmt,
+    io::{BufWriter, Write, stdout},
+    process::ExitCode,
+};
 
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use color_eyre::eyre::WrapErr as _;
@@ -25,6 +29,7 @@ mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
 mod localnet_tui;
+mod privacy_bootstrap;
 mod schema;
 mod secure_fs;
 mod swarm;
@@ -55,7 +60,59 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami advanced markdown-help\n",
 );
 
-fn main() -> Outcome {
+/// Error requesting one deliberate non-default CLI exit status.
+///
+/// Security-sensitive publication commands use this after the publication
+/// point when durability cannot be established. Keeping the status typed lets
+/// the top-level command preserve the ordinary error path without collapsing a
+/// commit-uncertain result into a retryable exit code.
+#[derive(Debug)]
+pub(crate) struct ExplicitExitError {
+    code: u8,
+    message: String,
+}
+
+impl ExplicitExitError {
+    /// Construct one explicit CLI exit request with its operator-facing error.
+    pub(crate) fn new(code: u8, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    const fn code(&self) -> u8 {
+        self.code
+    }
+}
+
+impl fmt::Display for ExplicitExitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ExplicitExitError {}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            if let Some(explicit) = error.downcast_ref::<ExplicitExitError>() {
+                // Explicit security outcomes are machine records. Do not wrap
+                // them in color-eyre's Debug report, which would make the
+                // documented status line unstable for operators and tooling.
+                eprintln!("{explicit}");
+                ExitCode::from(explicit.code())
+            } else {
+                eprintln!("{error:?}");
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
+fn run() -> Outcome {
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
     color_eyre::install()?;
     init_instruction_registry();
@@ -108,6 +165,8 @@ enum Command {
     Genesis(genesis::Args),
     /// Verify and promote authenticated Kagemusha ABI-21/V4 artifact releases
     Kagemusha(kagemusha::Args),
+    /// Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+    PrivacyBootstrap(privacy_bootstrap::Args),
     /// Verify a genesis manifest against a preset profile
     Verify(verify::Args),
     /// Advanced low-level helpers for codec conversion, schema generation, block inspection, and docs
@@ -154,6 +213,7 @@ impl<T: Write> RunArgs<T> for Command {
             Keys(args) => args.run(writer),
             Genesis(args) => args.run(writer),
             Kagemusha(args) => args.run(writer),
+            PrivacyBootstrap(args) => args.run(writer),
             Verify(args) => args.run(writer),
             Advanced(args) => args.run(writer),
         }
@@ -184,6 +244,64 @@ mod tests {
     #[test]
     fn verify_args() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn privacy_bootstrap_commands_require_complete_exact_v1_artifact_paths() {
+        assert!(
+            parse(
+                "kagami privacy-bootstrap emit-taira-v1 \
+                 --instructions-output ./privacy-instructions.json \
+                 --report-output ./privacy-report.json"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami privacy-bootstrap validate-taira-v1 \
+                 --instructions ./privacy-instructions.json \
+                 --report ./privacy-report.json"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami privacy-bootstrap render-taira-release-v1 \
+                 --activation-instructions ./privacy-instructions.json \
+                 --activation-report ./privacy-report.json \
+                 --broker-public-export ./broker-public.json \
+                 --plan-template ./privacy-plan.staging.json \
+                 --config-template ./config.staging.toml \
+                 --genesis-template ./genesis.staging.json \
+                 --plan-output ./privacy-plan.release.json \
+                 --config-output ./config.release.toml \
+                 --genesis-output ./genesis.release.json \
+                 --broker-public-output ./broker-public.verified.json"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami privacy-bootstrap render-taira-release-v1 \
+                 --activation-instructions ./privacy-instructions.json \
+                 --activation-report ./privacy-report.json \
+                 --broker-public-export ./broker-public.json"
+            )
+            .is_err(),
+            "release composition without every staging input and fresh output must fail"
+        );
+        assert!(
+            parse(
+                "kagami privacy-bootstrap emit-taira-v1 \
+                 --instructions-output ./privacy-instructions.json"
+            )
+            .is_err(),
+            "emission without its digest inventory must remain unavailable"
+        );
+        assert!(
+            parse("kagami privacy-bootstrap emit --output ./legacy.json").is_err(),
+            "the first release has no compatibility command aliases"
+        );
     }
 
     #[test]

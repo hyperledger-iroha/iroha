@@ -1094,7 +1094,7 @@ mod tests {
 
     #[test]
     fn transfer_control_permissions_use_exact_availability_target_and_scoped_daily_limit() {
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("currency", "sbp").expect("asset domain"),
             "pkr".parse().expect("asset name"),
         );

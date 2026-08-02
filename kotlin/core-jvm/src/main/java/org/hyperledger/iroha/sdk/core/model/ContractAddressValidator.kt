@@ -7,6 +7,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 private const val BECH32M_CHECKSUM = 0x2BC830A3
 private const val CONTRACT_ADDRESS_VERSION_V1 = 1
 private const val CONTRACT_ADDRESS_PAYLOAD_BYTES_V1 = 29
+private const val CONTRACT_ADDRESS_HRP = "irohac"
 private const val CONTRACT_SUBJECT_COUNTER_MAX = 0xFFFF_FFFFL
 private const val CHECKSUM_WORDS = 6
 private const val MAX_BECH32_LENGTH = 90
@@ -44,6 +45,9 @@ fun requireCanonicalV1ContractAddress(value: String): String {
         "contractAddress must contain a valid Bech32m human-readable prefix"
     }
     val hrp = value.substring(0, separator)
+    require(hrp == CONTRACT_ADDRESS_HRP) {
+        "contractAddress must use the canonical $CONTRACT_ADDRESS_HRP prefix"
+    }
     val data = IntArray(value.length - separator - 1) { index ->
         BECH32_CHARSET.indexOf(value[separator + 1 + index]).also { digit ->
             require(digit >= 0) { "contractAddress contains an invalid Bech32m character" }

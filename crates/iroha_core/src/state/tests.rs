@@ -677,7 +677,7 @@ ledger::nft::create_for_all_users();
     let authority = ALICE_ID.clone();
     let code_hash = ivm::contract_code_hash(&program);
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &authority,
         95,
         DataSpaceId::UNIVERSAL,
@@ -851,6 +851,59 @@ fn merge_write_set_encoder_mentions_every_persisted_world_block_field() {
         assert!(
             encoder.contains(field),
             "persisted WorldBlock field `{field}` is absent from the merge write-set encoder"
+        );
+    }
+}
+
+#[test]
+fn explorer_count_indexes_keep_complete_world_plumbing() {
+    let source = include_str!("../state.rs");
+
+    for fragment in [
+        "assets_by_account: $state.assets_by_account.$method()",
+        "assets_by_domain: $state.assets_by_domain.$method()",
+        "nfts_by_domain: $state.nfts_by_domain.$method()",
+        "assets_by_account: $state.assets_by_account.transaction()",
+        "assets_by_domain: $state.assets_by_domain.transaction()",
+        "nfts_by_domain: $state.nfts_by_domain.transaction()",
+        "assets_by_account: self.assets_by_account.view()",
+        "assets_by_domain: self.assets_by_domain.view()",
+        "nfts_by_domain: self.nfts_by_domain.view()",
+        "asset_definition_domains: $state.asset_definition_domains.$method()",
+        "asset_definition_domains: $state.asset_definition_domains.transaction()",
+        "asset_definition_domains: self.asset_definition_domains.view()",
+        "self.assets_by_account = assets_by_account.into_iter().collect()",
+        "self.assets_by_domain = assets_by_domain.into_iter().collect()",
+        "self.nfts_by_domain = by_domain.into_iter().collect()",
+        "assets_by_account.commit()",
+        "assets_by_domain.commit()",
+        "nfts_by_domain.commit()",
+        "assets_by_account.apply()",
+        "assets_by_domain.apply()",
+        "nfts_by_domain.apply()",
+        "asset_definition_domains.commit()",
+        "asset_definition_domains.apply()",
+        "fn assets_by_account(&self)",
+        "fn assets_by_domain(&self)",
+        "fn nfts_by_domain(&self)",
+    ] {
+        assert!(
+            source.contains(fragment),
+            "derived Explorer index plumbing is missing `{fragment}`"
+        );
+    }
+
+    for field in ["assets_by_account", "assets_by_domain", "nfts_by_domain"] {
+        assert!(
+            source
+                .matches(&format!("{field}: Storage::default()"))
+                .count()
+                >= 2,
+            "`{field}` must be initialized by both normal and snapshot construction"
+        );
+        assert!(
+            source.matches(&format!("            {field},\n")).count() >= 3,
+            "`{field}` must participate in merge encoding, block commit, and transaction apply"
         );
     }
 }
@@ -1300,11 +1353,17 @@ fn deserialize_rejects_invalid_ram_lfe_program_policy_storage() {
 fn asset_alias_test_world() -> (World, AssetDefinitionId) {
     let authority = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain");
-    let definition_id =
-        AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
-    let definition = AssetDefinition::numeric(definition_id.clone())
-        .with_name("usd".to_owned())
-        .build(&authority);
+    let definition_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "usd".parse().expect("asset name"),
+    );
+    let definition = AssetDefinition::numeric(
+        definition_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id.clone()),
+    )
+    .build(&authority);
 
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
@@ -1583,7 +1642,7 @@ fn alias_binding_rejects_incoherent_lease_windows() {
     let mut world = World::new();
 
     let contract_address = ContractAddress::derive(
-        iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         6,
         DataSpaceId::UNIVERSAL,
@@ -1631,7 +1690,7 @@ fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
     assert!(error.contains("requires lease_expiry_ms"));
 
     let contract_address = ContractAddress::derive(
-        iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         7,
         DataSpaceId::UNIVERSAL,
@@ -1659,14 +1718,14 @@ fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
 fn world_bind_contract_alias_keeps_indexes_consistent() {
     let mut world = World::new();
     let contract_address = ContractAddress::derive(
-        iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         1,
         DataSpaceId::UNIVERSAL,
     )
     .expect("contract address");
     let other_contract_address = ContractAddress::derive(
-        iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         2,
         DataSpaceId::UNIVERSAL,
@@ -1729,7 +1788,7 @@ fn world_bind_contract_alias_keeps_indexes_consistent() {
 fn contract_alias_time_lookup_rejects_index_without_binding_record() {
     let mut world = World::new();
     let contract_address = ContractAddress::derive(
-        iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         7,
         DataSpaceId::UNIVERSAL,
@@ -1831,16 +1890,21 @@ fn rebuild_asset_definition_alias_indexes_preserves_mv_revert_maps() {
         .get(&existing_definition_id)
         .expect("fixture definition")
         .clone();
-    let added_definition_id = AssetDefinitionId::new(
-        existing_definition_id
-            .try_domain()
-            .expect("fixture definition has a domain projection")
+    let added_definition_id = AssetDefinitionId::derive_from_components(
+        existing_definition
+            .owning_domain()
+            .as_ref()
+            .expect("fixture definition is explicitly domain-owned")
             .clone(),
         "rollback".parse().expect("asset name"),
     );
-    let added_definition = AssetDefinition::numeric(added_definition_id.clone())
-        .with_name("rollback".to_owned())
-        .build(existing_definition.owned_by());
+    let added_definition = AssetDefinition::numeric(
+        added_definition_id.clone(),
+        "rollback".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        existing_definition.owning_domain().clone(),
+    )
+    .build(existing_definition.owned_by());
     let alias: AssetDefinitionAlias = "rollback#universal".parse().expect("asset alias");
     let binding = AssetDefinitionAliasBindingRecord {
         alias,
@@ -2057,10 +2121,18 @@ fn snapshot_state_with_numeric_asset() -> (State, AssetDefinitionId, AssetId) {
     let domain_id = DomainId::try_new("numeric_snapshot", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
-    let definition = AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-        .with_name("coin".to_owned())
-        .build(&ALICE_ID);
+    let definition_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "coin".parse().expect("asset name"),
+    );
+    let definition = AssetDefinition::new(
+        definition_id.clone(),
+        "coin".to_owned(),
+        NumericSpec::integer(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    )
+    .build(&ALICE_ID);
     let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
     let asset = Asset::new(asset_id.clone(), Quantity::from(5_u32));
     let world = World::with_assets([domain], [account], [definition], [asset], []);
@@ -2070,6 +2142,397 @@ fn snapshot_state_with_numeric_asset() -> (State, AssetDefinitionId, AssetId) {
         LiveQueryStore::start_test(),
     );
     (state, definition_id, asset_id)
+}
+
+#[test]
+fn state_snapshot_rejects_serialized_asset_definition_domain_index() {
+    let (state, _, _) = snapshot_state_with_numeric_asset();
+    let mut snapshot = norito::json::to_value(&state).expect("serialize state");
+    let norito::json::Value::Object(state_object) = &mut snapshot else {
+        panic!("state snapshot must be an object");
+    };
+    let norito::json::Value::Object(world_object) = state_object
+        .get_mut("world")
+        .expect("state snapshot contains world")
+    else {
+        panic!("world snapshot must be an object");
+    };
+    assert!(
+        !world_object.contains_key("asset_definition_domains"),
+        "derived ownership index must not be serialized"
+    );
+    world_object.insert("asset_definition_domains".to_owned(), norito::json!({}));
+
+    let error = match deserialize_state_snapshot_value(snapshot) {
+        Ok(_) => panic!("persisted derived ownership index must be rejected"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("unknown field"),
+        "unexpected snapshot error: {error}"
+    );
+}
+
+#[test]
+fn explicit_asset_ownership_survives_alias_changes_and_snapshot_restore() {
+    use iroha_data_model::events::{EventFilter, data::prelude::*};
+    use iroha_data_model::query::asset::{FindAssets, FindAssetsDefinitions};
+
+    let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
+    let domain_id = state
+        .world_view()
+        .asset_definitions()
+        .get(&definition_id)
+        .expect("fixture definition")
+        .owning_domain()
+        .clone()
+        .expect("fixture definition has an explicit owner");
+
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    {
+        let mut transaction = block.transaction();
+        transaction
+            .world
+            .clear_asset_definition_alias(&definition_id);
+        assert_eq!(
+            transaction
+                .world
+                .asset_definition_domains
+                .get(&definition_id),
+            Some(&domain_id),
+            "clearing a label must not move immutable domain ownership context"
+        );
+        transaction
+            .world
+            .bind_asset_definition_alias(
+                &definition_id,
+                "coin#renamed.universal".parse().expect("replacement alias"),
+                None,
+                None,
+                0,
+            )
+            .expect("rebind alias");
+        assert_eq!(
+            transaction
+                .world
+                .asset_definition_domains
+                .get(&definition_id),
+            Some(&domain_id),
+            "rebinding a label must not move immutable domain ownership context"
+        );
+        transaction.apply();
+    }
+    block.commit().expect("commit alias clear");
+
+    let snapshot = norito::json::to_value(&state).expect("serialize state");
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore state");
+    let world = restored.world_view();
+    assert_eq!(
+        world.asset_definition_domains().get(&definition_id),
+        Some(&domain_id)
+    );
+    assert!(
+        world
+            .assets_by_domain()
+            .get(&domain_id)
+            .is_some_and(|assets| assets.contains(&asset_id)),
+        "restart rebuild must use the definition's persisted ownership context"
+    );
+    drop(world);
+
+    let view = restored.view();
+    let asset_filter = CompoundPredicate::<Asset>::build(|predicate| {
+        predicate.equals("domain", domain_id.to_string())
+    });
+    let assets: Vec<_> = FindAssets
+        .execute(asset_filter, &view)
+        .expect("domain-filtered asset query after restart")
+        .collect();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].id().definition(), &definition_id);
+
+    let definition_filter = CompoundPredicate::<AssetDefinition>::build(|predicate| {
+        predicate.equals("domain", domain_id.to_string())
+    });
+    let definitions: Vec<_> = FindAssetsDefinitions
+        .execute(definition_filter, &view)
+        .expect("domain-filtered definition query after restart")
+        .collect();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].id(), &definition_id);
+    drop(view);
+
+    let mut block = restored.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut transaction = block.transaction();
+    transaction
+        .world
+        .emit_asset_definition_event(data_pre::AssetDefinitionEvent::Deleted(
+            definition_id.clone(),
+        ));
+    let event = transaction
+        .world
+        .internal_event_buf
+        .last()
+        .expect("owned definition event emitted after restart");
+    let domain_filter =
+        DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
+    let definition_filter = DataEventFilter::AssetDefinition(
+        AssetDefinitionEventFilter::new().for_asset_definition(definition_id.clone()),
+    );
+    assert!(domain_filter.matches(event.as_ref()));
+    assert!(definition_filter.matches(event.as_ref()));
+    assert_eq!(event.domain(), Some(&domain_id));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn unregister_domain_after_snapshot_restore_removes_owned_asset_state_atomically() {
+    use crate::smartcontracts::Execute as _;
+    use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
+
+    let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
+    let domain_id = state
+        .world_view()
+        .asset_definitions()
+        .get(&definition_id)
+        .expect("fixture definition")
+        .owning_domain()
+        .clone()
+        .expect("fixture definition has an explicit owner");
+    let role_id: RoleId = "owned_asset_domain_cleanup"
+        .parse()
+        .expect("role identifier");
+    let definition_permission: Permission = CanMintAssetWithDefinition {
+        asset_definition: definition_id.clone(),
+    }
+    .into();
+    let mut permission_block =
+        state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    {
+        let mut transaction = permission_block.transaction();
+        Grant::account_permission(definition_permission.clone(), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("seed exact account permission");
+        Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("seed role");
+        Grant::role_permission(definition_permission, role_id.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("seed exact role permission");
+        transaction.apply();
+    }
+    permission_block
+        .commit()
+        .expect("commit exact permissions before snapshot");
+
+    let snapshot = norito::json::to_value(&state).expect("serialize state");
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore state");
+    let permission: Permission = CanMintAssetWithDefinition {
+        asset_definition: definition_id.clone(),
+    }
+    .into();
+    {
+        let world = restored.world_view();
+        assert!(
+            world
+                .account_permissions()
+                .get(&ALICE_ID)
+                .is_some_and(|permissions| permissions.contains(&permission)),
+            "snapshot must retain the exact account permission"
+        );
+        let role = world.roles().get(&role_id).expect("restored role");
+        assert!(
+            role.permissions().any(|candidate| candidate == &permission),
+            "snapshot must retain the exact role permission"
+        );
+        assert!(role.permission_epochs().contains_key(&permission));
+    }
+
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = restored.block(header);
+    {
+        let mut transaction = block.transaction();
+        Unregister::domain(domain_id.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("owned definitions must unregister through authoritative indexes");
+        assert!(transaction.world.domains.get(&domain_id).is_none());
+        assert!(
+            transaction
+                .world
+                .asset_definitions
+                .get(&definition_id)
+                .is_none()
+        );
+        assert!(
+            transaction
+                .world
+                .asset_definition_domains
+                .get(&definition_id)
+                .is_none()
+        );
+        assert!(transaction.world.assets.get(&asset_id).is_none());
+        assert!(
+            transaction
+                .world
+                .domain_asset_definitions
+                .get(&domain_id)
+                .is_none()
+        );
+        assert!(
+            transaction
+                .world
+                .asset_definition_assets
+                .get(&definition_id)
+                .is_none()
+        );
+        assert!(transaction.world.assets_by_domain.get(&domain_id).is_none());
+        assert!(
+            transaction
+                .world
+                .assets_by_account
+                .get(asset_id.account())
+                .is_none_or(|assets| !assets.contains(&asset_id))
+        );
+        assert!(
+            transaction
+                .world
+                .account_permissions
+                .get(&ALICE_ID)
+                .is_none_or(|permissions| !permissions.contains(&permission)),
+            "domain removal must prune permissions using authoritative ownership"
+        );
+        let role = transaction
+            .world
+            .roles
+            .get(&role_id)
+            .expect("role retained");
+        assert!(
+            !role.permissions().any(|candidate| candidate == &permission),
+            "domain removal must prune role permissions using authoritative ownership"
+        );
+        assert!(!role.permission_epochs().contains_key(&permission));
+        // Dropping without apply must restore every primary and derived row together.
+    }
+    assert!(block.domains.get(&domain_id).is_some());
+    assert!(block.asset_definitions.get(&definition_id).is_some());
+    assert!(block.assets.get(&asset_id).is_some());
+    assert_eq!(
+        block.asset_definition_domains.get(&definition_id),
+        Some(&domain_id)
+    );
+    assert!(
+        block
+            .assets_by_domain
+            .get(&domain_id)
+            .is_some_and(|assets| assets.contains(&asset_id))
+    );
+    assert!(
+        block
+            .account_permissions
+            .get(&ALICE_ID)
+            .is_some_and(|permissions| permissions.contains(&permission)),
+        "rollback must restore the exact account permission"
+    );
+    let role = block
+        .roles
+        .get(&role_id)
+        .expect("role restored on rollback");
+    assert!(role.permissions().any(|candidate| candidate == &permission));
+    assert!(role.permission_epochs().contains_key(&permission));
+
+    {
+        let mut transaction = block.transaction();
+        Unregister::domain(domain_id.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("retry after rollback must remove the same exact state");
+        transaction.apply();
+    }
+    assert!(block.domains.get(&domain_id).is_none());
+    assert!(block.asset_definitions.get(&definition_id).is_none());
+    assert!(block.assets.get(&asset_id).is_none());
+    assert!(block.asset_definition_domains.get(&definition_id).is_none());
+    assert!(block.domain_asset_definitions.get(&domain_id).is_none());
+    assert!(block.assets_by_domain.get(&domain_id).is_none());
+    assert!(
+        block
+            .account_permissions
+            .get(&ALICE_ID)
+            .is_none_or(|permissions| !permissions.contains(&permission))
+    );
+    let role = block
+        .roles
+        .get(&role_id)
+        .expect("role retained after apply");
+    assert!(!role.permissions().any(|candidate| candidate == &permission));
+    assert!(!role.permission_epochs().contains_key(&permission));
+    block.commit().expect("commit exact domain removal");
+
+    let world = restored.world_view();
+    assert!(world.domains().get(&domain_id).is_none());
+    assert!(world.asset_definitions().get(&definition_id).is_none());
+    assert!(world.assets().get(&asset_id).is_none());
+    assert!(
+        world
+            .asset_definition_domains()
+            .get(&definition_id)
+            .is_none()
+    );
+    assert!(world.domain_asset_definitions().get(&domain_id).is_none());
+    assert!(world.assets_by_domain().get(&domain_id).is_none());
+    assert!(
+        world
+            .account_permissions()
+            .get(&ALICE_ID)
+            .is_none_or(|permissions| !permissions.contains(&permission))
+    );
+    let role = world
+        .roles()
+        .get(&role_id)
+        .expect("role remains registered");
+    assert!(!role.permissions().any(|candidate| candidate == &permission));
+    assert!(!role.permission_epochs().contains_key(&permission));
+}
+
+#[test]
+fn asset_domain_index_rebuild_uses_only_definition_ownership() {
+    let domain_id = DomainId::try_new("orphan", "universal").expect("domain");
+    let definition_id =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "coin".parse().expect("name"));
+    let mut world = World::default();
+    world.domains.insert(
+        domain_id.clone(),
+        Domain::new(domain_id.clone()).build(&ALICE_ID),
+    );
+    world.asset_definitions.insert(
+        definition_id.clone(),
+        AssetDefinition::numeric(
+            definition_id.clone(),
+            "coin",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id.clone()),
+        )
+        .build(&ALICE_ID),
+    );
+    let conflicting_domain =
+        DomainId::try_new("conflicting", "universal").expect("conflicting domain");
+    world
+        .asset_definition_domains
+        .insert(definition_id.clone(), conflicting_domain);
+
+    world
+        .rebuild_asset_definition_indexes()
+        .expect("entity ownership rebuilds the derived index");
+    assert_eq!(
+        world.asset_definition_domains.get(&definition_id),
+        Some(&domain_id)
+    );
+    assert!(
+        world
+            .domain_asset_definitions
+            .get(&domain_id)
+            .is_some_and(|definitions| definitions.contains(&definition_id))
+    );
 }
 
 fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
@@ -2085,10 +2548,15 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     let reserve_account = BOB_ID.clone();
     let reserve = Account::new(reserve_account.clone()).build(&ALICE_ID);
     let asset_definition_id =
-        AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
-    let definition = AssetDefinition::new(asset_definition_id.clone(), NumericSpec::integer())
-        .with_name("coin".to_owned())
-        .build(&ALICE_ID);
+        AssetDefinitionId::derive_from_components(domain_id, "coin".parse().expect("asset name"));
+    let definition = AssetDefinition::new(
+        asset_definition_id.clone(),
+        "coin".to_owned(),
+        NumericSpec::integer(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     let mut world = World::with_assets([domain], [owner, reserve], [definition], [], []);
 
     let namespace = PrivacyNamespaceV1::new(
@@ -2238,10 +2706,16 @@ fn world_with_assets_rejects_initial_balance_outside_numeric_spec() {
     let domain_id = DomainId::try_new("invalid_scale", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
-    let definition = AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-        .with_name("coin".to_owned())
-        .build(&ALICE_ID);
+    let definition_id =
+        AssetDefinitionId::derive_from_components(domain_id, "coin".parse().expect("asset name"));
+    let definition = AssetDefinition::new(
+        definition_id.clone(),
+        "coin".to_owned(),
+        NumericSpec::integer(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     let asset = Asset::new(
         AssetId::new(definition_id, ALICE_ID.clone()),
         "0.1"
@@ -3586,7 +4060,7 @@ fn asset_definition_alias_bindings_roundtrip_through_state_json() {
 fn contract_alias_bindings_roundtrip_through_state_json() {
     let mut world = World::default();
     let contract_address = ContractAddress::derive(
-        iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         41,
         DataSpaceId::UNIVERSAL,
@@ -3672,7 +4146,7 @@ fn state_snapshot_rejects_malformed_contract_alias_lease_window() {
         LiveQueryStore::start_test(),
     );
     let contract_address = ContractAddress::derive(
-        iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         42,
         DataSpaceId::UNIVERSAL,
@@ -3709,7 +4183,7 @@ fn escrow_records_roundtrip_through_state_json() {
     let mut world = World::default();
     let seller = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let buyer = AccountId::new(crate::state::checked_keypair().public_key().clone());
-    let asset_definition = AssetDefinitionId::new(
+    let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("escrowsnapshot", "universal").expect("domain id"),
         "xor".parse().expect("asset name"),
     );
@@ -3830,7 +4304,7 @@ fn public_lane_staking_roundtrip_through_state_json() {
     let mismatched_staker_keypair = crate::state::checked_keypair();
     let mismatched_staker = AccountId::new(mismatched_staker_keypair.public_key().clone());
     let mismatched_lane = LaneId::new(99);
-    let stake_asset_definition = AssetDefinitionId::new(
+    let stake_asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("stake asset domain"),
         "stake".parse().expect("stake asset name"),
     );
@@ -4450,7 +4924,7 @@ fn nft_entries_by_ids_iter_resolves_selected_entries() {
     let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let domain = DomainId::try_new("gallery", "universal").expect("domain");
     let alpha_id = NftId::new(domain.clone(), "alpha".parse().unwrap());
-    let beta_id = NftId::new(domain, "beta".parse().unwrap());
+    let beta_id = NftId::new(domain.clone(), "beta".parse().unwrap());
 
     let mut world = World::default();
     for nft_id in [alpha_id.clone(), beta_id.clone()] {
@@ -4460,9 +4934,15 @@ fn nft_entries_by_ids_iter_resolves_selected_entries() {
         world.nfts.insert(id, value);
     }
     world.rebuild_nft_owner_index();
+    let view = world.view();
 
-    let selected_ids = world
-        .view()
+    assert_eq!(
+        view.nfts_by_domain().get(&domain),
+        Some(&BTreeSet::from([alpha_id.clone(), beta_id.clone()])),
+        "NFT rebuild should populate the exact domain projection"
+    );
+
+    let selected_ids = view
         .nft_entries_by_ids_iter(vec![beta_id.clone()])
         .map(|entry| entry.id().clone())
         .collect::<Vec<_>>();
@@ -4471,6 +4951,176 @@ fn nft_entries_by_ids_iter_resolves_selected_entries() {
         selected_ids,
         vec![beta_id],
         "NFT id iterator should resolve exactly the selected stored entries"
+    );
+}
+
+#[test]
+fn explorer_count_indexes_exclude_many_unrelated_rows() {
+    let target_domain = DomainId::try_new("gallery", "universal").expect("target domain");
+    let unrelated_domain = DomainId::try_new("warehouse", "universal").expect("unrelated domain");
+    let target_definition =
+        AssetDefinitionId::derive_from_components(target_domain.clone(), "target".parse().unwrap());
+    let target_asset = AssetId::new(target_definition.clone(), ALICE_ID.clone());
+    let target_nft = NftId::new(target_domain.clone(), "target".parse().unwrap());
+
+    let mut world = World::default();
+    for domain_id in [&target_domain, &unrelated_domain] {
+        world.domains.insert(
+            domain_id.clone(),
+            Domain::new(domain_id.clone()).build(&ALICE_ID),
+        );
+    }
+    world.asset_definitions.insert(
+        target_definition.clone(),
+        AssetDefinition::numeric(
+            target_definition.clone(),
+            "target",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(target_domain.clone()),
+        )
+        .build(&ALICE_ID),
+    );
+    world
+        .asset_definition_domains
+        .insert(target_definition, target_domain.clone());
+    let (asset_id, asset_value) = Asset::new(target_asset.clone(), 1_u32).into_key_value();
+    world.assets.insert(asset_id, asset_value);
+    let (nft_id, nft_value) = Nft::new(target_nft.clone(), Metadata::default())
+        .build(&ALICE_ID)
+        .into_key_value();
+    world.nfts.insert(nft_id, nft_value);
+
+    for index in 0..200_u16 {
+        let definition_name: Name = format!("asset_{index}").parse().expect("asset name");
+        let definition = AssetDefinitionId::derive_from_components(
+            unrelated_domain.clone(),
+            definition_name.clone(),
+        );
+        world.asset_definitions.insert(
+            definition.clone(),
+            AssetDefinition::numeric(
+                definition.clone(),
+                definition_name.to_string(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(unrelated_domain.clone()),
+            )
+            .build(&ALICE_ID),
+        );
+        world
+            .asset_definition_domains
+            .insert(definition.clone(), unrelated_domain.clone());
+        let unrelated_asset = AssetId::new(definition, BOB_ID.clone());
+        let (asset_id, asset_value) = Asset::new(unrelated_asset, 1_u32).into_key_value();
+        world.assets.insert(asset_id, asset_value);
+
+        let unrelated_nft = NftId::new(
+            unrelated_domain.clone(),
+            format!("nft_{index}").parse().expect("NFT name"),
+        );
+        let (nft_id, nft_value) = Nft::new(unrelated_nft, Metadata::default())
+            .build(&BOB_ID)
+            .into_key_value();
+        world.nfts.insert(nft_id, nft_value);
+    }
+
+    world
+        .rebuild_asset_definition_indexes()
+        .expect("valid asset definition domain contexts");
+    world.rebuild_nft_owner_index();
+    let view = world.view();
+
+    assert_eq!(
+        view.assets_by_account().get(&ALICE_ID),
+        Some(&BTreeSet::from([target_asset.clone()])),
+        "account projection must not include unrelated accounts"
+    );
+    assert_eq!(
+        view.assets_by_domain().get(&target_domain),
+        Some(&BTreeSet::from([target_asset])),
+        "asset-domain projection must not include unrelated domains"
+    );
+    assert_eq!(
+        view.nfts_by_domain().get(&target_domain),
+        Some(&BTreeSet::from([target_nft])),
+        "NFT-domain projection must not include unrelated domains"
+    );
+    assert_eq!(
+        view.assets_by_domain()
+            .get(&unrelated_domain)
+            .map(BTreeSet::len),
+        Some(200)
+    );
+    assert_eq!(
+        view.nfts_by_domain()
+            .get(&unrelated_domain)
+            .map(BTreeSet::len),
+        Some(200)
+    );
+}
+
+#[test]
+fn explorer_count_indexes_rollback_apply_and_commit_with_primary_rows() {
+    let domain = DomainId::try_new("gallery", "universal").expect("domain");
+    let definition =
+        AssetDefinitionId::derive_from_components(domain.clone(), "ticket".parse().unwrap());
+    let asset_id = AssetId::new(definition.clone(), ALICE_ID.clone());
+    let nft_id = NftId::new(domain.clone(), "badge".parse().unwrap());
+    let world = World::with_assets(
+        [Domain::new(domain.clone()).build(&ALICE_ID)],
+        [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+        [AssetDefinition::numeric(
+            definition,
+            "ticket",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain.clone()),
+        )
+        .build(&ALICE_ID)],
+        [],
+        [],
+    );
+    let world = world.block();
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let (_, value) = Asset::new(asset_id.clone(), 1_u32).into_key_value();
+        transaction.track_asset_holder(&asset_id);
+        transaction.assets.insert(asset_id.clone(), value);
+        let (_, value) = Nft::new(nft_id.clone(), Metadata::default())
+            .build(&ALICE_ID)
+            .into_key_value();
+        transaction.insert_nft_entry(nft_id.clone(), value);
+        // Drop without applying: the primary rows and every derived bucket must roll back.
+    }
+    assert!(block.assets.get(&asset_id).is_none());
+    assert!(block.assets_by_account.get(&ALICE_ID).is_none());
+    assert!(block.assets_by_domain.get(&domain).is_none());
+    assert!(block.nfts.get(&nft_id).is_none());
+    assert!(block.nfts_by_domain.get(&domain).is_none());
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let (_, value) = Asset::new(asset_id.clone(), 1_u32).into_key_value();
+        transaction.track_asset_holder(&asset_id);
+        transaction.assets.insert(asset_id.clone(), value);
+        let (_, value) = Nft::new(nft_id.clone(), Metadata::default())
+            .build(&ALICE_ID)
+            .into_key_value();
+        transaction.insert_nft_entry(nft_id.clone(), value);
+        transaction.apply();
+    }
+    assert!(block.assets_by_account.get(&ALICE_ID).is_some());
+    assert!(block.assets_by_domain.get(&domain).is_some());
+    assert!(block.nfts_by_domain.get(&domain).is_some());
+
+    block.commit();
+    let view = world.view();
+    assert_eq!(
+        view.assets_by_account().get(&ALICE_ID),
+        Some(&BTreeSet::from([asset_id]))
+    );
+    assert_eq!(
+        view.nfts_by_domain().get(&domain),
+        Some(&BTreeSet::from([nft_id]))
     );
 }
 
@@ -4970,7 +5620,8 @@ fn trigger_args_from_asset_event_falls_back_to_event_domain_without_account_alia
     let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
     let (subject, _) = gen_account_in("centralbank");
     let recipient = subject.clone();
-    let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
+    let asset_definition =
+        AssetDefinitionId::derive_from_components(asset_domain.clone(), "aed".parse().unwrap());
     let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -4986,12 +5637,13 @@ fn trigger_args_from_asset_event_falls_back_to_event_domain_without_account_alia
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
 
-    let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-        data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+    let event = data_pre::DataEvent::asset(
+        data_pre::AssetEvent::Added(data_pre::AssetChanged {
             asset: asset_id,
             amount: Quantity::from(1_u32),
-        })),
-    ));
+        }),
+        Some(asset_domain),
+    );
 
     let args = stx.trigger_args_from_data_event(&event);
     let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
@@ -5015,16 +5667,18 @@ fn trigger_args_from_asset_event_falls_back_to_event_domain_without_account_alia
 fn trigger_args_preserve_asset_amounts_beyond_i64_as_canonical_strings() {
     let asset_domain: DomainId = DomainId::try_new("wide", "universal").unwrap();
     let (subject, _) = gen_account_in("wide-trigger-amount");
-    let asset_definition = AssetDefinitionId::new(asset_domain, "coin".parse().unwrap());
+    let asset_definition =
+        AssetDefinitionId::derive_from_components(asset_domain.clone(), "coin".parse().unwrap());
     let wide_amount = "9223372036854775808"
         .parse::<Quantity>()
         .expect("canonical integer one above i64::MAX");
-    let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-        data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+    let event = data_pre::DataEvent::asset(
+        data_pre::AssetEvent::Added(data_pre::AssetChanged {
             asset: AssetId::new(asset_definition, subject),
             amount: wide_amount.clone(),
-        })),
-    ));
+        }),
+        Some(asset_domain),
+    );
 
     let state = State::new_for_testing(
         World::default(),
@@ -5054,19 +5708,19 @@ fn trigger_args_from_asset_transfer_bind_both_participants() {
     let asset_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
     let (source, _) = gen_account_in("transfer-source");
     let (destination, _) = gen_account_in("transfer-destination");
-    let asset_definition = AssetDefinitionId::new(asset_domain, "ds".parse().unwrap());
+    let asset_definition =
+        AssetDefinitionId::derive_from_components(asset_domain.clone(), "ds".parse().unwrap());
     let source_asset = AssetId::new(asset_definition.clone(), source.clone());
     let destination_asset = AssetId::new(asset_definition.clone(), destination.clone());
     let amount = Quantity::from(17_u32);
-    let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-        data_pre::AccountEvent::Asset(data_pre::AssetEvent::Transferred(
-            data_pre::AssetTransferred {
-                source: source_asset.clone(),
-                destination: destination_asset.clone(),
-                amount: amount.clone(),
-            },
-        )),
-    ));
+    let event = data_pre::DataEvent::asset(
+        data_pre::AssetEvent::Transferred(data_pre::AssetTransferred {
+            source: source_asset.clone(),
+            destination: destination_asset.clone(),
+            amount: amount.clone(),
+        }),
+        Some(asset_domain),
+    );
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -5114,7 +5768,8 @@ fn trigger_args_from_asset_event_use_account_label_domain_when_subject_links_mis
     let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
     let (subject, _) = gen_account_in("ghost");
     let account_label = alias_in_domain(&recipient_domain, "admin1".parse().expect("valid label"));
-    let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
+    let asset_definition =
+        AssetDefinitionId::derive_from_components(asset_domain.clone(), "aed".parse().unwrap());
     let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
     // A primary account label is authoritative only with its active forward,
     // reverse, continuity, and SNS records. Keep the account otherwise
@@ -5141,12 +5796,13 @@ fn trigger_args_from_asset_event_use_account_label_domain_when_subject_links_mis
     let mut state_block = state.block(block.as_ref().header());
     let stx = state_block.transaction();
 
-    let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-        data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+    let event = data_pre::DataEvent::asset(
+        data_pre::AssetEvent::Added(data_pre::AssetChanged {
             asset: asset_id,
             amount: Quantity::from(1_u32),
-        })),
-    ));
+        }),
+        Some(asset_domain),
+    );
 
     let args = stx.trigger_args_from_data_event(&event);
     let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
@@ -18251,12 +18907,12 @@ fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retire
     let embedded_retired_staker =
         AccountId::new(crate::state::checked_keypair().public_key().clone());
     let retained_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
-    let reward_asset_definition = AssetDefinitionId::new(
+    let reward_asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("sameblockrewards", "universal").expect("reward asset domain"),
         "autoscale".parse().expect("reward asset name"),
     );
     let reward_asset = AssetId::new(reward_asset_definition, validator.clone());
-    let embedded_reward_asset_definition = AssetDefinitionId::new(
+    let embedded_reward_asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("sameblockembeddedrewards", "universal")
             .expect("embedded reward asset domain"),
         "autoscale".parse().expect("embedded reward asset name"),
@@ -19353,8 +20009,9 @@ fn verified_lane_relay_contract_state_keys_drop_ref_or_envelope_lane_matches() {
     )
     .parse()
     .expect("spoofed map key");
-    let reset_incarnation = hex::encode(Hash::new(b"malformed-reset-relay-incarnation"));
-    let survivor_incarnation = hex::encode(Hash::new(b"malformed-survivor-relay-incarnation"));
+    let reset_incarnation = hex::encode(Hash::new(b"malformed-reset-relay-incarnation").as_ref());
+    let survivor_incarnation =
+        hex::encode(Hash::new(b"malformed-survivor-relay-incarnation").as_ref());
     let malformed_reset_key: StatePath = format!(
         "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_{}_11",
         reset_lane.as_u32(),
@@ -21427,9 +22084,6 @@ fn world_rebuild_account_indexes_populates_storage() {
         .insert(label.clone(), owner_id.clone());
 
     world
-        .rebuild_domain_selector_index()
-        .expect("domain selector rebuild");
-    world
         .rebuild_uaid_account_index()
         .expect("UAID index rebuild");
     world
@@ -21439,11 +22093,6 @@ fn world_rebuild_account_indexes_populates_storage() {
         .rebuild_opaque_uaid_index()
         .expect("opaque UAID rebuild");
 
-    let selector = AccountDomainSelector::from_domain(&domain_id).expect("domain selector");
-    assert_eq!(
-        world.domain_selectors.view().get(&selector),
-        Some(&domain_id)
-    );
     assert_eq!(world.uaid_accounts.view().get(&uaid), Some(&owner_id));
     assert_eq!(world.account_aliases.view().get(&label), Some(&owner_id));
     assert_eq!(world.opaque_uaids.view().get(&opaque), Some(&uaid));
@@ -21593,34 +22242,6 @@ fn set_crypto_updates_sm2_distid_default() {
 
     crypto_cfg.sm2_distid_default = original;
     state.set_crypto(crypto_cfg);
-}
-
-#[test]
-fn set_default_account_domain_label_updates_global_value() {
-    struct Reset(Arc<str>);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            let _ = iroha_data_model::account::address::set_default_domain_name(
-                self.0.as_ref().to_owned(),
-            );
-        }
-    }
-
-    let original = iroha_data_model::account::address::default_domain_name();
-    let _guard = Reset(original.clone());
-
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-
-    state
-        .set_default_account_domain_label("ledger")
-        .expect("default domain label set");
-
-    assert_eq!(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "ledger"
-    );
 }
 
 #[test]
@@ -22128,7 +22749,7 @@ fn public_lane_economic_cleanup_keys_treat_key_or_record_lane_as_reset_owner() {
     let key_owned_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let record_owned_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let retained_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
-    let reward_asset_definition = AssetDefinitionId::new(
+    let reward_asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("publiclane", "universal").expect("reward asset domain"),
         "resetcheck".parse().expect("reward asset name"),
     );
@@ -22378,7 +22999,7 @@ fn seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
     let validator_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let validator = AccountId::new(validator_keypair.public_key().clone());
     let staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
-    let reward_asset_definition = AssetDefinitionId::new(
+    let reward_asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("publiclane", "universal").expect("reward asset domain"),
         format!("reward{epoch}").parse().expect("reward asset name"),
     );
@@ -35074,7 +35695,7 @@ fn record_lane_relay_persists_and_deduplicates() {
     );
     configure_commit_topology_preserving_world_peers(&state, 1);
 
-    let mut envelope =
+    let envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
     let first = state
         .record_lane_relay(&envelope)
@@ -35703,9 +36324,14 @@ fn register_rejects_reproved_settlement_substitution_under_genuine_qc_before_sta
     let (state, validator_keypairs) = setup_lane_relay_burn_state();
     let genuine =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs);
-    state
-        .authenticate_finalized_lane_relay(&genuine)
-        .expect("fixture must carry a genuine committee QC over the original effect");
+    {
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut authentication_block = state.block(header);
+        authentication_block
+            .transaction()
+            .authenticate_finalized_lane_relay(&genuine)
+            .expect("fixture must carry a genuine committee QC over the original effect");
+    }
 
     let mut substituted = genuine;
     substituted.settlement_commitment.tx_count =
@@ -49707,18 +50333,19 @@ fn remove_asset_and_metadata_with_total_decrements_definition_total() {
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
 
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id.clone()),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     Mint::asset_quantity(5_u32, asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
@@ -49769,28 +50396,39 @@ fn asset_definition_domain_index_tracks_exact_membership() {
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
 
-    let rose_id = AssetDefinitionId::new(wonderland.clone(), "rose".parse().unwrap());
-    let tulip_id = AssetDefinitionId::new(wonderland.clone(), "tulip".parse().unwrap());
-    let cactus_id = AssetDefinitionId::new(denoland.clone(), "cactus".parse().unwrap());
-    let opaque_id = AssetDefinitionId::from_uuid_bytes([
+    let rose_id =
+        AssetDefinitionId::derive_from_components(wonderland.clone(), "rose".parse().unwrap());
+    let tulip_id =
+        AssetDefinitionId::derive_from_components(wonderland.clone(), "tulip".parse().unwrap());
+    let cactus_id =
+        AssetDefinitionId::derive_from_components(denoland.clone(), "cactus".parse().unwrap());
+    let unowned_id = AssetDefinitionId::from_uuid_bytes([
         0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1, 0x18,
         0x9e,
     ])
-    .expect("opaque asset definition id");
-    for definition_id in [&rose_id, &tulip_id, &cactus_id] {
-        Register::asset_definition({
-            let __asset_definition_id = definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
+    .expect("unowned asset definition id");
+    for (definition_id, name, owning_domain) in [
+        (&rose_id, "rose", &wonderland),
+        (&tulip_id, "tulip", &wonderland),
+        (&cactus_id, "cactus", &denoland),
+    ] {
+        Register::asset_definition(AssetDefinition::numeric(
+            definition_id.clone(),
+            name,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(owning_domain.clone()),
+        ))
         .execute(&ALICE_ID, &mut stx)
-        .expect("register asset definition");
+        .expect("register owned asset definition");
     }
-    Register::asset_definition(
-        AssetDefinition::numeric(opaque_id.clone()).with_name("cbdc".to_owned()),
-    )
+    Register::asset_definition(AssetDefinition::numeric(
+        unowned_id.clone(),
+        "cbdc",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&ALICE_ID, &mut stx)
-    .expect("register opaque asset definition");
+    .expect("register unowned asset definition");
 
     let wonderland_definitions = stx
         .world
@@ -49813,15 +50451,11 @@ fn asset_definition_domain_index_tracks_exact_membership() {
         "denoland should only expose its own definitions"
     );
     assert!(
-        opaque_id.try_domain().is_none(),
-        "opaque asset definitions must not expose a synthetic domain projection"
-    );
-    assert!(
         stx.world
             .domain_asset_definitions
             .iter()
-            .all(|(_, definitions)| !definitions.contains(&opaque_id)),
-        "opaque asset definitions must not create internal domain index entries"
+            .all(|(_, definitions)| !definitions.contains(&unowned_id)),
+        "unowned asset definitions must not create internal domain index entries"
     );
     let alice_definitions = stx
         .world
@@ -49834,9 +50468,9 @@ fn asset_definition_domain_index_tracks_exact_membership() {
             rose_id.clone(),
             tulip_id.clone(),
             cactus_id.clone(),
-            opaque_id.clone()
+            unowned_id.clone()
         ]),
-        "owner index should include domain-scoped and opaque definitions"
+        "owner index should include domain-owned and unowned definitions"
     );
 
     Unregister::asset_definition(cactus_id.clone())
@@ -49880,18 +50514,19 @@ fn asset_definition_holder_index_tracks_asset_lifecycle() {
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
 
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id.clone()),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-
     let alice_id = ALICE_ID.clone();
     let asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
     crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
@@ -49916,6 +50551,20 @@ fn asset_definition_holder_index_tracks_asset_lifecycle() {
     );
     assert!(
         stx.world
+            .assets_by_account
+            .get(&alice_id)
+            .is_some_and(|asset_ids| asset_ids == &BTreeSet::from([asset_id.clone()])),
+        "account projection should contain exactly the inserted asset id"
+    );
+    assert!(
+        stx.world
+            .assets_by_domain
+            .get(&domain_id)
+            .is_some_and(|asset_ids| asset_ids == &BTreeSet::from([asset_id.clone()])),
+        "domain projection should contain exactly the inserted asset id"
+    );
+    assert!(
+        stx.world
             .asset_definition_nonzero_holders
             .get(&asset_def_id)
             .is_some_and(|holders| holders.contains(&alice_id)),
@@ -49937,6 +50586,14 @@ fn asset_definition_holder_index_tracks_asset_lifecycle() {
             .get(&asset_def_id)
             .is_none(),
         "definition index should remove empty asset-id set"
+    );
+    assert!(
+        stx.world.assets_by_account.get(&alice_id).is_none(),
+        "account projection should remove an empty asset-id set"
+    );
+    assert!(
+        stx.world.assets_by_domain.get(&domain_id).is_none(),
+        "domain projection should remove an empty asset-id set"
     );
     assert!(
         stx.world
@@ -49965,18 +50622,19 @@ fn asset_definition_holder_index_waits_for_last_partition_removal() {
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
 
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id.clone()),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-
     let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let (_, global_asset_value) = Asset::new(global_asset_id.clone(), 1_u32).into_key_value();
     stx.world
@@ -50068,28 +50726,32 @@ fn assets_by_definition_iter_includes_all_tracked_partitions() {
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
 
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id.clone()),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-    let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "tulip".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = other_asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let other_asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "tulip".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        other_asset_def_id.clone(),
+        "tulip",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id.clone()),
+    ))
     .execute(&ALICE_ID, &mut stx)
-    .expect("register secondary asset definition");
+    .expect("register other asset definition");
 
     let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let scoped_asset_id = AssetId::with_scope(
@@ -50173,18 +50835,19 @@ fn remove_asset_and_metadata_with_total_cleans_orphan_metadata() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-
     let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
     stx.world.asset_metadata.insert(
         asset_id.clone(),
@@ -50220,18 +50883,19 @@ fn asset_total_amount_reads_tracked_definition_total() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let (_, asset_value) = Asset::new(asset_id.clone(), 9_u32).into_key_value();
     stx.world.assets.insert(asset_id.clone(), asset_value);
@@ -50262,14 +50926,20 @@ fn detached_metadata_merge_matches_sequential_state_and_events() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_def = {
             let __asset_definition_id = asset_def_id.clone();
-            AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::new(
+                __asset_definition_id.clone(),
+                "rose".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         }
         .build(&ALICE_ID);
         let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
@@ -50439,7 +51109,7 @@ fn capture_exec_witness_stashes_reads_and_writes() {
 
     let _guard = crate::sumeragi::witness::exec_witness_guard();
     crate::sumeragi::witness::start_block();
-    let asset_def_id = AssetDefinitionId::new(
+    let asset_def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
@@ -50494,23 +51164,25 @@ fn time_trigger_failure_populates_entrypoint_instructions() -> Result<()> {
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        Register::asset_definition({
-            let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal")?,
+        Register::asset_definition(AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
                 "rose".parse()?,
-            );
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
+            ),
+            "rose",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id),
+        ))
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
         stx.apply();
     }
 
     let trigger_id: TriggerId = "failing_time_trigger".parse()?;
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal")?,
-        "rose".parse()?,
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
     let alice_asset = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let failing_instruction: InstructionBox =
         Transfer::asset_quantity(alice_asset, 1_u32, BOB_ID.clone()).into();
@@ -51793,6 +52465,270 @@ fn governance_lock_record_legacy_wire_and_json_default_custody_to_none() {
     }
 }
 
+fn indexed_governance_lock(owner: AccountId, expiry_height: u64) -> GovernanceLockRecord {
+    GovernanceLockRecord {
+        owner,
+        amount: Quantity::from(1_u32),
+        slashed: Quantity::zero(),
+        expiry_height,
+        direction: 0,
+        duration_blocks: 1,
+        custody: None,
+    }
+}
+
+fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRecord {
+    use iroha_data_model::{
+        governance::types::{ProposalKind, ValidationFeePolicyProposal},
+        validation_fee::{
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            ValidationFeeChargingMode, ValidationFeePlainElectorateEligibilityRuleV1,
+            ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
+        },
+    };
+
+    let proposer = (*ALICE_ID).clone();
+    let fee_asset = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("validation-fee", "universal").expect("validation-fee domain"),
+        "xor".parse().expect("validation-fee asset name"),
+    );
+    let rules = ValidationFeePlainElectorateRulesV1 {
+        voting_asset_id: fee_asset.clone(),
+        bond_escrow_account: proposer.clone(),
+        slash_receiver_account: (*BOB_ID).clone(),
+        ballot_amount: Quantity::from(1_u32),
+        ballot_duration_blocks: 1,
+        citizenship_amount: Quantity::from(1_u32),
+        max_members: 1,
+        conviction_step_blocks: 1,
+        max_conviction: 1,
+        min_turnout: 1,
+        approval_threshold_numerator: 1,
+        approval_threshold_denominator: 1,
+        eligibility_rule:
+            ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+    };
+    let policy = ValidationFeePolicyV1 {
+        schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+        chain_id: ChainId::from("explorer-index-test"),
+        genesis_hash: [0xA5; 32],
+        policy_version: 1,
+        previous_policy_hash: None,
+        ds_asset_id: fee_asset,
+        ds_scale: VALIDATION_FEE_DS_SCALE,
+        fee: Quantity::zero(),
+        treasury_account_id: proposer.clone(),
+        charging_mode: ValidationFeeChargingMode::Disabled,
+        effective_from_height: 1,
+        expires_after_height: None,
+        exemption_classes: Vec::new(),
+        treasury_payout_binding: None,
+    };
+    GovernanceProposalRecord {
+        proposer,
+        kind: ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            policy,
+            payout_lifecycle_proposal_id: None,
+            plain_electorate_rules: rules,
+        }),
+        created_height,
+        status: GovernanceProposalStatus::Proposed,
+        pipeline: GovernancePipeline::default(),
+        parliament_snapshot: None,
+        finalization_evidence: None,
+        enacted_at_height: None,
+    }
+}
+
+#[test]
+fn governance_lock_test_mutator_replaces_removes_and_rolls_back_expiry_index() {
+    let world = World::default();
+    let referendum_id = "indexed-locks".to_owned();
+    let owner = (*ALICE_ID).clone();
+    let mut block = world.block();
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let mut locks = GovernanceLocksForReferendum::default();
+        locks
+            .locks
+            .insert(owner.clone(), indexed_governance_lock(owner.clone(), 10));
+        transaction
+            .governance_locks_mut()
+            .insert(referendum_id.clone(), locks);
+        transaction.apply();
+    }
+    assert_eq!(
+        block.governance_lock_expiry_index.get(&10),
+        Some(&BTreeSet::from([(referendum_id.clone(), owner.clone())])),
+    );
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let mut replacement = GovernanceLocksForReferendum::default();
+        replacement
+            .locks
+            .insert(owner.clone(), indexed_governance_lock(owner.clone(), 20));
+        transaction
+            .governance_locks_mut()
+            .insert(referendum_id.clone(), replacement);
+        // Dropping without apply must roll back both the primary record and its derived buckets.
+    }
+    assert!(block.governance_lock_expiry_index.get(&20).is_none());
+    assert!(block.governance_lock_expiry_index.get(&10).is_some());
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        let mut replacement = GovernanceLocksForReferendum::default();
+        replacement
+            .locks
+            .insert(owner.clone(), indexed_governance_lock(owner.clone(), 20));
+        transaction
+            .governance_locks_mut()
+            .insert(referendum_id.clone(), replacement);
+        transaction.apply();
+    }
+    assert!(block.governance_lock_expiry_index.get(&10).is_none());
+    assert!(block.governance_lock_expiry_index.get(&20).is_some());
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        transaction.governance_locks_mut().insert(
+            referendum_id.clone(),
+            GovernanceLocksForReferendum::default(),
+        );
+        transaction.apply();
+    }
+    assert!(block.governance_locks.get(&referendum_id).is_none());
+    assert!(block.governance_lock_expiry_index.get(&20).is_none());
+}
+
+#[test]
+fn governance_proposal_test_mutator_orders_updates_and_rolls_back_typed_index() {
+    let world = World::default();
+    let first_id = [0x11; 32];
+    let second_id = [0x22; 32];
+    let mut block = world.block();
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        transaction
+            .governance_proposals_mut()
+            .insert(first_id, indexed_validation_fee_proposal(20));
+        transaction
+            .governance_proposals_mut()
+            .insert(second_id, indexed_validation_fee_proposal(10));
+        transaction.apply();
+    }
+    assert_eq!(
+        block
+            .validation_fee_proposal_index
+            .iter()
+            .map(|(key, ())| *key)
+            .collect::<Vec<_>>(),
+        vec![(10, second_id), (20, first_id)],
+    );
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        transaction
+            .governance_proposals_mut()
+            .insert(first_id, indexed_validation_fee_proposal(5));
+        // Dropping without apply must restore the original ordered index entry.
+    }
+    assert_eq!(
+        block
+            .validation_fee_proposal_index
+            .iter()
+            .map(|(key, ())| *key)
+            .collect::<Vec<_>>(),
+        vec![(10, second_id), (20, first_id)],
+    );
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        transaction
+            .governance_proposals_mut()
+            .insert(first_id, indexed_validation_fee_proposal(5));
+        {
+            let mut proposals = transaction.governance_proposals_mut();
+            proposals
+                .get_mut(&second_id)
+                .expect("second indexed proposal")
+                .created_height = 7;
+        }
+        transaction.apply();
+    }
+    assert_eq!(
+        block
+            .validation_fee_proposal_index
+            .iter()
+            .map(|(key, ())| *key)
+            .collect::<Vec<_>>(),
+        vec![(5, first_id), (7, second_id)],
+    );
+}
+
+#[test]
+fn governance_unlock_stats_snapshot_obeys_transaction_and_block_visibility() {
+    let world = World::default();
+    let snapshot = GovernanceUnlockStatsSnapshot {
+        evaluated_height: 17,
+        expired_locks_now: 3,
+        referenda_with_expired: 2,
+    };
+    let mut block = world.block();
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        *transaction.governance_unlock_stats.get_mut() = snapshot;
+    }
+    assert_eq!(
+        *block.governance_unlock_stats,
+        GovernanceUnlockStatsSnapshot::default(),
+        "dropping a transaction must roll back its unlock snapshot"
+    );
+
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        *transaction.governance_unlock_stats.get_mut() = snapshot;
+        transaction.apply();
+    }
+    assert_eq!(*block.governance_unlock_stats, snapshot);
+    assert_eq!(
+        *world.view().governance_unlock_stats(),
+        GovernanceUnlockStatsSnapshot::default(),
+        "transaction apply must remain block-local until commit"
+    );
+
+    block.commit();
+    assert_eq!(*world.view().governance_unlock_stats(), snapshot);
+}
+
+#[test]
+fn block_records_governance_unlock_stats_when_no_locks_are_expired() {
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+    let block = state.block(header);
+
+    assert_eq!(
+        *block.world.governance_unlock_stats,
+        GovernanceUnlockStatsSnapshot {
+            evaluated_height: 10,
+            expired_locks_now: 0,
+            referenda_with_expired: 0,
+        }
+    );
+    assert_eq!(
+        *block.world.governance_last_unlock_sweep_height, 10,
+        "an empty but successful sweep must advance its completion marker"
+    );
+}
+
 #[test]
 fn block_sweeps_expired_governance_locks_and_records_height() {
     let kura = Kura::blank_kura_for_testing();
@@ -51822,9 +52758,7 @@ fn block_sweeps_expired_governance_locks_and_records_height() {
                 }),
             },
         );
-        world_block
-            .governance_locks
-            .insert(referendum_id.clone(), locks);
+        world_block.put_governance_locks(referendum_id.clone(), locks);
         *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
         world_block.commit();
     }
@@ -51837,14 +52771,17 @@ fn block_sweeps_expired_governance_locks_and_records_height() {
         recorded_height, 10,
         "sweep height must match current block height"
     );
-    let locks_after = block
-        .world
-        .governance_locks
-        .get(&referendum_id)
-        .expect("referendum entry should remain present");
     assert!(
-        locks_after.locks.is_empty(),
-        "expired locks must be removed during sweep"
+        block.world.governance_locks.get(&referendum_id).is_none(),
+        "fully expired referendum lock containers must be deleted"
+    );
+    assert_eq!(
+        *block.world.governance_unlock_stats,
+        GovernanceUnlockStatsSnapshot {
+            evaluated_height: 10,
+            expired_locks_now: 0,
+            referenda_with_expired: 0,
+        }
     );
 }
 
@@ -51878,9 +52815,7 @@ fn block_retains_expired_governance_lock_when_atomic_release_fails() {
                 custody: Some(custody),
             },
         );
-        world_block
-            .governance_locks
-            .insert(referendum_id.clone(), locks);
+        world_block.put_governance_locks(referendum_id.clone(), locks);
         *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
         world_block.commit();
     }
@@ -51900,15 +52835,28 @@ fn block_retains_expired_governance_lock_when_atomic_release_fails() {
         *block.world.governance_last_unlock_sweep_height, 1,
         "a failed release must not advance the successful sweep marker"
     );
+    assert_eq!(
+        *block.world.governance_unlock_stats,
+        GovernanceUnlockStatsSnapshot {
+            evaluated_height: 10,
+            expired_locks_now: 1,
+            referenda_with_expired: 1,
+        },
+        "a failed release must remain visible in the post-sweep snapshot"
+    );
 }
 
 #[test]
 fn block_releases_expired_governance_lock_through_stored_custody_after_config_change() {
     let domain_id = DomainId::try_new("governance", "custody").expect("domain id");
-    let old_definition_id =
-        AssetDefinitionId::new(domain_id.clone(), "old_vote".parse().expect("asset name"));
-    let live_definition_id =
-        AssetDefinitionId::new(domain_id.clone(), "live_vote".parse().expect("asset name"));
+    let old_definition_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "old_vote".parse().expect("asset name"),
+    );
+    let live_definition_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "live_vote".parse().expect("asset name"),
+    );
     let old_escrow = (*BOB_ID).clone();
     let live_escrow = AccountId::new(checked_keypair().public_key().clone());
     let voter = (*ALICE_ID).clone();
@@ -51916,19 +52864,27 @@ fn block_releases_expired_governance_lock_through_stored_custody_after_config_ch
     let voter_asset_id = AssetId::new(old_definition_id.clone(), voter.clone());
     let live_escrow_asset_id = AssetId::new(live_definition_id.clone(), live_escrow.clone());
     let world = World::with_assets(
-        [Domain::new(domain_id).build(&voter)],
+        [Domain::new(domain_id.clone()).build(&voter)],
         [
             Account::new(voter.clone()).build(&voter),
             Account::new(old_escrow.clone()).build(&voter),
             Account::new(live_escrow.clone()).build(&voter),
         ],
         [
-            AssetDefinition::numeric(old_definition_id.clone())
-                .with_name("old_vote".to_owned())
-                .build(&voter),
-            AssetDefinition::numeric(live_definition_id.clone())
-                .with_name("live_vote".to_owned())
-                .build(&voter),
+            AssetDefinition::numeric(
+                old_definition_id.clone(),
+                "old_vote",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            )
+            .build(&voter),
+            AssetDefinition::numeric(
+                live_definition_id.clone(),
+                "live_vote",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id),
+            )
+            .build(&voter),
         ],
         [
             Asset::new(old_escrow_asset_id.clone(), Quantity::from(42_u32)),
@@ -51965,9 +52921,7 @@ fn block_releases_expired_governance_lock_through_stored_custody_after_config_ch
                 }),
             },
         );
-        world_block
-            .governance_locks
-            .insert(referendum_id.clone(), locks);
+        world_block.put_governance_locks(referendum_id.clone(), locks);
         *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
         world_block.commit();
     }
@@ -51997,12 +52951,8 @@ fn block_releases_expired_governance_lock_through_stored_custody_after_config_ch
         "changed live governance custody must remain untouched"
     );
     assert!(
-        block
-            .world
-            .governance_locks
-            .get(&referendum_id)
-            .is_some_and(|locks| locks.locks.is_empty()),
-        "successfully released lock must be removed"
+        block.world.governance_locks.get(&referendum_id).is_none(),
+        "successfully released empty lock containers must be removed"
     );
     assert_eq!(
         *block.world.governance_last_unlock_sweep_height, 10,
@@ -52038,9 +52988,7 @@ fn block_removes_expired_fully_slashed_governance_lock_without_source_asset() {
                 }),
             },
         );
-        world_block
-            .governance_locks
-            .insert(referendum_id.clone(), locks);
+        world_block.put_governance_locks(referendum_id.clone(), locks);
         *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
         world_block.commit();
     }
@@ -52048,12 +52996,8 @@ fn block_removes_expired_fully_slashed_governance_lock_without_source_asset() {
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
     assert!(
-        block
-            .world
-            .governance_locks
-            .get(&referendum_id)
-            .is_some_and(|locks| locks.locks.is_empty()),
-        "a fully slashed zero-balance lock must not require a missing escrow asset"
+        block.world.governance_locks.get(&referendum_id).is_none(),
+        "a fully slashed zero-balance lock must be deleted without requiring a missing escrow asset"
     );
     assert_eq!(
         *block.world.governance_last_unlock_sweep_height, 10,
@@ -52107,9 +53051,7 @@ fn block_does_not_advance_sweep_marker_after_partial_release_failure() {
                 }),
             },
         );
-        world_block
-            .governance_locks
-            .insert(referendum_id.clone(), locks);
+        world_block.put_governance_locks(referendum_id.clone(), locks);
         *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
         world_block.commit();
     }
@@ -52132,6 +53074,15 @@ fn block_does_not_advance_sweep_marker_after_partial_release_failure() {
     assert_eq!(
         *block.world.governance_last_unlock_sweep_height, 1,
         "an incomplete sweep must not advance the successful sweep marker"
+    );
+    assert_eq!(
+        *block.world.governance_unlock_stats,
+        GovernanceUnlockStatsSnapshot {
+            evaluated_height: 10,
+            expired_locks_now: 1,
+            referenda_with_expired: 1,
+        },
+        "the post-sweep snapshot must count only the retained expired lock"
     );
 }
 
@@ -52160,15 +53111,17 @@ fn transaction_failure_rolls_back_asset_world_and_trigger_changes() {
     )
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
 
@@ -52209,11 +53162,12 @@ fn transaction_failure_rolls_back_asset_world_and_trigger_changes() {
             Register::trigger(Trigger::new(trigger_id.clone(), trigger_action))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            let duplicate = Register::asset_definition({
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let duplicate = Register::asset_definition(AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(DomainId::try_new("wonderland", "universal").unwrap()),
+            ))
             .execute(&ALICE_ID, &mut stx);
             assert!(
                 duplicate.is_err(),
@@ -52250,10 +53204,11 @@ fn execute_called_trigger_failure_rolls_back_state() {
     let state = State::new(World::default(), kura, query_handle);
 
     let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
-    let asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let asset_definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
 
     // Commit initial domain, account, and the by-call trigger.
     let block = new_dummy_block_with_payload(|header| {
@@ -52271,11 +53226,12 @@ fn execute_called_trigger_failure_rolls_back_state() {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
-        let create_asset = Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        });
+        let create_asset = Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "xor",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(DomainId::try_new("wonderland", "universal").unwrap()),
+        ));
         let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
         let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
         let trigger = Trigger::new(
@@ -52696,7 +53652,7 @@ fn raw_ivm_trigger_enforces_entrypoint_authorization_before_argument_decode() {
     let code_hash = ivm::contract_code_hash(&program);
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let contract_address = ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         77,
         DataSpaceId::UNIVERSAL,
@@ -53214,7 +54170,7 @@ fn contract_call_trigger_enforces_entrypoint_authorization_before_argument_decod
 
     let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
     let contract_address = ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         0,
         DataSpaceId::UNIVERSAL,
@@ -53454,9 +54410,15 @@ fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
 
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let rose_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().unwrap(),
+        );
     let gold_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::new(domain_id.clone(), "gold".parse().unwrap());
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "gold".parse().unwrap(),
+        );
     let gold_source = AssetId::new(gold_def_id.clone(), ALICE_ID.clone());
     let gold_target = AssetId::new(gold_def_id.clone(), BOB_ID.clone());
     let rose_source = AssetId::new(rose_def_id.clone(), ALICE_ID.clone());
@@ -53515,7 +54477,7 @@ fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
     let code_hash = ivm::contract_code_hash(&program);
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let contract_address = ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         95,
         DataSpaceId::UNIVERSAL,
@@ -53557,18 +54519,20 @@ fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
             .expect("register alias-transfer callback manifest");
         activate_instance(&ALICE_ID, contract_address.clone(), code_hash, &mut stx)
             .expect("activate alias-transfer callback contract");
-        Register::asset_definition({
-            let __asset_definition_id = rose_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
+        Register::asset_definition(AssetDefinition::numeric(
+            rose_def_id.clone(),
+            "rose",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id.clone()),
+        ))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-        Register::asset_definition({
-            let __asset_definition_id = gold_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
+        Register::asset_definition(AssetDefinition::numeric(
+            gold_def_id.clone(),
+            "gold",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id.clone()),
+        ))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         Mint::asset_quantity(1_000_u32, gold_source.clone())
@@ -53672,10 +54636,11 @@ fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
             iroha_data_model::alias_setup::AliasLeaseAcquisitionV1::new(1, None),
             iroha_data_model::alias_setup::AliasQuoteGuardV1 {
                 expected_policy_version: 0,
-                expected_payment_asset: iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("assets", "universal").expect("fixture asset domain"),
-                    "xor".parse().expect("fixture asset name"),
-                ),
+                expected_payment_asset:
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("assets", "universal").expect("fixture asset domain"),
+                        "xor".parse().expect("fixture asset name"),
+                    ),
                 max_amount: Quantity::zero(),
                 valid_until_ms: 0,
             },
@@ -53865,17 +54830,19 @@ fn block_rejects_failing_execute_trigger_and_rolls_back() {
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
 
     let trigger_id: TriggerId = "rollback_trigger_block".parse().unwrap();
-    let asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let asset_definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
 
     // Tx 1: register the by-call trigger that will fail when executed.
-    let create_asset = Register::asset_definition({
-        let __asset_definition_id = asset_definition_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    });
+    let create_asset = Register::asset_definition(AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "xor",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(DomainId::try_new("wonderland", "universal").unwrap()),
+    ));
     let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
     let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
     let register_trigger = Register::trigger(Trigger::new(
@@ -57167,9 +58134,13 @@ fn setup_nexus_fee_merge_state(
     let fee_asset_selector = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
     let asset_def_id = AssetDefinitionId::parse_address_literal(&fee_asset_selector)
         .expect("default Nexus XOR fee asset id must be canonical");
-    let asset_definition =
-        AssetDefinition::numeric(asset_def_id.clone()).with_name("xor".to_string());
-    let mut asset_definition = asset_definition.build(&sponsor_id);
+    let mut asset_definition = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "xor",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&sponsor_id);
     asset_definition.total_quantity = sponsor_balance.clone();
     let custody_asset = Asset::new(
         AssetId::of(asset_def_id.clone(), custody_id.clone()),
@@ -57271,7 +58242,7 @@ fn setup_nexus_fee_merge_state(
         &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids)],
     );
     let commit_keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
-    let envelope =
+    let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
     let mut settlement = envelope.settlement_commitment.clone();
     // The fee receipt belongs to the same transaction as the base
@@ -59314,15 +60285,17 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
 
@@ -59400,8 +60373,11 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
         .iter()
         .filter(|e| {
             if let EventBox::Data(ev) = e
-                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(ch)),
+                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(
+                    data_pre::ScopedAsset {
+                        event: data_pre::AssetEvent::Added(ch),
+                        ..
+                    },
                 )) = ev.as_ref()
             {
                 return ch.asset == asset_id && ch.amount == Quantity::one();
@@ -59413,8 +60389,11 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     // Negative: no Asset::Removed for this asset
     assert!(events.iter().all(|e| {
         if let EventBox::Data(ev) = e
-            && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                data_pre::AccountEvent::Asset(data_pre::AssetEvent::Removed(ch)),
+            && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(
+                data_pre::ScopedAsset {
+                    event: data_pre::AssetEvent::Removed(ch),
+                    ..
+                },
             )) = ev.as_ref()
         {
             return ch.asset != asset_id;
@@ -59426,9 +60405,8 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
         .iter()
         .filter(|e| {
             if let EventBox::Data(ev) = e
-                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::MetadataInserted(mc),
-                )) = ev.as_ref()
+                && let data_pre::DataEvent::Account(data_pre::AccountEvent::MetadataInserted(mc)) =
+                    ev.as_ref()
             {
                 return *mc.target() == *ALICE_ID
                     && mc.key() == &key
@@ -59444,9 +60422,8 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     // Negative: no metadata removal for flag in this event batch
     assert!(events.iter().all(|e| {
         if let EventBox::Data(ev) = e
-            && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                data_pre::AccountEvent::MetadataRemoved(mc),
-            )) = ev.as_ref()
+            && let data_pre::DataEvent::Account(data_pre::AccountEvent::MetadataRemoved(mc)) =
+                ev.as_ref()
         {
             return !(*mc.target() == *ALICE_ID && mc.key() == &key);
         }
@@ -60365,13 +61342,16 @@ fn pipeline_trigger_chained_data_failure_rolls_back_and_preserves_repeats() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    let asset_def_id = AssetDefinitionId::new(
+    let asset_def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "pipeline_rose".parse().unwrap(),
     );
-    Register::asset_definition(
-        AssetDefinition::numeric(asset_def_id.clone()).with_name(asset_def_id.name().to_string()),
-    )
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "pipeline_rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(DomainId::try_new("wonderland", "universal").unwrap()),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
     let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
@@ -60457,13 +61437,16 @@ fn by_call_chained_data_trigger_failure_rolls_back_and_preserves_repeats() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    let asset_def_id = AssetDefinitionId::new(
+    let asset_def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
-    Register::asset_definition(
-        AssetDefinition::numeric(asset_def_id.clone()).with_name(asset_def_id.name().to_string()),
-    )
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(DomainId::try_new("wonderland", "universal").unwrap()),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
     let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
@@ -60621,10 +61604,8 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         .iter()
         .filter(|e| {
             if let EventBox::Data(ev) = e
-                && let iroha_data_model::events::data::prelude::DataEvent::Domain(
-                    iroha_data_model::events::data::prelude::DomainEvent::Account(
-                        iroha_data_model::events::data::prelude::AccountEvent::MetadataInserted(mc),
-                    ),
+                && let iroha_data_model::events::data::prelude::DataEvent::Account(
+                    iroha_data_model::events::data::prelude::AccountEvent::MetadataInserted(mc),
                 ) = ev.as_ref()
             {
                 return *mc.target() == *ALICE_ID
@@ -60643,10 +61624,11 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     assert!(events.iter().all(|e| {
         if let EventBox::Data(ev) = e
             && let iroha_data_model::events::data::prelude::DataEvent::Domain(
-                iroha_data_model::events::data::prelude::DomainEvent::Account(
-                    iroha_data_model::events::data::prelude::AccountEvent::Asset(
-                        iroha_data_model::events::data::prelude::AssetEvent::Added(_),
-                    ),
+                iroha_data_model::events::data::prelude::DomainEvent::Asset(
+                    iroha_data_model::events::data::prelude::ScopedAsset {
+                        event: iroha_data_model::events::data::prelude::AssetEvent::Added(_),
+                        ..
+                    },
                 ),
             ) = ev.as_ref()
         {
@@ -60657,10 +61639,11 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     assert!(events.iter().all(|e| {
         if let EventBox::Data(ev) = e
             && let iroha_data_model::events::data::prelude::DataEvent::Domain(
-                iroha_data_model::events::data::prelude::DomainEvent::Account(
-                    iroha_data_model::events::data::prelude::AccountEvent::Asset(
-                        iroha_data_model::events::data::prelude::AssetEvent::Removed(_),
-                    ),
+                iroha_data_model::events::data::prelude::DomainEvent::Asset(
+                    iroha_data_model::events::data::prelude::ScopedAsset {
+                        event: iroha_data_model::events::data::prelude::AssetEvent::Removed(_),
+                        ..
+                    },
                 ),
             ) = ev.as_ref()
         {
@@ -60671,10 +61654,8 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     // Negative: no metadata removal for the same key
     assert!(events.iter().all(|e| {
         if let EventBox::Data(ev) = e
-            && let iroha_data_model::events::data::prelude::DataEvent::Domain(
-                iroha_data_model::events::data::prelude::DomainEvent::Account(
-                    iroha_data_model::events::data::prelude::AccountEvent::MetadataRemoved(mc),
-                ),
+            && let iroha_data_model::events::data::prelude::DataEvent::Account(
+                iroha_data_model::events::data::prelude::AccountEvent::MetadataRemoved(mc),
             ) = ev.as_ref()
         {
             return !(*mc.target() == *ALICE_ID && mc.key() == &tkey);
@@ -60713,7 +61694,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_once".parse().unwrap();
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "retrycoin".parse().unwrap(),
     );
@@ -60816,10 +61797,12 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     let mut state_block3 = state.block(block3.as_ref().header());
     {
         let mut stx = state_block3.transaction();
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "retrycoin",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(DomainId::try_new("wonderland", "universal").unwrap()),
+        ))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         stx.apply();
@@ -60869,7 +61852,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_exhausted".parse().unwrap();
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "exhaustcoin".parse().unwrap(),
     );
@@ -61005,7 +61988,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_periodic".parse().unwrap();
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "periodiccoin".parse().unwrap(),
     );
@@ -61114,10 +62097,12 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     let mut state_block3 = state.block(block3.as_ref().header());
     {
         let mut stx = state_block3.transaction();
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "periodiccoin",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(DomainId::try_new("wonderland", "universal").unwrap()),
+        ))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         stx.apply();
@@ -62284,10 +63269,11 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
 
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let flag_key: Name = "trigger_authority".parse().unwrap();
     let trigger_id: TriggerId = "data_trigger_registered_authority".parse().unwrap();
@@ -62307,11 +63293,12 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         Register::account(new_sample_account(&BOB_ID))
             .execute(&BOB_ID, &mut stx)
             .unwrap();
-        Register::asset_definition({
-            let __asset_definition_id = asset_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(DomainId::try_new("wonderland", "universal").unwrap()),
+        ))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
 
@@ -63025,12 +64012,12 @@ fn asset_account_range() {
         gen_account_in("z").0,
     ];
     let asset_definitions = [
-        AssetDefinitionId::new(domain_id.clone(), "a".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "f".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "b".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "c".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "d".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "e".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "a".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "f".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "b".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "c".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "d".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "e".parse().unwrap()),
     ];
 
     let mut assets = accounts
@@ -63041,7 +64028,7 @@ fn asset_account_range() {
         .collect::<Vec<_>>();
     assets.push((
         AssetId::with_scope(
-            AssetDefinitionId::new(domain_id, "g".parse().unwrap()),
+            AssetDefinitionId::derive_from_components(domain_id, "g".parse().unwrap()),
             account_id.clone(),
             AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
         ),
@@ -63058,8 +64045,10 @@ fn asset_account_range() {
 fn asset_account_definition_range_includes_all_scopes() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = gen_account_in("wonderland").0;
-    let target_definition = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-    let other_definition = AssetDefinitionId::new(domain_id, "tulip".parse().unwrap());
+    let target_definition =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
+    let other_definition =
+        AssetDefinitionId::derive_from_components(domain_id, "tulip".parse().unwrap());
 
     let assets = [
         AssetId::new(target_definition.clone(), account_id.clone()),
@@ -63106,15 +64095,17 @@ fn set_asset_metadata_inserts_value_and_event() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -63132,8 +64123,11 @@ fn set_asset_metadata_inserts_value_and_event() {
     assert!(
         events.iter().any(|event| {
             if let EventBox::Data(ev) = event
-                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::Asset(data_pre::AssetEvent::MetadataInserted(mc)),
+                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(
+                    data_pre::ScopedAsset {
+                        event: data_pre::AssetEvent::MetadataInserted(mc),
+                        ..
+                    },
                 )) = ev.as_ref()
             {
                 return *mc.target() == asset_id && mc.key() == &key && mc.value() == &value;
@@ -63164,15 +64158,17 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -63204,8 +64200,11 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
     assert!(
         events.iter().any(|event| {
             if let EventBox::Data(ev) = event
-                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::Asset(data_pre::AssetEvent::MetadataRemoved(mc)),
+                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(
+                    data_pre::ScopedAsset {
+                        event: data_pre::AssetEvent::MetadataRemoved(mc),
+                        ..
+                    },
                 )) = ev.as_ref()
             {
                 return *mc.target() == asset_id && mc.key() == &key && mc.value() == &value;
@@ -63409,6 +64408,7 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
                 secret_generation: 0,
                 service_configs: std::collections::BTreeMap::new(),
                 service_secrets: std::collections::BTreeMap::new(),
+                fhe_policy_records: std::collections::BTreeMap::new(),
                 service_lease: None,
                 lease_volume_states: Vec::new(),
             },

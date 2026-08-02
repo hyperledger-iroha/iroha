@@ -182,6 +182,10 @@ impl MusubiCursorFailureReasonV1 {
 /// Bounded package, alias, or registry governance action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiGovernanceActionV1 {
+    /// Register or replay an immutable namespace binding.
+    NamespaceBinding,
+    /// Register or replay an immutable archive commitment.
+    ArchiveRegistration,
     /// Claim or publish a release.
     Publish,
     /// Yank or unyank a release.
@@ -211,6 +215,8 @@ pub enum MusubiGovernanceActionV1 {
 impl MusubiGovernanceActionV1 {
     const fn label(self) -> &'static str {
         match self {
+            Self::NamespaceBinding => "namespace_binding",
+            Self::ArchiveRegistration => "archive_registration",
             Self::Publish => "publish",
             Self::Yank => "yank",
             Self::Metadata => "metadata",
@@ -353,7 +359,7 @@ impl MusubiMetrics {
         register(registry, &storage_bytes_used);
         register(registry, &storage_bytes_capacity);
 
-        let metrics = Self {
+        Self {
             publication_phase_age_seconds,
             replication_shortfall_releases,
             ingest_deadletters_total,
@@ -363,9 +369,7 @@ impl MusubiMetrics {
             governance_rejections_total,
             storage_bytes_used,
             storage_bytes_capacity,
-        };
-        metrics.reset_publication_phase_ages();
-        metrics
+        }
     }
 
     /// Reset every publication phase gauge before projecting a fresh journal snapshot.
@@ -462,6 +466,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn phase_age_series_remain_absent_until_a_successful_projection() {
+        let registry = Registry::new();
+        let metrics = MusubiMetrics::new(&registry);
+
+        let mut encoded = Vec::new();
+        TextEncoder::new()
+            .encode(&registry.gather(), &mut encoded)
+            .expect("encode empty Musubi metrics");
+        let encoded = String::from_utf8(encoded).expect("Prometheus output is UTF-8");
+        assert!(!encoded.contains("musubi_publication_phase_age_seconds"));
+
+        metrics.reset_publication_phase_ages();
+        let mut projected = Vec::new();
+        TextEncoder::new()
+            .encode(&registry.gather(), &mut projected)
+            .expect("encode projected Musubi metrics");
+        let projected = String::from_utf8(projected).expect("Prometheus output is UTF-8");
+        assert_eq!(
+            projected
+                .lines()
+                .filter(|line| line.starts_with("musubi_publication_phase_age_seconds{"))
+                .count(),
+            MusubiPublicationPhaseMetricV1::ALL.len()
+        );
+    }
+
+    #[test]
     fn exports_only_bounded_musubi_labels() {
         let registry = Registry::new();
         let metrics = MusubiMetrics::new(&registry);
@@ -475,6 +506,14 @@ mod tests {
         metrics.inc_governance_rejection(
             MusubiGovernanceActionV1::SetRole,
             MusubiGovernanceRejectionReasonV1::Unauthorized,
+        );
+        metrics.inc_governance_rejection(
+            MusubiGovernanceActionV1::NamespaceBinding,
+            MusubiGovernanceRejectionReasonV1::Unauthorized,
+        );
+        metrics.inc_governance_rejection(
+            MusubiGovernanceActionV1::ArchiveRegistration,
+            MusubiGovernanceRejectionReasonV1::StaleRevision,
         );
         metrics.set_storage_usage(90, 100);
 
@@ -492,6 +531,8 @@ mod tests {
             "musubi_cache_corruption_total{operation=\"verify\"} 1",
             "musubi_cursor_failures_total{reason=\"stale_revision\"} 1",
             "musubi_governance_rejections_total{action=\"set_role\",reason=\"unauthorized\"} 1",
+            "musubi_governance_rejections_total{action=\"namespace_binding\",reason=\"unauthorized\"} 1",
+            "musubi_governance_rejections_total{action=\"archive_registration\",reason=\"stale_revision\"} 1",
             "musubi_storage_bytes_used 90",
             "musubi_storage_bytes_capacity 100",
         ] {

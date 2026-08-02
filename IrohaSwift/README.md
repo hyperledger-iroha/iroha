@@ -835,8 +835,7 @@ For RWA lots, use the dedicated explorer and chain-state helpers:
 if #available(iOS 15.0, macOS 12.0, *) {
     let lots = try await torii.getExplorerRwas(
         params: ToriiExplorerRwasParams(
-            page: 1,
-            perPage: 25,
+            limit: 25,
             ownedBy: "<account_i105>",
             domain: "commodities"
         )
@@ -1925,6 +1924,45 @@ hooks for local and CI use live in `scripts/ci/verify_norito_demo.sh`.
 
 For contributor setup and Torii mock ledger instructions, refer to
 [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md).
+
+## Musubi V1 registry reads
+
+`MusubiToriiClientV1` is a signer-free, read-only client for the eleven typed
+`/v1/musubi/queries/*` POST routes. Its first-release-only models preserve
+structural package identities, immutable namespace bindings, canonical
+structured SemVer requirements, exact unsigned JSON integers, finalized cursors,
+chain/genesis lock identity, and the authoritative archive commitment. Decoding
+rejects unknown fields, unsupported
+ABI/edition versions, and noncanonical names instead of accepting legacy forms.
+
+Swift, Kotlin, and Java exercise the Rust-owned contract in
+[`fixtures/musubi/sdk_v1.json`](../fixtures/musubi/sdk_v1.json). Authentication can
+be supplied through explicit transport headers, but the local read surface never
+loads a signer or stores credentials.
+
+`search(_:)` posts to `/v1/musubi/queries/search` and returns a bounded,
+structurally ordered page with a search-specific finalized projection cursor;
+the discovery projection is never a resolver input.
+
+`findArchiveRetention(_:)` accepts a sorted, distinct, non-zero archive batch
+and verifies the response identity order plus the optional finalized-snapshot
+binding before returning cache-prune classifications.
+
+`MusubiInstructionV1` also provides fixture-backed field-to-Norito construction
+for namespace registration; maintainer invitation, acceptance, revocation,
+role replacement, and removal; permanent alias registration; exact release-
+digest assertion; archive registration, location addition or renewal, and
+location retirement; release publication and reversible yank state; package
+metadata replacement; and Parliament-enacted package ownership recovery,
+permanent-alias retargeting, artifact takedown, and registry-policy replacement.
+Call
+`transactionInstructionFrame()` for the dynamic pair consumed by transaction
+builders, or
+`standaloneInstructionBoxFrame()` only when an API explicitly requires a
+standalone framed box. Both forms are checked against the Rust-owned
+[`fixtures/musubi/instructions_v1.json`](../fixtures/musubi/instructions_v1.json);
+one real signed-batch regression also extracts and compares all eighteen inline
+pairs, including the compact `ChainId` and `TransactionSignature` wrappers.
 
 ## Development commands
 

@@ -2999,10 +2999,8 @@ fn load_source_snapshot(
                 "runtime index block {position} payload kind is invalid"
             )));
         }
-        let indexed_submission_account_digest = required_optional_json_string(
-            entry,
-            "submission_publisher_account_digest_hex",
-        )?;
+        let indexed_submission_account_digest =
+            required_optional_json_string(entry, "submission_publisher_account_digest_hex")?;
         let indexed_submission_origin = required_optional_json_string(entry, "submission_origin")?;
         let signed_submission_account_digest = block
             .node
@@ -5015,9 +5013,7 @@ fn mirror_index_value(
                 .node
                 .submission_provenance
                 .as_ref()
-                .map(|provenance| {
-                    JsonValue::from(hex::encode(provenance.publisher_account_digest))
-                })
+                .map(|provenance| JsonValue::from(hex::encode(provenance.publisher_account_digest)))
                 .unwrap_or(JsonValue::Null),
         );
         value.insert(

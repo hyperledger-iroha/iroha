@@ -3,7 +3,7 @@
 mod apply_blocks;
 
 use apply_blocks::StateApplyBlocks;
-use apply_blocks::common::generate_ids;
+use apply_blocks::common::{generate_ids, generated_asset_definition_name};
 use criterion::{BatchSize, Criterion};
 use iroha_core::state::World;
 use iroha_data_model::{Registrable, account::Account, asset::AssetDefinition, domain::Domain};
@@ -43,12 +43,21 @@ fn large_world() -> World {
     let accounts = account_ids
         .into_iter()
         .map(|id| Account::new(id).build(&authority));
-    let asset_definitions = asset_definition_ids.into_iter().map(|id| {
-        let name = id.name().to_string();
-        AssetDefinition::numeric(id)
-            .with_name(name)
+    let asset_definition_count = asset_definition_ids.len();
+    let domain_count = domain_ids.len();
+    let asset_definitions = asset_definition_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let name = generated_asset_definition_name(domain_count, asset_definition_count, index);
+            AssetDefinition::numeric(
+                id,
+                name,
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&authority)
-    });
+        });
 
     World::with(domains, accounts, asset_definitions)
 }

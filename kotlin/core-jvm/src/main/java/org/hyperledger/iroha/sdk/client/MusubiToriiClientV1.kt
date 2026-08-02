@@ -10,25 +10,27 @@ import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.musubi.MusubiAliasHistoryEntryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiAliasQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiAliasRecordV1
+import org.hyperledger.iroha.sdk.musubi.MusubiArchiveLocationPageV1
 import org.hyperledger.iroha.sdk.musubi.MusubiArchiveLocationQueryV1
-import org.hyperledger.iroha.sdk.musubi.MusubiArchiveLocationV1
+import org.hyperledger.iroha.sdk.musubi.MusubiArchiveRetentionPageV1
+import org.hyperledger.iroha.sdk.musubi.MusubiArchiveRetentionQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiExactPackageQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiExactReleaseQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiJsonV1
-import org.hyperledger.iroha.sdk.musubi.MusubiOrderedPackageEntryV1
+import org.hyperledger.iroha.sdk.musubi.MusubiMaintainerDirectoryEntryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiOrderedPrefixPageV1
 import org.hyperledger.iroha.sdk.musubi.MusubiOrderedPrefixQueryV1
-import org.hyperledger.iroha.sdk.musubi.MusubiPackageMemberV1
 import org.hyperledger.iroha.sdk.musubi.MusubiPackagePageQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiPackageRecordV1
 import org.hyperledger.iroha.sdk.musubi.MusubiPageV1
 import org.hyperledger.iroha.sdk.musubi.MusubiReleaseRecordV1
 import org.hyperledger.iroha.sdk.musubi.MusubiResolverIndexQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiResolverIndexPageV1
-import org.hyperledger.iroha.sdk.musubi.MusubiResolverReleaseRowV1
+import org.hyperledger.iroha.sdk.musubi.MusubiSearchPageV1
+import org.hyperledger.iroha.sdk.musubi.MusubiSearchQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiVersionV1
 
-/** Read-only client for the nine typed first-release Musubi registry queries. */
+/** Read-only client for the eleven typed first-release Musubi registry queries. */
 class MusubiToriiClientV1 private constructor(builder: Builder) {
     private val executor: HttpTransportExecutor =
         builder.executor ?: PlatformHttpTransportExecutor.createDefault()
@@ -62,21 +64,32 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     ): CompletableFuture<MusubiPageV1<MusubiVersionV1>> =
         executePost(VERSIONS_PATH, request.toJsonBytes(), MusubiJsonV1::parseVersionPage)
 
-    /** Lists accepted owners and maintainers for a package. */
+    /** Lists accepted owners/maintainers and pending invitations for a package. */
     fun findMaintainers(
         request: MusubiPackagePageQueryV1,
-    ): CompletableFuture<MusubiPageV1<MusubiPackageMemberV1>> =
+    ): CompletableFuture<MusubiPageV1<MusubiMaintainerDirectoryEntryV1>> =
         executePost(MAINTAINERS_PATH, request.toJsonBytes(), MusubiJsonV1::parseMaintainerPage)
 
     /** Lists renewable SoraFS locations for an archive. */
     fun findArchiveLocations(
         request: MusubiArchiveLocationQueryV1,
-    ): CompletableFuture<MusubiPageV1<MusubiArchiveLocationV1>> =
+    ): CompletableFuture<MusubiArchiveLocationPageV1> =
         executePost(
             ARCHIVE_LOCATIONS_PATH,
             request.toJsonBytes(),
             MusubiJsonV1::parseArchiveLocationPage,
         )
+
+    /** Classifies a bounded exact archive batch for fail-closed cache retention. */
+    fun findArchiveRetention(
+        request: MusubiArchiveRetentionQueryV1,
+    ): CompletableFuture<MusubiArchiveRetentionPageV1> =
+        executePost(
+            ARCHIVE_RETENTION_PATH,
+            request.toJsonBytes(),
+        ) { payload ->
+            MusubiJsonV1.parseArchiveRetentionPage(payload).also { it.requireMatches(request) }
+        }
 
     /** Resolves one paid permanent global alias. */
     fun findAlias(request: MusubiAliasQueryV1): CompletableFuture<MusubiAliasRecordV1> =
@@ -97,6 +110,10 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
             request.toJsonBytes(),
             MusubiJsonV1::parseOrderedPackagePage,
         )
+
+    /** Searches package metadata by bounded exact normalized terms. */
+    fun search(request: MusubiSearchQueryV1): CompletableFuture<MusubiSearchPageV1> =
+        executePost(SEARCH_PATH, request.toJsonBytes(), MusubiJsonV1::parseSearchPage)
 
     fun executor(): HttpTransportExecutor = executor
 
@@ -220,9 +237,11 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
         const val VERSIONS_PATH = "/v1/musubi/queries/versions"
         const val MAINTAINERS_PATH = "/v1/musubi/queries/maintainers"
         const val ARCHIVE_LOCATIONS_PATH = "/v1/musubi/queries/archive-locations"
+        const val ARCHIVE_RETENTION_PATH = "/v1/musubi/queries/archive-retention"
         const val ALIAS_PATH = "/v1/musubi/queries/alias"
         const val ALIAS_HISTORY_PATH = "/v1/musubi/queries/alias-history"
         const val ORDERED_PREFIX_PATH = "/v1/musubi/queries/ordered-prefix"
+        const val SEARCH_PATH = "/v1/musubi/queries/search"
 
         private const val REQUEST_MAX_BYTES = 64 * 1024
         private const val RESPONSE_MAX_BYTES = 8 * 1024 * 1024

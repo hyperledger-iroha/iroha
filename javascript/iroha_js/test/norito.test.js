@@ -661,6 +661,7 @@ const REGISTER_ASSET = {
       mintable: "Infinitely",
       spec: { scale: null },
       balance_scope_policy: "Global",
+      owning_domain: null,
       confidential_policy: {
         mode: "TransparentOnly",
         vk_set_hash: null,
@@ -686,6 +687,7 @@ const REGISTER_ASSET_WITH_POLICY = {
       mintable: "Limited(5)",
       spec: { scale: 2 },
       balance_scope_policy: "DataspaceRestricted",
+      owning_domain: "settlement.main",
       confidential_policy: {
         mode: "Convertible",
         vk_set_hash:
@@ -844,6 +846,18 @@ baseTest("pure JS Norito asset definition codec rejects adversarial fields", () 
     },
   });
   withMissingNativeBinding(() => {
+    const missingOwnership = withAssetPatch({});
+    delete missingOwnership.Register.AssetDefinition.owning_domain;
+    assert.throws(
+      () => noritoEncodeInstruction(missingOwnership),
+      /owning_domain is required/u,
+    );
+    const missingBalancePolicy = withAssetPatch({});
+    delete missingBalancePolicy.Register.AssetDefinition.balance_scope_policy;
+    assert.throws(
+      () => noritoEncodeInstruction(missingBalancePolicy),
+      /balance_scope_policy is required/u,
+    );
     assert.throws(
       () => noritoEncodeInstruction(withAssetPatch({ mintable: "Limited(0)" })),
       /positive unsigned 32-bit integer/,
@@ -1753,7 +1767,7 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
           multisig_account_alias: "cbdc@hbl.sbp",
           signer_account_id: MULTISIG_SIGNER_ID,
           signature_b64,
-          contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           entrypoint: "execute",
           payload: { probe: true },
           fee_payment: authorityFeePayment(10_000),

@@ -20015,7 +20015,7 @@ mod tests {
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
             "xor".parse().unwrap(),
         )

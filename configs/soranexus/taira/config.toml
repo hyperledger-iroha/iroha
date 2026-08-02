@@ -69,6 +69,20 @@ query_burst_per_authority = 320
 webhooks_enabled = false
 zk_attachments_enabled = false
 
+# First-release Bootle/Lantern issuance is deliberately staged disabled in the
+# shared template. The peer-1 renderer may enable it only after binding the
+# exact public provider policy and the governed on-chain issuer policy. The
+# provider owns all authentication and Falcon trapdoor material; no secret is
+# accepted in this file.
+[torii.privacy_bootle_lantern_issuer]
+enabled = false
+state_dir = "/var/lib/iroha/taira-validator-1/privacy/bootle-lantern/issuer"
+max_inflight = 2
+authorization_lifetime_blocks = 300
+max_records = 4096
+max_total_bytes = 13557760
+terminal_retention_blocks = 4096
+
 [torii.cors]
 enabled = true
 allowed_origins = [

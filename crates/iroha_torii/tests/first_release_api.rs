@@ -283,7 +283,7 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/v1/sorafs/por/status")
+                    .uri("/v1/sorafs/por/status?limit=1000&max_bytes=4194304")
                     .extension(local_connect_info())
                     .body(axum::body::Body::empty())
                     .expect("PoR status request"),

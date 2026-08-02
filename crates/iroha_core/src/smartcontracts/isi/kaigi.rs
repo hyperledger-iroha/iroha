@@ -1453,7 +1453,7 @@ mod tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     domain.clone(),
                     Name::from_str("unused-fee-fixture").expect("asset name"),
                 ),

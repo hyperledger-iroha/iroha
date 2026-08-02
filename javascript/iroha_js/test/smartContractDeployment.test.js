@@ -5,6 +5,7 @@ import test from "node:test";
 import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
+import { parseCanonicalContractAddress } from "../src/contractAddress.js";
 import {
   buildCancelSmartContractCodeUploadInstruction,
   buildCommitContractDeploymentInstruction,
@@ -117,7 +118,7 @@ test("current smart-contract deployment instructions round-trip through Norito",
     buildCancelSmartContractCodeUploadInstruction({ codeHash: codeHashHex }),
     buildCommitContractDeploymentInstruction({
       expectedDeployNonce: 7,
-      contractAddress: "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62",
+      contractAddress: "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
       codeHash: codeHashHex,
       contractAlias: "demo::universal",
       leaseExpiryMs: 123_456,
@@ -171,12 +172,36 @@ test("artifact preparation verifies the authenticated CNTR envelope before uploa
 test("contract-address derivation matches the pinned current-Rust V1 vector", () => {
   assert.equal(
     deriveContractAddress({
+      chainId: "pk3",
       chainDiscriminant: 753,
       authority: AUTHORITY,
       deployNonce: 7,
       dataspaceId: 0,
     }),
-    "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62",
+    "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
+  );
+});
+
+test("contract-address derivation commits the exact full chain identity", () => {
+  const common = {
+    chainDiscriminant: 753,
+    authority: AUTHORITY,
+    deployNonce: 7,
+    dataspaceId: 0,
+  };
+  assert.notEqual(
+    deriveContractAddress({ ...common, chainId: "pk3-alpha" }),
+    deriveContractAddress({ ...common, chainId: "pk3-beta" }),
+  );
+});
+
+test("contract-address parsing rejects a checksum-valid legacy HRP", () => {
+  assert.throws(
+    () =>
+      parseCanonicalContractAddress(
+        "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62",
+      ),
+    /canonical irohac prefix/u,
   );
 });
 
@@ -313,7 +338,7 @@ test("browser deployment retains the existing key locally and commits every step
   assert.match(registeredManifest.provenance.signature, /^[0-9A-F]{128}$/u);
   assert.equal(
     result.contractAddress,
-    "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62",
+    "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
   );
   assert.equal(result.observedBlockHeight, "10");
   assert.equal(result.observedBlockHash, hashLiteral("ab".repeat(32)));
@@ -557,6 +582,7 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
   );
 
   const wrongDataspaceAddress = deriveContractAddress({
+    chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
     deployNonce: 6,

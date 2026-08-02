@@ -5,6 +5,7 @@
     "private_key": "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
     "domain": "wallets",
     "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    "asset_name": "rose",
     "initial_balance": "1000"
   },
   {
@@ -13,6 +14,7 @@
     "private_key": "802620AF3F96DEEF44348FEB516C057558972CEC4C75C4DB9C5B3AAC843668854BF828",
     "domain": "wallets",
     "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    "asset_name": "rose",
     "initial_balance": "400"
   }
 ]

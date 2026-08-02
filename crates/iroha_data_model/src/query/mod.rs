@@ -1207,6 +1207,8 @@ mod model {
         FindMusubiMaintainersV1(musubi::prelude::FindMusubiMaintainersV1),
         /// Fetch a finalized page of renewable Musubi V1 archive locations.
         FindMusubiArchiveLocationsV1(musubi::prelude::FindMusubiArchiveLocationsV1),
+        /// Fetch bounded exact finalized Musubi V1 cache-retention decisions.
+        FindMusubiArchiveRetentionV1(musubi::prelude::FindMusubiArchiveRetentionV1),
         /// Fetch one permanent Musubi V1 global alias record.
         FindMusubiAliasV1(musubi::prelude::FindMusubiAliasV1),
         /// Fetch a finalized page of permanent Musubi V1 alias history.
@@ -1413,6 +1415,8 @@ mod model {
         MusubiMaintainerPage(crate::musubi::MusubiMaintainerPageV1),
         /// Finalized renewable archive-location page.
         MusubiArchiveLocationPage(crate::musubi::MusubiArchiveLocationPageV1),
+        /// Exact bounded finalized cache-retention decisions.
+        MusubiArchiveRetentionPage(crate::musubi::MusubiArchiveRetentionPageV1),
         /// Exact permanent global-alias payload.
         MusubiAlias(crate::musubi::MusubiAliasRecordV1),
         /// Finalized permanent alias-history page.
@@ -4310,6 +4314,7 @@ impl_singular_queries! {
     musubi::prelude::FindMusubiVersionsV1 => crate::musubi::MusubiVersionPageV1,
     musubi::prelude::FindMusubiMaintainersV1 => crate::musubi::MusubiMaintainerPageV1,
     musubi::prelude::FindMusubiArchiveLocationsV1 => crate::musubi::MusubiArchiveLocationPageV1,
+    musubi::prelude::FindMusubiArchiveRetentionV1 => crate::musubi::MusubiArchiveRetentionPageV1,
     musubi::prelude::FindMusubiAliasV1 => crate::musubi::MusubiAliasRecordV1,
     musubi::prelude::FindMusubiAliasHistoryV1 => crate::musubi::MusubiAliasHistoryPageV1,
     musubi::prelude::FindMusubiOrderedPrefixV1 => crate::musubi::MusubiOrderedPackagePageV1,
@@ -6809,9 +6814,9 @@ pub mod musubi {
     use std::fmt;
 
     use crate::musubi::{
-        MusubiAliasQueryV1, MusubiArchiveLocationQueryV1, MusubiExactPackageQueryV1,
-        MusubiExactReleaseQueryV1, MusubiOrderedPrefixQueryV1, MusubiPackagePageQueryV1,
-        MusubiResolverIndexQueryV1,
+        MusubiAliasQueryV1, MusubiArchiveLocationQueryV1, MusubiArchiveRetentionQueryV1,
+        MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1, MusubiOrderedPrefixQueryV1,
+        MusubiPackagePageQueryV1, MusubiResolverIndexQueryV1,
     };
 
     pub use self::model::*;
@@ -6903,6 +6908,20 @@ pub mod musubi {
         pub struct FindMusubiArchiveLocationsV1 {
             /// Archive-scoped finalized page request.
             pub request: MusubiArchiveLocationQueryV1,
+        }
+
+        /// Fetch exact finalized cache-retention decisions for a bounded archive batch.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiArchiveRetentionV1 {
+            /// Exact archive identities and optional finalized-snapshot binding.
+            pub request: MusubiArchiveRetentionQueryV1,
         }
 
         /// Fetch one exact permanent Musubi V1 global alias record.
@@ -7008,6 +7027,16 @@ pub mod musubi {
         }
     }
 
+    impl fmt::Display for FindMusubiArchiveRetentionV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find Musubi V1 retention for {} exact archive(s)",
+                self.request.archive_ids.len()
+            )
+        }
+    }
+
     impl fmt::Display for FindMusubiAliasV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
@@ -7042,8 +7071,9 @@ pub mod musubi {
     pub mod prelude {
         pub use super::{
             FindMusubiAliasHistoryV1, FindMusubiAliasV1, FindMusubiArchiveLocationsV1,
-            FindMusubiExactPackageV1, FindMusubiExactReleaseV1, FindMusubiMaintainersV1,
-            FindMusubiOrderedPrefixV1, FindMusubiResolverIndexV1, FindMusubiVersionsV1,
+            FindMusubiArchiveRetentionV1, FindMusubiExactPackageV1, FindMusubiExactReleaseV1,
+            FindMusubiMaintainersV1, FindMusubiOrderedPrefixV1, FindMusubiResolverIndexV1,
+            FindMusubiVersionsV1,
         };
     }
 
@@ -7055,13 +7085,14 @@ pub mod musubi {
         use crate::{
             musubi::{
                 ArchiveId, MusubiAliasNameV1, MusubiAliasQueryV1, MusubiArchiveLocationPageV1,
-                MusubiArchiveLocationQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
-                MusubiMaintainerPageV1, MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1,
-                MusubiOrderedPrefixV1, MusubiPackageIdV1, MusubiPackageNameV1,
-                MusubiPackagePageQueryV1, MusubiPackageRecordV1, MusubiPackageScopeV1,
-                MusubiPageRequestV1, MusubiReleaseIdV1, MusubiReleaseRecordV1,
-                MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiVersionPageV1,
-                MusubiVersionV1,
+                MusubiArchiveLocationQueryV1, MusubiArchiveRetentionPageV1,
+                MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1,
+                MusubiExactReleaseQueryV1, MusubiMaintainerPageV1, MusubiOrderedPackagePageV1,
+                MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1, MusubiPackageIdV1,
+                MusubiPackageNameV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
+                MusubiPackageScopeV1, MusubiPageRequestV1, MusubiReleaseIdV1,
+                MusubiReleaseRecordV1, MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1,
+                MusubiVersionPageV1, MusubiVersionV1,
             },
             nexus::DataSpaceId,
             query::{SingularQuery, SingularQueryBox, SingularQueryOutputBox},
@@ -7117,6 +7148,11 @@ pub mod musubi {
                     page: page(),
                 })
                 .into(),
+                FindMusubiArchiveRetentionV1::new(MusubiArchiveRetentionQueryV1 {
+                    archive_ids: vec![ArchiveId::new([0xA5; 32])],
+                    expected_snapshot: None,
+                })
+                .into(),
                 FindMusubiAliasV1::new(MusubiAliasQueryV1 {
                     alias: alias.clone(),
                     page: page(),
@@ -7159,6 +7195,7 @@ pub mod musubi {
             assert_query_output::<FindMusubiVersionsV1, MusubiVersionPageV1>();
             assert_query_output::<FindMusubiMaintainersV1, MusubiMaintainerPageV1>();
             assert_query_output::<FindMusubiArchiveLocationsV1, MusubiArchiveLocationPageV1>();
+            assert_query_output::<FindMusubiArchiveRetentionV1, MusubiArchiveRetentionPageV1>();
             assert_query_output::<FindMusubiAliasV1, crate::musubi::MusubiAliasRecordV1>();
             assert_query_output::<FindMusubiAliasHistoryV1, crate::musubi::MusubiAliasHistoryPageV1>(
             );
@@ -7170,6 +7207,7 @@ pub mod musubi {
             assert_output_variant::<MusubiVersionPageV1>();
             assert_output_variant::<MusubiMaintainerPageV1>();
             assert_output_variant::<MusubiArchiveLocationPageV1>();
+            assert_output_variant::<MusubiArchiveRetentionPageV1>();
             assert_output_variant::<crate::musubi::MusubiAliasRecordV1>();
             assert_output_variant::<crate::musubi::MusubiAliasHistoryPageV1>();
             assert_output_variant::<MusubiOrderedPackagePageV1>();
@@ -7898,7 +7936,7 @@ mod fault_injection_tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
@@ -7993,7 +8031,7 @@ mod fault_injection_tests {
             leg_index: 0,
             leg_id: "fault-injection-leg".to_owned(),
             asset: AssetId::new(
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("rose").expect("asset name"),
                 ),
@@ -8084,7 +8122,7 @@ mod tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),

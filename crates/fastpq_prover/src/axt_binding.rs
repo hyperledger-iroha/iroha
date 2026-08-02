@@ -859,7 +859,8 @@ mod tests {
         const RECEIVER_START: u64 = 120;
 
         let domain = DomainId::try_new("axt", "universal").expect("domain id");
-        let asset_definition = AssetDefinitionId::new(domain.clone(), "rose".parse().unwrap());
+        let asset_definition =
+            AssetDefinitionId::derive_from_components(domain.clone(), "rose".parse().unwrap());
         let from_account = deterministic_account("transfer_sender", &domain);
         let to_account = deterministic_account("transfer_receiver", &domain);
         let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")

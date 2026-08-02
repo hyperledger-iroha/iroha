@@ -36,7 +36,13 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
     let escrow_account = iroha_data_model::account::Account::new(bob_id.clone()).build(&bob_id);
     let carpenter_account =
         iroha_data_model::account::Account::new(carpenter_id.clone()).build(&carpenter_id);
-    let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
+    let asset_def = AssetDefinition::numeric(
+        def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
         Quantity::from(1_000_u64),
@@ -82,7 +88,7 @@ fn configure_state(def_id: &AssetDefinitionId, seat_cooldown_blocks: u64) -> Sta
 }
 
 fn xor_definition_id() -> AssetDefinitionId {
-    iroha_data_model::asset::AssetDefinitionId::new(
+    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     )

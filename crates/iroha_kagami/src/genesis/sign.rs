@@ -190,7 +190,7 @@ fn collect_topology_peers(manifest: &RawGenesisTransaction) -> Vec<PeerId> {
 }
 
 fn default_npos_bootstrap_stake_asset_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_DOMAIN)
             .expect("static stake asset domain must remain valid"),
         DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME
@@ -355,9 +355,14 @@ fn append_npos_bootstrap(
         registrations.accounts.insert(escrow_account_id.clone());
     }
     if !registrations.asset_defs.contains(stake_asset_id) {
-        let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-            .with_name("NPOS Stake".to_owned())
-            .with_metadata(Metadata::default());
+        let definition = AssetDefinition::new(
+            stake_asset_id.clone(),
+            "NPOS Stake".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(stake_asset_id.clone());
     }
@@ -3324,9 +3329,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             PathBuf::from("."),
         )
         .append_instruction(Register::asset_definition(
-            AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
-                .with_name("xor".to_owned())
-                .with_metadata(Metadata::default()),
+            AssetDefinition::new(
+                asset_definition_id.clone(),
+                "xor".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default()),
         ))
         .append_instruction(SetAssetDefinitionAlias::bind(
             asset_definition_id,
@@ -3359,9 +3369,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let manifest =
             GenesisBuilder::new_without_executor(ChainId::from("iroha3-taira"), PathBuf::from("."))
                 .append_instruction(Register::asset_definition(
-                    AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
-                        .with_name("xor".to_owned())
-                        .with_metadata(Metadata::default()),
+                    AssetDefinition::new(
+                        asset_definition_id.clone(),
+                        "xor".to_owned(),
+                        NumericSpec::default(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
+                    .with_metadata(Metadata::default()),
                 ))
                 .append_instruction(SetAssetDefinitionAlias::bind(
                     asset_definition_id,
@@ -3418,14 +3433,24 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let manifest =
             GenesisBuilder::new_without_executor(ChainId::from("iroha3-taira"), PathBuf::from("."))
                 .append_instruction(Register::asset_definition(
-                    AssetDefinition::new(canonical_xor.clone(), NumericSpec::default())
-                        .with_name("xor".to_owned())
-                        .with_metadata(Metadata::default()),
+                    AssetDefinition::new(
+                        canonical_xor.clone(),
+                        "xor".to_owned(),
+                        NumericSpec::default(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
+                    .with_metadata(Metadata::default()),
                 ))
                 .append_instruction(Register::asset_definition(
-                    AssetDefinition::new(wrong_xor.clone(), NumericSpec::default())
-                        .with_name("xor-shadow".to_owned())
-                        .with_metadata(Metadata::default()),
+                    AssetDefinition::new(
+                        wrong_xor.clone(),
+                        "xor-shadow".to_owned(),
+                        NumericSpec::default(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
+                    .with_metadata(Metadata::default()),
                 ))
                 .append_instruction(SetAssetDefinitionAlias::bind(
                     canonical_xor,

@@ -103,7 +103,7 @@ if [[ -z "${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}" ]]; then
 fi
 
 EVIDENCE_ROOT="$ROOT_DIR/artifacts/kagemusha-candidate-evidence/$CANDIDATE_SHA256/$STAGE_SHA256"
-STAGE_MANIFEST="$EVIDENCE_ROOT/candidate-stage-manifest-v1.json"
+STAGE_MANIFEST="$EVIDENCE_ROOT/candidate-stage-manifest-v2.json"
 CANDIDATE_RECORD="$EVIDENCE_ROOT/evidence/candidate/candidate-v4.norito"
 NATIVE_DIRECTORY="$EVIDENCE_ROOT/evidence/candidate/lib/arm64-v8a"
 NATIVE_LIBRARY="$NATIVE_DIRECTORY/libconnect_norito_bridge.so"

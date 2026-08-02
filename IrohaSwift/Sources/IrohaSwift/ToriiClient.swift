@@ -4435,6 +4435,104 @@ public struct ToriiExplorerPaginationMeta: Decodable, Sendable, Equatable {
     }
 }
 
+private let toriiExplorerCursorMaxLength = 1_424
+
+private func normalizeToriiExplorerCursor(_ raw: String?, field: String) throws -> String? {
+    guard let raw else {
+        return nil
+    }
+    guard !raw.isEmpty,
+          raw.utf8.count <= toriiExplorerCursorMaxLength,
+          raw.utf8.allSatisfy({ byte in
+              (48...57).contains(byte)
+                  || (65...90).contains(byte)
+                  || (97...122).contains(byte)
+                  || byte == 45
+                  || byte == 95
+          }) else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be canonical base64url without padding"
+        )
+    }
+    let remainder = raw.utf8.count % 4
+    guard remainder != 1 else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be canonical base64url without padding"
+        )
+    }
+    var standard = raw.replacingOccurrences(of: "-", with: "+")
+        .replacingOccurrences(of: "_", with: "/")
+    if remainder != 0 {
+        standard.append(String(repeating: "=", count: 4 - remainder))
+    }
+    guard let decoded = Data(base64Encoded: standard) else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be canonical base64url without padding"
+        )
+    }
+    let canonical = decoded.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    guard canonical == raw else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be canonical base64url without padding"
+        )
+    }
+    return raw
+}
+
+/// Strict seek-cursor metadata returned by world-backed Explorer lists.
+public struct ToriiExplorerCursorMeta: Decodable, Sendable, Equatable {
+    public let limit: UInt32
+    public let nextCursor: String?
+    public let hasMore: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case nextCursor = "next_cursor"
+        case hasMore = "has_more"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["limit", "next_cursor", "has_more"],
+            debugName: "Explorer cursor pagination"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        limit = try container.decode(UInt32.self, forKey: .limit)
+        guard (1...100).contains(limit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .limit,
+                in: container,
+                debugDescription: "Explorer cursor pagination limit must be between 1 and 100"
+            )
+        }
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "Explorer cursor pagination requires next_cursor"
+                )
+            )
+        }
+        nextCursor = try normalizeToriiExplorerCursor(
+            container.decodeIfPresent(String.self, forKey: .nextCursor),
+            field: "Explorer cursor pagination next_cursor"
+        )
+        hasMore = try container.decode(Bool.self, forKey: .hasMore)
+        guard hasMore == (nextCursor != nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .hasMore,
+                in: container,
+                debugDescription: "Explorer cursor pagination has_more must match next_cursor presence"
+            )
+        }
+    }
+}
+
 /// Instruction payload wrapper returned by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionBox: Decodable, Sendable, Equatable {
     public let encoded: String?
@@ -4594,10 +4692,33 @@ public struct ToriiExplorerRwaRecord: Decodable, Sendable, Equatable {
     }
 }
 
-/// Paginated explorer RWA lot list returned by `/v1/explorer/rwas`.
+/// Bounded cursor page returned by `/v1/explorer/rwas`.
 public struct ToriiExplorerRwasPage: Decodable, Sendable, Equatable {
-    public let pagination: ToriiExplorerPaginationMeta
+    public let pagination: ToriiExplorerCursorMeta
     public let items: [ToriiExplorerRwaRecord]
+
+    private enum CodingKeys: String, CodingKey {
+        case pagination
+        case items
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["pagination", "items"],
+            debugName: "Explorer RWA page"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pagination = try container.decode(ToriiExplorerCursorMeta.self, forKey: .pagination)
+        items = try container.decode([ToriiExplorerRwaRecord].self, forKey: .items)
+        guard items.count <= Int(pagination.limit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .items,
+                in: container,
+                debugDescription: "Explorer RWA page contains more items than its limit"
+            )
+        }
+    }
 }
 
 /// Contract-call activity item returned by `/v1/contracts/activity`.
@@ -5258,34 +5379,36 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
 
 /// Query parameters accepted by `/v1/explorer/rwas`.
 public struct ToriiExplorerRwasParams: Sendable, Equatable {
-    public var page: UInt64?
-    public var perPage: UInt64?
+    public var cursor: String?
+    public var limit: UInt32?
     public var ownedBy: String?
     public var domain: String?
 
-    public init(page: UInt64? = nil,
-                perPage: UInt64? = nil,
+    public init(cursor: String? = nil,
+                limit: UInt32? = nil,
                 ownedBy: String? = nil,
                 domain: String? = nil) {
-        self.page = page
-        self.perPage = perPage
+        self.cursor = cursor
+        self.limit = limit
         self.ownedBy = ownedBy
         self.domain = domain
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
-        if let page {
-            guard page > 0 else {
-                throw ToriiClientError.invalidPayload("page must be at least 1.")
-            }
-            items.append(URLQueryItem(name: "page", value: String(page)))
+        if let cursor = try normalizeToriiExplorerCursor(
+            cursor,
+            field: "Explorer RWA cursor"
+        ) {
+            items.append(URLQueryItem(name: "cursor", value: cursor))
         }
-        if let perPage {
-            guard perPage > 0 else {
-                throw ToriiClientError.invalidPayload("perPage must be at least 1.")
+        if let limit {
+            guard (1...100).contains(limit) else {
+                throw ToriiClientError.invalidPayload(
+                    "Explorer RWA limit must be between 1 and 100."
+                )
             }
-            items.append(URLQueryItem(name: "per_page", value: String(perPage)))
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
         }
         if let ownedBy {
             let exactOwnedBy = try requireToriiExactNonEmptyQueryValue(ownedBy, field: "ownedBy")
@@ -28116,18 +28239,22 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         continuation.finish()
                         return
                     }
-                    var currentPage = params.page ?? 1
-                    var currentPerPage = params.perPage
+                    var currentCursor = params.cursor
+                    var currentLimit = params.limit
+                    var seenCursors = Set<String>()
+                    if let currentCursor {
+                        seenCursors.insert(currentCursor)
+                    }
                     var remaining = maxItems
                     while true {
                         try Task.checkCancellation()
-                        let pageParams = ToriiExplorerRwasParams(page: currentPage,
-                                                                 perPage: currentPerPage,
+                        let pageParams = ToriiExplorerRwasParams(cursor: currentCursor,
+                                                                 limit: currentLimit,
                                                                  ownedBy: params.ownedBy,
                                                                  domain: params.domain)
                         let response = try await getExplorerRwas(params: pageParams)
-                        if currentPerPage == nil {
-                            currentPerPage = response.pagination.perPage
+                        if currentLimit == nil {
+                            currentLimit = response.pagination.limit
                         }
                         for item in response.items {
                             continuation.yield(item)
@@ -28142,13 +28269,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         if remaining == 0 {
                             break
                         }
-                        if response.items.isEmpty || response.pagination.totalPages == 0 {
+                        if !response.pagination.hasMore {
                             break
                         }
-                        if currentPage >= response.pagination.totalPages {
-                            break
+                        guard let nextCursor = response.pagination.nextCursor else {
+                            throw ToriiClientError.invalidPayload(
+                                "Explorer RWA response declared more results without a next cursor."
+                            )
                         }
-                        currentPage += 1
+                        guard seenCursors.insert(nextCursor).inserted else {
+                            throw ToriiClientError.invalidPayload(
+                                "Explorer RWA response repeated a cursor."
+                            )
+                        }
+                        currentCursor = nextCursor
                     }
                     continuation.finish()
                 } catch is CancellationError {

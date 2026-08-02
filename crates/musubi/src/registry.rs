@@ -20,20 +20,23 @@ use iroha::{
     client::{
         Client, PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
     },
-    config::Config,
+    config::{Config, resolve_account_chain_discriminant},
 };
 use iroha_data_model::{
+    account::address::ChainDiscriminantGuard,
     isi::{InstructionBox, musubi::PublishMusubiReleaseV1},
     musubi::{
         MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiAliasHistoryPageV1,
         MusubiAliasQueryV1, MusubiAliasRecordV1, MusubiArchiveLocationPageV1,
         MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1, MusubiArchiveLocationV1,
-        MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1, MusubiMaintainerPageV1,
+        MusubiArchiveRetentionPageV1, MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1,
+        MusubiExactReleaseQueryV1, MusubiMaintainerPageV1, MusubiNamespaceBindingV1,
         MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
         MusubiPackageIdV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
         MusubiPackageSelectorV1, MusubiPageRequestV1, MusubiReleaseIdV1, MusubiReleaseRecordV1,
-        MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiSeedIngressReceiptBindingV1,
-        MusubiSeedIngressReceiptV1, MusubiVersionPageV1, MusubiVersionReqV1,
+        MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiSearchPageV1,
+        MusubiSearchQueryV1, MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
+        MusubiVersionPageV1, MusubiVersionReqV1,
     },
     sorafs::capacity::ProviderId,
     transaction::FeePaymentIntent,
@@ -104,28 +107,39 @@ impl Error for RegistryErrorV1 {}
 pub struct RegistryReadClientV1 {
     torii_url: Url,
     timeout: Duration,
+    account_chain_discriminant: u16,
 }
 
 impl RegistryReadClientV1 {
     /// Construct a signer-free client from an already validated public Torii URL.
-    pub fn new(torii_url: Url, timeout: Duration) -> Result<Self, RegistryErrorV1> {
+    pub fn new(
+        torii_url: Url,
+        timeout: Duration,
+        account_chain_discriminant: u16,
+    ) -> Result<Self, RegistryErrorV1> {
         if !matches!(torii_url.scheme(), "http" | "https")
             || !torii_url.username().is_empty()
             || torii_url.password().is_some()
             || timeout == Duration::ZERO
             || timeout > Duration::from_secs(60)
+            || account_chain_discriminant == 0
         {
             return Err(RegistryErrorV1::new(
                 RegistryFailureClassV1::Permanent,
                 "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
             ));
         }
-        Ok(Self { torii_url, timeout })
+        Ok(Self {
+            torii_url,
+            timeout,
+            account_chain_discriminant,
+        })
     }
 
-    /// Load only `torii_url` from explicit `--config` or the platform `client.toml` convention.
+    /// Load only public endpoint/network context from `--config` or platform `client.toml`.
     ///
-    /// Account, private-key, bearer-token, and basic-auth fields are neither parsed into their
+    /// Only `torii_url`, timeout, and `[account].profile`/`chain_discriminant` are interpreted.
+    /// Account identity, private-key, bearer-token, and basic-auth fields are neither parsed into
     /// typed forms nor retained. The default path is the same required `client.toml` used by the
     /// Iroha CLI; project manifests and command-line credential values are never consulted.
     pub fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
@@ -159,13 +173,38 @@ impl RegistryReadClientV1 {
             .map(Duration::from_millis)
             .unwrap_or(DEFAULT_PUBLIC_QUERY_TIMEOUT)
             .min(Duration::from_secs(60));
-        Self::new(torii_url, timeout)
+        let account = match document.get("account") {
+            Some(value) => Some(value.as_table().ok_or_else(invalid_public_config)?),
+            None => None,
+        };
+        let profile = match account.and_then(|account| account.get("profile")) {
+            Some(value) => Some(value.as_str().ok_or_else(invalid_public_config)?),
+            None => None,
+        };
+        let explicit_discriminant =
+            match account.and_then(|account| account.get("chain_discriminant")) {
+                Some(value) => {
+                    let value = value.as_integer().ok_or_else(invalid_public_config)?;
+                    Some(u16::try_from(value).map_err(|_| invalid_public_config())?)
+                }
+                None => None,
+            };
+        let account_chain_discriminant =
+            resolve_account_chain_discriminant(profile, explicit_discriminant)
+                .map_err(|_| invalid_public_config())?;
+        Self::new(torii_url, timeout, account_chain_discriminant)
     }
 
     /// Return the configured public endpoint. No account or credential material is retained.
     #[must_use]
     pub const fn torii_url(&self) -> &Url {
         &self.torii_url
+    }
+
+    /// Return the validated public I105 account chain discriminant without loading a signer.
+    #[must_use]
+    pub const fn account_chain_discriminant(&self) -> u16 {
+        self.account_chain_discriminant
     }
 
     /// Resolve canonical `namespace/package` text to its structural package identity.
@@ -187,6 +226,25 @@ impl RegistryReadClientV1 {
             .ok_or_else(|| {
                 RegistryErrorV1::new(RegistryFailureClassV1::NotFound, "MUSUBI_PACKAGE_NOT_FOUND")
             })
+    }
+
+    /// Bind a canonical selector through its immutable namespace even before first publication.
+    ///
+    /// Unlike [`Self::resolve_selector`], this queries the namespace directory prefix and does
+    /// not require a package row to exist. This is the package/publication boundary for claiming
+    /// a previously absent package under an already-registered namespace.
+    pub fn bind_selector_namespace(
+        &self,
+        selector: &MusubiPackageSelectorV1,
+    ) -> Result<MusubiPackageIdV1, RegistryErrorV1> {
+        selector.validate().map_err(|_| invalid_response())?;
+        let prefix = MusubiOrderedPrefixV1::new(&format!("{}/", selector.namespace))
+            .map_err(|_| invalid_response())?;
+        let page = self.ordered_prefix(&MusubiOrderedPrefixQueryV1 {
+            prefix,
+            page: first_page(1),
+        })?;
+        package_id_from_namespace_binding(selector, &page.namespace_binding)
     }
 
     /// Fetch and validate one exact authoritative package record.
@@ -252,7 +310,7 @@ impl RegistryReadClientV1 {
         Ok(page)
     }
 
-    /// Fetch and validate one finalized accepted-member page.
+    /// Fetch and validate one finalized accepted-member and pending-invitation page.
     pub fn maintainers(
         &self,
         request: &MusubiPackagePageQueryV1,
@@ -261,13 +319,7 @@ impl RegistryReadClientV1 {
             PublicMusubiQueryPathV1::Maintainers,
             request,
         )?;
-        page.validate().map_err(|_| invalid_response())?;
-        for member in &page.items {
-            member.validate().map_err(|_| invalid_response())?;
-            if member.package != request.package {
-                return Err(invalid_response());
-            }
-        }
+        validate_maintainer_page(request, &page)?;
         Ok(page)
     }
 
@@ -288,6 +340,36 @@ impl RegistryReadClientV1 {
                     return Err(invalid_response());
                 }
             }
+        }
+        Ok(page)
+    }
+
+    /// Fetch and validate exact finalized cache-retention decisions for one bounded batch.
+    pub fn archive_retention(
+        &self,
+        request: &MusubiArchiveRetentionQueryV1,
+    ) -> Result<MusubiArchiveRetentionPageV1, RegistryErrorV1> {
+        request.validate().map_err(|_| {
+            RegistryErrorV1::new(
+                RegistryFailureClassV1::Permanent,
+                "MUSUBI_REGISTRY_RETENTION_REQUEST_INVALID",
+            )
+        })?;
+        let page = self.query_required::<_, MusubiArchiveRetentionPageV1>(
+            PublicMusubiQueryPathV1::ArchiveRetention,
+            request,
+        )?;
+        page.validate().map_err(|_| invalid_response())?;
+        if request
+            .expected_snapshot
+            .is_some_and(|expected| expected != page.snapshot)
+            || page
+                .items
+                .iter()
+                .map(|decision| decision.archive_id)
+                .ne(request.archive_ids.iter().copied())
+        {
+            return Err(invalid_response());
         }
         Ok(page)
     }
@@ -356,6 +438,35 @@ impl RegistryReadClientV1 {
         Ok(page)
     }
 
+    /// Search the rebuildable finalized-event metadata projection by exact normalized terms.
+    ///
+    /// This discovery API is intentionally separate from [`Self::resolver_index`]; callers
+    /// must resolve a selected structural package through the universal sparse index.
+    pub fn search(
+        &self,
+        request: &MusubiSearchQueryV1,
+    ) -> Result<MusubiSearchPageV1, RegistryErrorV1> {
+        request.validate().map_err(|_| {
+            RegistryErrorV1::new(
+                RegistryFailureClassV1::Permanent,
+                "MUSUBI_REGISTRY_SEARCH_REQUEST_INVALID",
+            )
+        })?;
+        let page =
+            self.query_required::<_, MusubiSearchPageV1>(PublicMusubiQueryPathV1::Search, request)?;
+        page.validate().map_err(|_| invalid_response())?;
+        if request.page.cursor.as_ref().is_some_and(|cursor| {
+            page.snapshot != cursor.snapshot
+                || page
+                    .items
+                    .first()
+                    .is_some_and(|item| item.package <= cursor.last_package)
+        }) {
+            return Err(invalid_response());
+        }
+        Ok(page)
+    }
+
     fn query_required<Q, R>(
         &self,
         path: PublicMusubiQueryPathV1,
@@ -382,6 +493,7 @@ impl RegistryReadClientV1 {
         Q: JsonSerialize + ?Sized,
         R: JsonDeserialize,
     {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
         let response = post_public_musubi_query_v1(&self.torii_url, path, query, self.timeout)
             .map_err(|_| {
                 RegistryErrorV1::new(
@@ -404,13 +516,19 @@ impl RegistryReadClientV1 {
 #[derive(Clone)]
 pub struct RegistrySigningClientV1 {
     client: Client,
+    account_chain_discriminant: u16,
 }
 
 impl fmt::Debug for RegistrySigningClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
         formatter
             .debug_struct("RegistrySigningClientV1")
             .field("authority", &self.client.account)
+            .field(
+                "account_chain_discriminant",
+                &self.account_chain_discriminant,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -425,9 +543,48 @@ impl RegistrySigningClientV1 {
                 "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
             )
         })?;
-        let mut client = Client::new(configuration);
+        Ok(Self::from_configuration(configuration))
+    }
+
+    pub(crate) fn load_with_publication_config(
+        config: Option<&Path>,
+    ) -> Result<(Self, iroha::config::MusubiPublicationConfig), RegistryErrorV1> {
+        let path = config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
+        let (configuration, publication) = Config::load_file_with_musubi_publication(path)
+            .map_err(|_| {
+                RegistryErrorV1::new(
+                    RegistryFailureClassV1::Permanent,
+                    "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
+                )
+            })?;
+        Ok((Self::from_configuration(configuration), publication))
+    }
+
+    pub(crate) fn load_with_publication_config_bytes(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<(Self, iroha::config::MusubiPublicationConfig), RegistryErrorV1> {
+        let (configuration, publication) = Config::load_bytes_with_musubi_publication(path, bytes)
+            .map_err(|_| {
+                RegistryErrorV1::new(
+                    RegistryFailureClassV1::Permanent,
+                    "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
+                )
+            })?;
+        Ok((Self::from_configuration(configuration), publication))
+    }
+
+    fn from_configuration(configuration: Config) -> Self {
+        let account_chain_discriminant = configuration.account_chain_discriminant;
+        let mut client = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(account_chain_discriminant);
+            Client::new(configuration)
+        };
         client.torii_request_timeout = client.torii_request_timeout.min(Duration::from_secs(60));
-        Ok(Self { client })
+        Self {
+            client,
+            account_chain_discriminant,
+        }
     }
 
     /// Return the configured mutation authority.
@@ -436,11 +593,54 @@ impl RegistrySigningClientV1 {
         &self.client.account
     }
 
+    /// Return the validated I105 account chain discriminant used by this signer.
+    #[must_use]
+    pub const fn account_chain_discriminant(&self) -> u16 {
+        self.account_chain_discriminant
+    }
+
+    /// Construct the fixed private-publication HTTPS client from this signer.
+    ///
+    /// Only the chain, account, and key pair are copied. Torii Basic Auth and configured
+    /// headers are deliberately excluded from the private publication service boundary.
+    pub fn publication_runtime_client(
+        &self,
+        timeout: Duration,
+    ) -> Result<
+        iroha::musubi_runtime::AuthenticatedMusubiPublicationRuntimeClientV1,
+        iroha::musubi_runtime::MusubiPublicationRuntimeTransportErrorV1,
+    > {
+        iroha::musubi_runtime::AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
+            &self.client,
+            timeout,
+        )
+    }
+
+    /// Parse one canonical account argument under the signing client's network profile.
+    ///
+    /// The scoped override is thread-local and is removed before returning. No key material is
+    /// accepted, retained, or exposed by this method.
+    pub fn parse_account_id(
+        &self,
+        input: &str,
+    ) -> Result<iroha_data_model::account::AccountId, RegistryErrorV1> {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
+        iroha_data_model::account::AccountId::parse_encoded(input)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|_| {
+                RegistryErrorV1::new(
+                    RegistryFailureClassV1::Permanent,
+                    "MUSUBI_ACCOUNT_ID_INVALID",
+                )
+            })
+    }
+
     /// Sign, submit, and wait for commitment of one concrete V1 instruction.
     pub fn submit_v1<I>(&self, instruction: I) -> Result<[u8; 32], RegistryErrorV1>
     where
         I: Into<InstructionBox>,
     {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
         let hash = self
             .client
             .submit_blocking(instruction, FeePaymentIntent::authority(Vec::new(), None))
@@ -512,8 +712,8 @@ impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
         _expected: &MusubiSeedIngressReceiptBindingV1,
         _car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
-        // TODO: Implement the server-side authenticated admitted-broker Norito request/response
-        // contract. This must stay fail-closed and must never fall back to `/v1/sorafs/upload`.
+        // This explicit fallback never probes Torii or the implemented private service. A
+        // configured production runtime supplies that authenticated service client instead.
         Err(PublicationBackendError::permanent(
             "SEED_INGRESS_SERVICE_NOT_CONFIGURED",
         ))
@@ -843,6 +1043,45 @@ fn invalid_response() -> RegistryErrorV1 {
     )
 }
 
+fn package_id_from_namespace_binding(
+    selector: &MusubiPackageSelectorV1,
+    binding: &MusubiNamespaceBindingV1,
+) -> Result<MusubiPackageIdV1, RegistryErrorV1> {
+    selector.validate().map_err(|_| invalid_response())?;
+    binding.validate().map_err(|_| invalid_response())?;
+    if selector.namespace != binding.namespace {
+        return Err(invalid_response());
+    }
+    let package = MusubiPackageIdV1::new(
+        binding.home_dataspace,
+        binding.scope.clone(),
+        selector.name.clone(),
+    );
+    package.validate().map_err(|_| invalid_response())?;
+    Ok(package)
+}
+
+fn validate_maintainer_page(
+    request: &MusubiPackagePageQueryV1,
+    page: &MusubiMaintainerPageV1,
+) -> Result<(), RegistryErrorV1> {
+    page.validate().map_err(|_| invalid_response())?;
+    for entry in &page.items {
+        entry.validate().map_err(|_| invalid_response())?;
+        if entry.key().package != request.package {
+            return Err(invalid_response());
+        }
+    }
+    Ok(())
+}
+
+fn invalid_public_config() -> RegistryErrorV1 {
+    RegistryErrorV1::new(
+        RegistryFailureClassV1::Permanent,
+        "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
+    )
+}
+
 fn registry_backend_error(error: RegistryErrorV1) -> PublicationBackendError {
     match error.class() {
         RegistryFailureClassV1::Retryable => PublicationBackendError::retryable(error.code()),
@@ -897,17 +1136,186 @@ fn read_bounded_config(path: &Path) -> Result<String, RegistryErrorV1> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::{cell::Cell, io::Write as _, net::TcpListener, time::Duration};
 
-    use iroha::crypto::{Algorithm, KeyPair};
+    use iroha::crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         ChainId,
         account::AccountId,
-        musubi::{ArchiveId, MusubiContentDigestV1, MusubiSemanticReleaseDigestV1},
+        musubi::{
+            ArchiveId, MusubiArchiveRetentionDecisionV1, MusubiArchiveRetentionDispositionV1,
+            MusubiArchiveRetentionPageV1, MusubiArchiveRetentionQueryV1, MusubiContentDigestV1,
+            MusubiInvitationStateV1, MusubiInviteIdV1, MusubiMaintainerDirectoryEntryV1,
+            MusubiMaintainerInvitationV1, MusubiPackageMemberV1, MusubiPackageRoleV1,
+            MusubiPackageScopeV1, MusubiRegistrySnapshotV1, MusubiSearchPageRequestV1,
+            MusubiSemanticReleaseDigestV1,
+        },
+        nexus::DataSpaceId,
     };
     use tempfile::tempdir;
 
     use super::*;
+
+    fn serve_json_once(response: Vec<u8>) -> (Url, thread::JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let address = listener.local_addr().expect("loopback address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("one query connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 2_048];
+            let (header_end, content_length) = loop {
+                let read = stream.read(&mut buffer).expect("read query request");
+                assert_ne!(read, 0, "query request ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = std::str::from_utf8(&request[..header_end]).expect("HTTP headers");
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().expect("content length"))
+                    })
+                    .unwrap_or(0);
+                break (header_end + 4, content_length);
+            };
+            while request.len() < header_end + content_length {
+                let read = stream.read(&mut buffer).expect("read query body");
+                assert_ne!(read, 0, "query request ended before its body");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let request_body = request[header_end..header_end + content_length].to_vec();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response.len()
+            )
+            .expect("write response headers");
+            stream.write_all(&response).expect("write response body");
+            request_body
+        });
+        (
+            format!("http://{address}/").parse().expect("loopback URL"),
+            server,
+        )
+    }
+
+    fn retention_page(
+        archive_ids: &[ArchiveId],
+        snapshot: MusubiRegistrySnapshotV1,
+    ) -> MusubiArchiveRetentionPageV1 {
+        MusubiArchiveRetentionPageV1 {
+            chain_id: ChainId::from("musubi-retention-client-test"),
+            genesis_hash: [0x81; 32],
+            items: archive_ids
+                .iter()
+                .map(|archive_id| MusubiArchiveRetentionDecisionV1 {
+                    archive_id: *archive_id,
+                    disposition: MusubiArchiveRetentionDispositionV1::RetainUnknown,
+                    active_releases: 0,
+                    yanked_releases: 0,
+                    taken_down_releases: 0,
+                    storage: None,
+                })
+                .collect(),
+            snapshot,
+        }
+    }
+
+    #[test]
+    fn archive_retention_client_binds_snapshot_and_exact_item_order() {
+        let archive_ids = vec![ArchiveId::new([0x11; 32]), ArchiveId::new([0x22; 32])];
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 7,
+            finalized_block_hash: [0x71; 32],
+            index_revision: 9,
+        };
+        let request = MusubiArchiveRetentionQueryV1 {
+            archive_ids: archive_ids.clone(),
+            expected_snapshot: Some(snapshot),
+        };
+
+        let valid = retention_page(&archive_ids, snapshot);
+        let (url, server) =
+            serve_json_once(norito::json::to_vec(&valid).expect("retention page JSON"));
+        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
+            .expect("signer-free registry client");
+        assert_eq!(
+            client
+                .archive_retention(&request)
+                .expect("exact retention response"),
+            valid
+        );
+        server.join().expect("query server");
+
+        let mut stale = retention_page(&archive_ids, snapshot);
+        stale.snapshot.finalized_height += 1;
+        stale.snapshot.finalized_block_hash = [0x72; 32];
+        let (url, server) = serve_json_once(norito::json::to_vec(&stale).expect("stale page JSON"));
+        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
+            .expect("signer-free registry client");
+        assert_eq!(
+            client
+                .archive_retention(&request)
+                .expect_err("snapshot mismatch must fail closed")
+                .code(),
+            "MUSUBI_REGISTRY_RESPONSE_INVALID"
+        );
+        server.join().expect("query server");
+
+        let mismatched_ids = vec![archive_ids[0], ArchiveId::new([0x33; 32])];
+        let mismatched = retention_page(&mismatched_ids, snapshot);
+        let (url, server) = serve_json_once(
+            norito::json::to_vec(&mismatched).expect("mismatched retention page JSON"),
+        );
+        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
+            .expect("signer-free registry client");
+        assert_eq!(
+            client
+                .archive_retention(&request)
+                .expect_err("item mismatch must fail closed")
+                .code(),
+            "MUSUBI_REGISTRY_RESPONSE_INVALID"
+        );
+        server.join().expect("query server");
+
+        let reversed = retention_page(&[archive_ids[1], archive_ids[0]], snapshot);
+        let (url, server) =
+            serve_json_once(norito::json::to_vec(&reversed).expect("reversed page JSON"));
+        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
+            .expect("signer-free registry client");
+        assert_eq!(
+            client
+                .archive_retention(&request)
+                .expect_err("noncanonical item order must fail closed")
+                .code(),
+            "MUSUBI_REGISTRY_RESPONSE_INVALID"
+        );
+        server.join().expect("query server");
+    }
+
+    #[test]
+    fn archive_retention_rejects_an_invalid_request_before_network_io() {
+        let client = RegistryReadClientV1::new(
+            "http://127.0.0.1:9/".parse().expect("loopback URL"),
+            Duration::from_secs(1),
+            753,
+        )
+        .expect("signer-free reader");
+        let error = client
+            .archive_retention(&MusubiArchiveRetentionQueryV1 {
+                archive_ids: Vec::new(),
+                expected_snapshot: None,
+            })
+            .expect_err("invalid retention request must fail before transport");
+        assert_eq!(error.code(), "MUSUBI_REGISTRY_RETENTION_REQUEST_INVALID");
+    }
 
     #[test]
     fn public_config_ignores_signer_fields() {
@@ -918,6 +1326,7 @@ mod tests {
             r#"
                 torii_url = "https://registry.example/iroha/"
                 [account]
+                profile = "taira"
                 public_key = "deliberately-not-a-key"
                 private_key = "must-not-be-parsed"
             "#,
@@ -929,6 +1338,232 @@ mod tests {
             client.torii_url().as_str(),
             "https://registry.example/iroha/"
         );
+        assert_eq!(client.account_chain_discriminant(), 369);
+    }
+
+    #[test]
+    fn search_rejects_an_invalid_request_before_network_io() {
+        let client = RegistryReadClientV1::new(
+            "http://127.0.0.1:9/".parse().expect("loopback URL"),
+            Duration::from_secs(1),
+            753,
+        )
+        .expect("signer-free reader");
+        let error = client
+            .search(&MusubiSearchQueryV1 {
+                query: String::new(),
+                page: MusubiSearchPageRequestV1 {
+                    limit: 50,
+                    cursor: None,
+                },
+            })
+            .expect_err("invalid search must fail before transport");
+        assert_eq!(error.code(), "MUSUBI_REGISTRY_SEARCH_REQUEST_INVALID");
+    }
+
+    #[test]
+    fn signing_client_parses_account_arguments_under_its_taira_profile() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("client.toml");
+        let signer_keypair = KeyPair::try_from_seed(vec![89; 32], Algorithm::Ed25519)
+            .expect("signer fixture key pair");
+        let private_key = ExposedPrivateKey(signer_keypair.private_key().clone()).to_string();
+        fs::write(
+            &path,
+            format!(
+                r#"
+                    chain = "musubi-registry-test"
+                    torii_url = "https://registry.example/iroha/"
+                    [account]
+                    domain = "dex.universal"
+                    profile = "taira"
+                    public_key = "{}"
+                    private_key = "{}"
+                "#,
+                signer_keypair.public_key(),
+                private_key,
+            ),
+        )
+        .expect("write signing config fixture");
+        let signing = RegistrySigningClientV1::load(Some(&path)).expect("load Taira signer");
+        assert_eq!(signing.account_chain_discriminant(), 369);
+        assert!(!format!("{signing:?}").contains(&private_key));
+
+        let expected = account(90);
+        let taira_literal = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+            expected.canonical_i105().expect("Taira account literal")
+        };
+        assert_eq!(
+            signing
+                .parse_account_id(&taira_literal)
+                .expect("Taira account argument"),
+            expected
+        );
+
+        let default_literal = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(753);
+            expected.canonical_i105().expect("default-network literal")
+        };
+        let error = signing
+            .parse_account_id(&default_literal)
+            .expect_err("another network's account literal must be rejected");
+        assert_eq!(error.code(), "MUSUBI_ACCOUNT_ID_INVALID");
+    }
+
+    #[test]
+    fn public_queries_decode_accounts_with_the_configured_discriminant() {
+        let expected = account(91);
+        let response = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+            norito::json::to_vec(&expected).expect("account response JSON")
+        };
+        let (url, server) = serve_json_once(response);
+        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 369)
+            .expect("Taira registry reader");
+
+        let actual: AccountId = client
+            .query_required(
+                PublicMusubiQueryPathV1::Maintainers,
+                &norito::json!({"probe": true}),
+            )
+            .expect("configured discriminant applies during response decoding");
+        assert_eq!(actual, expected);
+        server.join().expect("query server");
+    }
+
+    #[test]
+    fn namespace_binding_derives_an_absent_package_identity() {
+        let selector: MusubiPackageSelectorV1 =
+            "dex.universal/new-package".parse().expect("selector");
+        let binding = MusubiNamespaceBindingV1 {
+            namespace: selector.namespace.clone(),
+            home_dataspace: DataSpaceId::new(7),
+            scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
+            generation: 4,
+        };
+
+        let package = package_id_from_namespace_binding(&selector, &binding)
+            .expect("namespace binding is enough before a package row exists");
+        assert_eq!(package.home_dataspace, DataSpaceId::new(7));
+        assert_eq!(package.scope, binding.scope);
+        assert_eq!(package.name, selector.name);
+
+        let other: MusubiPackageSelectorV1 = "other.universal/new-package"
+            .parse()
+            .expect("other selector");
+        let error = package_id_from_namespace_binding(&other, &binding)
+            .expect_err("a response for another namespace must be rejected");
+        assert_eq!(error.code(), "MUSUBI_REGISTRY_RESPONSE_INVALID");
+    }
+
+    #[test]
+    fn maintainer_page_accepts_members_and_pending_invites_for_the_requested_package() {
+        let package = MusubiPackageIdV1::new(
+            DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "demo".parse().expect("package name"),
+        );
+        let owner = account(41);
+        let invited = account(42);
+        let mut items = vec![
+            MusubiMaintainerDirectoryEntryV1::Accepted(MusubiPackageMemberV1 {
+                package: package.clone(),
+                account: owner.clone(),
+                role: MusubiPackageRoleV1::Owner,
+                accepted_at_height: 2,
+                governance_revision: 3,
+            }),
+            MusubiMaintainerDirectoryEntryV1::PendingInvitation(MusubiMaintainerInvitationV1 {
+                invite_id: MusubiInviteIdV1::new([4; 32]),
+                package: package.clone(),
+                invited_by: owner,
+                invited_account: invited,
+                role: MusubiPackageRoleV1::Owner,
+                expected_governance_revision: 3,
+                expires_at_height: 20,
+                state: MusubiInvitationStateV1::Pending,
+            }),
+        ];
+        items.sort_by_key(MusubiMaintainerDirectoryEntryV1::key);
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 5,
+            finalized_block_hash: [6; 32],
+            index_revision: 7,
+        };
+        let page = MusubiMaintainerPageV1 {
+            items,
+            next_cursor: None,
+            snapshot,
+        };
+        let request = MusubiPackagePageQueryV1 {
+            package: package.clone(),
+            page: first_page(10),
+        };
+        validate_maintainer_page(&request, &page)
+            .expect("accepted and pending entries share the requested package");
+
+        let foreign_package = MusubiPackageIdV1::new(
+            DataSpaceId::new(8),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "foreign".parse().expect("foreign package name"),
+        );
+        let mismatched = MusubiMaintainerPageV1 {
+            items: vec![MusubiMaintainerDirectoryEntryV1::Accepted(
+                MusubiPackageMemberV1 {
+                    package: foreign_package,
+                    account: account(43),
+                    role: MusubiPackageRoleV1::Owner,
+                    accepted_at_height: 2,
+                    governance_revision: 3,
+                },
+            )],
+            next_cursor: None,
+            snapshot,
+        };
+        let error = validate_maintainer_page(&request, &mismatched)
+            .expect_err("a package-crossing directory response must be rejected");
+        assert_eq!(error.code(), "MUSUBI_REGISTRY_RESPONSE_INVALID");
+    }
+
+    #[test]
+    fn bind_selector_namespace_uses_a_namespace_prefix_without_requiring_a_row() {
+        let selector: MusubiPackageSelectorV1 =
+            "dex.universal/new-package".parse().expect("selector");
+        let page = MusubiOrderedPackagePageV1 {
+            chain_id: ChainId::from("musubi-registry-test"),
+            genesis_hash: [1; 32],
+            namespace_binding: MusubiNamespaceBindingV1 {
+                namespace: selector.namespace.clone(),
+                home_dataspace: DataSpaceId::new(7),
+                scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
+                generation: 4,
+            },
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot: MusubiRegistrySnapshotV1 {
+                finalized_height: 2,
+                finalized_block_hash: [3; 32],
+                index_revision: 5,
+            },
+        };
+        let response = norito::json::to_vec(&page).expect("directory response JSON");
+        let (url, server) = serve_json_once(response);
+        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
+            .expect("signer-free registry client");
+
+        let package = client
+            .bind_selector_namespace(&selector)
+            .expect("empty namespace directory still binds a package");
+        assert_eq!(package.home_dataspace, DataSpaceId::new(7));
+        assert_eq!(package.name, selector.name);
+
+        let request_body = server.join().expect("query server");
+        let query: MusubiOrderedPrefixQueryV1 =
+            norito::json::from_slice(&request_body).expect("ordered-prefix request JSON");
+        assert_eq!(query.prefix.as_str(), "dex.universal/");
+        assert_eq!(query.page.limit, 1);
+        assert!(query.page.cursor.is_none());
     }
 
     struct CountingReader<'a> {

@@ -114,11 +114,12 @@ pub use por::{
     PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1,
     PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveProofBoundsV1,
     PorFinalizedReplayArchiveReadbackV1, PorFinalizedReplayArchiveReceiptV1,
-    PorFinalizedReplayArchiveRecordV1, PorFinalizedReplayArchiveV1, PorProtocolMetricsSnapshot,
-    PorRandomness, PorRepairHandoff, PorRepairHandoffError, PorReputationTerminalAckOutcomeV1,
-    PorReputationTerminalWorkV1, PorTracker, PorTrackerError, PorVerdictStats,
-    build_por_challenge_for_manifest, canonical_por_failure_repair_report_v1,
-    por_repair_source_identity_v1,
+    PorFinalizedReplayArchiveRecordV1, PorFinalizedReplayArchiveV1, PorPendingRepairWorkV1,
+    PorProtocolMetricsSnapshot, PorRandomness, PorRepairHandoff, PorRepairHandoffAckOutcomeV1,
+    PorRepairHandoffError, PorRepairReconcileErrorV1, PorRepairReconcileOutcomeV1,
+    PorReputationTerminalAckOutcomeV1, PorReputationTerminalWorkV1, PorStatusAuthoritySnapshotV1,
+    PorTracker, PorTrackerError, PorVerdictStats, build_por_challenge_for_manifest,
+    canonical_por_failure_repair_report_v1, por_repair_source_identity_v1,
 };
 pub use potr::{
     POTR_EXPORT_MAX_RECORDS_V1, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1,
@@ -316,10 +317,11 @@ const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V2: &str = "initialized-v2";
 const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V3: &str = "initialized-v3";
 const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v4\n";
 // V4 is a first-release hard cut: it adds authenticated governance provenance
-// to retained source events, publish receipts, and outbox entries. V1/V2/V3
+// to retained source events, publish receipts, outbox entries, and the complete
+// bounded PoR status/repair projection. V1/V2/V3/V4
 // artifacts are rejected and must be explicitly reseeded; no field-default or
 // heuristic migration is accepted.
-const AUX_RUNTIME_STATE_VERSION_V4: u8 = 4;
+const AUX_RUNTIME_STATE_VERSION_V5: u8 = 5;
 const ADMITTED_REPUTATION_SNAPSHOT_VERSION_V1: u8 = 1;
 const GOVERNANCE_OUTBOX_VERSION_V3: u8 = 3;
 const GOVERNANCE_OUTBOX_BINDING_DOMAIN_V3: &[u8] = b"sorafs.node.governance_outbox.binding.v3";
@@ -432,6 +434,7 @@ use sorafs_manifest::{
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     capacity::CapacityTelemetryV1,
     deal::{DealSettlementV1, XorQuantity},
+    governance_dag_submission_account_digest_v1,
     por::{
         AuditOutcomeV1, AuditVerdictV1, PorChallengePublicationV1, PorChallengeV1, PorProofV1,
         PorWeeklyReportV1, decode_por_challenge_publication_v1, decode_por_weekly_report_v1,
@@ -444,7 +447,6 @@ use sorafs_manifest::{
         GC_AUDIT_REASON_RETENTION_EXPIRED_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1, GcAuditPayloadV1,
         RepairReportV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
     },
-    governance_dag_submission_account_digest_v1,
     validate_reputation_snapshot_transition,
 };
 use thiserror::Error;
@@ -2665,9 +2667,8 @@ impl GovernanceSubmissionProvenanceV1 {
                 sorafs_manifest::GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup
             }
         };
-        let publisher_account_digest = governance_dag_submission_account_digest_v1(
-            &self.publisher_account.encode(),
-        );
+        let publisher_account_digest =
+            governance_dag_submission_account_digest_v1(&self.publisher_account.encode());
         sorafs_manifest::GovernanceDagSubmissionProvenanceV1 {
             publisher_account_digest,
             origin,
@@ -3592,6 +3593,8 @@ pub struct NodeHandle {
     governance_outbox_drain_lock: Arc<Mutex<()>>,
     runtime_mutation_lock: Arc<Mutex<()>>,
     auxiliary_checkpoint_lock: Arc<Mutex<()>>,
+    #[cfg(test)]
+    fail_after_next_auxiliary_checkpoint_publication: Arc<std::sync::atomic::AtomicBool>,
     durability_failure: Arc<Mutex<Option<String>>>,
     auxiliary_runtime_checkpoint_path: Option<PathBuf>,
     reputation_trust_policy: Option<Arc<ReputationSnapshotTrustPolicyV1>>,
@@ -4800,7 +4803,7 @@ struct AdmittedReputationSnapshotV1 {
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct AuxiliaryRuntimeCheckpointV4 {
+struct AuxiliaryRuntimeCheckpointV5 {
     version: u8,
     capacity_runtime: CapacityRuntimeCheckpointV1,
     por_tracker: por::PorTrackerCheckpointV1,
@@ -6270,6 +6273,10 @@ impl NodeHandle {
             governance_outbox_drain_lock: Arc::new(Mutex::new(())),
             runtime_mutation_lock: Arc::new(Mutex::new(())),
             auxiliary_checkpoint_lock: Arc::new(Mutex::new(())),
+            #[cfg(test)]
+            fail_after_next_auxiliary_checkpoint_publication: Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
             durability_failure: Arc::new(Mutex::new(None)),
             auxiliary_runtime_checkpoint_path,
             reputation_trust_policy,
@@ -6472,6 +6479,54 @@ impl NodeHandle {
     #[must_use]
     pub fn config(&self) -> &StorageConfig {
         &self.config
+    }
+
+    /// Return the canonical Governance DAG root retained by the running node.
+    #[must_use]
+    pub fn governance_dag_root(&self) -> Option<&Path> {
+        self.governance_runtime_root.as_deref()
+    }
+
+    /// Read one Governance DAG file through the node's retained filesystem root.
+    ///
+    /// Every path component is resolved relative to the descriptor-pinned
+    /// Governance root without following links or reparse points. The opened
+    /// regular file, its parent bindings, and the root identity are revalidated
+    /// after the bounded read, so callers never authenticate one path and read
+    /// a concurrently substituted object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Governance DAG storage is not configured, the path
+    /// is absolute or non-canonical, any retained filesystem identity or access
+    /// policy changed, the target is not a direct single-link regular file, or
+    /// its contents exceed `max_bytes`.
+    pub fn read_governance_dag_file(
+        &self,
+        relative_path: &Path,
+        max_bytes: usize,
+    ) -> io::Result<Vec<u8>> {
+        if relative_path.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Governance DAG file path must be relative",
+            ));
+        }
+        let root = self.governance_dag_root().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "Governance DAG runtime root is not configured",
+            )
+        })?;
+        let root_guard = self.governance_runtime_root_guard.as_ref().ok_or_else(|| {
+            io::Error::other("Governance DAG runtime root has no retained filesystem identity")
+        })?;
+        governance::read_rooted_governance_state_file(
+            root_guard,
+            &root.join(relative_path),
+            max_bytes,
+        )
+        .map(governance_rooted_fs::FileSnapshot::into_bytes)
     }
 
     /// Return the durable PDP provider protocol when storage is enabled.
@@ -12310,7 +12365,7 @@ impl NodeHandle {
 
     fn export_auxiliary_runtime_checkpoint(
         &self,
-    ) -> Result<AuxiliaryRuntimeCheckpointV4, GovernancePublishError> {
+    ) -> Result<AuxiliaryRuntimeCheckpointV5, GovernancePublishError> {
         let capacity_runtime = self.capacity.checkpoint().map_err(|err| {
             GovernancePublishError::other(format!("export capacity runtime checkpoint: {err}"))
         })?;
@@ -12438,8 +12493,8 @@ impl NodeHandle {
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
         let governance_outbox_next_sequence = governance_outbox.next_sequence;
         let governance_outbox_entries = governance_outbox.entries.values().cloned().collect();
-        Ok(AuxiliaryRuntimeCheckpointV4 {
-            version: AUX_RUNTIME_STATE_VERSION_V4,
+        Ok(AuxiliaryRuntimeCheckpointV5 {
+            version: AUX_RUNTIME_STATE_VERSION_V5,
             capacity_runtime,
             por_tracker: self.por.checkpoint(),
             por_history,
@@ -12479,15 +12534,22 @@ impl NodeHandle {
                 "encode auxiliary runtime checkpoint: {err}"
             ))
         })?;
-        self.finish_local_checkpoint_write(
-            "auxiliary runtime",
+        let mut write_result = write_local_checkpoint_atomic_bounded(
             path,
-            write_local_checkpoint_atomic_bounded(
-                path,
-                &bytes,
-                self.config.runtime_retention().checkpoint_max_bytes(),
-            ),
-        )
+            &bytes,
+            self.config.runtime_retention().checkpoint_max_bytes(),
+        );
+        #[cfg(test)]
+        if write_result.is_ok()
+            && self
+                .fail_after_next_auxiliary_checkpoint_publication
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            write_result = Err(LocalCheckpointWriteError::committed(io::Error::other(
+                "injected post-publication auxiliary checkpoint failure",
+            )));
+        }
+        self.finish_local_checkpoint_write("auxiliary runtime", path, write_result)
     }
 
     fn mutate_capacity_durably<T>(
@@ -12556,7 +12618,7 @@ impl NodeHandle {
             // for those sequences; domain restore validation still enforces
             // the configured state and event limits.
             .max(bytes.len());
-        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV4>(
+        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV5>(
             &bytes,
             retention.checkpoint_max_bytes(),
             maximum_sequence_elements,
@@ -12569,9 +12631,9 @@ impl NodeHandle {
 
     fn restore_auxiliary_runtime_checkpoint(
         &self,
-        checkpoint: AuxiliaryRuntimeCheckpointV4,
+        checkpoint: AuxiliaryRuntimeCheckpointV5,
     ) -> Result<(), GovernancePublishError> {
-        if checkpoint.version != AUX_RUNTIME_STATE_VERSION_V4 {
+        if checkpoint.version != AUX_RUNTIME_STATE_VERSION_V5 {
             return Err(GovernancePublishError::other(format!(
                 "unsupported auxiliary runtime checkpoint version {}",
                 checkpoint.version
@@ -14820,14 +14882,14 @@ impl NodeHandle {
         self.ensure_durability_healthy()
             .map_err(PorTrackerError::RuntimeCheckpoint)?;
         let previous = self.por.checkpoint();
-        match replay_archive {
+        let outcome = match replay_archive {
             Some(replay_archive) => self.por.record_challenge_with_archive_and_bounds(
                 challenge,
                 replay_archive,
                 proof_bounds.expect("configured archive has proof bounds"),
             )?,
             None => self.por.record_challenge(challenge)?,
-        }
+        };
         if let (Some(policy), Some(replay_archive)) =
             (self.config.por_replay_archive_policy(), replay_archive)
             && let Err(error) = verify_por_replay_archive_provider(policy, replay_archive)
@@ -14840,6 +14902,9 @@ impl NodeHandle {
                 return Err(PorTrackerError::RuntimeCheckpoint(message));
             }
             return Err(error);
+        }
+        if outcome == por::PorChallengeRecordOutcomeV1::ExactReplay {
+            return Ok(());
         }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
@@ -14871,7 +14936,10 @@ impl NodeHandle {
         self.ensure_durability_healthy()
             .map_err(PorTrackerError::RuntimeCheckpoint)?;
         let previous = self.por.checkpoint();
-        self.por.record_proof(proof, admitted_provider_key)?;
+        let outcome = self.por.record_proof(proof, admitted_provider_key)?;
+        if outcome == por::PorProofRecordOutcomeV1::ExactReplay {
+            return Ok(());
+        }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
                 return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
@@ -14892,6 +14960,83 @@ impl NodeHandle {
     #[must_use]
     pub fn por_protocol_metrics(&self) -> PorProtocolMetricsSnapshot {
         self.por.protocol_metrics()
+    }
+
+    /// Export the complete bounded PoR status history from the authoritative checkpoint state.
+    pub fn por_status_authority_snapshot(
+        &self,
+    ) -> Result<PorStatusAuthoritySnapshotV1, PorTrackerError> {
+        self.por.status_authority_snapshot()
+    }
+
+    /// Return the oldest failed-verdict repair intent awaiting durable handoff.
+    pub fn next_pending_por_repair_work(
+        &self,
+    ) -> Result<Option<PorPendingRepairWorkV1>, PorTrackerError> {
+        self.por.next_pending_repair_work()
+    }
+
+    /// Durably acknowledge one exact failed-verdict repair handoff.
+    pub fn acknowledge_por_repair_handoff(
+        &self,
+        challenge_id: [u8; 32],
+        repair_task_id: [u8; 32],
+    ) -> Result<PorRepairHandoffAckOutcomeV1, PorTrackerError> {
+        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            PorTrackerError::RuntimeCheckpoint(
+                "auxiliary checkpoint transaction lock poisoned".to_owned(),
+            )
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(PorTrackerError::RuntimeCheckpoint)?;
+        let previous = self.por.checkpoint();
+        let outcome = self
+            .por
+            .acknowledge_repair_handoff(challenge_id, repair_task_id)?;
+        if outcome == PorRepairHandoffAckOutcomeV1::ExactReplay {
+            return Ok(outcome);
+        }
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            }
+            if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR repair acknowledgement after checkpoint error",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
+            return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+        }
+        Ok(outcome)
+    }
+
+    /// Reconcile one exact durable failed-verdict repair outbox entry.
+    ///
+    /// The external admission boundary runs before the node acknowledgement.
+    /// A crash or commit-uncertain acknowledgement therefore replays the same
+    /// deterministic task identity until the checkpoint advances.
+    pub fn reconcile_next_por_repair_handoff(
+        &self,
+        handoff: &dyn PorRepairHandoff,
+    ) -> Result<PorRepairReconcileOutcomeV1, PorRepairReconcileErrorV1> {
+        let Some(work) = self.next_pending_por_repair_work()? else {
+            return Ok(PorRepairReconcileOutcomeV1::Idle);
+        };
+        let actual = handoff.enqueue_failed_por_repair(&work.intent)?;
+        if actual != work.repair_task_id {
+            return Err(PorRepairReconcileErrorV1::TaskIdMismatch {
+                expected: work.repair_task_id,
+                actual,
+            });
+        }
+        let acknowledgement =
+            self.acknowledge_por_repair_handoff(work.intent.challenge_id, work.repair_task_id)?;
+        Ok(PorRepairReconcileOutcomeV1::Reconciled {
+            work,
+            acknowledgement,
+        })
     }
 
     /// Return the exact next retained PoR terminal awaiting reputation admission.
@@ -15066,7 +15211,6 @@ impl NodeHandle {
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
-        repair_handoff: &dyn PorRepairHandoff,
     ) -> Result<PorVerdictOutcome, PorTrackerError> {
         let replay_archive = self
             .por_finalized_replay_archive
@@ -15076,7 +15220,6 @@ impl NodeHandle {
             verdict,
             trusted_auditor_keys,
             auditor_threshold,
-            repair_handoff,
             replay_archive,
         )
     }
@@ -15087,14 +15230,12 @@ impl NodeHandle {
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
-        repair_handoff: &dyn PorRepairHandoff,
         replay_archive: &dyn PorFinalizedReplayArchiveV1,
     ) -> Result<PorVerdictOutcome, PorTrackerError> {
         self.record_por_verdict_with_optional_replay_archive(
             verdict,
             trusted_auditor_keys,
             auditor_threshold,
-            repair_handoff,
             Some(replay_archive),
         )
     }
@@ -15104,7 +15245,6 @@ impl NodeHandle {
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
-        repair_handoff: &dyn PorRepairHandoff,
         replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
     ) -> Result<PorVerdictOutcome, PorTrackerError> {
         let proof_bounds = match (self.config.por_replay_archive_policy(), replay_archive) {
@@ -15137,20 +15277,17 @@ impl NodeHandle {
         }
         let previous_tracker = self.por.checkpoint();
         let transition = match replay_archive {
-            Some(replay_archive) => self.por.record_verdict_with_archive_and_bounds(
+            Some(replay_archive) => self.por.record_verdict_durable_with_archive_and_bounds(
                 verdict,
                 trusted_auditor_keys,
                 auditor_threshold,
                 replay_archive,
                 proof_bounds.expect("configured archive has proof bounds"),
-                |intent| repair_handoff.enqueue_failed_por_repair(intent),
             )?,
-            None => self.por.record_verdict_with(
-                verdict,
-                trusted_auditor_keys,
-                auditor_threshold,
-                |intent| repair_handoff.enqueue_failed_por_repair(intent),
-            )?,
+            None => {
+                self.por
+                    .record_verdict_durable(verdict, trusted_auditor_keys, auditor_threshold)?
+            }
         };
         if let (Some(policy), Some(replay_archive)) =
             (self.config.por_replay_archive_policy(), replay_archive)
@@ -16289,6 +16426,20 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct FailingPorRepairHandoff;
+
+    impl PorRepairHandoff for FailingPorRepairHandoff {
+        fn enqueue_failed_por_repair(
+            &self,
+            _intent: &PorFailedRepairIntentV1,
+        ) -> Result<[u8; 32], PorRepairHandoffError> {
+            Err(PorRepairHandoffError(
+                "injected repair admission failure".to_owned(),
+            ))
+        }
+    }
+
     #[derive(Debug, Default)]
     struct RecordingReputationAdmission {
         retained: Mutex<
@@ -16669,13 +16820,8 @@ mod tests {
             .expect("checkpoint challenge");
         node.record_por_proof(&proof, &por_sample_provider_key())
             .expect("checkpoint proof");
-        node.record_por_verdict(
-            &verdict,
-            &por_sample_auditor_keys(),
-            1,
-            &SuccessfulPorRepairHandoff,
-        )
-        .expect("checkpoint finalized terminal");
+        node.record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
+            .expect("checkpoint finalized terminal");
         let work = node
             .next_por_reputation_terminal_work()
             .expect("read retained terminal")
@@ -17618,7 +17764,7 @@ mod tests {
             revision: 1,
             predecessor_policy_digest: None,
             economics: ReservePolicyV1::default(),
-            asset_definition: AssetDefinitionId::new(
+            asset_definition: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("reserve", "universal").expect("reserve domain"),
                 "xor".parse().expect("reserve asset name"),
             ),
@@ -19086,8 +19232,8 @@ mod tests {
         drop(NodeHandle::new(cfg.clone()));
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read initialized auxiliary checkpoint");
-        for retired_version in [1, 2, 3] {
-            let mut checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV4>(&bytes)
+        for retired_version in [1, 2, 3, 4] {
+            let mut checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV5>(&bytes)
                 .expect("decode initialized auxiliary checkpoint");
             checkpoint.version = retired_version;
             let retired = norito::to_bytes(&checkpoint).expect("encode retired checkpoint version");
@@ -22719,7 +22865,7 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for tamper in 0..3 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
                 norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
             let entry = checkpoint
                 .governance_outbox_entries
@@ -22768,7 +22914,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         let entry = checkpoint
             .governance_outbox_entries
@@ -22812,7 +22958,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         checkpoint.reputation_events[0].snapshot_id = [0x99; 16];
         write_local_checkpoint_atomic(
@@ -22842,7 +22988,7 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for case in 0..7_u8 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
                 norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
             match case {
                 0 => {
@@ -22949,7 +23095,7 @@ mod tests {
 
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let checkpoint_bytes = fs::read(&checkpoint_path).expect("read governance checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
             norito::decode_from_bytes(&checkpoint_bytes).expect("decode governance checkpoint");
         let entry = checkpoint
             .governance_outbox_entries
@@ -23506,7 +23652,7 @@ mod tests {
         );
         let checkpoint_bytes = fs::read(auxiliary_runtime_checkpoint_path(cfg.data_dir()))
             .expect("read authenticated source checkpoint");
-        let checkpoint: AuxiliaryRuntimeCheckpointV4 =
+        let checkpoint: AuxiliaryRuntimeCheckpointV5 =
             norito::decode_from_bytes(&checkpoint_bytes).expect("decode source checkpoint");
         let provenance = checkpoint.privacy_source_events[0]
             .provenance
@@ -24722,7 +24868,7 @@ mod tests {
 
         let original = fs::read(&checkpoint_path).expect("read privacy receipt checkpoint");
         for tamper in 0..2 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
                 norito::decode_from_bytes(&original).expect("decode privacy receipt checkpoint");
             let receipt = checkpoint
                 .privacy_publish_request_receipts
@@ -24818,7 +24964,7 @@ mod tests {
         drop(source);
 
         let bytes = fs::read(&checkpoint_path).expect("read receipt-only checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
             norito::decode_from_bytes(&bytes).expect("decode receipt-only checkpoint");
         assert!(checkpoint.privacy_source_events.is_empty());
         checkpoint
@@ -25648,12 +25794,7 @@ mod tests {
             .expect("record proof succeeds");
         let verdict = por_sample_verdict(&challenge, proof.proof_digest());
         handle
-            .record_por_verdict(
-                &verdict,
-                &por_sample_auditor_keys(),
-                1,
-                &SuccessfulPorRepairHandoff,
-            )
+            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("record verdict succeeds");
 
         let after = handle
@@ -25681,12 +25822,7 @@ mod tests {
             .record_por_proof(&proof, &por_sample_provider_key())
             .expect("record proof");
         handle
-            .record_por_verdict(
-                &verdict,
-                &por_sample_auditor_keys(),
-                1,
-                &SuccessfulPorRepairHandoff,
-            )
+            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("finalize PoR terminal and durable work");
         assert_eq!(handle.pending_por_reputation_terminal_count(), 1);
 
@@ -25749,6 +25885,120 @@ mod tests {
     }
 
     #[test]
+    fn por_authority_checkpoint_prepublication_and_commit_uncertain_matrix() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let challenge = por_sample_challenge();
+
+        let handle = NodeHandle::new(cfg.clone());
+        let initial_checkpoint = fs::read(&checkpoint_path).expect("read initial checkpoint");
+        fs::remove_file(&checkpoint_path).expect("remove checkpoint for prepublication fault");
+        fs::create_dir(&checkpoint_path).expect("install invalid checkpoint target");
+        assert!(matches!(
+            handle.record_por_challenge(&challenge),
+            Err(PorTrackerError::RuntimeCheckpoint(_))
+        ));
+        let rolled_back = handle
+            .por_status_authority_snapshot()
+            .expect("read rolled-back authority");
+        assert_eq!(rolled_back.generation, 1);
+        assert!(rolled_back.statuses.is_empty());
+        fs::remove_dir(&checkpoint_path).expect("remove invalid checkpoint target");
+        write_local_checkpoint_atomic(&checkpoint_path, &initial_checkpoint)
+            .expect("restore initial checkpoint");
+        drop(handle);
+
+        let uncertain = NodeHandle::new(cfg.clone());
+        uncertain
+            .fail_after_next_auxiliary_checkpoint_publication
+            .store(true, Ordering::SeqCst);
+        assert!(matches!(
+            uncertain.record_por_challenge(&challenge),
+            Err(PorTrackerError::RuntimeCheckpoint(_))
+        ));
+        let visible = uncertain
+            .por_status_authority_snapshot()
+            .expect("commit-uncertain state remains readable");
+        assert_eq!(visible.generation, 2);
+        assert_eq!(visible.statuses.len(), 1);
+        assert_eq!(visible.statuses[0].challenge_id, challenge.challenge_id);
+        drop(uncertain);
+
+        let restored = NodeHandle::new(cfg);
+        assert_eq!(
+            restored
+                .por_status_authority_snapshot()
+                .expect("restore visible checkpoint"),
+            visible
+        );
+        restored
+            .record_por_challenge(&challenge)
+            .expect("exact replay after commit uncertainty is side-effect free");
+    }
+
+    #[test]
+    fn por_repair_outbox_replays_enqueue_and_acknowledgement_faults() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let handle = NodeHandle::new(cfg.clone());
+        let challenge = por_sample_challenge();
+        handle
+            .record_por_challenge(&challenge)
+            .expect("record challenge");
+        let mut verdict = por_sample_verdict(&challenge, [0; 32]);
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.failure_reason = Some("deadline elapsed".to_owned());
+        verdict.proof_digest = None;
+        verdict.decided_at = challenge.deadline_at;
+        resign_por_sample_verdict(&mut verdict);
+        handle
+            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
+            .expect("commit failed verdict and repair outbox entry");
+
+        assert!(matches!(
+            handle.reconcile_next_por_repair_handoff(&FailingPorRepairHandoff),
+            Err(PorRepairReconcileErrorV1::Handoff(_))
+        ));
+        assert!(handle.next_pending_por_repair_work().unwrap().is_some());
+
+        let before_ack = fs::read(&checkpoint_path).expect("read pending-repair checkpoint");
+        fs::remove_file(&checkpoint_path).expect("remove checkpoint for ack failure");
+        fs::create_dir(&checkpoint_path).expect("install invalid checkpoint target");
+        assert!(matches!(
+            handle.reconcile_next_por_repair_handoff(&SuccessfulPorRepairHandoff),
+            Err(PorRepairReconcileErrorV1::Tracker(
+                PorTrackerError::RuntimeCheckpoint(_)
+            ))
+        ));
+        assert!(handle.next_pending_por_repair_work().unwrap().is_some());
+        fs::remove_dir(&checkpoint_path).expect("remove invalid checkpoint target");
+        write_local_checkpoint_atomic(&checkpoint_path, &before_ack)
+            .expect("restore pending-repair checkpoint");
+        drop(handle);
+
+        let restored = NodeHandle::new(cfg.clone());
+        assert!(matches!(
+            restored
+                .reconcile_next_por_repair_handoff(&SuccessfulPorRepairHandoff)
+                .expect("replay exact repair admission and acknowledge"),
+            PorRepairReconcileOutcomeV1::Reconciled {
+                acknowledgement: PorRepairHandoffAckOutcomeV1::Advanced,
+                ..
+            }
+        ));
+        assert!(restored.next_pending_por_repair_work().unwrap().is_none());
+        drop(restored);
+
+        let replay = NodeHandle::new(cfg);
+        assert_eq!(
+            replay
+                .reconcile_next_por_repair_handoff(&SuccessfulPorRepairHandoff)
+                .expect("durable repair acknowledgement survives restart"),
+            PorRepairReconcileOutcomeV1::Idle
+        );
+    }
+
+    #[test]
     fn por_ingestion_status_tracks_failures() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -25764,12 +26014,7 @@ mod tests {
         verdict.decided_at = challenge.deadline_at;
         resign_por_sample_verdict(&mut verdict);
         handle
-            .record_por_verdict(
-                &verdict,
-                &por_sample_auditor_keys(),
-                1,
-                &SuccessfulPorRepairHandoff,
-            )
+            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("record failure verdict");
 
         let status = handle
@@ -25805,12 +26050,7 @@ mod tests {
         verdict.decided_at = challenge.deadline_at;
         resign_por_sample_verdict(&mut verdict);
         handle
-            .record_por_verdict(
-                &verdict,
-                &por_sample_auditor_keys(),
-                1,
-                &SuccessfulPorRepairHandoff,
-            )
+            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("record failure verdict");
 
         let overview_after = handle.por_ingestion_overview();
@@ -26450,7 +26690,7 @@ mod tests {
             }
             let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
             let bytes = fs::read(&path).expect("read GC intent checkpoint");
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
                 norito::decode_from_bytes(&bytes).expect("decode GC intent checkpoint");
             let intent = checkpoint
                 .gc_eviction_intents
@@ -26511,7 +26751,7 @@ mod tests {
         assert_eq!(handle.pending_governance_publication_count(), 0);
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read linked GC checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
             norito::decode_from_bytes(&bytes).expect("decode linked GC checkpoint");
         let link = checkpoint
             .gc_eviction_audit_links
@@ -26833,6 +27073,59 @@ mod tests {
         ensure_test_capacity_provider(&handle);
         assert!(handle.has_governance_publisher());
         handle
+    }
+
+    #[test]
+    fn governance_dag_file_reads_are_descriptor_rooted_and_bounded() {
+        let temp = tempfile::tempdir().expect("create governance readback root");
+        let handle = reconciliation_handle_with_governance(temp.path());
+        let governance = temp.path().join("governance");
+        fs::create_dir(governance.join("snapshots")).expect("create snapshot directory");
+        fs::write(governance.join("snapshots/state.json"), b"state-v1")
+            .expect("write governance snapshot");
+
+        assert_eq!(
+            handle
+                .read_governance_dag_file(Path::new("snapshots/state.json"), 8)
+                .expect("read exact bounded snapshot"),
+            b"state-v1"
+        );
+        assert_eq!(
+            handle
+                .read_governance_dag_file(Path::new("snapshots/state.json"), 7)
+                .expect_err("oversized snapshot must fail")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            handle
+                .read_governance_dag_file(Path::new("../outside"), 8)
+                .expect_err("parent traversal must fail")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            handle
+                .read_governance_dag_file(&governance.join("snapshots/state.json"), 8)
+                .expect_err("absolute path must fail")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        #[cfg(unix)]
+        {
+            let outside = temp.path().join("outside");
+            fs::create_dir(&outside).expect("create outside directory");
+            fs::write(outside.join("state.json"), b"outside!").expect("write outside snapshot");
+            std::os::unix::fs::symlink(&outside, governance.join("linked"))
+                .expect("create substituted directory link");
+            assert!(
+                handle
+                    .read_governance_dag_file(Path::new("linked/state.json"), 8)
+                    .is_err(),
+                "descriptor-rooted traversal must reject a linked path component"
+            );
+        }
     }
 
     fn weekly_rollup_publish_index_entry(root: &Path) -> JsonValue {

@@ -19,11 +19,14 @@ fn data_events_follow_instruction_order_in_tx() {
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
     let acc = Account::new(authority_id.clone()).build(&authority_id);
     let ad: AssetDefinition = AssetDefinition::new(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
+        "rose".to_owned(),
         NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(&authority_id);
     let world = iroha_core::state::World::with([domain], [acc], [ad]);
@@ -39,7 +42,7 @@ fn data_events_follow_instruction_order_in_tx() {
 
     // Single transaction: three instructions in a fixed order
     let asset = AssetId::of(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),

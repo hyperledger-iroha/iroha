@@ -51,11 +51,17 @@ fn disable_nexus_fee_admission(nexus: &mut Nexus) {
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
     let domain = Domain::new(domain_id.clone()).build(authority);
     let account = Account::new(authority.clone()).build(authority);
-    let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), "xor".parse().unwrap());
+    let asset_definition_id =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "xor".parse().unwrap());
     let asset_definition = {
         let __asset_definition_id = asset_definition_id;
-        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::new(
+            __asset_definition_id.clone(),
+            "xor".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     }
     .build(authority);
 
@@ -126,8 +132,10 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
 
     let time_source = TimeSource::new_system();
 
-    let asset_definition_id =
-        AssetDefinitionId::new(wonderland_domain.clone(), "xor".parse().unwrap());
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
+        wonderland_domain.clone(),
+        "xor".parse().unwrap(),
+    );
     let asset_id = AssetId::of(asset_definition_id, account_id.clone());
 
     let mint = Mint::asset_quantity(10_u32, asset_id.clone());

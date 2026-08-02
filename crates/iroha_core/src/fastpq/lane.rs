@@ -705,10 +705,11 @@ mod tests {
                 deltas: vec![TransferDeltaTranscript {
                     from_account: (*ALICE_ID).clone(),
                     to_account: (*BOB_ID).clone(),
-                    asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                        DomainId::try_new("wonderland", "universal").unwrap(),
-                        "rose".parse().unwrap(),
-                    ),
+                    asset_definition:
+                        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                            DomainId::try_new("wonderland", "universal").unwrap(),
+                            "rose".parse().unwrap(),
+                        ),
                     amount: Quantity::from(10u32),
                     from_balance_before: Quantity::from(100u32),
                     from_balance_after: Quantity::from(90u32),

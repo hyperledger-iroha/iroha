@@ -754,9 +754,6 @@ mod tests {
                     others: <_>::default(),
                     pops: std::collections::BTreeMap::new(),
                 }),
-                default_account_domain_label: WithOrigin::inline(
-                    iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned(),
-                ),
                 chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
             },
             network: Network {
@@ -1530,12 +1527,8 @@ mod tests {
                 },
                 stark: iroha_config::parameters::actual::Stark::default(),
                 sccp: iroha_config::parameters::actual::Sccp::default(),
-                root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
                 ballot_history_cap:
                     iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
-                empty_root_on_empty:
-                    iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
-                merkle_depth: iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_DEPTH,
                 preverify_max_bytes: iroha_config::parameters::defaults::zk::preverify::MAX_BYTES,
                 preverify_budget_bytes:
                     iroha_config::parameters::defaults::zk::preverify::BUDGET_BYTES,

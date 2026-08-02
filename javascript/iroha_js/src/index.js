@@ -167,6 +167,19 @@ export {
   buildCanonicalJsonRequest,
 } from "./canonicalRequest.js";
 export {
+  BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,
+  BOOTLE_LANTERN_ISSUANCE_ISSUE_PATH_V1,
+  BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1,
+  BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1,
+  BOOTLE_LANTERN_ISSUE_REQUEST_BYTES_V1,
+  BOOTLE_LANTERN_ISSUE_RESPONSE_BYTES_V1,
+  BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1,
+  BOOTLE_LANTERN_ISSUANCE_ERROR_RESPONSE_MAX_BYTES_V1,
+  BootleLanternIssuanceCredentialV1,
+  BootleLanternIssuanceClientErrorV1,
+  BootleLanternIssuanceClientV1,
+} from "./bootleLanternIssuance.js";
+export {
   assembleSoracloudAppInfraRequest,
   assembleSoracloudHfDeployRequest,
   buildSoracloudAppInfraDraft,
