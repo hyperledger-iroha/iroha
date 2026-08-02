@@ -4203,7 +4203,7 @@ mod tests {
     ) -> iroha_data_model::musubi::MusubiArchiveRetentionPageV1 {
         let snapshot = retention_snapshot();
         iroha_data_model::musubi::MusubiArchiveRetentionPageV1 {
-            chain_id: ChainId::from(chain),
+            chain_id: chain.parse::<ChainId>().expect("fixture chain id"),
             genesis_hash: [0x81; 32],
             items: archive_ids
                 .iter()
@@ -5342,7 +5342,11 @@ mod tests {
         };
         assert_eq!(
             arguments.selection.packages,
-            vec!["apps.sora/demo".parse().expect("package selector")]
+            vec![
+                "apps.sora/demo"
+                    .parse::<MusubiPackageSelectorV1>()
+                    .expect("package selector")
+            ]
         );
         assert_eq!(
             arguments.network.config.as_deref(),

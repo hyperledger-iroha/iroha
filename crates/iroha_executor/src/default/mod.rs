@@ -36,7 +36,9 @@ pub use governance::{
     visit_finalize_referendum, visit_propose_sccp_route_governance,
     visit_propose_validation_fee_policy, visit_register_citizen,
 };
+use iroha_smart_contract::Iroha;
 use iroha_smart_contract::data_model::{
+    executor::Result,
     isi::{
         AcceptSorafsModerationJurorAssignment, ActivatePublicLaneValidator,
         ActivateSorafsModerationCase, AdvanceSorafsReserveLifecycle,

@@ -27,6 +27,7 @@ pub mod confidential;
 pub mod envelope;
 mod errors;
 mod field;
+pub mod generalized_bulletproof;
 mod group;
 mod hash;
 mod ipa;

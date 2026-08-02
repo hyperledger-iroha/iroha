@@ -49,6 +49,14 @@ use crate::{client::Client, crypto::KeyPair};
 mod publication_clock;
 mod publication_journal;
 
+#[cfg(unix)]
+fn publication_filesystem_owner_probe(root: &std::path::Path) -> std::io::Result<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let probe = tempfile::tempfile_in(root)?;
+    Ok(probe.metadata()?.uid())
+}
+
 pub use publication_clock::{
     DurableMusubiPublicationServiceClockOpenErrorV1, DurableMusubiPublicationServiceClockV1,
 };
@@ -88,6 +96,7 @@ const RESPONSE_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
     32 * 1024 * 1024,
     64,
 );
+const PROVIDER_READBACK_TARGET_DOMAIN_V1: &[u8] = b"iroha.musubi.v1.provider-readback-target";
 
 // TODO: Deployments must inject and qualify their private HTTPS listener, durable replay journal,
 // broker HSM/signer, and authoritative SoraFS backends around the transport-independent server
@@ -849,6 +858,28 @@ fn valid_storage_generation_target(target: [u8; 32]) -> bool {
         && usize::from(target[0]) <= MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
         && target[1..].iter().all(|byte| *byte == 0)
 }
+
+fn provider_readback_target(location: &MusubiArchiveLocationV1, provider: ProviderId) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PROVIDER_READBACK_TARGET_DOMAIN_V1);
+    hasher.update(location.location_id.as_bytes());
+    hasher.update(&location.revision.to_le_bytes());
+    hasher.update(provider.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn maximum_historical_readbacks_per_operation() -> usize {
+    let bound = MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
+        .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
+        .expect("Musubi readback history bound is a fixed small constant");
+    debug_assert!(
+        bound
+            >= MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
+                .checked_mul(2)
+                .expect("publication readback minimum is fixed")
+    );
+    bound
+}
 /// Exact private path for authenticated seed ingress.
 pub const MUSUBI_PUBLICATION_SEED_INGRESS_PATH_V1: &str = "/v1/musubi/publication/seed-ingress";
 /// Exact private path for permanent-pin and replication coordination.
@@ -1242,7 +1273,7 @@ pub struct MusubiPublicationIdempotencyKeyV1 {
     /// Stable publisher-selected operation id.
     pub operation_id: [u8; 32],
     /// Route-specific target: zero for ingress, one-based location generation for storage
-    /// coordination, or provider id for readback.
+    /// coordination, or the exact location-ID/revision/provider digest for readback.
     pub target: [u8; 32],
 }
 
@@ -1383,8 +1414,7 @@ impl InMemoryMusubiPublicationServiceJournalV1 {
         }
         let max_results = max_operations
             .checked_mul(
-                MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
-                    .saturating_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
+                maximum_historical_readbacks_per_operation()
                     .saturating_add(1)
                     .saturating_add(MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1),
             )
@@ -1540,7 +1570,7 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
                         && key.operation == MusubiPublicationRuntimeOperationV1::ProviderReadback
                 })
                 .count()
-                >= MUSUBI_MAX_ARCHIVE_LOCATIONS_V1.saturating_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
+                >= maximum_historical_readbacks_per_operation()
         {
             return Err(MusubiPublicationServiceJournalErrorV1::Capacity);
         }
@@ -2293,7 +2323,7 @@ impl MusubiPublicationPrivateServiceV1 {
         let attempt = journal_attempt(
             MusubiPublicationRuntimeOperationV1::ProviderReadback,
             decoded.value.operation_id,
-            *decoded.value.provider.as_bytes(),
+            provider_readback_target(&decoded.value.location, decoded.value.provider),
             &decoded.value.chain_id,
             decoded.value.genesis_block_hash,
             &decoded.value.publisher,
@@ -3439,6 +3469,8 @@ fn retryable_status(status: StatusCode) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -4018,6 +4050,35 @@ mod tests {
         substitute: bool,
     }
 
+    #[cfg(unix)]
+    struct RecordingExactReadback {
+        calls: Arc<Mutex<Vec<(MusubiArchiveLocationIdV1, u64, ProviderId)>>>,
+    }
+
+    #[cfg(unix)]
+    impl MusubiProviderReadbackBackendV1 for RecordingExactReadback {
+        fn readback_provider(
+            &mut self,
+            request: &MusubiProviderReadbackRequestV1,
+        ) -> Result<MusubiProviderReadbackResponseV1, MusubiPublicationServiceBackendErrorV1>
+        {
+            self.calls.lock().expect("readback call journal").push((
+                request.location.location_id,
+                request.location.revision,
+                request.provider,
+            ));
+            Ok(MusubiProviderReadbackResponseV1 {
+                version: 1,
+                provider: request.provider,
+                location_id: request.location.location_id,
+                replication_order: request.location.replication_order,
+                commitment: request.commitment.clone(),
+                semantic_release_digest: request.semantic_release_digest,
+                verification_lock_digest: request.verification_lock_digest,
+            })
+        }
+    }
+
     impl MusubiProviderReadbackBackendV1 for FixedReadback {
         fn readback_provider(
             &mut self,
@@ -4494,6 +4555,34 @@ mod tests {
             .expect("authorization");
         base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(norito::encode_canonical(&authorization).expect("canonical authorization"))
+    }
+
+    fn control_readback_response(
+        fixture: &mut ControlServiceFixture,
+        request: &MusubiProviderReadbackRequestV1,
+        issued_at_ms: u64,
+    ) -> MusubiPublicationPrivateHttpResponseV1 {
+        let body = norito::encode_canonical(request).expect("readback request bytes");
+        let authorization = control_authorization_header(
+            &fixture.runtime,
+            MusubiPublicationRuntimeOperationV1::ProviderReadback,
+            request.operation_id,
+            &body,
+            issued_at_ms,
+        );
+        fixture
+            .clock
+            .store(issued_at_ms.saturating_add(1), Ordering::SeqCst);
+        fixture
+            .service
+            .handle(MusubiPublicationPrivateHttpRequestV1 {
+                method: "POST",
+                path: MUSUBI_PUBLICATION_PROVIDER_READBACK_PATH_V1,
+                content_type: APPLICATION_NORITO,
+                authorization: Some(&authorization),
+                seed_ingress_metadata: None,
+                body: &body,
+            })
     }
 
     fn seed_http_response(
@@ -5998,6 +6087,115 @@ mod tests {
             norito::decode_canonical_with_limits(&readback.body, RESPONSE_DECODE_LIMITS)
                 .expect("readback response");
         assert_eq!(readback_response, fixture.readback_response);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_readback_journal_separates_replacement_and_renewal_targets() {
+        let mut fixture = control_service_fixture(false, false);
+        let root = tempfile::tempdir().expect("durable readback journal root");
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("private journal root permissions");
+        let binding =
+            MusubiPublicationServiceJournalBindingV1::from_configuration(&fixture.service.config);
+        let limits = DurableMusubiPublicationServiceJournalLimitsV1::new(
+            16,
+            64,
+            MAX_CONTROL_RESPONSE_BYTES_U64,
+            MAX_CONTROL_RESPONSE_BYTES_U64 + 1024 * 1024,
+        )
+        .expect("durable journal limits");
+        fixture.service.journal = Box::new(
+            DurableMusubiPublicationServiceJournalV1::initialize(
+                root.path(),
+                binding.clone(),
+                limits,
+            )
+            .expect("initialize durable readback journal"),
+        );
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        fixture.service.readback = Box::new(RecordingExactReadback {
+            calls: Arc::clone(&calls),
+        });
+
+        let initial = fixture.readback_request.clone();
+        let initial_response = control_readback_response(&mut fixture, &initial, 3_000);
+        assert_eq!(initial_response.status, 200);
+        assert_eq!(calls.lock().expect("readback calls").len(), 1);
+
+        let fallback = InMemoryMusubiPublicationServiceJournalV1::new(binding.clone(), 1, 1)
+            .expect("temporary journal");
+        let durable = std::mem::replace(&mut fixture.service.journal, Box::new(fallback));
+        drop(durable);
+        fixture.service.journal = Box::new(
+            DurableMusubiPublicationServiceJournalV1::open(root.path(), binding.clone(), limits)
+                .expect("reopen durable readback journal"),
+        );
+
+        let cached = control_readback_response(&mut fixture, &initial, 3_100);
+        assert_eq!(cached.status, 200);
+        assert_eq!(cached.body, initial_response.body);
+        assert_eq!(calls.lock().expect("cached readback calls").len(), 1);
+
+        let mut replacement = initial.clone();
+        replacement.location.location_id = MusubiArchiveLocationIdV1::new([0xe1; 32]);
+        replacement.location.finalized_height += 1;
+        assert_ne!(
+            provider_readback_target(&initial.location, initial.provider),
+            provider_readback_target(&replacement.location, replacement.provider)
+        );
+        let replacement_response = control_readback_response(&mut fixture, &replacement, 3_200);
+        assert_eq!(replacement_response.status, 200);
+
+        let mut renewal = replacement.clone();
+        renewal.location.revision += 1;
+        renewal.location.finalized_height += 1;
+        renewal.location.renew_after_epoch += 1;
+        renewal.location.expires_at_epoch += 1;
+        assert_ne!(
+            provider_readback_target(&replacement.location, replacement.provider),
+            provider_readback_target(&renewal.location, renewal.provider)
+        );
+        let renewal_response = control_readback_response(&mut fixture, &renewal, 3_300);
+        assert_eq!(renewal_response.status, 200);
+        assert_eq!(calls.lock().expect("replacement readback calls").len(), 3);
+
+        let fallback = InMemoryMusubiPublicationServiceJournalV1::new(binding.clone(), 1, 1)
+            .expect("second temporary journal");
+        let durable = std::mem::replace(&mut fixture.service.journal, Box::new(fallback));
+        drop(durable);
+        fixture.service.journal = Box::new(
+            DurableMusubiPublicationServiceJournalV1::open(root.path(), binding, limits)
+                .expect("reopen durable journal with all readback targets"),
+        );
+
+        let cached_replacement = control_readback_response(&mut fixture, &replacement, 3_400);
+        assert_eq!(cached_replacement.status, 200);
+        assert_eq!(cached_replacement.body, replacement_response.body);
+        let cached_renewal = control_readback_response(&mut fixture, &renewal, 3_500);
+        assert_eq!(cached_renewal.status, 200);
+        assert_eq!(cached_renewal.body, renewal_response.body);
+        assert_eq!(
+            calls.lock().expect("durable cached readback calls").len(),
+            3
+        );
+
+        let mut substituted_same_tuple = renewal.clone();
+        substituted_same_tuple.location.renew_after_epoch += 1;
+        assert_eq!(
+            provider_readback_target(
+                &substituted_same_tuple.location,
+                substituted_same_tuple.provider
+            ),
+            provider_readback_target(&renewal.location, renewal.provider)
+        );
+        let conflict = control_readback_response(&mut fixture, &substituted_same_tuple, 3_600);
+        assert_eq!(conflict.status, 422);
+        assert_eq!(
+            decode_service_error(&conflict).code,
+            MusubiPublicationServiceErrorCodeV1::OperationConflict
+        );
+        assert_eq!(calls.lock().expect("conflicting readback calls").len(), 3);
     }
 
     #[test]

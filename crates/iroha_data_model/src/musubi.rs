@@ -6961,9 +6961,9 @@ mod tests {
 
     #[test]
     fn empty_response_pages_retain_their_exact_query_identity() {
-        let package = package("empty-context");
+        let package_id = package("empty-context");
         let package_query = MusubiPackagePageQueryV1 {
-            package: package.clone(),
+            package: package_id.clone(),
             page: MusubiPageRequestV1 {
                 limit: 7,
                 cursor: None,
@@ -6983,7 +6983,7 @@ mod tests {
         assert!(versions.validate_for(&other_package_query).is_err());
 
         let resolver_query = MusubiResolverIndexQueryV1 {
-            package: package.clone(),
+            package: package_id,
             requirement: Some("^1.2.3".parse().expect("requirement")),
             page: MusubiPageRequestV1 {
                 limit: 9,

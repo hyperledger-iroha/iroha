@@ -2607,6 +2607,7 @@ mod event_routing_tests {
         domain::{DomainEvent, ScopedAsset, ScopedAssetDefinition},
     };
     use crate::{
+        PublicKey,
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
@@ -2653,10 +2654,11 @@ mod event_routing_tests {
             .to_string()
             .parse()
             .expect("opaque canonical asset definition id");
-        let account_id: AccountId =
+        let public_key: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
-                .expect("account id");
+                .expect("public key");
+        let account_id = AccountId::new(public_key);
         let asset_id = AssetId::of(opaque_definition, account_id);
         let opaque_event = AssetEvent::Added(AssetChanged {
             asset: asset_id.clone(),
@@ -2691,10 +2693,11 @@ mod event_routing_tests {
 
     #[test]
     fn domainless_account_event_roundtrips_without_domain_wrapper() {
-        let account_id: AccountId =
+        let public_key: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
-                .expect("account id");
+                .expect("public key");
+        let account_id = AccountId::new(public_key);
         let event = DataEvent::from(super::account::AccountEvent::Deleted(account_id));
         assert!(matches!(event, DataEvent::Account(_)));
         assert!(event.domain().is_none());

@@ -51,7 +51,7 @@ fn asset_definition_mutators_metadata_mintable_owner() {
     let mut def = AssetDefinition::numeric(
         asset_def_id.clone(),
         "rose".to_owned(),
-        crate::asset::AssetBalancePolicy::Global,
+        iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )
     .build(&owner);

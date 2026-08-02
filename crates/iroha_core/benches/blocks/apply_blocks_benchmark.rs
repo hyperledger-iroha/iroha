@@ -37,6 +37,7 @@ fn large_world() -> World {
         .first()
         .expect("benchmark fixture has accounts")
         .clone();
+    let domain_count = domain_ids.len();
     let domains = domain_ids
         .into_iter()
         .map(|id| Domain::new(id).build(&authority));
@@ -44,7 +45,6 @@ fn large_world() -> World {
         .into_iter()
         .map(|id| Account::new(id).build(&authority));
     let asset_definition_count = asset_definition_ids.len();
-    let domain_count = domain_ids.len();
     let asset_definitions = asset_definition_ids
         .into_iter()
         .enumerate()

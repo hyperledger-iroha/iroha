@@ -286,6 +286,11 @@ evidence.
 
 ## Sumeragi V2 production multilane release closure
 
+- Restore the proposal-work gate lost in the Sumeragi V2 runner so an idle
+  height does not continuously manufacture empty blocks. Preserve explicitly
+  armed recovery heartbeats and genuine internal work, and bind the repair to
+  focused regression coverage plus a live four-validator idle-chain check.
+
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
 [`specs/sumeragi_v2_multilane_closure_ledger.md`](./specs/sumeragi_v2_multilane_closure_ledger.md).

@@ -11,10 +11,7 @@ use std::{
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
 #[cfg(unix)]
-unsafe extern "C" {
-    fn geteuid() -> std::os::raw::c_uint;
-}
-
+use super::publication_filesystem_owner_probe;
 use super::{
     MusubiPublicationServiceBackendErrorV1, MusubiPublicationServiceClockV1,
     MusubiPublicationSystemClockV1,
@@ -428,6 +425,15 @@ fn open_private_root(
     if !same_file(&linked, &canonical_metadata) {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
     }
+    #[cfg(unix)]
+    let filesystem_owner = publication_filesystem_owner_probe(&canonical)
+        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+    #[cfg(unix)]
+    if metadata_owner(&linked) != filesystem_owner
+        || metadata_owner(&canonical_metadata) != filesystem_owner
+    {
+        return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
+    }
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -440,6 +446,10 @@ fn open_private_root(
         .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     validate_private_root(&opened)?;
     if !same_file(&canonical_metadata, &opened) {
+        return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
+    }
+    #[cfg(unix)]
+    if metadata_owner(&opened) != filesystem_owner {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
     }
     Ok((
@@ -882,7 +892,7 @@ fn validate_private_root(
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
     }
     #[cfg(unix)]
-    if metadata.mode() & 0o7777 != 0o700 || metadata.uid() != effective_user_id() {
+    if metadata.mode() & 0o7777 != 0o700 {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
     }
     Ok(())
@@ -1050,12 +1060,6 @@ fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 #[cfg(unix)]
 fn metadata_owner(metadata: &fs::Metadata) -> u32 {
     metadata.uid()
-}
-
-#[cfg(unix)]
-fn effective_user_id() -> u32 {
-    // SAFETY: `geteuid` takes no arguments and has no preconditions on Unix.
-    unsafe { geteuid() }
 }
 
 #[cfg(not(unix))]

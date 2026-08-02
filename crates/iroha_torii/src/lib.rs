@@ -27103,6 +27103,12 @@ async fn execute_torii_transaction_via_proxy(
     let routing_decision = routing_plan.coordinator_route();
     let entrypoint_hash = transaction.hash();
     let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
+    // An ordinary durable ingress/gossip claim deliberately has no global identity yet. It is
+    // not a public QueuePlanSynced retry: construct the canonical global binding below and let
+    // strict admission atomically promote the exact unbound journal owner. Only an already
+    // globally bound claim may enter the retry reconstruction branch.
+    let durable_retry_claim =
+        durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some());
     if durable_retry_claim.is_none() {
         match app
             .state

@@ -253,6 +253,12 @@ resume process through compare-and-set.
    the prior intent/application/terminal history, clears replication and
    readbacks, and coordinates the replacement. A healthy same-ID renewal uses
    its current finalized pin, order, epochs, and exact provider attestations.
+   Treat a lower location revision as a lagging retry without modifying the
+   journal. Equal snapshots or archive revisions must reproduce the exact
+   directory; field changes at either checkpoint are integrity failures. The
+   provider-readback replay identity includes location ID, location revision,
+   and provider ID, so a replacement or renewal has a separate durable cached
+   result while a different request under the same tuple is a conflict.
 5. If a retained object differs, stop. Preserve the journal and evidence as an
    integrity incident; do not start a same-version publication with different
    commitments.

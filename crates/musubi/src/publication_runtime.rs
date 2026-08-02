@@ -447,6 +447,9 @@ fn validate_finalized_archive_page(
     registered: &PublicationRegisteredArchiveV1,
     page: &MusubiArchiveLocationPageV1,
 ) -> Result<(), PublicationBackendError> {
+    page.validate().map_err(|_| {
+        PublicationBackendError::permanent("ARCHIVE_LOCATION_FINALIZED_PAGE_INVALID")
+    })?;
     let expected = &registered.archive;
     let observed = &page.archive;
     if page.snapshot.finalized_height < registered.snapshot.finalized_height

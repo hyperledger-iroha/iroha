@@ -13569,8 +13569,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let tx = sample_transaction(
@@ -13623,8 +13624,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let tx = sample_transaction(
@@ -13678,8 +13680,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let tx = sample_transaction(
@@ -13697,7 +13700,7 @@ mod tests {
                     asset_definition,
                     "pkr".to_owned(),
                     AssetBalancePolicy::Global,
-                    None,
+                    Some(owning_domain),
                 )
                 .build(&alice_id),
             ],

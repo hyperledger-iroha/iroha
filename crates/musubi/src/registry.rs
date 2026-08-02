@@ -1454,6 +1454,39 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         else {
             return Ok(PublicationReplicationAdvanceV1::Pending);
         };
+        let registered_location = registration.location().map_err(|_| {
+            PublicationBackendError::permanent("ARCHIVE_LOCATION_REGISTRATION_INVALID")
+        })?;
+        let location = page
+            .items
+            .iter()
+            .find(|candidate| candidate.location_id == registration.location_id())
+            .cloned();
+        page.validate().map_err(|_| {
+            PublicationBackendError::permanent("ARCHIVE_LOCATION_FINALIZED_PAGE_INVALID")
+        })?;
+        let registered_page = &registration.finalized_page;
+        if (page.snapshot.finalized_height == registered_page.snapshot.finalized_height
+            && page.snapshot != registered_page.snapshot)
+            || (page.snapshot == registered_page.snapshot
+                && (page.archive != registered_page.archive || page.items != registered_page.items))
+            || (page.archive.location_revision == registered_page.archive.location_revision
+                && (page.archive != registered_page.archive || page.items != registered_page.items))
+        {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_FINALIZED_PAGE_INVALID",
+            ));
+        }
+        if page.snapshot.finalized_height < registration.finalized_page.snapshot.finalized_height
+            || page.snapshot.index_revision < registration.finalized_page.snapshot.index_revision
+            || page.archive.location_revision
+                < registration.finalized_page.archive.location_revision
+            || location
+                .as_ref()
+                .is_some_and(|current| current.revision < registered_location.revision)
+        {
+            return Ok(PublicationReplicationAdvanceV1::Pending);
+        }
         registration
             .validate_polled_page(request, &page)
             .map_err(|_| {
@@ -1469,11 +1502,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
                 "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT",
             ));
         }
-        let location = page
-            .items
-            .iter()
-            .find(|candidate| candidate.location_id == registration.location_id())
-            .cloned();
         if let Some(location) = location {
             return if location.state == MusubiArchiveLocationStateV1::Healthy
                 && location.providers.len() >= usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1)

@@ -1292,10 +1292,10 @@ exports = []
                 cursor: None,
             },
         };
-        assert_eq!(
+        assert!(matches!(
             sources[0].ordered_prefix(&missing),
             Err(ResolverIndexCacheSourceErrorV1::Miss)
-        );
+        ));
 
         let path = root.join("registry-v1").join(CACHE_FILE);
         let mut bytes = fs::read(&path).expect("cache bytes");

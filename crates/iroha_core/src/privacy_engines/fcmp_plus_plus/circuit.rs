@@ -17,8 +17,8 @@ use super::{
     },
     divisor::NormalizedDivisor,
     proof_math::{
-        ProofGeneratorView, ProofPoint, ProofScalar, ProofSuite, ProverTranscript,
-        VerifierTranscript, multiexp,
+        FcmpProofRandomSource, ProofGeneratorView, ProofPoint, ProofScalar, ProofSuite,
+        ProverTranscript, VerifierTranscript, multiexp,
     },
 };
 
@@ -1509,7 +1509,11 @@ mod tests {
         transcript.write_commitments::<SeleneSuite>(commitments, Vec::new());
         let mut rng = StdRng::seed_from_u64(0xc1_0017);
         statement
-            .prove(&mut rng, &mut transcript, witness)
+            .prove(
+                &mut FcmpProofRandomSource::new(&mut rng),
+                &mut transcript,
+                witness,
+            )
             .expect("proof");
         let proof = transcript.complete();
 

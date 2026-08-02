@@ -21729,13 +21729,12 @@ seiyaku OpaqueInstructionSubmission {
         asset_def: AssetDefinitionId,
         asset_name: &str,
         balance_policy: AssetBalancePolicy,
+        owning_domain: Option<DomainId>,
     ) -> State {
-        let domain_id = fixture_domain_id();
+        let domain_id = owning_domain.clone().unwrap_or_else(fixture_domain_id);
         let domain = Domain::new(domain_id.clone()).build(authority);
         let source_account = build_fixture_account(authority, authority);
         let destination_account = build_fixture_account(destination, authority);
-        let owning_domain =
-            (balance_policy == AssetBalancePolicy::DataspaceRestricted).then_some(domain_id);
         let asset_def = AssetDefinition::numeric(
             asset_def,
             asset_name.to_owned(),
@@ -21785,6 +21784,7 @@ seiyaku OpaqueInstructionSubmission {
             asset_def.clone(),
             "xor",
             AssetBalancePolicy::Global,
+            None,
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21823,6 +21823,7 @@ seiyaku OpaqueInstructionSubmission {
             asset_def.clone(),
             "xor",
             AssetBalancePolicy::Global,
+            None,
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21854,8 +21855,9 @@ seiyaku OpaqueInstructionSubmission {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
         let (paynet, catalog) = retail_dataspace_catalog();
+        let owning_domain = DomainId::try_new("wonderland", "paynet").unwrap();
         let asset_def = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "paynet").unwrap(),
+            owning_domain.clone(),
             "rose".parse().unwrap(),
         );
         let state = scoped_transfer_state(
@@ -21864,6 +21866,7 @@ seiyaku OpaqueInstructionSubmission {
             asset_def.clone(),
             "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         state.nexus.write().dataspace_catalog = catalog;
         let view = state.view();
@@ -21895,8 +21898,11 @@ seiyaku OpaqueInstructionSubmission {
     fn transfer_asset_scoped_syscall_queues_dataspace_source_for_restricted_definition() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def =
-            AssetDefinitionId::derive_from_components(fixture_domain_id(), "rose".parse().unwrap());
+        let owning_domain = fixture_domain_id();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            "rose".parse().unwrap(),
+        );
         let dataspace = DataSpaceId::new(7);
         let state = scoped_transfer_state(
             &authority,
@@ -21904,6 +21910,7 @@ seiyaku OpaqueInstructionSubmission {
             asset_def.clone(),
             "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21938,14 +21945,18 @@ seiyaku OpaqueInstructionSubmission {
     fn transfer_asset_scoped_syscall_rejects_non_dataspace_r14() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def =
-            AssetDefinitionId::derive_from_components(fixture_domain_id(), "rose".parse().unwrap());
+        let owning_domain = fixture_domain_id();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            "rose".parse().unwrap(),
+        );
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
             "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());

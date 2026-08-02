@@ -2414,27 +2414,30 @@ fn unregister_domain_after_snapshot_restore_removes_owned_asset_state_atomically
         assert!(!role.permission_epochs().contains_key(&permission));
         // Dropping without apply must restore every primary and derived row together.
     }
-    assert!(block.domains.get(&domain_id).is_some());
-    assert!(block.asset_definitions.get(&definition_id).is_some());
-    assert!(block.assets.get(&asset_id).is_some());
+    assert!(block.world.domains.get(&domain_id).is_some());
+    assert!(block.world.asset_definitions.get(&definition_id).is_some());
+    assert!(block.world.assets.get(&asset_id).is_some());
     assert_eq!(
-        block.asset_definition_domains.get(&definition_id),
+        block.world.asset_definition_domains.get(&definition_id),
         Some(&domain_id)
     );
     assert!(
         block
+            .world
             .assets_by_domain
             .get(&domain_id)
             .is_some_and(|assets| assets.contains(&asset_id))
     );
     assert!(
         block
+            .world
             .account_permissions
             .get(&ALICE_ID)
             .is_some_and(|permissions| permissions.contains(&permission)),
         "rollback must restore the exact account permission"
     );
     let role = block
+        .world
         .roles
         .get(&role_id)
         .expect("role restored on rollback");
@@ -2448,19 +2451,33 @@ fn unregister_domain_after_snapshot_restore_removes_owned_asset_state_atomically
             .expect("retry after rollback must remove the same exact state");
         transaction.apply();
     }
-    assert!(block.domains.get(&domain_id).is_none());
-    assert!(block.asset_definitions.get(&definition_id).is_none());
-    assert!(block.assets.get(&asset_id).is_none());
-    assert!(block.asset_definition_domains.get(&definition_id).is_none());
-    assert!(block.domain_asset_definitions.get(&domain_id).is_none());
-    assert!(block.assets_by_domain.get(&domain_id).is_none());
+    assert!(block.world.domains.get(&domain_id).is_none());
+    assert!(block.world.asset_definitions.get(&definition_id).is_none());
+    assert!(block.world.assets.get(&asset_id).is_none());
     assert!(
         block
+            .world
+            .asset_definition_domains
+            .get(&definition_id)
+            .is_none()
+    );
+    assert!(
+        block
+            .world
+            .domain_asset_definitions
+            .get(&domain_id)
+            .is_none()
+    );
+    assert!(block.world.assets_by_domain.get(&domain_id).is_none());
+    assert!(
+        block
+            .world
             .account_permissions
             .get(&ALICE_ID)
             .is_none_or(|permissions| !permissions.contains(&permission))
     );
     let role = block
+        .world
         .roles
         .get(&role_id)
         .expect("role retained after apply");
@@ -2523,13 +2540,11 @@ fn asset_domain_index_rebuild_uses_only_definition_ownership() {
     world
         .rebuild_asset_definition_indexes()
         .expect("entity ownership rebuilds the derived index");
-    assert_eq!(
-        world.asset_definition_domains.get(&definition_id),
-        Some(&domain_id)
-    );
+    let definition_domains = world.asset_definition_domains.view();
+    assert_eq!(definition_domains.get(&definition_id), Some(&domain_id));
+    let domain_definitions = world.domain_asset_definitions.view();
     assert!(
-        world
-            .domain_asset_definitions
+        domain_definitions
             .get(&domain_id)
             .is_some_and(|definitions| definitions.contains(&definition_id))
     );
@@ -5083,7 +5098,7 @@ fn explorer_count_indexes_rollback_apply_and_commit_with_primary_rows() {
         [],
         [],
     );
-    let world = world.block();
+    let mut block = world.block();
 
     {
         let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
@@ -5096,11 +5111,11 @@ fn explorer_count_indexes_rollback_apply_and_commit_with_primary_rows() {
         transaction.insert_nft_entry(nft_id.clone(), value);
         // Drop without applying: the primary rows and every derived bucket must roll back.
     }
-    assert!(block.assets.get(&asset_id).is_none());
-    assert!(block.assets_by_account.get(&ALICE_ID).is_none());
-    assert!(block.assets_by_domain.get(&domain).is_none());
-    assert!(block.nfts.get(&nft_id).is_none());
-    assert!(block.nfts_by_domain.get(&domain).is_none());
+    assert!(block.world.assets.get(&asset_id).is_none());
+    assert!(block.world.assets_by_account.get(&ALICE_ID).is_none());
+    assert!(block.world.assets_by_domain.get(&domain).is_none());
+    assert!(block.world.nfts.get(&nft_id).is_none());
+    assert!(block.world.nfts_by_domain.get(&domain).is_none());
 
     {
         let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
@@ -5113,9 +5128,9 @@ fn explorer_count_indexes_rollback_apply_and_commit_with_primary_rows() {
         transaction.insert_nft_entry(nft_id.clone(), value);
         transaction.apply();
     }
-    assert!(block.assets_by_account.get(&ALICE_ID).is_some());
-    assert!(block.assets_by_domain.get(&domain).is_some());
-    assert!(block.nfts_by_domain.get(&domain).is_some());
+    assert!(block.world.assets_by_account.get(&ALICE_ID).is_some());
+    assert!(block.world.assets_by_domain.get(&domain).is_some());
+    assert!(block.world.nfts_by_domain.get(&domain).is_some());
 
     block.commit();
     let view = world.view();

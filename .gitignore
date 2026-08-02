@@ -200,6 +200,8 @@ fixtures/sccp/release_evidence_v1/artifacts/phases/*
 .clean_copy/*
 clean_copy/*
 test_*
+!vendor/vega-prover/src/bellpepper/test_r1cs.rs
+!vendor/vega-prover/src/bellpepper/test_shape_cs.rs
 !crates/musubi/src/test_runner.rs
 !crates/iroha_core/src/privacy_engines/fcmp_plus_plus/test_vectors/
 !crates/iroha_core/src/privacy_engines/fcmp_plus_plus/test_vectors/**

@@ -9778,7 +9778,7 @@ pub mod query {
                 None,
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
 
             let world = World::with_assets(
@@ -9841,7 +9841,7 @@ pub mod query {
                 None,
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
 
             let world =
@@ -9903,7 +9903,7 @@ pub mod query {
                 None,
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
+            let source_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
 
             let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
@@ -10026,7 +10026,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset = Asset = Asset::new(
+            let source_asset = Asset::new(
                 AssetId::with_scope(
                     asset_def_id.clone(),
                     ALICE_ID.clone(),
@@ -10092,7 +10092,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::with_scope(
+            let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
@@ -10180,7 +10180,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::with_scope(
+            let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
@@ -10291,7 +10291,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::with_scope(
+            let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
@@ -10378,7 +10378,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let issuer_policy = AssetIssuerUsagePolicy = AssetIssuerUsagePolicyV1 {
+            let issuer_policy = AssetIssuerUsagePolicyV1 {
                 require_subject_binding: true,
                 subject_bindings: BTreeMap::from([
                     (
@@ -10565,7 +10565,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::with_scope(
+            let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
@@ -10687,7 +10687,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::with_scope(
+            let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -10790,7 +10790,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::with_scope(
+            let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
@@ -10907,7 +10907,7 @@ pub mod query {
                 Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
-            let source_asset_id = Asset_id = AssetId::with_scope(
+            let source_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(first_source_dataspace),

@@ -25,7 +25,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     account::{AccountId, NewAccount},
-    asset::{AssetDefinitionId, AssetId, NewAssetDefinition},
+    asset::{AssetBalancePolicy, AssetDefinitionId, AssetId, NewAssetDefinition},
     block::BlockHeader,
     domain::{Domain, DomainId},
     isi::{Mint, Register},
@@ -157,7 +157,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         mintable: Default::default(),
         logo: None,
         metadata: Default::default(),
-        balance_scope_policy: Default::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
         confidential_policy: Default::default(),
     })
@@ -331,7 +331,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         mintable: Default::default(),
         logo: None,
         metadata: Default::default(),
-        balance_scope_policy: Default::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
         confidential_policy: Default::default(),
     })
@@ -652,7 +652,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         mintable: Default::default(),
         logo: None,
         metadata: Default::default(),
-        balance_scope_policy: Default::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
         confidential_policy: Default::default(),
     })
@@ -813,7 +813,7 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         mintable: Default::default(),
         logo: None,
         metadata: Default::default(),
-        balance_scope_policy: Default::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
         confidential_policy: Default::default(),
     })

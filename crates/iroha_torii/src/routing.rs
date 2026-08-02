@@ -179,9 +179,9 @@ pub mod debug_match_flag {
 }
 
 use crate::sorafs::{
-    POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorCoordinatorError, PorStatusExportPageV1,
-    PorStatusFilter, PorStatusPageCursor, PorStatusPageLimits, PorStatusPageV1, QuotaExceeded,
+    PorCoordinatorError, PorStatusExportPageV1, PorStatusFilter, PorStatusPageV1, QuotaExceeded,
     SorafsAction, SorafsQuotaEnforcer,
+    por::{POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorStatusPageCursor, PorStatusPageLimits},
 };
 #[cfg(feature = "app_api")]
 use crate::{
@@ -35867,9 +35867,12 @@ mod sorafs_capacity_tests {
         let page = por_coordinator
             .query_status_page(
                 &sorafs::PorStatusFilter::default(),
-                sorafs::PorStatusPageLimits::new(1, sorafs::POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
-                    .expect("valid status-page limits"),
-                sorafs::PorStatusPageCursor::First,
+                sorafs::por::PorStatusPageLimits::new(
+                    1,
+                    sorafs::por::POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
+                )
+                .expect("valid status-page limits"),
+                sorafs::por::PorStatusPageCursor::First,
             )
             .expect("proof and verdict handlers update the authoritative projection");
         assert_eq!(page.snapshot_generation, 4);

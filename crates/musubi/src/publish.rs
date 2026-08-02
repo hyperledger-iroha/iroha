@@ -808,6 +808,7 @@ impl PublicationArchiveLocationIntentV1 {
                 .binary_search(&self.location_id)
                 .is_ok()
             || self.expected_location_revision != self.prepared_page.archive.location_revision
+            || self.expected_location_revision == u64::MAX
             || self.instruction_digest != archive_location_instruction_digest(&self.instruction())
             || self.pin_manifest.as_bytes().iter().all(|byte| *byte == 0)
             || self
@@ -871,12 +872,20 @@ impl PublicationArchiveRegistrationV1 {
         request: &PublicationRequestV1,
         page: &MusubiArchiveLocationPageV1,
     ) -> Result<(), PublicationError> {
-        page.snapshot
-            .validate()
+        page.validate()
             .map_err(|error| invalid(PublicationPhaseV1::Replication, error))?;
-        page.archive
-            .validate()
-            .map_err(|error| invalid(PublicationPhaseV1::Replication, error))?;
+        let registered_location = self.location()?;
+        let observed_location = page
+            .items
+            .binary_search_by_key(&self.intent.location_id, |location| location.location_id)
+            .ok()
+            .map(|index| &page.items[index]);
+        let location_regressed = observed_location.is_some_and(|location| {
+            !matches!(
+                location_progress(registered_location, location),
+                Ok(PublicationLocationProgressV1::Current)
+            )
+        });
         if page.chain_id != request.chain_id
             || page.genesis_hash != request.genesis_block_hash
             || page.archive.registration_projection()
@@ -885,6 +894,13 @@ impl PublicationArchiveRegistrationV1 {
             || page.snapshot.index_revision < self.finalized_page.snapshot.index_revision
             || (page.snapshot.finalized_height == self.finalized_page.snapshot.finalized_height
                 && page.snapshot != self.finalized_page.snapshot)
+            || page.archive.location_revision < self.finalized_page.archive.location_revision
+            || (page.snapshot == self.finalized_page.snapshot
+                && (page.archive != self.finalized_page.archive
+                    || page.items != self.finalized_page.items))
+            || (page.archive.location_revision == self.finalized_page.archive.location_revision
+                && (page.archive != self.finalized_page.archive
+                    || page.items != self.finalized_page.items))
             || page.next_cursor.is_some()
             || page.items.len() != page.archive.location_ids.len()
             || page
@@ -898,6 +914,7 @@ impl PublicationArchiveRegistrationV1 {
                         || location.state == MusubiArchiveLocationStateV1::Retired
                         || location.validate().is_err()
                 })
+            || location_regressed
         {
             return Err(PublicationError::InvalidEvidence {
                 phase: PublicationPhaseV1::Replication,
@@ -937,6 +954,15 @@ impl PublicationArchiveRegistrationV1 {
                 && self.finalized_page.snapshot != self.intent.prepared_page.snapshot)
             || self.finalized_page.archive.location_revision
                 <= self.intent.expected_location_revision
+            || location.revision <= self.intent.expected_location_revision
+            || (location.revision == self.intent.expected_location_revision + 1
+                && (location.finalized_height != self.applied_height
+                    || location.state != MusubiArchiveLocationStateV1::Healthy
+                    || location.pin_manifest != self.intent.pin_manifest
+                    || location.replication_order != self.intent.replication_order
+                    || location.provider_attestations != self.intent.provider_attestations
+                    || location.renew_after_epoch != self.intent.renew_after_epoch
+                    || location.expires_at_epoch != self.intent.expires_at_epoch))
             || location.location_id != self.intent.location_id
             || location.archive_id != request.archive_commitment.archive_id()
             || location.finalized_height < self.applied_height
@@ -1021,8 +1047,6 @@ impl PublicationArchiveLocationTerminalV1 {
                 attempt.registration.is_none()
                     && block_height > attempt.intent.prepared_page.snapshot.finalized_height
                     && block_height <= self.finalized_page.snapshot.finalized_height
-                    && self.finalized_page.snapshot.index_revision
-                        > attempt.intent.prepared_page.snapshot.index_revision
                     && self.finalized_page.archive.location_revision
                         > attempt.intent.expected_location_revision
             }
@@ -1039,8 +1063,6 @@ impl PublicationArchiveLocationTerminalV1 {
                 attempt.registration.is_none()
                     && applied_height > attempt.intent.prepared_page.snapshot.finalized_height
                     && applied_height <= self.finalized_page.snapshot.finalized_height
-                    && self.finalized_page.snapshot.index_revision
-                        > attempt.intent.prepared_page.snapshot.index_revision
                     && self.finalized_page.archive.location_revision
                         > attempt.intent.expected_location_revision.saturating_add(1)
             }
@@ -1049,7 +1071,7 @@ impl PublicationArchiveLocationTerminalV1 {
                     self.finalized_page.snapshot.finalized_height
                         > registration.finalized_page.snapshot.finalized_height
                         && self.finalized_page.snapshot.index_revision
-                            > registration.finalized_page.snapshot.index_revision
+                            >= registration.finalized_page.snapshot.index_revision
                         && self.finalized_page.archive.location_revision
                             > registration.finalized_page.archive.location_revision
                 })
@@ -1064,6 +1086,13 @@ impl PublicationArchiveLocationTerminalV1 {
             || (self.finalized_page.snapshot.finalized_height
                 == attempt.intent.prepared_page.snapshot.finalized_height
                 && self.finalized_page.snapshot != attempt.intent.prepared_page.snapshot)
+            || (self.finalized_page.snapshot == attempt.intent.prepared_page.snapshot
+                && (self.finalized_page.archive != attempt.intent.prepared_page.archive
+                    || self.finalized_page.items != attempt.intent.prepared_page.items))
+            || (self.finalized_page.archive.location_revision
+                == attempt.intent.prepared_page.archive.location_revision
+                && (self.finalized_page.archive != attempt.intent.prepared_page.archive
+                    || self.finalized_page.items != attempt.intent.prepared_page.items))
             || !absent
             || !reason_is_valid
         {
@@ -1128,11 +1157,7 @@ pub(crate) fn validate_archive_location_page(
     registered: &PublicationRegisteredArchiveV1,
     page: &MusubiArchiveLocationPageV1,
 ) -> Result<(), PublicationError> {
-    page.snapshot
-        .validate()
-        .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
-    page.archive
-        .validate()
+    page.validate()
         .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
     if page.chain_id != request.chain_id
         || page.genesis_hash != request.genesis_block_hash
@@ -1141,6 +1166,8 @@ pub(crate) fn validate_archive_location_page(
         || page.snapshot.index_revision < registered.snapshot.index_revision
         || (page.snapshot.finalized_height == registered.snapshot.finalized_height
             && page.snapshot != registered.snapshot)
+        || page.archive.location_revision < registered.archive.location_revision
+        || (page.snapshot == registered.snapshot && page.archive != registered.archive)
         || page.next_cursor.is_some()
         || page.items.len() != page.archive.location_ids.len()
         || page
@@ -1552,8 +1579,15 @@ impl PublicationJournalV1 {
                     || (prepared.snapshot.finalized_height
                         == prior_finalized.snapshot.finalized_height
                         && prepared != prior_finalized)
+                    || (prepared.snapshot == prior_finalized.snapshot
+                        && (prepared.archive != prior_finalized.archive
+                            || prepared.items != prior_finalized.items))
                     || prepared.archive.location_revision
                         < prior_finalized.archive.location_revision
+                    || (prepared.archive.location_revision
+                        == prior_finalized.archive.location_revision
+                        && (prepared.archive != prior_finalized.archive
+                            || prepared.items != prior_finalized.items))
                 {
                     return Err(PublicationError::InvalidJournal(
                         "a replacement archive location regressed prior terminal finality"
@@ -2404,12 +2438,16 @@ impl PublicationJournalStore {
         };
 
         let (file, created) = match before.as_ref() {
-            Some(_) => (open_existing_operation_lock(&path)?, false),
+            Some(_) => (
+                open_existing_operation_lock(&path).map_err(PublicationError::JournalIo)?,
+                false,
+            ),
             None => match create_operation_lock(&path) {
                 Ok(file) => (file, true),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    (open_existing_operation_lock(&path)?, false)
-                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (
+                    open_existing_operation_lock(&path).map_err(PublicationError::JournalIo)?,
+                    false,
+                ),
                 Err(error) => return Err(PublicationError::JournalIo(error)),
             },
         };
@@ -2731,6 +2769,11 @@ impl<'a> PublicationEngine<'a> {
                     PublicationReplicationAdvanceV1::Healthy(location) => location,
                 };
                 validate_replication(&journal.request, registration, &location)?;
+                if location_progress(journaled_location, &location)?
+                    == PublicationLocationProgressV1::Stale
+                {
+                    return Ok(PublicationAdvanceV1::Pending(phase));
+                }
                 if &location != journaled_location {
                     next.replication = Some(location.clone());
                 }
@@ -2774,6 +2817,11 @@ impl<'a> PublicationEngine<'a> {
                     }
                     PublicationReplicationAdvanceV1::Healthy(location) => {
                         validate_replication(&journal.request, registration, &location)?;
+                        if location_progress(journaled_location, &location)?
+                            == PublicationLocationProgressV1::Stale
+                        {
+                            return Ok(PublicationAdvanceV1::Pending(phase));
+                        }
                         if &location != journaled_location {
                             next.replication = Some(location);
                             next.readbacks.clear();
@@ -2907,6 +2955,44 @@ fn append_location_terminal(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicationLocationProgressV1 {
+    Stale,
+    Current,
+}
+
+fn location_progress(
+    previous: &MusubiArchiveLocationV1,
+    current: &MusubiArchiveLocationV1,
+) -> Result<PublicationLocationProgressV1, PublicationError> {
+    if current.archive_id != previous.archive_id || current.location_id != previous.location_id {
+        return Err(PublicationError::InvalidEvidence {
+            phase: PublicationPhaseV1::Replication,
+            reason: "finalized archive location changed its stable identity".to_owned(),
+        });
+    }
+    if current.revision < previous.revision {
+        return Ok(PublicationLocationProgressV1::Stale);
+    }
+    if current.revision == previous.revision {
+        return if current == previous {
+            Ok(PublicationLocationProgressV1::Current)
+        } else {
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Replication,
+                reason: "equal archive-location revisions carried different records".to_owned(),
+            })
+        };
+    }
+    if current.finalized_height < previous.finalized_height {
+        return Err(PublicationError::InvalidEvidence {
+            phase: PublicationPhaseV1::Replication,
+            reason: "archive-location revision advanced while finality regressed".to_owned(),
+        });
+    }
+    Ok(PublicationLocationProgressV1::Current)
+}
+
 /// Validate a current healthy location for the immutable publication archive.
 ///
 /// The stable location identity cannot be reused after retirement. Its renewable pin, order,
@@ -2921,11 +3007,14 @@ pub(crate) fn validate_replication(
     location
         .validate()
         .map_err(|error| invalid(PublicationPhaseV1::Replication, error))?;
+    let registered_location = registration.location()?;
     if location.archive_id != request.archive_commitment.archive_id()
         || location.location_id != registration.location_id()
         || location.state != MusubiArchiveLocationStateV1::Healthy
         || location.providers.len() < usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1)
         || location.finalized_height < registration.applied_height
+        || location_progress(registered_location, location)?
+            != PublicationLocationProgressV1::Current
     {
         return Err(PublicationError::InvalidEvidence {
             phase: PublicationPhaseV1::Replication,
@@ -3633,6 +3722,7 @@ mod tests {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum LocationPollV1 {
         Healthy,
+        HealthyRevisionOffset(u64),
         Retired,
     }
 
@@ -4155,6 +4245,12 @@ mod tests {
                     registration,
                     3,
                 ))),
+                LocationPollV1::HealthyRevisionOffset(offset) => {
+                    let mut current = location(request, registration, 3);
+                    current.revision += offset;
+                    current.finalized_height += offset;
+                    Ok(PublicationReplicationAdvanceV1::Healthy(current))
+                }
                 LocationPollV1::Retired => Ok(PublicationReplicationAdvanceV1::Retired(
                     retired_location_terminal(registration),
                 )),
@@ -4689,6 +4785,9 @@ mod tests {
         registration: &PublicationArchiveRegistrationV1,
         provider_count: u8,
     ) -> MusubiArchiveLocationV1 {
+        let registered_location = registration
+            .location()
+            .expect("registered fixture location");
         let attestations = (1..=provider_count)
             .map(|provider| {
                 provider_attestation(request, registration.intent.replication_order, provider)
@@ -4706,8 +4805,8 @@ mod tests {
             provider_attestations: attestations,
             renew_after_epoch: registration.intent.renew_after_epoch,
             expires_at_epoch: registration.intent.expires_at_epoch,
-            finalized_height: 70,
-            revision: 1,
+            finalized_height: registered_location.finalized_height,
+            revision: registered_location.revision,
             state: MusubiArchiveLocationStateV1::Healthy,
         }
     }
@@ -5193,6 +5292,89 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn stale_healthy_poll_preserves_the_journal_and_exact_or_newer_revisions_resume() {
+        let temp = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, broker) = request();
+        let operation_id = engine
+            .begin_detached(request)
+            .expect("persist detached operation");
+        let source = BytesSource(b"canonical-car".to_vec());
+        let mut backend = LocationRecoveryBackend::new(
+            broker,
+            [
+                LocationPollV1::HealthyRevisionOffset(1),
+                LocationPollV1::Healthy,
+                LocationPollV1::HealthyRevisionOffset(1),
+                LocationPollV1::HealthyRevisionOffset(2),
+            ],
+        );
+
+        for step in 0..6 {
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .unwrap_or_else(|error| panic!("reach replication step {step}: {error}"));
+        }
+        assert_eq!(
+            store.load(operation_id).expect("replication journal").phase,
+            PublicationPhaseV1::Replication
+        );
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("persist renewed healthy location"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::Readback)
+        );
+        let renewed = store.load(operation_id).expect("renewed journal");
+        assert_eq!(
+            renewed
+                .replication
+                .as_ref()
+                .expect("renewed replication")
+                .revision,
+            3
+        );
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("stale finalized poll remains retryable"),
+            PublicationAdvanceV1::Pending(PublicationPhaseV1::Readback)
+        );
+        assert_eq!(
+            store.load(operation_id).expect("unchanged stale journal"),
+            renewed
+        );
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("exact journaled revision resumes readback"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::ReleaseSubmission)
+        );
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("newer healthy revision returns to readback"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::Readback)
+        );
+        let newer = store.load(operation_id).expect("newer journal");
+        assert_eq!(
+            newer
+                .replication
+                .as_ref()
+                .expect("newer replication")
+                .revision,
+            4
+        );
+        assert!(newer.readbacks.is_empty());
+        assert!(newer.submission.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn rejected_release_rotates_only_after_post_rejection_retirement_evidence() {
         let temp = tempdir().expect("state root");
         let store = PublicationJournalStore::open(temp.path()).expect("journal store");
@@ -5579,6 +5761,199 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution() {
+        let (request, broker) = request();
+        let operation_id = request.operation_id();
+        let receipt = signed_receipt(&request.receipt_binding(), &broker);
+        let archive_intent = registration_intent(operation_id, &request, receipt.clone());
+        let registered = registered_archive(&request, &broker, &archive_intent);
+        let first = location_registration_generation(operation_id, &request, &registered, 1);
+        let first_terminal = retired_location_terminal(&first);
+        let second = location_registration_generation(operation_id, &request, &registered, 2);
+        let second_attempt = PublicationArchiveLocationAttemptV1 {
+            generation: 2,
+            intent: second.intent.clone(),
+            registration: None,
+            terminal: None,
+        };
+        let prior_location_ids = [first.location_id()];
+        let active_second_attempt = PublicationArchiveLocationAttemptV1 {
+            generation: 2,
+            intent: second.intent.clone(),
+            registration: Some(second.clone()),
+            terminal: None,
+        };
+        let mut equal_index_retirement = retired_location_terminal(&second);
+        equal_index_retirement
+            .finalized_page
+            .snapshot
+            .index_revision = second.finalized_page.snapshot.index_revision;
+        equal_index_retirement
+            .validate_for(
+                operation_id,
+                &request,
+                &registered,
+                &active_second_attempt,
+                &prior_location_ids,
+            )
+            .expect("retirement may preserve the resolver index revision");
+        let mut lower_index_retirement = equal_index_retirement;
+        lower_index_retirement
+            .finalized_page
+            .snapshot
+            .index_revision -= 1;
+        assert!(
+            lower_index_retirement
+                .validate_for(
+                    operation_id,
+                    &request,
+                    &registered,
+                    &active_second_attempt,
+                    &prior_location_ids,
+                )
+                .is_err()
+        );
+
+        let exact_expiry = PublicationArchiveLocationTerminalV1 {
+            transaction_hash: second.intent.transaction_hash,
+            reason: PublicationArchiveLocationTerminalReasonV1::RegistryExpired {
+                block_height: None,
+            },
+            finalized_page: second.intent.prepared_page.clone(),
+        };
+        exact_expiry
+            .validate_for(
+                operation_id,
+                &request,
+                &registered,
+                &second_attempt,
+                &prior_location_ids,
+            )
+            .expect("unchanged prepared snapshot proves exact expiry absence");
+
+        let mut same_snapshot_substituted = exact_expiry.clone();
+        let mut unrelated = second.location().expect("second location fixture").clone();
+        unrelated.location_id = MusubiArchiveLocationIdV1::new([0xe5; 32]);
+        unrelated.finalized_height = same_snapshot_substituted
+            .finalized_page
+            .snapshot
+            .finalized_height;
+        unrelated.revision = same_snapshot_substituted
+            .finalized_page
+            .archive
+            .location_revision
+            + 1;
+        same_snapshot_substituted
+            .finalized_page
+            .archive
+            .location_revision += 1;
+        same_snapshot_substituted
+            .finalized_page
+            .archive
+            .location_ids = vec![unrelated.location_id];
+        same_snapshot_substituted.finalized_page.items = vec![unrelated.clone()];
+        assert!(
+            same_snapshot_substituted
+                .validate_for(
+                    operation_id,
+                    &request,
+                    &registered,
+                    &second_attempt,
+                    &prior_location_ids,
+                )
+                .is_err()
+        );
+
+        let mut same_revision_substituted = exact_expiry;
+        same_revision_substituted
+            .finalized_page
+            .snapshot
+            .finalized_height += 1;
+        same_revision_substituted
+            .finalized_page
+            .snapshot
+            .finalized_block_hash = [0xe6; 32];
+        unrelated.revision = same_revision_substituted
+            .finalized_page
+            .archive
+            .location_revision;
+        unrelated.finalized_height = same_revision_substituted
+            .finalized_page
+            .snapshot
+            .finalized_height;
+        same_revision_substituted
+            .finalized_page
+            .archive
+            .location_ids = vec![unrelated.location_id];
+        same_revision_substituted.finalized_page.items = vec![unrelated.clone()];
+        assert!(
+            same_revision_substituted
+                .validate_for(
+                    operation_id,
+                    &request,
+                    &registered,
+                    &second_attempt,
+                    &prior_location_ids,
+                )
+                .is_err()
+        );
+
+        let mut journal = PublicationJournalV1::new(request.clone()).expect("publication journal");
+        journal.validation = Some(validation_evidence(&request));
+        journal.staging_receipt = Some(receipt);
+        journal
+            .archive_registration_attempts
+            .push(PublicationArchiveRegistrationAttemptV1::new(
+                1,
+                archive_intent,
+            ));
+        journal.registered_archive = Some(registered);
+        journal.archive_location_attempts = vec![
+            PublicationArchiveLocationAttemptV1 {
+                generation: 1,
+                intent: first.intent.clone(),
+                registration: Some(first),
+                terminal: Some(first_terminal),
+            },
+            second_attempt,
+        ];
+        journal.phase = PublicationPhaseV1::ArchiveRegistration;
+        journal
+            .validate()
+            .expect("exact terminal-to-prepared checkpoint");
+
+        let mut replacement_substituted = journal;
+        let prepared = &mut replacement_substituted.archive_location_attempts[1]
+            .intent
+            .prepared_page;
+        prepared.snapshot.finalized_height += 1;
+        prepared.snapshot.finalized_block_hash = [0xe7; 32];
+        unrelated.revision = prepared.archive.location_revision;
+        unrelated.finalized_height = prepared.snapshot.finalized_height;
+        prepared.archive.location_ids = vec![unrelated.location_id];
+        prepared.items = vec![unrelated];
+        assert!(matches!(
+            replacement_substituted.validate(),
+            Err(PublicationError::InvalidJournal(ref reason))
+                if reason.contains("regressed prior terminal finality")
+        ));
+        let encoded =
+            norito::encode_canonical(&replacement_substituted).expect("encode substituted journal");
+        let temp = tempdir().expect("substituted journal root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        store
+            .root
+            .replace(&journal_relative_path(operation_id), &encoded)
+            .expect("persist substituted restart image");
+        assert!(matches!(
+            store.load(operation_id),
+            Err(PublicationError::InvalidJournal(ref reason))
+                if reason.contains("regressed prior terminal finality")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn conflicting_authoritative_archive_never_reaches_pin_coordination() {
         let temp = tempdir().expect("state root");
         let store = PublicationJournalStore::open(temp.path()).expect("journal store");
@@ -5928,16 +6303,58 @@ mod tests {
         let exact = location(&request, &registration, 3);
         validate_replication(&request, &registration, &exact).expect("three-provider quorum");
 
+        let mut stale = exact.clone();
+        stale.revision -= 1;
+        assert!(matches!(
+            validate_replication(&request, &registration, &stale),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Replication,
+                ..
+            })
+        ));
+
+        let mut equal_revision_substitution = exact.clone();
+        equal_revision_substitution.renew_after_epoch += 1;
+        assert!(matches!(
+            validate_replication(&request, &registration, &equal_revision_substitution),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Replication,
+                ..
+            })
+        ));
+
         let mut renewed_registration = registration.clone();
         renewed_registration.intent.pin_manifest = ManifestDigest::new([0xD1; 32]);
         renewed_registration.intent.replication_order = ReplicationOrderId::new([0xD2; 32]);
         renewed_registration.intent.renew_after_epoch = 15;
         renewed_registration.intent.expires_at_epoch = 30;
         let mut renewed = location(&request, &renewed_registration, 3);
-        renewed.revision = 2;
+        renewed.revision = 3;
         renewed.finalized_height = 71;
         validate_replication(&request, &registration, &renewed)
             .expect("same stable location may carry an authenticated finalized renewal");
+        assert_eq!(
+            location_progress(&renewed, &renewed).expect("exact renewal is current"),
+            PublicationLocationProgressV1::Current
+        );
+        let mut newer = renewed.clone();
+        newer.revision += 1;
+        newer.finalized_height += 1;
+        assert_eq!(
+            location_progress(&renewed, &newer).expect("newer renewal is current"),
+            PublicationLocationProgressV1::Current
+        );
+        validate_replication(&request, &registration, &newer)
+            .expect("newer authenticated renewal remains selectable");
+        let mut higher_revision_lower_height = newer;
+        higher_revision_lower_height.finalized_height = renewed.finalized_height - 1;
+        assert!(matches!(
+            location_progress(&renewed, &higher_revision_lower_height),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Replication,
+                ..
+            })
+        ));
 
         let mut substituted = exact;
         substituted.provider_attestations[1]
@@ -5951,6 +6368,149 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
+        let (request, broker) = request();
+        let registration = registration(&request, &broker);
+        let archive_intent = registration_intent(
+            request.operation_id(),
+            &request,
+            registration
+                .intent
+                .prepared_page
+                .archive
+                .staging_receipt
+                .clone(),
+        );
+        let registered = PublicationRegisteredArchiveV1 {
+            finalized_transaction_hash: archive_intent.transaction_hash,
+            chain_id: request.chain_id.clone(),
+            genesis_block_hash: request.genesis_block_hash,
+            snapshot: registration.intent.prepared_page.snapshot,
+            archive: registration.intent.prepared_page.archive.clone(),
+        };
+        registration
+            .validate_for(request.operation_id(), &request, &registered, &[])
+            .expect("baseline archive-location application");
+        registration
+            .validate_polled_page(&request, &registration.finalized_page)
+            .expect("baseline finalized location page");
+
+        let mut target_revision_regressed = registration.clone();
+        target_revision_regressed.finalized_page.items[0].revision =
+            registration.intent.expected_location_revision;
+        assert!(
+            target_revision_regressed
+                .validate_for(request.operation_id(), &request, &registered, &[])
+                .is_err()
+        );
+
+        let mut first_application_substituted = registration.clone();
+        first_application_substituted.finalized_page.items[0].pin_manifest =
+            ManifestDigest::new([0xe1; 32]);
+        assert!(
+            first_application_substituted
+                .validate_for(request.operation_id(), &request, &registered, &[])
+                .is_err()
+        );
+
+        let mut first_application_not_healthy = registration.clone();
+        first_application_not_healthy.finalized_page.items[0].state =
+            MusubiArchiveLocationStateV1::Degraded;
+        assert!(
+            first_application_not_healthy
+                .validate_for(request.operation_id(), &request, &registered, &[])
+                .is_err()
+        );
+
+        let mut first_application_wrong_height = registration.clone();
+        first_application_wrong_height.applied_height -= 1;
+        assert!(
+            first_application_wrong_height
+                .validate_for(request.operation_id(), &request, &registered, &[])
+                .is_err()
+        );
+
+        let mut archive_revision_regressed = registration.finalized_page.clone();
+        archive_revision_regressed.snapshot.finalized_height += 1;
+        archive_revision_regressed.snapshot.finalized_block_hash = [0xe2; 32];
+        archive_revision_regressed.archive.location_revision -= 1;
+        archive_revision_regressed.archive.location_ids.clear();
+        archive_revision_regressed.items.clear();
+        assert!(
+            registration
+                .validate_polled_page(&request, &archive_revision_regressed)
+                .is_err()
+        );
+
+        let mut equal_archive_revision_substituted = registration.finalized_page.clone();
+        equal_archive_revision_substituted.snapshot.finalized_height += 1;
+        equal_archive_revision_substituted
+            .snapshot
+            .finalized_block_hash = [0xe3; 32];
+        equal_archive_revision_substituted
+            .archive
+            .location_ids
+            .clear();
+        equal_archive_revision_substituted.items.clear();
+        assert!(
+            registration
+                .validate_polled_page(&request, &equal_archive_revision_substituted)
+                .is_err()
+        );
+
+        let mut same_snapshot_higher_revision = registration.finalized_page.clone();
+        same_snapshot_higher_revision.archive.location_revision += 1;
+        same_snapshot_higher_revision.items[0].revision += 1;
+        assert!(
+            registration
+                .validate_polled_page(&request, &same_snapshot_higher_revision)
+                .is_err()
+        );
+
+        let mut item_ahead_of_archive = registration.finalized_page.clone();
+        item_ahead_of_archive.items[0].revision += 1;
+        assert!(
+            registration
+                .validate_polled_page(&request, &item_ahead_of_archive)
+                .is_err()
+        );
+
+        let mut same_snapshot_archive_substitution = registration.intent.prepared_page.clone();
+        same_snapshot_archive_substitution.archive.location_revision += 1;
+        assert!(
+            validate_archive_location_page(
+                &request,
+                &registered,
+                &same_snapshot_archive_substitution,
+            )
+            .is_err()
+        );
+
+        let mut registered_current = registered;
+        registered_current.snapshot = registration.finalized_page.snapshot;
+        registered_current.archive = registration.finalized_page.archive.clone();
+        let mut later_archive_revision_regression = registration.finalized_page.clone();
+        later_archive_revision_regression.snapshot.finalized_height += 1;
+        later_archive_revision_regression
+            .snapshot
+            .finalized_block_hash = [0xe4; 32];
+        later_archive_revision_regression.archive.location_revision -= 1;
+        later_archive_revision_regression
+            .archive
+            .location_ids
+            .clear();
+        later_archive_revision_regression.items.clear();
+        assert!(
+            validate_archive_location_page(
+                &request,
+                &registered_current,
+                &later_archive_revision_regression,
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -2268,10 +2268,11 @@ mod tests {
             .to_string()
             .parse()
             .expect("opaque canonical id");
-        let account_id: AccountId =
+        let public_key: crate::PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
-                .expect("account id");
+                .expect("public key");
+        let account_id = AccountId::new(public_key);
         let asset_id = AssetId::of(opaque_definition.clone(), account_id);
         let event = DataEvent::from(AssetEvent::Added(AssetChanged {
             asset: asset_id.clone(),

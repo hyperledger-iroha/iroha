@@ -20435,14 +20435,18 @@ mod protocol {
                 }
                 self.live_qualification().map_err(Self::registry_error)?;
                 let provider = Arc::new(self.clone());
-                Ok(iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeSecretsV1 {
-                    issuer_provider: Arc::clone(&provider)
-                        as Arc<dyn iroha_torii::privacy_issuance_api::
-                            BootleLanternIssuerCryptoProviderV1>,
-                    authenticator: provider
-                        as Arc<dyn iroha_torii::privacy_issuance_api::
-                            BootleLanternIssuanceAuthenticatorV1>,
-                })
+                let issuer_provider: Arc<
+                    dyn iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1,
+                > = Arc::clone(&provider);
+                let authenticator: Arc<
+                    dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatorV1,
+                > = provider;
+                Ok(
+                    iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeSecretsV1 {
+                        issuer_provider,
+                        authenticator,
+                    },
+                )
             }
         }
 

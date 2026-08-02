@@ -4953,6 +4953,10 @@ mod tests {
             "replacement-release",
             pinned_source.manifest_sha256,
             &pinned_source,
+            pinned_source
+                .authenticated_release()
+                .manifest()
+                .qualification_receipt_sha256,
             trusted_uid,
             &mut paths,
         )

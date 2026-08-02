@@ -581,6 +581,14 @@ only after the prior generation has immutable terminal evidence, and its
 preparation page must equal or advance that terminal finalized state without
 resurrecting any prior identity.
 
+Provider readback replay keys are independently domain-separated hashes of the
+exact `(location_id, location_revision, provider_id)` tuple. Replacing a
+location or renewing the same stable location therefore gets a new bounded
+durable result, while changing any other request field under an existing tuple
+is an idempotency conflict. The journal retains a fixed protocol-sized history
+large enough for two distinct readbacks in every one of the eight publication
+location generations; restart preserves both cached results and conflicts.
+
 An identical active-location Add is a validated no-op before the consumed
 location-set CAS revision, so a lost response recovers the exact journaled
 transaction rather than building another mutation. For an absent target, the
@@ -599,6 +607,14 @@ later height and revision that omit the stable ID append exact retirement
 evidence, clear replication and readback checkpoints, and return to location
 coordination for the next bounded generation. Release rejection gets one typed
 post-rejection location check; only exact retirement evidence permits rotation.
+A finalized page may not regress height, resolver index, archive revision, or
+the active location revision. Equal finalized heights require the exact same
+snapshot; an equal snapshot or equal archive revision requires the exact same
+archive directory. The first applied target revision (`expected + 1`) must
+exactly reproduce the signed intent fields and application height. A lower
+healthy location revision observed after a later one was journaled is a
+retryable stale poll and never overwrites the journal; the exact journaled
+record or a higher revision at a non-regressing location height may resume.
 A healthy same-ID renewal resumes from its current finalized pin, order, epochs,
 and provider attestations, all of which must still bind the exact chain,
 archive, bundle, source, semantic manifest, verification lock, and replication

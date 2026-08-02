@@ -12,10 +12,7 @@ use std::{
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
 #[cfg(unix)]
-unsafe extern "C" {
-    fn geteuid() -> std::os::raw::c_uint;
-}
-
+use super::publication_filesystem_owner_probe;
 use super::{
     InMemoryMusubiPublicationServiceJournalV1, InMemoryPublicationResultV1,
     MAX_CONTROL_RESPONSE_BYTES, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
@@ -627,19 +624,25 @@ fn candidate_open_error(
 }
 
 fn results_per_operation() -> usize {
-    MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
-        .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
-        .and_then(|readbacks| readbacks.checked_add(1))
+    maximum_historical_readbacks_per_operation()
+        .checked_add(1)
         .and_then(|with_ingress| {
             with_ingress.checked_add(MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1)
         })
         .expect("Musubi result bound is a fixed small constant")
 }
 
-fn maximum_readbacks_per_operation() -> usize {
-    MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
+fn maximum_historical_readbacks_per_operation() -> usize {
+    let bound = MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
         .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
-        .expect("Musubi readback bound is a fixed small constant")
+        .expect("Musubi readback history bound is a fixed small constant");
+    debug_assert!(
+        bound
+            >= MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
+                .checked_mul(2)
+                .expect("publication readback minimum is fixed")
+    );
+    bound
 }
 
 fn recover_interrupted_results(journal: &mut InMemoryMusubiPublicationServiceJournalV1) -> bool {
@@ -767,7 +770,7 @@ fn validate_candidate_journal(
                 counts.1 += 1;
             }
             MusubiPublicationRuntimeOperationV1::ProviderReadback
-                if counts.2 < maximum_readbacks_per_operation() =>
+                if counts.2 < maximum_historical_readbacks_per_operation() =>
             {
                 counts.2 += 1;
             }
@@ -1006,7 +1009,7 @@ fn journal_from_state(
                 counts.1 += 1;
             }
             MusubiPublicationRuntimeOperationV1::ProviderReadback
-                if counts.2 < maximum_readbacks_per_operation() =>
+                if counts.2 < maximum_historical_readbacks_per_operation() =>
             {
                 counts.2 += 1;
             }
@@ -1441,6 +1444,15 @@ fn open_private_root(
     if !same_file(&linked, &canonical_metadata) {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
     }
+    #[cfg(unix)]
+    let filesystem_owner = publication_filesystem_owner_probe(&canonical)
+        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
+    #[cfg(unix)]
+    if metadata_owner(&linked) != filesystem_owner
+        || metadata_owner(&canonical_metadata) != filesystem_owner
+    {
+        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
+    }
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -1453,6 +1465,10 @@ fn open_private_root(
         .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
     validate_private_root(&opened)?;
     if !same_file(&canonical_metadata, &opened) {
+        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
+    }
+    #[cfg(unix)]
+    if metadata_owner(&opened) != filesystem_owner {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
     }
     Ok((
@@ -1699,7 +1715,7 @@ fn validate_private_root(
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
     }
     #[cfg(unix)]
-    if metadata.mode() & 0o7777 != 0o700 || metadata.uid() != effective_user_id() {
+    if metadata.mode() & 0o7777 != 0o700 {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
     }
     Ok(())
@@ -1871,12 +1887,6 @@ fn metadata_owner(metadata: &fs::Metadata) -> u32 {
     metadata.uid()
 }
 
-#[cfg(unix)]
-fn effective_user_id() -> u32 {
-    // SAFETY: `geteuid` takes no arguments and has no preconditions on Unix.
-    unsafe { geteuid() }
-}
-
 #[cfg(not(unix))]
 fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
     0
@@ -2016,6 +2026,12 @@ mod tests {
         assert_eq!(limits().max_operations(), 8);
         assert_eq!(limits().max_authorizations(), 32);
         assert_eq!(
+            results_per_operation(),
+            MUSUBI_MAX_ARCHIVE_LOCATIONS_V1 * MUSUBI_MAX_LOCATION_PROVIDERS_V1
+                + 1
+                + MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
+        );
+        assert_eq!(
             DurableMusubiPublicationServiceJournalLimitsV1::new(0, 1, 1, 1),
             Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidLimits)
         );
@@ -2131,7 +2147,6 @@ mod tests {
         let mut journal = DurableMusubiPublicationServiceJournalV1::initialize(
             root.path(),
             journal_binding(&configuration),
-            limits(),
             limits(),
         )
         .expect("initialize journal");

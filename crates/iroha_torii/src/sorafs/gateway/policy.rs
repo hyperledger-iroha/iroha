@@ -311,7 +311,7 @@ impl GatewayPolicy {
     #[must_use]
     pub fn new_default(admission: Option<Arc<AdmissionRegistry>>) -> Self {
         let config = GatewayPolicyConfig::default();
-        let rate_limiter = GatewayRateLimiter::new(config.rate_limit.clone());
+        let rate_limiter = GatewayRateLimiter::new(config.rate_limit);
         Self::new(config, admission, rate_limiter)
     }
 
@@ -526,7 +526,7 @@ mod tests {
             ..GatewayPolicyConfig::default()
         };
         let policy = GatewayPolicy::new(
-            config.clone(),
+            config,
             admission,
             GatewayRateLimiter::new(config.rate_limit),
         );

@@ -103,11 +103,11 @@ fn state_with_asset_definitions(
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
-    let asset_domain = DomainId::try_new("wonder", "universal").unwrap();
+    let asset_domain_id = DomainId::try_new("wonder", "universal").unwrap();
     let asset_name: Name = "coin".parse().unwrap();
     let asset_def_seed: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            asset_domain.clone(),
+            asset_domain_id.clone(),
             asset_name.clone(),
         );
     let sample_asset_literal = asset_def_seed.canonical_address();
@@ -143,11 +143,10 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let asset_domain_id = DomainId::try_new("wonder", "universal").unwrap();
     let asset_def = AssetDefinitionId::parse_address_literal(&sample_asset_literal)
         .expect("canonical asset definition literal");
     let account_domain = Domain::new(account_domain_id).build(&from);
-    let asset_domain_record = Domain::new(asset_domain).build(&from);
+    let asset_domain_record = Domain::new(asset_domain_id).build(&from);
     let from_account = Account::new(from.clone()).build(&from);
     let to_account = Account::new(to.clone()).build(&to);
     let asset_definition = AssetDefinition::numeric(

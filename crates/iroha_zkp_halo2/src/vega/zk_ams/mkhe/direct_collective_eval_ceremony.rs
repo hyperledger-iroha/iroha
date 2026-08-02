@@ -22,8 +22,13 @@
 //! `sum_i b_i + a_d*S = g^d*sigma_k(S) + p*sum_i e_i`.
 
 use super::{
-    ArtifactAuthentication, BgvProfile, MKHE_VERSION_V1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
-    active::ZkAmsMkheGovernedActiveRosterV1,
+    ArtifactAuthentication, BgvProfile, MKHE_VERSION_V1, MaskedRelaxedRandomSourceV1,
+    ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
+    active::{ZkAmsMkheActivePartySecretV1, ZkAmsMkheGovernedActiveRosterV1},
+    active_exact_binding::{
+        PersistentDirectRelationV1, PersistentWitnessConsumerV1,
+        VerifiedDirectRelationProofReceiptV1, VerifiedPersistentWitnessBindingSetV1,
+    },
     manifest::{
         ZK_AMS_MKHE_CIPHERTEXT_MODULUS_BITS_V1, ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
         ZK_AMS_MKHE_SPARSE_MAP_FAN_IN_CEILING_V1, ZK_AMS_MKHE_STATISTICAL_SECURITY_BITS_V1,
@@ -36,8 +41,6 @@ use super::{
     phase23_max_composed_rotation_key_switch_count,
     wire::derive_wire_length_certificate_v1,
 };
-#[cfg(test)]
-use super::{MaskedRelaxedRandomSourceV1, active::ZkAmsMkheActivePartySecretV1};
 use crate::vega::sponge::{Keccak256, keccak256};
 
 const DIRECT_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collective-eval-context";
@@ -49,6 +52,8 @@ const DIRECT_INITIAL_ROUND_DOMAIN_V1: &[u8] =
 const DIRECT_POLYNOMIAL_STREAM_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-collective-polynomial-stream";
 const DIRECT_CONTRIBUTION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collective-contribution";
+const DIRECT_RELATION_STATEMENT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.direct-collective-relation-statement";
 const DIRECT_CONTRIBUTION_AUTH_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-collective-contribution-auth";
 const DIRECT_ORDERED_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collective-ordered-set";
@@ -182,6 +187,7 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
     /// bindings whose secret role mask covers CPK, both RKG rounds,
     /// normalization, every Galois key, and decryption.  Until that exact
     /// membership backend exists, outside callers cannot manufacture a context.
+    #[cfg(test)]
     pub(super) fn new(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         transcript_digest: [u8; 32],
@@ -283,6 +289,39 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
             initial_round_digest,
             context_digest,
         };
+        value.validate(roster)?;
+        Ok(value)
+    }
+
+    /// Mint one context from the complete opaque CPK secret-binding set.
+    ///
+    /// Callers cannot provide lineage leaves or a root.  Both are taken from
+    /// the exact-membership verifier capability, and the CPK transcript/key
+    /// axes are inherited from that same sealed set.
+    pub(super) fn from_verified_binding_set(
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        bindings: &VerifiedPersistentWitnessBindingSetV1,
+        target: ZkAmsMkheDirectEvaluatedKeyTargetV1,
+        digit_index: usize,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        let consumer = match target {
+            ZkAmsMkheDirectEvaluatedKeyTargetV1::Relinearization => {
+                PersistentWitnessConsumerV1::RkgRoundOne
+            }
+            ZkAmsMkheDirectEvaluatedKeyTargetV1::Galois { .. } => {
+                PersistentWitnessConsumerV1::Galois
+            }
+        };
+        bindings.validate_for_consumer(roster, consumer)?;
+        let value = Self::new_unchecked_inputs(
+            roster,
+            bindings.cpk_transcript_digest(),
+            bindings.collective_public_key_digest(),
+            *bindings.identity_digests(),
+            Some(bindings.set_root()),
+            target,
+            digit_index,
+        )?;
         value.validate(roster)?;
         Ok(value)
     }
@@ -393,6 +432,7 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
             self.transcript_digest,
             self.collective_public_key_digest,
             self.secret_lineage_digests,
+            Some(self.secret_lineage_root),
             self.target,
             usize::from(self.digit_index),
         )?;
@@ -407,6 +447,7 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         transcript_digest: [u8; 32],
         collective_public_key_digest: [u8; 32],
         secret_lineage_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+        sealed_secret_lineage_root: Option<[u8; 32]>,
         target: ZkAmsMkheDirectEvaluatedKeyTargetV1,
         digit_index: usize,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -441,7 +482,11 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         };
         let digit_index =
             u8::try_from(digit_index).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-        let secret_lineage_root = direct_secret_lineage_root(roster, &secret_lineage_digests)?;
+        let secret_lineage_root = match sealed_secret_lineage_root {
+            Some(root) if root != [0; 32] => root,
+            Some(_) => return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
+            None => direct_secret_lineage_root(roster, &secret_lineage_digests)?,
+        };
         let binding_digest = direct_context_binding_digest(
             roster.profile_digest(),
             roster.roster_digest(),
@@ -1706,6 +1751,7 @@ pub struct ZkAmsMkheDirectVerifiedContributionV1 {
     secret_lineage_digest: [u8; 32],
     rkg_ephemeral_lineage_digest: [u8; 32],
     payload: DirectContributionPayloadV1,
+    relation_use_digest: [u8; 32],
     proof_digest: [u8; 32],
     evidence_set_digest: [u8; 32],
     authentication: ArtifactAuthentication,
@@ -1749,6 +1795,12 @@ impl ZkAmsMkheDirectVerifiedContributionV1 {
         self.rkg_ephemeral_lineage_digest
     }
 
+    /// Digest of the consumed, actual-commitment relation-use capability.
+    #[must_use]
+    pub const fn relation_use_digest(&self) -> [u8; 32] {
+        self.relation_use_digest
+    }
+
     /// Digest of the complete contribution including proof identity and signature.
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
@@ -1760,6 +1812,167 @@ impl ZkAmsMkheDirectVerifiedContributionV1 {
     pub const fn evidence_set_digest(&self) -> [u8; 32] {
         self.evidence_set_digest
     }
+}
+
+fn persistent_relation_for_round(
+    round: ZkAmsMkheDirectCeremonyRoundV1,
+) -> PersistentDirectRelationV1 {
+    match round {
+        ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne => PersistentDirectRelationV1::RkgRoundOne,
+        ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo => PersistentDirectRelationV1::RkgRoundTwo,
+        ZkAmsMkheDirectCeremonyRoundV1::RkgNormalize => PersistentDirectRelationV1::RkgNormalize,
+        ZkAmsMkheDirectCeremonyRoundV1::Galois => PersistentDirectRelationV1::Galois,
+    }
+}
+
+fn direct_relation_contribution_statement_digest(
+    context: ZkAmsMkheDirectCeremonyContextV1,
+    round: ZkAmsMkheDirectCeremonyRoundV1,
+    prior_round_digest: [u8; 32],
+    party_index: u8,
+    party: ZkAmsMkhePartyIdV1,
+    payload: DirectContributionPayloadV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    if prior_round_digest == [0; 32]
+        || usize::from(party_index) >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(DIRECT_RELATION_STATEMENT_DOMAIN_V1);
+    hash.update(&context.context_digest);
+    hash.update(&[round.tag()]);
+    hash.update(&prior_round_digest);
+    hash.update(&[party_index]);
+    hash.update(&party.to_bytes());
+    hash.update(&[
+        context.target.tag(),
+        context.evaluated_key_ordinal,
+        context.digit_index,
+    ]);
+    hash.update(&context.galois_exponent.to_be_bytes());
+    hash.update(&context.common_a_seed);
+    hash.update(&context.target_a_seed);
+    hash.update(&context.final_a_seed);
+    match payload {
+        DirectContributionPayloadV1::RkgRoundOne { h0, h1 }
+            if round == ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne =>
+        {
+            hash.update(&[1]);
+            hash.update(&h0.polynomial_digest);
+            hash.update(&h1.polynomial_digest);
+        }
+        DirectContributionPayloadV1::RkgRoundTwo { k }
+            if round == ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo =>
+        {
+            hash.update(&[2]);
+            hash.update(&k.polynomial_digest);
+        }
+        DirectContributionPayloadV1::RkgNormalize { normalization }
+            if round == ZkAmsMkheDirectCeremonyRoundV1::RkgNormalize =>
+        {
+            hash.update(&[3]);
+            hash.update(&normalization.polynomial_digest);
+        }
+        DirectContributionPayloadV1::Galois { b }
+            if round == ZkAmsMkheDirectCeremonyRoundV1::Galois =>
+        {
+            hash.update(&[4]);
+            hash.update(&b.polynomial_digest);
+        }
+        _ => return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
+    }
+    Ok(hash.finalize())
+}
+
+/// Sole constructor used after the exact proof verifier has consumed an
+/// actual-commitment relation capability.  It is unreachable while that
+/// verifier remains fail-closed.
+#[allow(dead_code, clippy::too_many_arguments)]
+fn mint_verified_contribution_from_exact_receipt<R: MaskedRelaxedRandomSourceV1>(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    context: ZkAmsMkheDirectCeremonyContextV1,
+    round: ZkAmsMkheDirectCeremonyRoundV1,
+    prior_round_digest: [u8; 32],
+    payload: DirectContributionPayloadV1,
+    receipt: VerifiedDirectRelationProofReceiptV1,
+    party_secret: &ZkAmsMkheActivePartySecretV1,
+    random: &mut R,
+) -> Result<ZkAmsMkheDirectVerifiedContributionV1, ZkAmsMkheErrorV1> {
+    context.validate(roster)?;
+    receipt.validate()?;
+    let party_index = usize::from(receipt.party_index());
+    let participant = roster
+        .participants()
+        .get(party_index)
+        .ok_or(ZkAmsMkheErrorV1::InvalidPartySet)?;
+    let expected_statement = direct_relation_contribution_statement_digest(
+        context,
+        round,
+        prior_round_digest,
+        receipt.party_index(),
+        receipt.party(),
+        payload,
+    )?;
+    if receipt.relation() != persistent_relation_for_round(round)
+        || receipt.context_digest() != context.context_digest
+        || receipt.prior_round_digest() != prior_round_digest
+        || receipt.evaluated_key_ordinal() != context.evaluated_key_ordinal
+        || receipt.digit_index() != context.digit_index
+        || receipt.galois_exponent() != context.galois_exponent
+        || receipt.party() != participant.party()
+        || receipt.party() != party_secret.party()?
+        || receipt.secret_identity_digest() != context.secret_lineage_digests[party_index]
+        || receipt.contribution_statement_digest() != expected_statement
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let ephemeral = receipt.ephemeral_identity_digest();
+    match round {
+        ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne
+        | ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo
+            if ephemeral == [0; 32] =>
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        ZkAmsMkheDirectCeremonyRoundV1::RkgNormalize | ZkAmsMkheDirectCeremonyRoundV1::Galois
+            if ephemeral != [0; 32] =>
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        _ => {}
+    }
+    let mut contribution = ZkAmsMkheDirectVerifiedContributionV1 {
+        version: MKHE_VERSION_V1,
+        context_digest: context.context_digest,
+        round,
+        prior_round_digest,
+        party_index: receipt.party_index(),
+        party: receipt.party(),
+        secret_lineage_digest: receipt.secret_identity_digest(),
+        rkg_ephemeral_lineage_digest: ephemeral,
+        payload,
+        relation_use_digest: receipt.relation_use_digest(),
+        proof_digest: receipt.proof_digest(),
+        evidence_set_digest: receipt.evidence_set_digest(),
+        authentication: ArtifactAuthentication {
+            version: 0,
+            party: receipt.party(),
+            public_key: [0; 33],
+            signature: [0; 65],
+        },
+        contribution_digest: [0; 32],
+    };
+    validate_contribution_payload(context, &contribution)?;
+    let statement = direct_contribution_auth_statement(&contribution)?;
+    contribution.authentication = party_secret.authenticate_artifact(
+        DIRECT_CONTRIBUTION_AUTH_DOMAIN_V1,
+        statement,
+        random,
+    )?;
+    contribution.contribution_digest = direct_contribution_digest(&contribution)?;
+    validate_verified_contribution(roster, context, round, prior_round_digest, &contribution)?;
+    Ok(contribution)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2393,6 +2606,7 @@ fn validate_verified_contribution(
         || contribution.prior_round_digest != expected_prior_round_digest
         || contribution.party != participant.party()
         || contribution.secret_lineage_digest != context.secret_lineage_digests[index]
+        || contribution.relation_use_digest == [0; 32]
         || contribution.proof_digest == [0; 32]
         || contribution.evidence_set_digest == [0; 32]
         || contribution.authentication.party != contribution.party
@@ -2499,6 +2713,7 @@ fn direct_contribution_frame(
 ) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
     if contribution.context_digest == [0; 32]
         || contribution.prior_round_digest == [0; 32]
+        || contribution.relation_use_digest == [0; 32]
         || contribution.proof_digest == [0; 32]
         || contribution.evidence_set_digest == [0; 32]
     {
@@ -2513,6 +2728,7 @@ fn direct_contribution_frame(
     frame.extend_from_slice(&contribution.party.to_bytes());
     frame.extend_from_slice(&contribution.secret_lineage_digest);
     frame.extend_from_slice(&contribution.rkg_ephemeral_lineage_digest);
+    frame.extend_from_slice(&contribution.relation_use_digest);
     match contribution.payload {
         DirectContributionPayloadV1::RkgRoundOne { h0, h1 } => {
             frame.push(1);
@@ -2568,6 +2784,10 @@ fn authenticate_test_verified_contribution<R: MaskedRelaxedRandomSourceV1>(
         secret_lineage_digest,
         rkg_ephemeral_lineage_digest,
         payload,
+        relation_use_digest: hash_domain_parts(
+            DIRECT_RELATION_STATEMENT_DOMAIN_V1,
+            &[&context.context_digest, &proof_digest],
+        ),
         proof_digest,
         evidence_set_digest: hash_domain_parts(
             DIRECT_ORDERED_EVIDENCE_SET_DOMAIN_V1,
@@ -3307,6 +3527,11 @@ mod tests {
         proof_splice_records[2].proof_digest = records[3].proof_digest;
         let proof_splice = VecContributionProvider::new(proof_splice_records);
         assert_eq!(reject(proof_splice), 3);
+
+        let mut relation_use_splice_records = records.clone();
+        relation_use_splice_records[3].relation_use_digest = records[4].relation_use_digest;
+        let relation_use_splice = VecContributionProvider::new(relation_use_splice_records);
+        assert_eq!(reject(relation_use_splice), 4);
 
         let mut evidence_splice_records = records.clone();
         evidence_splice_records[6].evidence_set_digest = records[7].evidence_set_digest;

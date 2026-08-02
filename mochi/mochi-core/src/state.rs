@@ -246,7 +246,7 @@ impl StateEntry {
         let owner = asset_id.account().clone();
         let owner_str = owner.to_string();
         let owner_lower = owner_str.to_ascii_lowercase();
-        let domain = None;
+        let domain: Option<String> = None;
         let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
@@ -304,7 +304,7 @@ impl StateEntry {
         let owner = asset_id.account().clone();
         let owner_str = owner.to_string();
         let owner_lower = owner_str.to_ascii_lowercase();
-        let domain = None;
+        let domain: Option<String> = None;
         let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
@@ -400,7 +400,7 @@ impl StateEntry {
     }
 
     fn from_asset_definition_id(id: AssetDefinitionId) -> Self {
-        let domain = None;
+        let domain: Option<String> = None;
         let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = id.to_string();
         let definition_lower = definition.to_ascii_lowercase();

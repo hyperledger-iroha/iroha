@@ -10869,8 +10869,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-global", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id =
-            AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "unit".parse().expect("name"),
+        );
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "unit".to_owned(),
@@ -10968,10 +10970,9 @@ mod tests {
                 definition_id.clone(),
                 "unit".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(domain_id),
             )
             .build(&authority),
-            Some(domain_id),
         );
 
         let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");

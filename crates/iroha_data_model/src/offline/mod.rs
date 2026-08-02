@@ -8193,6 +8193,54 @@ mod kagemusha_v4_artifact_contract_tests {
         );
     }
 
+    #[cfg(feature = "json")]
+    #[test]
+    fn qualification_receipt_json_rejects_wrong_digest_cardinality_and_encoding() {
+        let candidate = unsigned_candidate(&manifest());
+        let receipt =
+            KagemushaRecursiveSpendQualificationReceiptV4::new(&candidate, vec![0x41], vec![0x42])
+                .expect("structurally valid qualification receipt");
+
+        for malformed_len in [15_usize, 17] {
+            let mut value =
+                norito::json::to_value(&receipt).expect("qualification receipt JSON value");
+            let digests = value
+                .as_object_mut()
+                .and_then(|object| object.get_mut("artifact_role_digests"))
+                .and_then(norito::json::Value::as_array_mut)
+                .expect("qualification receipt digest array");
+            if malformed_len < digests.len() {
+                digests.truncate(malformed_len);
+            } else {
+                let digest = digests[0].clone();
+                digests.push(digest);
+            }
+            let error =
+                norito::json::from_value::<KagemushaRecursiveSpendQualificationReceiptV4>(value)
+                    .expect_err("qualification receipt digest cardinality must be exact");
+            assert!(
+                error
+                    .to_string()
+                    .contains("expected exactly 16 array elements"),
+                "unexpected qualification receipt cardinality error: {error}",
+            );
+        }
+
+        for malformed_digest in ["00".repeat(31), "gg".repeat(32)] {
+            let mut value =
+                norito::json::to_value(&receipt).expect("qualification receipt JSON value");
+            let digest = value
+                .as_object_mut()
+                .and_then(|object| object.get_mut("artifact_role_digests"))
+                .and_then(norito::json::Value::as_array_mut)
+                .and_then(|digests| digests.first_mut())
+                .expect("qualification receipt digest");
+            *digest = norito::json::Value::String(malformed_digest);
+            norito::json::from_value::<KagemushaRecursiveSpendQualificationReceiptV4>(value)
+                .expect_err("qualification receipt digest must be exactly 32 bytes of hex");
+        }
+    }
+
     fn promoted_release() -> KagemushaRecursiveSpendPromotedReleaseV4 {
         let finalized_manifest = manifest();
         let candidate = unsigned_candidate(&finalized_manifest);
