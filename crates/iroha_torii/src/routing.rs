@@ -23576,6 +23576,19 @@ fn multisig_proposal_operation_type<W: iroha_core::state::WorldReadOnly>(
         return "ONCHAIN_MULTISIG";
     };
 
+    if matches!(
+        iroha_executor_data_model::isi::multisig::MultisigInstructionBox::try_from(
+            first_instruction
+        ),
+        Ok(
+            iroha_executor_data_model::isi::multisig::MultisigInstructionBox::InvalidateOutstanding(
+                _
+            )
+        )
+    ) {
+        return "MULTISIG_POLICY_CHANGE_INVALIDATION";
+    }
+
     if let Some((operation_type, _intent)) =
         multisig_asset_transfer_control_operation(first_instruction)
     {
@@ -23622,6 +23635,19 @@ fn multisig_proposal_intent<W: iroha_core::state::WorldReadOnly>(
         .or_else(|| {
             proposal.instructions.first().and_then(|instruction| {
                 multisig_asset_transfer_control_operation(instruction).map(|(_, intent)| intent)
+            })
+        })
+        .or_else(|| {
+            proposal.instructions.first().and_then(|instruction| {
+                let Ok(
+                    iroha_executor_data_model::isi::multisig::MultisigInstructionBox::InvalidateOutstanding(invalidate),
+                ) = iroha_executor_data_model::isi::multisig::MultisigInstructionBox::try_from(instruction)
+                else {
+                    return None;
+                };
+                let mut payload = Map::new();
+                payload.insert("account_id".into(), Value::from(invalidate.account.to_string()));
+                Some(IrohaJson::new(Value::Object(payload)))
             })
         })
 }
@@ -25234,7 +25260,8 @@ mod multisig_selector_tests {
         query::error::QueryExecutionFail,
     };
     use iroha_executor_data_model::isi::multisig::{
-        MultisigAccountState, MultisigApprove, MultisigProposalValue, MultisigPropose, MultisigSpec,
+        MultisigAccountState, MultisigApprove, MultisigInvalidateOutstanding,
+        MultisigProposalValue, MultisigPropose, MultisigSpec,
     };
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
@@ -26183,6 +26210,37 @@ mod multisig_selector_tests {
             classify_active_multisig_proposal_status(&spec, &proposal, 2),
             MultisigProposalStatus::CollectingSignatures,
             "only a native terminal record may prove final execution",
+        );
+    }
+
+    #[test]
+    fn policy_change_invalidation_has_explicit_operation_type_and_exact_account_intent() {
+        let target = checked_multisig_selector_account_id(
+            0x76,
+            "derive policy-change invalidation target account",
+        );
+        let proposal = MultisigProposalValue::new(
+            vec![dm::InstructionBox::from(
+                MultisigInvalidateOutstanding::new(target.clone()),
+            )],
+            100,
+            200,
+            BTreeSet::new(),
+            None,
+        );
+        let world = World::default();
+
+        assert_eq!(
+            multisig_proposal_operation_type(&world, &target, &proposal),
+            "MULTISIG_POLICY_CHANGE_INVALIDATION",
+        );
+        let intent = multisig_proposal_intent(&world, &target, &proposal)
+            .expect("invalidation intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("invalidation intent value");
+        assert_eq!(
+            intent["account_id"].as_str(),
+            Some(target.to_string().as_str()),
         );
     }
 
@@ -29768,6 +29826,733 @@ pub(crate) async fn handle_post_multisig_proposals_resolve_for_authority(
 }
 
 #[cfg(feature = "app_api")]
+const REGULATED_RECOVERY_GUARDIAN_COUNT: usize = 3;
+#[cfg(feature = "app_api")]
+const REGULATED_RECOVERY_GUARDIAN_QUORUM: u16 = 2;
+#[cfg(feature = "app_api")]
+const REGULATED_RECOVERY_TIMELOCK_MS: u64 = 72 * 60 * 60 * 1_000;
+
+#[cfg(feature = "app_api")]
+fn resolve_account_recovery_alias(
+    state: &CoreState,
+    alias_literal: &str,
+) -> Result<(
+    iroha_data_model::account::AccountAlias,
+    iroha_data_model::account::AccountId,
+)> {
+    if alias_literal.is_empty() || alias_literal.trim() != alias_literal {
+        return Err(conversion_error(
+            "account_alias must use an exact non-empty canonical literal".to_owned(),
+        ));
+    }
+    let now_ms = state
+        .latest_block_header_fast()
+        .map_or(0, |header| header.creation_time_ms);
+    let nexus = state.nexus_snapshot();
+    let alias = iroha_data_model::account::AccountAlias::from_literal(
+        alias_literal,
+        &nexus.dataspace_catalog,
+    )
+    .map_err(|error| conversion_error(format!("invalid account_alias: {error}")))?;
+    let canonical = alias
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|error| {
+            conversion_error(format!("failed to canonicalize account_alias: {error}"))
+        })?;
+    if canonical != alias_literal {
+        return Err(conversion_error(format!(
+            "account_alias must use canonical literal `{canonical}`"
+        )));
+    }
+    let world = state.world_view();
+    let active = resolve_active_account_alias(&world, &nexus.dataspace_catalog, &alias, now_ms)
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "account recovery alias `{alias_literal}` does not resolve to a strictly active account"
+            ))
+        })?;
+    Ok((alias, active))
+}
+
+#[cfg(feature = "app_api")]
+fn regulated_account_recovery_policy(
+    state: &CoreState,
+    policy: &iroha_data_model::account::AccountRecoveryPolicy,
+) -> Result<()> {
+    use iroha_data_model::account::AccountRecoveryPolicy;
+
+    AccountRecoveryPolicy::new(policy.guardians.clone(), policy.quorum, policy.timelock_ms)
+        .map_err(|error| conversion_error(error.to_string()))?;
+    if policy.guardians.len() != REGULATED_RECOVERY_GUARDIAN_COUNT
+        || policy.quorum != REGULATED_RECOVERY_GUARDIAN_QUORUM
+        || policy.timelock_ms.get() != REGULATED_RECOVERY_TIMELOCK_MS
+        || policy.guardians.iter().any(|guardian| guardian.weight != 1)
+    {
+        return Err(conversion_error(format!(
+            "regulated account recovery requires exactly three weight-one guardians, quorum two, and a {REGULATED_RECOVERY_TIMELOCK_MS} ms timelock"
+        )));
+    }
+
+    let world = state.world_view();
+    for guardian in &policy.guardians {
+        let signatory = guardian
+            .account
+            .controller()
+            .single_signatory()
+            .ok_or_else(|| {
+                conversion_error(format!(
+                    "regulated recovery guardian `{}` must be a single-key account",
+                    guardian.account
+                ))
+            })?;
+        if signatory.algorithm() != Algorithm::Ed25519 {
+            return Err(conversion_error(format!(
+                "regulated recovery guardian `{}` must use Ed25519",
+                guardian.account
+            )));
+        }
+        world.account(&guardian.account).map_err(|_| {
+            conversion_error(format!(
+                "regulated recovery guardian `{}` is not registered",
+                guardian.account
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn load_regulated_account_recovery_policy(
+    state: &CoreState,
+    alias: &iroha_data_model::account::AccountAlias,
+) -> Result<iroha_data_model::account::AccountRecoveryPolicy> {
+    let world = state.world_view();
+    let policy = world
+        .account_recovery_policies()
+        .get(alias)
+        .cloned()
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "account recovery policy for `{alias:?}` does not exist"
+            ))
+        })?;
+    drop(world);
+    regulated_account_recovery_policy(state, &policy)?;
+    Ok(policy)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_recovered_company_controller(
+    controller: &iroha_data_model::account::AccountController,
+) -> Result<()> {
+    let iroha_data_model::account::AccountController::Multisig(policy) = controller else {
+        return Err(conversion_error(
+            "regulated company recovery requires a native multisig replacement controller"
+                .to_owned(),
+        ));
+    };
+    let member_count = policy.members().len();
+    if member_count == 0
+        || (member_count == 1 && policy.threshold() != 1)
+        || (member_count > 1
+            && (policy.threshold() < 2 || usize::from(policy.threshold()) > member_count))
+    {
+        return Err(conversion_error(
+            "replacement controller threshold must be 1-of-1 or between 2 and N".to_owned(),
+        ));
+    }
+    if policy
+        .members()
+        .iter()
+        .any(|member| member.weight() != 1 || member.public_key().algorithm() != Algorithm::Ed25519)
+    {
+        return Err(conversion_error(
+            "replacement controller members must be weight-one Ed25519 keys".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn recovered_company_account_id(
+    controller: &iroha_data_model::account::AccountController,
+) -> iroha_data_model::account::AccountId {
+    match controller {
+        iroha_data_model::account::AccountController::Single(public_key) => {
+            iroha_data_model::account::AccountId::new(public_key.clone())
+        }
+        iroha_data_model::account::AccountController::Multisig(policy) => {
+            iroha_data_model::account::AccountId::new_multisig(policy.clone())
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_account_recovery_detached_signer(auth: &AccountRecoveryDetachedAuthDto) -> Result<()> {
+    let signer_key = auth
+        .signer_account_id
+        .controller()
+        .single_signatory()
+        .ok_or_else(|| {
+            conversion_error(
+                "regulated recovery participation must use a personal single-key account"
+                    .to_owned(),
+            )
+        })?;
+    if signer_key.algorithm() != Algorithm::Ed25519 {
+        return Err(conversion_error(
+            "regulated recovery participation requires Ed25519".to_owned(),
+        ));
+    }
+    match (&auth.public_key_hex, &auth.signature_b64) {
+        (None, None) => Ok(()),
+        (Some(public_key_hex), Some(_)) => {
+            if auth.creation_time_ms.is_none() {
+                return Err(conversion_error(
+                    "creation_time_ms from preparation is required for detached submission"
+                        .to_owned(),
+                ));
+            }
+            if public_key_hex.is_empty()
+                || public_key_hex.trim() != public_key_hex
+                || public_key_hex
+                    .chars()
+                    .any(|value| value.is_ascii_uppercase())
+            {
+                return Err(conversion_error(
+                    "public_key_hex must use canonical lowercase hexadecimal".to_owned(),
+                ));
+            }
+            let public_key_bytes = hex::decode(public_key_hex)
+                .map_err(|error| conversion_error(format!("invalid public_key_hex: {error}")))?;
+            let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &public_key_bytes)
+                .map_err(|error| conversion_error(format!("invalid public_key_hex: {error}")))?;
+            if &public_key != signer_key {
+                return Err(conversion_error(
+                    "public_key_hex does not match signer_account_id".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(conversion_error(
+            "public_key_hex and signature_b64 must either both be present or both be absent"
+                .to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn recovery_guardian_authorized(
+    policy: &iroha_data_model::account::AccountRecoveryPolicy,
+    signer: &iroha_data_model::account::AccountId,
+) -> Result<()> {
+    if policy.contains_guardian(signer) {
+        Ok(())
+    } else {
+        Err(conversion_error(format!(
+            "account `{signer}` is not a guardian in the regulated recovery policy"
+        )))
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_account_recovery_mutation(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    selector: AccountRecoverySelectorDto,
+    auth: AccountRecoveryDetachedAuthDto,
+    instruction: iroha_data_model::isi::InstructionBox,
+    action: &'static str,
+    endpoint: &'static str,
+) -> Result<JsonBody<AccountRecoveryMutationResponseDto>> {
+    use base64::Engine as _;
+
+    validate_app_api_fee_payment(&auth.fee_payment, false)?;
+    validate_account_recovery_detached_signer(&auth)?;
+    let (_, resolved_active_account_id) =
+        resolve_account_recovery_alias(state.as_ref(), &selector.account_alias)?;
+    let creation_time_ms = auth.creation_time_ms.unwrap_or_else(current_time_millis);
+    let mut builder = TransactionBuilder::new(
+        (*chain_id).clone(),
+        auth.signer_account_id.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
+    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let builder = builder
+        .with_fee_payment_intent(auth.fee_payment)
+        .with_instructions([instruction]);
+    let builder =
+        quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), endpoint)?;
+    let fee_payment = builder.payload().fee_payment.clone();
+    let mut transaction = sign_app_api_scaffold_transaction(
+        builder,
+        auth.signer_account_id.clone().into(),
+        endpoint,
+    )?;
+
+    let (submitted, tx_hash_hex, signing_message_b64) = if let Some(signature_b64) =
+        auth.signature_b64.as_deref()
+    {
+        let signature = decode_app_api_detached_signature(signature_b64)?;
+        transaction.set_signature(
+            iroha_data_model::transaction::signed::TransactionSignature(SignatureOf::<
+                iroha_data_model::transaction::signed::TransactionPayload,
+            >::from_signature(
+                signature
+            )),
+        );
+        transaction.verify_signature().map_err(|error| {
+            conversion_error(format!(
+                "{action} detached signature verification failed: {error}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(transaction.hash().as_ref());
+        handle_transaction_with_metrics(chain_id, queue, state, transaction, telemetry, endpoint)
+            .await?;
+        (true, Some(tx_hash_hex), None)
+    } else {
+        let signing_message_b64 = base64::engine::general_purpose::STANDARD
+            .encode(HashOf::new(transaction.payload()).as_ref());
+        (false, None, Some(signing_message_b64))
+    };
+
+    Ok(JsonBody(AccountRecoveryMutationResponseDto {
+        ok: true,
+        action: action.to_owned(),
+        account_alias: selector.account_alias,
+        resolved_active_account_id,
+        submitted,
+        tx_hash_hex,
+        creation_time_ms,
+        fee_payment,
+        signing_message_b64,
+    }))
+}
+
+/// POST /v1/accounts/recovery/policy/set — prepare or submit exact regulated recovery policy setup.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_account_recovery_policy_set(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(request): NoritoJson<AccountRecoveryPolicySetDto>,
+) -> Result<impl IntoResponse> {
+    let timelock_ms = NonZeroU64::new(request.timelock_ms)
+        .ok_or_else(|| conversion_error("timelock_ms must be positive".to_owned()))?;
+    let policy = iroha_data_model::account::AccountRecoveryPolicy::new(
+        request.guardians,
+        request.quorum,
+        timelock_ms,
+    )
+    .map_err(|error| conversion_error(error.to_string()))?;
+    regulated_account_recovery_policy(state.as_ref(), &policy)?;
+    let (_, account) =
+        resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
+    if request.auth.signer_account_id != account {
+        return Err(conversion_error(
+            "direct recovery-policy setup must be signed by the active single-key account; native multisig accounts must propose this instruction through /v1/multisig/propose"
+                .to_owned(),
+        ));
+    }
+    let instruction = iroha_data_model::isi::SetAccountRecoveryPolicy { account, policy };
+    execute_account_recovery_mutation(
+        chain_id,
+        queue,
+        state,
+        telemetry,
+        request.selector,
+        request.auth,
+        instruction.into(),
+        "SET_POLICY",
+        ENDPOINT_ACCOUNT_RECOVERY_POLICY_SET,
+    )
+    .await
+}
+
+/// POST /v1/accounts/recovery/propose — prepare or submit a regulated recovery proposal.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_account_recovery_propose(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(request): NoritoJson<AccountRecoveryProposeDto>,
+) -> Result<impl IntoResponse> {
+    validate_recovered_company_controller(&request.new_controller)?;
+    let (alias, active) =
+        resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
+    let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
+    if request.auth.signer_account_id != active {
+        recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
+    }
+    let instruction = iroha_data_model::isi::ProposeAccountRecovery {
+        alias,
+        new_controller: request.new_controller,
+    };
+    execute_account_recovery_mutation(
+        chain_id,
+        queue,
+        state,
+        telemetry,
+        request.selector,
+        request.auth,
+        instruction.into(),
+        "PROPOSE",
+        ENDPOINT_ACCOUNT_RECOVERY_PROPOSE,
+    )
+    .await
+}
+
+/// POST /v1/accounts/recovery/approve — prepare or submit one guardian approval.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_account_recovery_approve(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(request): NoritoJson<AccountRecoveryApproveDto>,
+) -> Result<impl IntoResponse> {
+    let (alias, _) =
+        resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
+    let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
+    recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
+    let instruction = iroha_data_model::isi::ApproveAccountRecovery { alias };
+    execute_account_recovery_mutation(
+        chain_id,
+        queue,
+        state,
+        telemetry,
+        request.selector,
+        request.auth,
+        instruction.into(),
+        "APPROVE",
+        ENDPOINT_ACCOUNT_RECOVERY_APPROVE,
+    )
+    .await
+}
+
+/// POST /v1/accounts/recovery/finalize — prepare or submit quorum/timelock finalization.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_account_recovery_finalize(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(request): NoritoJson<AccountRecoveryFinalizeDto>,
+) -> Result<impl IntoResponse> {
+    let (alias, _) =
+        resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
+    let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
+    recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
+    let instruction = iroha_data_model::isi::FinalizeAccountRecovery { alias };
+    execute_account_recovery_mutation(
+        chain_id,
+        queue,
+        state,
+        telemetry,
+        request.selector,
+        request.auth,
+        instruction.into(),
+        "FINALIZE",
+        ENDPOINT_ACCOUNT_RECOVERY_FINALIZE,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+fn account_recovery_invalidation_evidence(
+    state: &CoreState,
+    active_account: &iroha_data_model::account::AccountId,
+    request: &iroha_data_model::account::AccountRecoveryRequest,
+) -> Result<(Vec<AccountRecoveryInvalidatedProposalEvidenceDto>, bool)> {
+    use iroha_data_model::account::AccountRecoveryStatus;
+    use iroha_executor_data_model::isi::multisig::{
+        MultisigProposalTerminalState, MultisigProposalTerminalStatus,
+    };
+
+    if request.status != AccountRecoveryStatus::Finalized {
+        return Ok((Vec::new(), false));
+    }
+    let world = state.world_view();
+    let storage = world.smart_contract_state();
+    let mut evidence = Vec::with_capacity(request.invalidated_multisig_proposal_hashes.len());
+    let mut proposal_hashes = std::collections::BTreeSet::new();
+    for proposal_hash in &request.invalidated_multisig_proposal_hashes {
+        if !proposal_hashes.insert(*proposal_hash) {
+            return Err(conversion_error(format!(
+                "recovery request contains duplicate invalidated proposal `{proposal_hash}`"
+            )));
+        }
+        let prior_key = multisig_proposal_state_contract_key(
+            &request.active_account_id_at_proposal,
+            proposal_hash,
+        );
+        if storage.get(prior_key.as_ref()).is_some() {
+            return Err(conversion_error(format!(
+                "recovery-invalidated proposal `{proposal_hash}` remains active under the pre-recovery controller"
+            )));
+        }
+        let active_key = multisig_proposal_state_contract_key(active_account, proposal_hash);
+        if storage.get(active_key.as_ref()).is_some() {
+            return Err(conversion_error(format!(
+                "recovery-invalidated proposal `{proposal_hash}` remains active"
+            )));
+        }
+        let terminal_key =
+            multisig_proposal_terminal_state_contract_key(active_account, proposal_hash);
+        let bytes = storage.get(terminal_key.as_ref()).ok_or_else(|| {
+            conversion_error(format!(
+                "recovery-invalidated proposal `{proposal_hash}` is missing terminal evidence"
+            ))
+        })?;
+        let terminal = norito::decode_from_bytes::<MultisigProposalTerminalState>(bytes).map_err(
+            |error| {
+                conversion_error(format!(
+                    "invalid terminal evidence for recovery-invalidated proposal `{proposal_hash}`: {error}"
+                ))
+            },
+        )?;
+        validate_multisig_terminal_proposal_binding(active_account, proposal_hash, &terminal)?;
+        if terminal.terminal_at_ms == 0 {
+            return Err(conversion_error(format!(
+                "recovery-invalidated proposal `{proposal_hash}` is missing its terminal timestamp"
+            )));
+        }
+        let status = match terminal.status {
+            MultisigProposalTerminalStatus::Canceled => "CANCELED",
+            MultisigProposalTerminalStatus::Expired => "EXPIRED",
+            MultisigProposalTerminalStatus::Finalized => {
+                return Err(conversion_error(format!(
+                    "recovery-invalidated proposal `{proposal_hash}` has finalized evidence"
+                )));
+            }
+        };
+        evidence.push(AccountRecoveryInvalidatedProposalEvidenceDto {
+            proposal_id: proposal_hash.to_string(),
+            status: status.to_owned(),
+            terminal_at_ms: terminal.terminal_at_ms,
+        });
+    }
+    Ok((evidence, true))
+}
+
+/// POST /v1/accounts/recovery/status — query authoritative alias-bound recovery evidence.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_account_recovery_status(
+    state: Arc<CoreState>,
+    NoritoJson(request): NoritoJson<AccountRecoveryStatusRequestDto>,
+) -> Result<JsonBody<AccountRecoveryStatusResponseDto>> {
+    let (account_alias, active_account) =
+        resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
+    let world = state.world_view();
+    let policy = world
+        .account_recovery_policies()
+        .get(&account_alias)
+        .cloned();
+    let recovery_request = world
+        .account_recovery_requests()
+        .get(&account_alias)
+        .cloned();
+    drop(world);
+    if let Some(policy) = policy.as_ref() {
+        regulated_account_recovery_policy(state.as_ref(), policy)?;
+    }
+    if recovery_request.is_some() && policy.is_none() {
+        return Err(conversion_error(
+            "account recovery request is missing its regulated policy".to_owned(),
+        ));
+    }
+    if let Some(recovery_request) = recovery_request.as_ref() {
+        if recovery_request.alias != account_alias {
+            return Err(conversion_error(
+                "account recovery request alias does not match its storage selector".to_owned(),
+            ));
+        }
+        validate_recovered_company_controller(&recovery_request.proposed_controller)?;
+        let now_ms = state
+            .latest_block_header_fast()
+            .map_or(0, |header| header.creation_time_ms);
+        let nexus = state.nexus_snapshot();
+        let world = state.world_view();
+        let lineage = iroha_core::sns::resolve_active_account_id_rekey_lineage_for_alias(
+            &world,
+            &nexus.dataspace_catalog,
+            &account_alias,
+            &recovery_request.active_account_id_at_proposal,
+            now_ms,
+        );
+        if lineage.as_ref() != Some(&active_account) {
+            return Err(conversion_error(
+                "account recovery request is not bound to the active alias controller lineage"
+                    .to_owned(),
+            ));
+        }
+        if recovery_request.status == iroha_data_model::account::AccountRecoveryStatus::Finalized
+            && recovered_company_account_id(&recovery_request.proposed_controller) != active_account
+        {
+            return Err(conversion_error(
+                "finalized account recovery controller does not match the active alias".to_owned(),
+            ));
+        }
+    }
+    let (invalidated_proposals, invalidation_evidence_complete) = match recovery_request.as_ref() {
+        Some(recovery_request) => account_recovery_invalidation_evidence(
+            state.as_ref(),
+            &active_account,
+            recovery_request,
+        )?,
+        None => (Vec::new(), false),
+    };
+    Ok(JsonBody(AccountRecoveryStatusResponseDto {
+        account_alias: request.selector.account_alias,
+        resolved_active_account_id: active_account,
+        policy,
+        request: recovery_request,
+        invalidated_proposals,
+        invalidation_evidence_complete,
+    }))
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod account_recovery_route_tests {
+    use std::num::NonZeroU64;
+
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        account::{
+            AccountController, AccountId, AccountRecoveryPolicy, MultisigMember, MultisigPolicy,
+            RecoveryGuardian,
+        },
+        transaction::FeePaymentIntent,
+    };
+
+    use super::*;
+
+    fn test_state() -> CoreState {
+        CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        )
+    }
+
+    fn ed25519_keypair() -> KeyPair {
+        KeyPair::try_random().expect("Ed25519 recovery fixture keypair")
+    }
+
+    fn single_account(keypair: &KeyPair) -> AccountId {
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn recovery_auth(account: AccountId) -> AccountRecoveryDetachedAuthDto {
+        AccountRecoveryDetachedAuthDto {
+            signer_account_id: account,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        }
+    }
+
+    #[test]
+    fn regulated_recovery_policy_rejects_any_shape_other_than_two_of_three_for_72_hours() {
+        let guardians = (0..3)
+            .map(|_| RecoveryGuardian::new(single_account(&ed25519_keypair()), 1))
+            .collect::<Vec<_>>();
+        let state = test_state();
+
+        let wrong_count = AccountRecoveryPolicy::new(
+            guardians[..2].to_vec(),
+            2,
+            NonZeroU64::new(REGULATED_RECOVERY_TIMELOCK_MS).unwrap(),
+        )
+        .unwrap();
+        assert!(regulated_account_recovery_policy(&state, &wrong_count).is_err());
+
+        let wrong_quorum = AccountRecoveryPolicy::new(
+            guardians.clone(),
+            1,
+            NonZeroU64::new(REGULATED_RECOVERY_TIMELOCK_MS).unwrap(),
+        )
+        .unwrap();
+        assert!(regulated_account_recovery_policy(&state, &wrong_quorum).is_err());
+
+        let wrong_timelock = AccountRecoveryPolicy::new(
+            guardians,
+            2,
+            NonZeroU64::new(REGULATED_RECOVERY_TIMELOCK_MS - 1).unwrap(),
+        )
+        .unwrap();
+        assert!(regulated_account_recovery_policy(&state, &wrong_timelock).is_err());
+    }
+
+    #[test]
+    fn recovered_company_controller_accepts_only_weight_one_ed25519_native_multisig() {
+        let member1 = MultisigMember::new(ed25519_keypair().public_key().clone(), 1).unwrap();
+        let member2 = MultisigMember::new(ed25519_keypair().public_key().clone(), 1).unwrap();
+        let one_of_one =
+            AccountController::multisig(MultisigPolicy::new(1, vec![member1.clone()]).unwrap());
+        assert!(validate_recovered_company_controller(&one_of_one).is_ok());
+
+        let two_of_two = AccountController::multisig(
+            MultisigPolicy::new(2, vec![member1.clone(), member2.clone()]).unwrap(),
+        );
+        assert!(validate_recovered_company_controller(&two_of_two).is_ok());
+
+        let one_of_two =
+            AccountController::multisig(MultisigPolicy::new(1, vec![member1, member2]).unwrap());
+        assert!(validate_recovered_company_controller(&one_of_two).is_err());
+        assert!(
+            validate_recovered_company_controller(&AccountController::single(
+                ed25519_keypair().public_key().clone()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn detached_recovery_signer_requires_an_exact_complete_ed25519_proof_pair() {
+        let signer = ed25519_keypair();
+        let signer_account = single_account(&signer);
+        assert!(
+            validate_account_recovery_detached_signer(&recovery_auth(signer_account.clone()))
+                .is_ok()
+        );
+
+        let (_, signer_bytes) = signer
+            .public_key()
+            .try_to_bytes()
+            .expect("Ed25519 public key bytes");
+        let mut submitted = recovery_auth(signer_account.clone());
+        submitted.public_key_hex = Some(hex::encode(signer_bytes));
+        submitted.signature_b64 = Some("detached-signature".to_owned());
+        submitted.creation_time_ms = Some(1);
+        assert!(validate_account_recovery_detached_signer(&submitted).is_ok());
+
+        let mut partial = recovery_auth(signer_account.clone());
+        partial.public_key_hex = submitted.public_key_hex.clone();
+        assert!(validate_account_recovery_detached_signer(&partial).is_err());
+
+        let different = ed25519_keypair();
+        let (_, different_bytes) = different
+            .public_key()
+            .try_to_bytes()
+            .expect("different Ed25519 public key bytes");
+        submitted.public_key_hex = Some(hex::encode(different_bytes));
+        assert!(validate_account_recovery_detached_signer(&submitted).is_err());
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn multisig_proposals_resolve_response(
     state: &Arc<CoreState>,
     req: &MultisigProposalsResolveRequestDto,
@@ -32612,6 +33397,180 @@ pub struct MultisigProposalEntryDto {
     pub status: String,
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(decode_from_slice)]
+/// Stable account selector shared by native recovery routes.
+pub struct AccountRecoverySelectorDto {
+    /// Canonical stable alias whose active controller and recovery state are targeted.
+    pub account_alias: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(decode_from_slice)]
+/// Detached-signature fields shared by native recovery mutations.
+pub struct AccountRecoveryDetachedAuthDto {
+    /// Exact single-key account authorizing the native recovery instruction.
+    pub signer_account_id: iroha_data_model::account::AccountId,
+    /// Optional canonical lowercase Ed25519 public-key hex used for submission.
+    #[norito(default)]
+    pub public_key_hex: Option<String>,
+    /// Optional canonical padded-base64 Ed25519 signature over `signing_message_b64`.
+    #[norito(default)]
+    pub signature_b64: Option<String>,
+    /// Fixed transaction creation time returned by preparation and repeated at submission.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+    /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Configure the exact regulated 2-of-3, 72-hour account-recovery policy.
+pub struct AccountRecoveryPolicySetDto {
+    #[norito(flatten)]
+    pub selector: AccountRecoverySelectorDto,
+    #[norito(flatten)]
+    pub auth: AccountRecoveryDetachedAuthDto,
+    /// Recovery guardians. Exactly three distinct weight-one Ed25519 accounts are required.
+    pub guardians: Vec<iroha_data_model::account::RecoveryGuardian>,
+    /// Guardian quorum. Regulated application routes require exactly two.
+    pub quorum: u16,
+    /// Recovery cooling period. Regulated application routes require exactly 259,200,000 ms.
+    pub timelock_ms: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Propose an alias-bound controller replacement through regulated recovery.
+pub struct AccountRecoveryProposeDto {
+    #[norito(flatten)]
+    pub selector: AccountRecoverySelectorDto,
+    #[norito(flatten)]
+    pub auth: AccountRecoveryDetachedAuthDto,
+    /// Exact replacement controller requested for the stable alias.
+    pub new_controller: iroha_data_model::account::AccountController,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Approve an alias-bound regulated account-recovery request.
+pub struct AccountRecoveryApproveDto {
+    #[norito(flatten)]
+    pub selector: AccountRecoverySelectorDto,
+    #[norito(flatten)]
+    pub auth: AccountRecoveryDetachedAuthDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Finalize an alias-bound regulated account-recovery request after quorum and cooling.
+pub struct AccountRecoveryFinalizeDto {
+    #[norito(flatten)]
+    pub selector: AccountRecoverySelectorDto,
+    #[norito(flatten)]
+    pub auth: AccountRecoveryDetachedAuthDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Query an alias-bound recovery policy, request, and proposal-invalidation evidence.
+pub struct AccountRecoveryStatusRequestDto {
+    #[norito(flatten)]
+    pub selector: AccountRecoverySelectorDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Detached-signature preparation or submission response for a recovery mutation.
+pub struct AccountRecoveryMutationResponseDto {
+    pub ok: bool,
+    pub action: String,
+    pub account_alias: String,
+    pub resolved_active_account_id: iroha_data_model::account::AccountId,
+    pub submitted: bool,
+    #[norito(default)]
+    pub tx_hash_hex: Option<String>,
+    pub creation_time_ms: u64,
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    #[norito(default)]
+    pub signing_message_b64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Terminal native multisig proposal evidence retained by recovery finalization.
+pub struct AccountRecoveryInvalidatedProposalEvidenceDto {
+    pub proposal_id: String,
+    pub status: String,
+    pub terminal_at_ms: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Authoritative alias-bound recovery state and terminal evidence.
+pub struct AccountRecoveryStatusResponseDto {
+    pub account_alias: String,
+    pub resolved_active_account_id: iroha_data_model::account::AccountId,
+    #[norito(default)]
+    pub policy: Option<iroha_data_model::account::AccountRecoveryPolicy>,
+    #[norito(default)]
+    pub request: Option<iroha_data_model::account::AccountRecoveryRequest>,
+    pub invalidated_proposals: Vec<AccountRecoveryInvalidatedProposalEvidenceDto>,
+    pub invalidation_evidence_complete: bool,
 }
 
 #[cfg(feature = "app_api")]
@@ -38742,6 +39701,7 @@ where
                     .is_some_and(|domain_id| matches_domain(domain_id)),
                 MultisigInstructionBox::Approve(_approve) => false,
                 MultisigInstructionBox::Cancel(_cancel) => false,
+                MultisigInstructionBox::InvalidateOutstanding(_invalidate) => false,
                 MultisigInstructionBox::Propose(propose) => {
                     propose.instructions.iter().any(|nested| {
                         instruction_matches_domain_predicate(
@@ -39994,6 +40954,16 @@ pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_RESOLVE: &str = "/v1/multisig/proposals/resolve";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_RECOVERY_POLICY_SET: &str = "/v1/accounts/recovery/policy/set";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_RECOVERY_PROPOSE: &str = "/v1/accounts/recovery/propose";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_RECOVERY_APPROVE: &str = "/v1/accounts/recovery/approve";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_RECOVERY_FINALIZE: &str = "/v1/accounts/recovery/finalize";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_RECOVERY_STATUS: &str = "/v1/accounts/recovery/status";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";

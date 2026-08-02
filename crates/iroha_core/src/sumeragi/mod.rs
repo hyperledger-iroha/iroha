@@ -1446,6 +1446,53 @@ fn fair_v2_ingress_same_control_slot(
         && left_round.height == right_round.height
 }
 
+/// Whether timeout control can advance past the selected control owner's view.
+///
+/// A direct Vote may deliberately remain in fair ingress until its Proposal
+/// binds the execution commitment. Requiring that blocked Vote to cross before
+/// same-view timeout shares creates a circular dependency: those shares must
+/// assemble the TC which retires the view's proposal and vote work. An already
+/// assembled TC for that view or a later one has the same dependency. Every
+/// candidate still crosses normal downstream authentication and quorum checks;
+/// this helper only allows the verifier to observe it when the immutable
+/// control owner is currently inadmissible.
+fn fair_v2_ingress_timeout_control_advances_owner(
+    owner: &FairV2IngressLeaderWireToken,
+    inbound: &InboundBlockMessage,
+) -> bool {
+    use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+
+    if !matches!(
+        owner.identity.phase,
+        FairV2IngressLeaderWirePhase::Proposal
+            | FairV2IngressLeaderWirePhase::PrepareVote
+            | FairV2IngressLeaderWirePhase::CommitVote
+            | FairV2IngressLeaderWirePhase::PrepareQc
+            | FairV2IngressLeaderWirePhase::CommitQc
+            | FairV2IngressLeaderWirePhase::TimeoutVote
+    ) {
+        return false;
+    }
+    let BlockMessage::V2(message) = inbound.message() else {
+        return false;
+    };
+    let (round, view_advances) = match &message.payload {
+        ConsensusMessageV2Payload::TimeoutVote(vote) => (
+            vote.round,
+            owner.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
+                && vote.round.view == owner.identity.view,
+        ),
+        ConsensusMessageV2Payload::TimeoutCertificate(certificate) => (
+            certificate.round,
+            certificate.round.view >= owner.identity.view,
+        ),
+        _ => return false,
+    };
+    round.context_id == owner.identity.context_id
+        && round.height == owner.identity.height
+        && view_advances
+}
+
 fn fair_v2_ingress_subject_hash(
     subject: Option<&iroha_data_model::block::consensus_v2::BlockSubject>,
 ) -> CryptoHash {
@@ -4606,6 +4653,91 @@ impl FairV2Ingress {
         Ok(())
     }
 
+    /// Retire every closed-height carrier and atomically detach both durable
+    /// ingress gates.
+    ///
+    /// Productive leader-wire records describe physical entries in the same
+    /// lanes that carry certified Serve reservations. Clearing those lanes
+    /// before detaching the leader-wire gate would transiently leave a durable
+    /// `Ingress` record without its unique carrier. Keep the two per-height
+    /// ownership cuts under one ingress transaction instead.
+    ///
+    /// This detach deliberately does not forge a backward `Ingress` to
+    /// `Dormant` refinement in the persistent leader-wire gate. On shutdown or
+    /// abnormal runner exit, same-height restart reconciliation normalizes
+    /// active records to selector-dormant `Dormant`. After durable height
+    /// finality, replay's decision authority instead retires the obsolete
+    /// records. Both paths retain the ordinal high-watermarks.
+    pub(crate) fn unbind_height_ingress_gates(
+        &self,
+        certified_serve_gate: &v2_worker::CertifiedServeIngressGate,
+        leader_wire_gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+    ) -> Result<(), String> {
+        let _service_guard = self.service_lock.lock();
+        let mut state = self.state.lock();
+        if state.open {
+            return Err("height ingress gates cannot unbind from open ingress".to_owned());
+        }
+        let bound_certified_serve = state
+            .certified_serve_gate
+            .as_ref()
+            .ok_or_else(|| "height ingress lost its certified Serve gate".to_owned())?;
+        if !bound_certified_serve.ptr_eq(certified_serve_gate) {
+            return Err("certified Serve gate changed per-height I/O ownership".to_owned());
+        }
+        let bound_leader_wire = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .ok_or_else(|| "height ingress lost its leader-wire lifecycle gate".to_owned())?;
+        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
+            bound_leader_wire,
+            leader_wire_gate,
+        ) {
+            return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
+        }
+
+        // Every queued carrier belongs to the closed height. Replacing the
+        // lanes drops each Serve RAII ticket while the ingress lock is held;
+        // ticket rollback takes only the I/O lock, and no I/O path calls back
+        // into fair ingress.
+        let mut lanes = BTreeMap::new();
+        for peer in &state.roster {
+            lanes.insert(
+                FairV2IngressSource::Validator(peer.clone()),
+                FairV2IngressLane::default(),
+            );
+        }
+        lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
+        state.lanes = lanes;
+        state.pending_wire_owners.clear();
+        state.ready.clear();
+        state.len = 0;
+        state.bytes = 0;
+        state.nonempty_since = None;
+        state.last_service_attempt_at = None;
+
+        let detached_certified_serve = state
+            .certified_serve_gate
+            .take()
+            .expect("validated certified Serve gate remains bound");
+        debug_assert!(detached_certified_serve.ptr_eq(certified_serve_gate));
+        let detached_leader_wire = state
+            .leader_wire_lifecycle_gate
+            .take()
+            .expect("validated leader-wire lifecycle gate remains bound");
+        debug_assert!(
+            serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
+                &detached_leader_wire,
+                leader_wire_gate,
+            )
+        );
+        state.leader_wire_lifecycle_ordinals = None;
+        state.leader_wire_context = None;
+        state.leader_wire_lifecycles.clear();
+        self.debug_assert_consistent(&state);
+        Ok(())
+    }
+
     /// Retire all closed-height occurrences, then detach their exact Serve gate.
     pub(crate) fn unbind_certified_serve_gate(
         &self,
@@ -6111,10 +6243,19 @@ impl FairV2Ingress {
                                                     )
                                                 },
                                             ));
+                                    let timeout_control_dependency = leader_wire_barrier
+                                        .as_ref()
+                                        .is_some_and(|owner| {
+                                            fair_v2_ingress_timeout_control_advances_owner(
+                                                &owner.token,
+                                                &entry.inbound,
+                                            )
+                                        });
                                     let dependency_bypass = !ingress_barrier_allows
                                         && leader_wire_control_barrier
                                         && (earlier_dependency
-                                            || selected_serve_control_dependency);
+                                            || selected_serve_control_dependency
+                                            || timeout_control_dependency);
                                     (!has_live_control_predecessor
                                         && (ingress_barrier_allows || dependency_bypass))
                                         .then(|| {

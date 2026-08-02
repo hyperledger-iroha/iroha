@@ -4211,6 +4211,11 @@ pub mod contracts_and_verification_keys {
         MULTISIG_SPEC_POST => app_signed_post("contracts.multisig_spec_post", "/v1/multisig/spec");
         MULTISIG_PROPOSALS_QUERY_POST => app_signed_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
         MULTISIG_PROPOSALS_RESOLVE_POST => app_signed_post("contracts.multisig_proposals_resolve_post", "/v1/multisig/proposals/resolve");
+        ACCOUNT_RECOVERY_POLICY_SET_POST => app_post("contracts.account_recovery_policy_set_post", "/v1/accounts/recovery/policy/set");
+        ACCOUNT_RECOVERY_PROPOSE_POST => app_post("contracts.account_recovery_propose_post", "/v1/accounts/recovery/propose");
+        ACCOUNT_RECOVERY_APPROVE_POST => app_post("contracts.account_recovery_approve_post", "/v1/accounts/recovery/approve");
+        ACCOUNT_RECOVERY_FINALIZE_POST => app_post("contracts.account_recovery_finalize_post", "/v1/accounts/recovery/finalize");
+        ACCOUNT_RECOVERY_STATUS_POST => app_post("contracts.account_recovery_status_post", "/v1/accounts/recovery/status");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4982,6 +4987,11 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_POLICY_SET_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_PROPOSE_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_APPROVE_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_FINALIZE_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_STATUS_POST,
     contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
     contracts_and_verification_keys::ZK_VK_REGISTER_POST,
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
@@ -5264,6 +5274,38 @@ mod tests {
             assert_eq!(route.path_normalization(), PathNormalization::Strict);
             assert!(route.cors_options());
             assert!(!route.implicit_head());
+        }
+    }
+
+    #[test]
+    fn canonical_catalog_exposes_the_complete_regulated_account_recovery_family() {
+        let expected = [
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_POLICY_SET_POST,
+                "/v1/accounts/recovery/policy/set",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_PROPOSE_POST,
+                "/v1/accounts/recovery/propose",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_APPROVE_POST,
+                "/v1/accounts/recovery/approve",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_FINALIZE_POST,
+                "/v1/accounts/recovery/finalize",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_STATUS_POST,
+                "/v1/accounts/recovery/status",
+            ),
+        ];
+        for (route, path) in expected {
+            assert_eq!(route.method(), HttpMethod::Post);
+            assert_eq!(route.path(), path);
+            assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
+            assert!(CATALOGED_ROUTES.contains(&route));
         }
     }
 

@@ -3675,7 +3675,7 @@ mod tests {
             .expect("peer0 Torii table")
             .insert(
                 "internal_api_trusted_cidrs".to_owned(),
-                toml::Value::Array(vec![toml::Value::String("172.16.0.0/12".to_owned())]),
+                toml::Value::Array(vec![toml::Value::String("172.16.0.1/32".to_owned())]),
             );
         fs::write(
             &peer0_path,

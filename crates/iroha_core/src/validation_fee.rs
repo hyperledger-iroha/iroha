@@ -1519,7 +1519,9 @@ where
                         resolve,
                     )?;
                 }
-                MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => {}
+                MultisigInstructionBox::Register(_)
+                | MultisigInstructionBox::Cancel(_)
+                | MultisigInstructionBox::InvalidateOutstanding(_) => {}
             }
         }
 
@@ -3144,7 +3146,9 @@ fn native_instruction_ds_effect_disposition(
             MultisigInstructionBox::Approve(_) => {
                 NativeInstructionDsEffectDisposition::GuardedDeferredEffect
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => {
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => {
                 NativeInstructionDsEffectDisposition::AuditedNoDsEffect
             }
         };

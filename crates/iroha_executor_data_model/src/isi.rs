@@ -78,6 +78,8 @@ pub mod multisig {
         Approve(MultisigApprove),
         /// Cancel a certain multisig transaction before it reaches quorum
         Cancel(MultisigCancel),
+        /// Atomically invalidate every outstanding proposal owned by a multisig account
+        InvalidateOutstanding(MultisigInvalidateOutstanding),
     }
 
     impl JsonSerialize for MultisigInstructionBox {
@@ -101,6 +103,11 @@ pub mod multisig {
                 }
                 Self::Cancel(value) => {
                     norito::json::write_json_string("Cancel", out);
+                    out.push(':');
+                    value.json_serialize(out);
+                }
+                Self::InvalidateOutstanding(value) => {
+                    norito::json::write_json_string("InvalidateOutstanding", out);
                     out.push(':');
                     value.json_serialize(out);
                 }
@@ -148,6 +155,14 @@ pub mod multisig {
                         }
                         let value = visitor.parse_value::<MultisigCancel>()?;
                         variant = Some(Self::Cancel(value));
+                    }
+                    "InvalidateOutstanding" => {
+                        if variant.is_some() {
+                            visitor.skip_value()?;
+                            return Err(json::Error::duplicate_field(name));
+                        }
+                        let value = visitor.parse_value::<MultisigInvalidateOutstanding>()?;
+                        variant = Some(Self::InvalidateOutstanding(value));
                     }
                     other => {
                         visitor.skip_value()?;
@@ -343,9 +358,38 @@ pub mod multisig {
         pub instructions_hash: HashOf<Vec<InstructionBox>>,
     }
 
+    /// Atomically invalidate every outstanding proposal owned by a multisig account.
+    ///
+    /// This instruction must execute as `account` itself, normally as the
+    /// first instruction in an approved multisig policy-change proposal. The
+    /// proposal executing this instruction is already terminal before its
+    /// payload runs, so only other outstanding proposals are invalidated.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        DeriveJsonSerialize,
+        DeriveJsonDeserialize,
+    )]
+    pub struct MultisigInvalidateOutstanding {
+        /// Multisig account whose outstanding proposals must be invalidated.
+        pub account: AccountId,
+    }
+
     impl_custom_instruction!(
         MultisigInstructionBox,
-        MultisigRegister | MultisigPropose | MultisigApprove | MultisigCancel
+        MultisigRegister
+            | MultisigPropose
+            | MultisigApprove
+            | MultisigCancel
+            | MultisigInvalidateOutstanding
     );
 
     impl TryFrom<&InstructionBox> for MultisigInstructionBox {
@@ -901,6 +945,29 @@ pub mod multisig {
                 }
                 _ => panic!("expected cancel variant"),
             }
+        }
+
+        #[test]
+        fn multisig_invalidate_outstanding_instruction_roundtrips_exact_account() {
+            let multisig_account = fixture_account(13);
+            let invalidate = MultisigInvalidateOutstanding::new(multisig_account.clone());
+            let instruction_box = InstructionBox::from(invalidate);
+
+            let decoded = MultisigInstructionBox::try_from(&instruction_box)
+                .expect("decode multisig invalidation instruction");
+            match &decoded {
+                MultisigInstructionBox::InvalidateOutstanding(decoded) => {
+                    assert_eq!(decoded.account, multisig_account);
+                }
+                _ => panic!("expected invalidate-outstanding variant"),
+            }
+
+            let json = norito::json::to_json(&decoded)
+                .expect("encode multisig invalidation instruction JSON");
+            assert!(json.contains("\"InvalidateOutstanding\""));
+            let decoded_json = norito::json::from_str::<MultisigInstructionBox>(&json)
+                .expect("decode multisig invalidation instruction JSON");
+            assert_eq!(decoded_json, decoded);
         }
 
         #[test]

@@ -297,6 +297,211 @@
     }
 
     #[test]
+    fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let validator = PeerId::new(KeyPair::random().public_key().clone());
+        let mut vote_message = v2_vote(wire::GlobalPhase::Prepare);
+        let vote_round = match &mut vote_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Vote(vote),
+                ..
+            }) => {
+                vote.round.view = 1;
+                vote.proposal_round.view = 1;
+                vote.round
+            }
+            _ => unreachable!("vote fixture carries a v2 Vote"),
+        };
+        let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 1);
+
+        let mut timeout_certificate = v2_timeout_certificate(vote_round.view);
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+            ..
+        }) = &mut timeout_certificate
+        else {
+            unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+        };
+        certificate.round = vote_round;
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                vote_message.clone(),
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let vote_token = ingress
+            .state
+            .lock()
+            .leader_wire_lifecycles
+            .values()
+            .next()
+            .expect("the retained Vote owns the first leader-wire lifecycle")
+            .token
+            .clone();
+
+        let mut stale_timeout_certificate = timeout_certificate.clone();
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(stale),
+            ..
+        }) = &mut stale_timeout_certificate
+        else {
+            unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+        };
+        stale.round.view = vote_round.view - 1;
+        let mut later_timeout_certificate = timeout_certificate.clone();
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(later),
+            ..
+        }) = &mut later_timeout_certificate
+        else {
+            unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+        };
+        later.round.view = vote_round.view + 1;
+        assert!(!super::fair_v2_ingress_timeout_control_advances_owner(
+            &vote_token,
+            &InboundBlockMessage::new(stale_timeout_certificate, Some(validator.clone())),
+        ));
+        assert!(super::fair_v2_ingress_timeout_control_advances_owner(
+            &vote_token,
+            &InboundBlockMessage::new(later_timeout_certificate, Some(validator.clone())),
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                timeout_certificate,
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+
+        let installed_timeout = ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(_),
+                        ..
+                    })
+                )
+            })
+            .expect("a TC can reach verification when the selected Vote is body-blocked");
+        assert!(matches!(
+            installed_timeout.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(_),
+                ..
+            })
+        ));
+        assert_eq!(ingress.state.lock().len, 1);
+
+        let retained_vote = ingress
+            .try_recv_if(|_| true)
+            .expect("the superseded Vote remains exactly owned until normal retirement");
+        assert_eq!(retained_vote.message().encode(), vote_message.encode());
+        assert_eq!(ingress.state.lock().len, 0);
+    }
+
+    #[test]
+    fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let validator = PeerId::new(KeyPair::random().public_key().clone());
+        let mut vote_message = v2_vote(wire::GlobalPhase::Prepare);
+        let vote_round = match &mut vote_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Vote(vote),
+                ..
+            }) => {
+                vote.round.view = 1;
+                vote.proposal_round.view = 1;
+                vote.round
+            }
+            _ => unreachable!("vote fixture carries a v2 Vote"),
+        };
+        let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 1);
+
+        let mut timeout_vote = v2_timeout_vote();
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::TimeoutVote(timeout),
+            ..
+        }) = &mut timeout_vote
+        else {
+            unreachable!("timeout fixture carries a v2 TimeoutVote");
+        };
+        timeout.round = vote_round;
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                vote_message.clone(),
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let vote_token = ingress
+            .state
+            .lock()
+            .leader_wire_lifecycles
+            .values()
+            .next()
+            .expect("the retained Vote owns the first leader-wire lifecycle")
+            .token
+            .clone();
+
+        for (view, expected) in [(vote_round.view - 1, false), (vote_round.view, true), (vote_round.view + 1, false)] {
+            let mut candidate = timeout_vote.clone();
+            let BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(timeout),
+                ..
+            }) = &mut candidate
+            else {
+                unreachable!("timeout fixture carries a v2 TimeoutVote");
+            };
+            timeout.round.view = view;
+            assert_eq!(
+                super::fair_v2_ingress_timeout_control_advances_owner(
+                    &vote_token,
+                    &InboundBlockMessage::new(candidate, Some(validator.clone())),
+                ),
+                expected,
+                "only an exact-view timeout share can cross the blocked Vote owner"
+            );
+        }
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                timeout_vote,
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+
+        let admitted_timeout_vote = ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                        ..
+                    })
+                )
+            })
+            .expect("a timeout share can reach verification while the direct Vote is body-blocked");
+        assert!(matches!(
+            admitted_timeout_vote.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                ..
+            })
+        ));
+        assert_eq!(ingress.state.lock().len, 1);
+
+        let retained_vote = ingress
+            .try_recv_if(|_| true)
+            .expect("the timed-out Vote remains exactly owned until normal retirement");
+        assert_eq!(retained_vote.message().encode(), vote_message.encode());
+        assert_eq!(ingress.state.lock().len, 0);
+    }
+
+    #[test]
     fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
         let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
         handle.ingress_ready.store(false, Ordering::Release);

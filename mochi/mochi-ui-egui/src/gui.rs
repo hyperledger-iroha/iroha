@@ -1024,6 +1024,9 @@ fn write_session_metadata_file(
         "mcp_url": (session.mcp_url.clone()),
         "account_id": (session.account_id.clone()),
         "private_key": (session.private_key.clone()),
+        "onboarding_credential_id": (session.onboarding_credential_id.clone()),
+        "onboarding_signer_file": (session.onboarding_signer_file.display().to_string()),
+        "onboarding_token_file": (session.onboarding_token_file.display().to_string()),
         "mcp_protocol_version": (mcp_probe.protocol_version.clone()),
         "mcp_toolset_version": (mcp_probe.toolset_version.clone()),
         "mcp_tool_count": (mcp_probe.tool_count),
@@ -13726,6 +13729,13 @@ mod tests {
             mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
             account_id: Some("alice@wonderland".to_owned()),
             private_key: Some("deadbeef".to_owned()),
+            onboarding_credential_id: "local-dev".to_owned(),
+            onboarding_signer_file: PathBuf::from(
+                "/tmp/workspace/.mochi/sandbox/single-peer/runtime/onboarding-signer.key",
+            ),
+            onboarding_token_file: PathBuf::from(
+                "/tmp/workspace/.mochi/sandbox/single-peer/runtime/onboarding.token",
+            ),
         };
 
         let inputs = bootstrap_inputs_from_session(&session);
@@ -13759,6 +13769,13 @@ mod tests {
             mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
             account_id: Some("alice@wonderland".to_owned()),
             private_key: Some("deadbeef".to_owned()),
+            onboarding_credential_id: "local-dev".to_owned(),
+            onboarding_signer_file: temp
+                .path()
+                .join(".mochi/sandbox/single-peer/runtime/onboarding-signer.key"),
+            onboarding_token_file: temp
+                .path()
+                .join(".mochi/sandbox/single-peer/runtime/onboarding.token"),
         };
 
         let written = write_bootstrap_files_for_session(temp.path(), &session)
@@ -13783,6 +13800,67 @@ mod tests {
                 .join(".mochi/generated/kotlin/MochiConnect.kt")
                 .exists()
         );
+    }
+
+    #[test]
+    fn session_metadata_exposes_only_safe_onboarding_identifiers_and_paths() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let token_file = temp.path().join("runtime/onboarding.token");
+        let signer_file = temp.path().join("runtime/onboarding-signer.key");
+        let session = SupervisorSessionInfo {
+            profile_slug: "four-peer-bft".to_owned(),
+            chain_id: "mochi-local".to_owned(),
+            sandbox_root: temp.path().join("four-peer-bft"),
+            workspace_root: Some(temp.path().to_path_buf()),
+            peer_alias: "peer0".to_owned(),
+            api_base: "http://127.0.0.1:8080".to_owned(),
+            torii_url: "http://127.0.0.1:8080".to_owned(),
+            mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
+            account_id: Some("local-admin".to_owned()),
+            private_key: Some("existing-local-client-key".to_owned()),
+            onboarding_credential_id: "local-dev".to_owned(),
+            onboarding_signer_file: signer_file.clone(),
+            onboarding_token_file: token_file.clone(),
+        };
+        let session_path = temp.path().join("session.json");
+        write_session_metadata_file(
+            &session_path,
+            temp.path(),
+            &session,
+            true,
+            &local_mcp_probe_fixture(),
+        )
+        .expect("write session metadata");
+
+        let payload: Value =
+            json::from_slice(&fs::read(&session_path).expect("read generated session metadata"))
+                .expect("parse session metadata");
+        let payload = payload.as_object().expect("session metadata object");
+        assert_eq!(
+            payload
+                .get("onboarding_credential_id")
+                .and_then(Value::as_str),
+            Some("local-dev")
+        );
+        assert_eq!(
+            payload
+                .get("onboarding_signer_file")
+                .and_then(Value::as_str),
+            Some(signer_file.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            payload.get("onboarding_token_file").and_then(Value::as_str),
+            Some(token_file.to_string_lossy().as_ref())
+        );
+        for forbidden in [
+            "onboarding_token",
+            "onboarding_token_hash",
+            "onboarding_token_digest",
+            "onboarding_signer",
+            "onboarding_private_key",
+        ] {
+            assert!(!payload.contains_key(forbidden));
+        }
     }
 
     #[test]

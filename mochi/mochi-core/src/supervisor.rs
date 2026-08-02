@@ -19,15 +19,21 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, bls_normal_pop_prove};
-use iroha_data_model::{parameter::system::SumeragiConsensusMode, peer::PeerId, prelude::ChainId};
+use iroha_data_model::{
+    parameter::system::SumeragiConsensusMode,
+    peer::PeerId,
+    prelude::{AccountId, ChainId},
+};
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_version::build_line::BuildLine;
 use norito::json::{self, Map, Value};
 use once_cell::sync::OnceCell;
+use rand::{TryRngCore as _, rngs::OsRng};
 use tokio::runtime::Handle;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{
     compose::{SigningAuthority, development_signing_authorities},
@@ -51,6 +57,11 @@ const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
 const LOCAL_MCP_TOOL_PREFIX: &str = "iroha.";
 const LOCAL_NORITO_RPC_STAGE: &str = "ga";
+const LOCAL_ONBOARDING_RUNTIME_DIRECTORY: &str = "runtime";
+const LOCAL_ONBOARDING_SIGNER_KEY_FILE: &str = "onboarding-signer.key";
+const LOCAL_ONBOARDING_TOKEN_FILE: &str = "onboarding.token";
+const LOCAL_ONBOARDING_CREDENTIAL_ID: &str = "local-dev";
+const LOCAL_ONBOARDING_DATASPACE: &str = "universal";
 const LOCAL_MULTI_PEER_POW_TICKET_TTL_SECS: i64 = 300;
 // Mochi runs every validator on one developer machine. Keep the mandatory
 // SoraNet memory-hard admission proof enabled, but use the protocol's minimum
@@ -173,6 +184,204 @@ impl From<SignerVaultError> for SupervisorError {
             SignerVaultError::InvalidEntry(message) => Self::Config(message),
         }
     }
+}
+
+#[derive(Clone)]
+struct OnboardingRuntimeBundle {
+    authority: AccountId,
+    private_key_file: PathBuf,
+    token_file: PathBuf,
+    token_hash: [u8; 32],
+}
+
+impl std::fmt::Debug for OnboardingRuntimeBundle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OnboardingRuntimeBundle")
+            .field("authority", &self.authority)
+            .field("private_key_file", &self.private_key_file)
+            .field("token_file", &self.token_file)
+            .field("token_hash", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl OnboardingRuntimeBundle {
+    fn create(paths: &NetworkPaths, authority: &SigningAuthority) -> Result<Self> {
+        let root = fs::canonicalize(paths.root())?;
+        let runtime_dir = root.join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
+        prepare_owner_only_runtime_directory(&runtime_dir, &root)?;
+
+        let private_key_file = runtime_dir.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE);
+        let token_file = runtime_dir.join(LOCAL_ONBOARDING_TOKEN_FILE);
+        let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
+        let signer_payload = Zeroizing::new(format!("{private_key}\n"));
+        write_owner_only_runtime_file(&private_key_file, signer_payload.as_bytes())?;
+
+        let mut token_entropy = [0_u8; 32];
+        OsRng.try_fill_bytes(&mut token_entropy).map_err(|error| {
+            SupervisorError::Config(format!(
+                "failed to obtain OS entropy for the local onboarding token: {error}"
+            ))
+        })?;
+        let token = Zeroizing::new(format!(
+            "iroha-localnet-{}",
+            encode_hex(token_entropy.as_slice())
+        ));
+        token_entropy.zeroize();
+        let token_hash = *blake3::hash(token.as_bytes()).as_bytes();
+        write_owner_only_runtime_file(&token_file, token.as_bytes())?;
+
+        Ok(Self {
+            authority: authority.account_id().clone(),
+            private_key_file,
+            token_file,
+            token_hash,
+        })
+    }
+
+    fn config_table(&self) -> toml::Table {
+        let mut scope = toml::Table::new();
+        scope.insert(
+            "dataspace".to_owned(),
+            toml::Value::String(LOCAL_ONBOARDING_DATASPACE.to_owned()),
+        );
+        let mut credential = toml::Table::new();
+        credential.insert(
+            "id".to_owned(),
+            toml::Value::String(LOCAL_ONBOARDING_CREDENTIAL_ID.to_owned()),
+        );
+        credential.insert("scope".to_owned(), toml::Value::Table(scope));
+        credential.insert(
+            "token_hash".to_owned(),
+            toml::Value::String(format!("blake3:{}", encode_hex(&self.token_hash))),
+        );
+
+        let mut table = toml::Table::new();
+        table.insert(
+            "authority".to_owned(),
+            toml::Value::String(self.authority.to_string()),
+        );
+        table.insert(
+            "private_key_file".to_owned(),
+            toml::Value::String(self.private_key_file.display().to_string()),
+        );
+        table.insert("lease_term_years".to_owned(), toml::Value::Integer(1));
+        table.insert(
+            "additional_permissions".to_owned(),
+            toml::Value::Array(Vec::new()),
+        );
+        table.insert(
+            "credentials".to_owned(),
+            toml::Value::Array(vec![toml::Value::Table(credential)]),
+        );
+        table
+    }
+}
+
+fn localnet_admin_signer() -> Result<&'static SigningAuthority> {
+    development_signing_authorities().first().ok_or_else(|| {
+        SupervisorError::Config(
+            "Mochi local onboarding requires the bundled localnet administrator".to_owned(),
+        )
+    })
+}
+
+#[cfg(unix)]
+fn prepare_owner_only_runtime_directory(path: &Path, trusted_root: &Path) -> Result<()> {
+    let trusted_root_metadata = fs::metadata(trusted_root)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink()
+                || !metadata.is_dir()
+                || metadata.uid() != trusted_root_metadata.uid()
+            {
+                return Err(SupervisorError::Config(format!(
+                    "local onboarding runtime `{}` must be an owner-controlled non-symlink directory",
+                    path.display()
+                )));
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(path)?,
+        Err(error) => return Err(error.into()),
+    }
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(path, permissions)?;
+    let canonical = fs::canonicalize(path)?;
+    if canonical.parent() != Some(trusted_root) {
+        return Err(SupervisorError::Config(format!(
+            "local onboarding runtime escaped the managed sandbox root `{}`",
+            trusted_root.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn prepare_owner_only_runtime_directory(_path: &Path, _trusted_root: &Path) -> Result<()> {
+    Err(SupervisorError::Config(
+        "local onboarding requires owner-only runtime directory support".to_owned(),
+    ))
+}
+
+#[cfg(unix)]
+fn write_owner_only_runtime_file(path: &Path, payload: &[u8]) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        SupervisorError::Config("local onboarding runtime file has no parent".to_owned())
+    })?;
+    let owner_uid = fs::metadata(parent)?.uid();
+    let file_name = path.file_name().and_then(OsStr::to_str).ok_or_else(|| {
+        SupervisorError::Config("local onboarding runtime file name is invalid".to_owned())
+    })?;
+    for attempt in 0_u8..32 {
+        let temporary = parent.join(format!(
+            ".{file_name}.tmp-{}-{}-{attempt}",
+            std::process::id(),
+            timestamp_ms()
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = match options.open(&temporary) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let result = (|| -> io::Result<()> {
+            file.write_all(payload)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temporary, path)?;
+            let metadata = fs::symlink_metadata(path)?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.uid() != owner_uid
+                || metadata.nlink() != 1
+                || metadata.permissions().mode() & 0o777 != 0o600
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "local onboarding runtime file is not an owner-only regular file",
+                ));
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        return result.map_err(Into::into);
+    }
+    Err(SupervisorError::Config(format!(
+        "failed to allocate a private temporary file for `{}`",
+        path.display()
+    )))
+}
+
+#[cfg(not(unix))]
+fn write_owner_only_runtime_file(_path: &Path, _payload: &[u8]) -> Result<()> {
+    Err(SupervisorError::Config(
+        "local onboarding requires owner-only runtime file support".to_owned(),
+    ))
 }
 
 /// Policy governing automatic restarts for managed peers.
@@ -378,6 +587,12 @@ pub struct SupervisorSessionInfo {
     pub account_id: Option<String>,
     /// Preferred local dev signer private key.
     pub private_key: Option<String>,
+    /// Stable identifier for the managed local account-onboarding credential.
+    pub onboarding_credential_id: String,
+    /// Owner-only file containing the local account-onboarding signer.
+    pub onboarding_signer_file: PathBuf,
+    /// Owner-only file containing the dedicated local account-onboarding token.
+    pub onboarding_token_file: PathBuf,
 }
 
 /// Paths to external binaries used by the supervisor.
@@ -1339,6 +1554,7 @@ impl SupervisorBuilder {
         let data_root = resolve_data_root(&self.data_root)?;
         let paths = NetworkPaths::from_root(data_root, &self.profile);
         paths.ensure()?;
+        let onboarding = OnboardingRuntimeBundle::create(&paths, localnet_admin_signer()?)?;
         let mut binaries = self.binaries.allow_auto_builds(self.auto_build_binaries);
         let chain_id = if let Some(profile) = self.genesis_profile {
             let defaults = profile.defaults();
@@ -1363,6 +1579,7 @@ impl SupervisorBuilder {
             &mut sumeragi_config,
             &mut torii_config,
         )?;
+        install_managed_account_onboarding_config(&mut torii_config, &onboarding)?;
         let peer_config_overrides = PeerConfigOverrides {
             nexus: nexus_config,
             sumeragi: sumeragi_config,
@@ -1412,6 +1629,7 @@ impl SupervisorBuilder {
                 block_cadence_ms: self.profile.signed_block_cadence_ms(),
                 genesis_profile: self.genesis_profile,
                 vrf_seed_hex: self.vrf_seed_hex.as_deref(),
+                onboarding_authority: &onboarding.authority,
             },
         )?;
 
@@ -1434,6 +1652,7 @@ impl SupervisorBuilder {
             genesis,
             peers,
             signers,
+            onboarding,
             binaries,
             peer_config_overrides: peer_config_overrides.clone(),
             compatibility: None,
@@ -1682,6 +1901,24 @@ fn normalize_peer_config_overrides(
     Ok(())
 }
 
+fn install_managed_account_onboarding_config(
+    torii: &mut Option<toml::Table>,
+    onboarding: &OnboardingRuntimeBundle,
+) -> Result<()> {
+    let torii = torii.get_or_insert_with(toml::Table::new);
+    if torii.contains_key("account_onboarding") {
+        return Err(SupervisorError::Config(
+            "torii.account_onboarding is managed by Mochi's owner-only local runtime bundle"
+                .to_owned(),
+        ));
+    }
+    torii.insert(
+        "account_onboarding".to_owned(),
+        toml::Value::Table(onboarding.config_table()),
+    );
+    Ok(())
+}
+
 fn ensure_local_mcp_config(torii: &mut Option<toml::Table>) -> Result<()> {
     let table = torii.get_or_insert_with(toml::Table::new);
     let entry = table
@@ -1858,11 +2095,31 @@ impl LaneCatalogSummary {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 struct PeerConfigOverrides {
     nexus: Option<toml::Table>,
     sumeragi: Option<toml::Table>,
     torii: Option<toml::Table>,
+}
+
+impl std::fmt::Debug for PeerConfigOverrides {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut torii = self.torii.clone();
+        if let Some(torii) = torii.as_mut()
+            && torii.contains_key("account_onboarding")
+        {
+            torii.insert(
+                "account_onboarding".to_owned(),
+                toml::Value::String("[REDACTED managed account onboarding]".to_owned()),
+            );
+        }
+        formatter
+            .debug_struct("PeerConfigOverrides")
+            .field("nexus", &self.nexus)
+            .field("sumeragi", &self.sumeragi)
+            .field("torii", &torii)
+            .finish()
+    }
 }
 
 /// Supervises a prepared set of peers for a local network.
@@ -1874,6 +2131,7 @@ pub struct Supervisor {
     genesis: GenesisMaterial,
     peers: Vec<PeerHandle>,
     signers: Vec<SigningAuthority>,
+    onboarding: OnboardingRuntimeBundle,
     binaries: BinaryPaths,
     peer_config_overrides: PeerConfigOverrides,
     compatibility: Option<CompatibilityReport>,
@@ -2085,6 +2343,9 @@ impl Supervisor {
             account_id: signer.map(|entry| entry.account_id().to_string()),
             private_key: signer
                 .map(|entry| ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string()),
+            onboarding_credential_id: LOCAL_ONBOARDING_CREDENTIAL_ID.to_owned(),
+            onboarding_signer_file: self.onboarding.private_key_file.clone(),
+            onboarding_token_file: self.onboarding.token_file.clone(),
         })
     }
 
@@ -2592,6 +2853,7 @@ impl Supervisor {
                 block_cadence_ms: self.profile.signed_block_cadence_ms(),
                 genesis_profile: self.genesis.profile,
                 vrf_seed_hex: self.genesis.vrf_seed_hex.as_deref(),
+                onboarding_authority: &self.onboarding.authority,
             },
         )?;
         for spec in &specs {
@@ -3234,6 +3496,11 @@ impl PeerSpec {
             &mut config_overrides.sumeragi,
             &mut config_overrides.torii,
         )?;
+        let managed_account_onboarding = config_overrides
+            .torii
+            .as_ref()
+            .and_then(|torii| torii.get("account_onboarding"))
+            .cloned();
         let mut root = toml::Table::new();
         root.insert("chain".into(), toml::Value::String(chain_id.to_owned()));
         root.insert(
@@ -3455,6 +3722,19 @@ impl PeerSpec {
             merge_table(&mut root, overlay);
         }
 
+        if let Some(expected) = managed_account_onboarding.as_ref() {
+            let configured = root
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("account_onboarding"));
+            if configured != Some(expected) {
+                return Err(SupervisorError::Config(
+                    "temporary config overlays must preserve Mochi's managed torii.account_onboarding bundle"
+                        .to_owned(),
+                ));
+            }
+        }
+
         let expected_kura_dir = self.kura_dir.display().to_string();
         let configured_kura_dir = root
             .get("kura")
@@ -3672,6 +3952,7 @@ struct GenesisCreateContext<'a> {
     block_cadence_ms: NonZeroU64,
     genesis_profile: Option<GenesisProfile>,
     vrf_seed_hex: Option<&'a str>,
+    onboarding_authority: &'a AccountId,
 }
 
 #[derive(Debug)]
@@ -3751,6 +4032,7 @@ impl GenesisMaterial {
             block_cadence_ms,
             genesis_profile,
             vrf_seed_hex,
+            onboarding_authority,
         } = context;
         let genesis_dir = paths.genesis_dir();
         fs::create_dir_all(&genesis_dir)?;
@@ -3779,6 +4061,8 @@ impl GenesisMaterial {
                 .build_raw()
                 .with_consensus_meta()
         };
+        let manifest =
+            genesis::with_local_account_onboarding_bootstrap(manifest, onboarding_authority)?;
         let topology: Vec<GenesisTopologyEntry> = peers
             .iter()
             .map(|spec| GenesisTopologyEntry::new(spec.peer_id(), spec.pop_bytes().to_vec()))
@@ -7820,6 +8104,148 @@ esac
     }
 
     #[test]
+    #[cfg(unix)]
+    fn four_peer_onboarding_bundle_is_private_identical_and_session_path_only() {
+        if !ports_available(
+            "four_peer_onboarding_bundle_is_private_identical_and_session_path_only",
+        ) {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let _stub = KagamiStub::install(temp.path());
+        let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
+            .data_root(temp.path().join("sandbox"))
+            .torii_base_port(24_000)
+            .p2p_base_port(25_000)
+            .build()
+            .expect("build four-peer supervisor");
+
+        let session = supervisor.session_info().expect("session info");
+        assert_eq!(
+            session.onboarding_token_file,
+            supervisor.onboarding.token_file
+        );
+        assert_eq!(
+            session.onboarding_credential_id,
+            LOCAL_ONBOARDING_CREDENTIAL_ID
+        );
+        assert_eq!(
+            session.onboarding_signer_file,
+            supervisor.onboarding.private_key_file
+        );
+        assert!(session.onboarding_token_file.is_absolute());
+        let token = fs::read_to_string(&session.onboarding_token_file)
+            .expect("read private onboarding token");
+        assert!(token.starts_with("iroha-localnet-"));
+        assert!((32..=256).contains(&token.len()));
+        assert!(token.bytes().all(|byte| (b'!'..=b'~').contains(&byte)));
+        assert_eq!(token, token.trim_end());
+
+        let runtime_dir = session
+            .onboarding_token_file
+            .parent()
+            .expect("runtime directory");
+        assert_eq!(
+            fs::metadata(runtime_dir)
+                .expect("runtime metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        for private_file in [
+            &supervisor.onboarding.private_key_file,
+            &supervisor.onboarding.token_file,
+        ] {
+            let metadata = fs::metadata(private_file).expect("private file metadata");
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+            assert_eq!(metadata.nlink(), 1);
+        }
+
+        let admin = localnet_admin_signer().expect("localnet admin");
+        let admin_account = admin.account_id().to_string();
+        let admin_private = ExposedPrivateKey(admin.key_pair().private_key().clone()).to_string();
+        assert_eq!(
+            fs::read_to_string(&supervisor.onboarding.private_key_file)
+                .expect("read onboarding signer")
+                .trim_end(),
+            admin_private
+        );
+        let expected_digest = format!("blake3:{}", blake3::hash(token.as_bytes()).to_hex());
+        let mut expected_onboarding = None;
+        for peer in supervisor.peers() {
+            let config_text = fs::read_to_string(peer.config_path()).expect("read peer config");
+            assert!(!config_text.contains(&token));
+            assert!(!config_text.contains(&admin_private));
+            let config: toml::Table = toml::from_str(&config_text).expect("parse peer config");
+            let onboarding = config
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("account_onboarding"))
+                .and_then(toml::Value::as_table)
+                .expect("managed account onboarding");
+            assert_eq!(
+                onboarding.get("authority").and_then(toml::Value::as_str),
+                Some(admin_account.as_str())
+            );
+            assert_eq!(
+                onboarding
+                    .get("private_key_file")
+                    .and_then(toml::Value::as_str),
+                Some(
+                    supervisor
+                        .onboarding
+                        .private_key_file
+                        .to_string_lossy()
+                        .as_ref()
+                )
+            );
+            assert!(
+                onboarding
+                    .get("additional_permissions")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|permissions| permissions.is_empty())
+            );
+            let credential = onboarding
+                .get("credentials")
+                .and_then(toml::Value::as_array)
+                .and_then(|credentials| credentials.first())
+                .and_then(toml::Value::as_table)
+                .expect("single onboarding credential");
+            assert_eq!(
+                credential.get("id").and_then(toml::Value::as_str),
+                Some(LOCAL_ONBOARDING_CREDENTIAL_ID)
+            );
+            assert_eq!(
+                credential
+                    .get("scope")
+                    .and_then(toml::Value::as_table)
+                    .and_then(|scope| scope.get("dataspace"))
+                    .and_then(toml::Value::as_str),
+                Some(LOCAL_ONBOARDING_DATASPACE)
+            );
+            assert_eq!(
+                credential.get("token_hash").and_then(toml::Value::as_str),
+                Some(expected_digest.as_str())
+            );
+            let onboarding = toml::Value::Table(onboarding.clone());
+            if let Some(expected) = expected_onboarding.as_ref() {
+                assert_eq!(&onboarding, expected);
+            } else {
+                expected_onboarding = Some(onboarding);
+            }
+        }
+
+        let session_debug = format!("{session:?}");
+        assert!(!session_debug.contains(&token));
+        assert!(!session_debug.contains(&expected_digest));
+        let supervisor_debug = format!("{supervisor:?}");
+        assert!(!supervisor_debug.contains(&token));
+        assert!(!supervisor_debug.contains(&expected_digest));
+    }
+
+    #[test]
     fn supervisor_session_info_reports_workspace_and_mcp_urls() {
         if !ports_available("supervisor_session_info_reports_workspace_and_mcp_urls") {
             return;
@@ -7845,6 +8271,15 @@ esac
         assert_eq!(info.mcp_url, "http://127.0.0.1:8080/v1/mcp");
         assert!(info.account_id.is_some());
         assert!(info.private_key.is_some());
+        assert_eq!(
+            info.onboarding_token_file,
+            info.sandbox_root.join("runtime/onboarding.token")
+        );
+        assert_eq!(info.onboarding_credential_id, "local-dev");
+        assert_eq!(
+            info.onboarding_signer_file,
+            info.sandbox_root.join("runtime/onboarding-signer.key")
+        );
     }
 
     #[test]

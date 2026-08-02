@@ -77,6 +77,12 @@ The generated local Torii config enables both the curated `/v1/mcp` endpoint and
 transport (`stage = "ga"`, no mTLS) so the same sandbox works for Codex MCP clients and local SDK
 smoke tests without extra hand-edited config.
 
+Mochi also provisions signer-backed local account onboarding for the universal dataspace. The
+owner-only signer and token remain under the sandbox `runtime/` directory; `session.json` exposes
+only the `local-dev` credential identifier and the `onboarding_signer_file` and
+`onboarding_token_file` paths so local applications can use the bundle without copying its raw
+secrets or digest into generated metadata.
+
 Generated local validator configs pin the runtime-critical local defaults Mochi depends on:
 `nexus.enabled = false` unless explicitly enabled and `confidential.enabled = true`. Consensus mode
 is carried by the signed genesis/height context, so Mochi does not emit the retired mutable

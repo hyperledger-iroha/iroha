@@ -746,6 +746,95 @@ impl Drop for LeaderWireIngressBinding {
     }
 }
 
+/// Joint per-height ownership of the fair-ingress durable gates.
+///
+/// Once both gates are live they must retire in one queue transaction: the
+/// Serve binding and leader-wire binding describe carriers in the same lanes.
+struct HeightIngressBindings {
+    certified_serve: CertifiedServeIngressBinding,
+    leader_wire: LeaderWireIngressBinding,
+}
+
+impl HeightIngressBindings {
+    fn new(
+        certified_serve: CertifiedServeIngressBinding,
+        leader_wire: LeaderWireIngressBinding,
+    ) -> Self {
+        Self {
+            certified_serve,
+            leader_wire,
+        }
+    }
+
+    fn retire(&mut self) -> Result<(), V2RunnerError> {
+        match (
+            self.certified_serve.gate.as_ref(),
+            self.leader_wire.gate.as_ref(),
+        ) {
+            (None, None) => return Ok(()),
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(V2RunnerError::Service(
+                    "per-height ingress gates changed joint ownership".to_owned(),
+                ));
+            }
+            (Some(_), Some(_)) => {}
+        }
+        if !Arc::ptr_eq(
+            &self.certified_serve.ingress_ready,
+            &self.leader_wire.ingress_ready,
+        ) || !Arc::ptr_eq(
+            &self.certified_serve.block_ingress,
+            &self.leader_wire.block_ingress,
+        ) {
+            return Err(V2RunnerError::Service(
+                "per-height ingress gates changed their shared queue".to_owned(),
+            ));
+        }
+
+        close_ingress_for_rollover(
+            &self.certified_serve.ingress_ready,
+            &self.certified_serve.block_ingress,
+        );
+        self.certified_serve
+            .block_ingress
+            .unbind_height_ingress_gates(
+                self.certified_serve
+                    .gate
+                    .as_ref()
+                    .expect("joint binding retains the certified Serve gate"),
+                self.leader_wire
+                    .gate
+                    .as_ref()
+                    .expect("joint binding retains the leader-wire gate"),
+            )
+            .map_err(V2RunnerError::Service)?;
+        self.certified_serve.gate = None;
+        self.leader_wire.gate = None;
+        Ok(())
+    }
+}
+
+impl Drop for HeightIngressBindings {
+    fn drop(&mut self) {
+        if let Err(error) = self.retire() {
+            // Joint validation failed before mutation. Keep the shared queue
+            // fail-closed and disarm the child guards: retrying their former
+            // split teardown would recreate the carrierless-Ingress cut this
+            // owner exists to prevent.
+            close_ingress_for_rollover(
+                &self.certified_serve.ingress_ready,
+                &self.certified_serve.block_ingress,
+            );
+            self.certified_serve.gate = None;
+            self.leader_wire.gate = None;
+            iroha_logger::error!(
+                %error,
+                "failed to atomically retire the per-height ingress gates"
+            );
+        }
+    }
+}
+
 struct V2StatusClearGuard {
     clear_on_drop: bool,
 }
@@ -1142,7 +1231,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         lifecycle_ordinals
             .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())
             .map_err(V2RunnerError::Service)?;
-        let mut leader_wire_ingress_binding = LeaderWireIngressBinding::bind(
+        let leader_wire_ingress_binding = LeaderWireIngressBinding::bind(
             Arc::clone(&ingress_ready),
             Arc::clone(&block_rx),
             Arc::clone(&leader_wire_gate),
@@ -1237,13 +1326,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             exact_output_service_owner,
         )
         .map_err(V2RunnerError::Service)?;
-        let mut certified_serve_ingress_binding = CertifiedServeIngressBinding::bind(
+        let certified_serve_ingress_binding = CertifiedServeIngressBinding::bind(
             Arc::clone(&ingress_ready),
             Arc::clone(&block_rx),
             services
                 .certified_serve_ingress_gate()
                 .map_err(V2RunnerError::Service)?,
         )?;
+        let mut height_ingress_bindings = HeightIngressBindings::new(
+            certified_serve_ingress_binding,
+            leader_wire_ingress_binding,
+        );
 
         // A Native receipt at the durable tip may have crossed its
         // finality/manifest/receipt boundary before WSV checkpoint and commit
@@ -1272,8 +1365,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     return Err(V2RunnerError::RestartRequired);
                 }
                 if shutdown_signal.is_sent() {
-                    certified_serve_ingress_binding.retire()?;
-                    leader_wire_ingress_binding.retire()?;
+                    height_ingress_bindings.retire()?;
                     services.allow_clean_shutdown();
                     return Ok(());
                 }
@@ -1436,8 +1528,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 return Err(V2RunnerError::RestartRequired);
             }
             if shutdown_signal.is_sent() {
-                certified_serve_ingress_binding.retire()?;
-                leader_wire_ingress_binding.retire()?;
+                height_ingress_bindings.retire()?;
                 services.allow_clean_shutdown();
                 return Ok(());
             }
@@ -1864,8 +1955,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 .to_owned(),
                         )
                     })?;
-                certified_serve_ingress_binding.retire()?;
-                leader_wire_ingress_binding.retire()?;
+                height_ingress_bindings.retire()?;
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
                 let wal_retirement = output_guard
                     .begin_fail_stop_operation()
@@ -4284,8 +4374,15 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
+    let parent_creation_time = match parent {
+        CandidateParent::Block(parent) => parent.header().creation_time(),
+        CandidateParent::Snapshot(anchor) => {
+            Duration::from_millis(anchor.snapshot_block_creation_time_ms)
+        }
+    };
     Ok(CandidateAttachments {
-        time_trigger_clock_progress_required: state.time_trigger_clock_progress_required_fast(),
+        time_trigger_clock_progress_required: state
+            .time_trigger_clock_progress_required_fast(parent_creation_time),
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()
