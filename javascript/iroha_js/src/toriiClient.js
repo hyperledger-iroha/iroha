@@ -116,11 +116,23 @@ import {
 } from "./validationFeeConsensus.js";
 import { assertCanonicalBls12381G1Compressed } from "./bls12381G1.js";
 
+// Capture frequently used statics once: this reduces the complete Torii bundle
+// and keeps validation stable if application code later replaces a global.
+const arrayIsArray = Array.isArray;
+const numberIsFinite = Number.isFinite;
+const numberIsInteger = Number.isInteger;
+const numberIsSafeInteger = Number.isSafeInteger;
+const objectEntries = Object.entries;
+const objectFreeze = Object.freeze;
+const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const objectHasOwn = Object.hasOwn;
+const objectKeys = Object.keys;
+
 const DEFAULT_PAGE_SIZE = 100;
 const APPLICATION_JSON = "application/json";
 const APPLICATION_NORITO = "application/x-norito";
-const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: APPLICATION_JSON });
-const JSON_REQUEST_HEADERS = Object.freeze({
+const JSON_ACCEPT_HEADERS = objectFreeze({ Accept: APPLICATION_JSON });
+const JSON_REQUEST_HEADERS = objectFreeze({
   "Content-Type": APPLICATION_JSON,
   Accept: APPLICATION_JSON,
 });
@@ -162,66 +174,66 @@ const BOUNDED_JSON_MAX_STREAM_CHUNKS = 64 * 1024;
 const JSON_CLONE_MAX_DEPTH = 128;
 const JSON_CLONE_MAX_NODES = 100_000;
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
-const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+const typedArrayBufferGetter = objectGetOwnPropertyDescriptor(
   typedArrayPrototype,
   "buffer",
 ).get;
-const typedArrayByteOffsetGetter = Object.getOwnPropertyDescriptor(
+const typedArrayByteOffsetGetter = objectGetOwnPropertyDescriptor(
   typedArrayPrototype,
   "byteOffset",
 ).get;
-const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+const typedArrayByteLengthGetter = objectGetOwnPropertyDescriptor(
   typedArrayPrototype,
   "byteLength",
 ).get;
-const typedArrayTagGetter = Object.getOwnPropertyDescriptor(
+const typedArrayTagGetter = objectGetOwnPropertyDescriptor(
   typedArrayPrototype,
   Symbol.toStringTag,
 ).get;
-const typedArraySet = Object.getOwnPropertyDescriptor(
+const typedArraySet = objectGetOwnPropertyDescriptor(
   typedArrayPrototype,
   "set",
 ).value;
 const Uint8ArrayIntrinsic = Uint8Array;
-const dataViewBufferGetter = Object.getOwnPropertyDescriptor(
+const dataViewBufferGetter = objectGetOwnPropertyDescriptor(
   DataView.prototype,
   "buffer",
 ).get;
-const dataViewByteOffsetGetter = Object.getOwnPropertyDescriptor(
+const dataViewByteOffsetGetter = objectGetOwnPropertyDescriptor(
   DataView.prototype,
   "byteOffset",
 ).get;
-const dataViewByteLengthGetter = Object.getOwnPropertyDescriptor(
+const dataViewByteLengthGetter = objectGetOwnPropertyDescriptor(
   DataView.prototype,
   "byteLength",
 ).get;
-const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+const arrayBufferByteLengthGetter = objectGetOwnPropertyDescriptor(
   ArrayBuffer.prototype,
   "byteLength",
 ).get;
 const sharedArrayBufferByteLengthGetter =
   typeof SharedArrayBuffer === "undefined"
     ? null
-    : Object.getOwnPropertyDescriptor(
+    : objectGetOwnPropertyDescriptor(
         SharedArrayBuffer.prototype,
         "byteLength",
       ).get;
 const responseBodyGetter =
   typeof Response === "undefined"
     ? null
-    : (Object.getOwnPropertyDescriptor(Response.prototype, "body")?.get ?? null);
+    : (objectGetOwnPropertyDescriptor(Response.prototype, "body")?.get ?? null);
 const responseHeadersGetter =
   typeof Response === "undefined"
     ? null
-    : (Object.getOwnPropertyDescriptor(Response.prototype, "headers")?.get ?? null);
+    : (objectGetOwnPropertyDescriptor(Response.prototype, "headers")?.get ?? null);
 const responseStatusGetter =
   typeof Response === "undefined"
     ? null
-    : (Object.getOwnPropertyDescriptor(Response.prototype, "status")?.get ?? null);
+    : (objectGetOwnPropertyDescriptor(Response.prototype, "status")?.get ?? null);
 const responseStatusTextGetter =
   typeof Response === "undefined"
     ? null
-    : (Object.getOwnPropertyDescriptor(Response.prototype, "statusText")?.get ??
+    : (objectGetOwnPropertyDescriptor(Response.prototype, "statusText")?.get ??
       null);
 const headersGet =
   typeof Headers === "undefined" ? null : Headers.prototype.get;
@@ -236,7 +248,7 @@ const readableStreamCancel =
 const readableStreamLockedGetter =
   typeof ReadableStream === "undefined"
     ? null
-    : (Object.getOwnPropertyDescriptor(
+    : (objectGetOwnPropertyDescriptor(
         ReadableStream.prototype,
         "locked",
       )?.get ?? null);
@@ -255,12 +267,12 @@ const readerReleaseLock =
 const abortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
     ? null
-    : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get ??
+    : (objectGetOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get ??
       null);
 const abortSignalReasonGetter =
   typeof AbortSignal === "undefined"
     ? null
-    : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get ??
+    : (objectGetOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get ??
       null);
 const eventTargetAddEventListener =
   typeof EventTarget === "undefined" ? null : EventTarget.prototype.addEventListener;
@@ -453,7 +465,7 @@ function ownDataMethod(target, name) {
   if (target === null || (typeof target !== "object" && typeof target !== "function")) {
     return null;
   }
-  const descriptor = Object.getOwnPropertyDescriptor(target, name);
+  const descriptor = objectGetOwnPropertyDescriptor(target, name);
   return descriptor && "value" in descriptor && typeof descriptor.value === "function"
     ? descriptor.value
     : null;
@@ -488,7 +500,7 @@ function responseBodyWithoutUserGetter(response) {
       // Custom fetch responses may expose an own data property instead.
     }
   }
-  const descriptor = Object.getOwnPropertyDescriptor(response, "body");
+  const descriptor = objectGetOwnPropertyDescriptor(response, "body");
   return descriptor && "value" in descriptor ? descriptor.value : null;
 }
 
@@ -500,7 +512,7 @@ function responseHeadersWithoutUserGetter(response) {
       // Custom fetch responses may expose an own data property instead.
     }
   }
-  const descriptor = Object.getOwnPropertyDescriptor(response, "headers");
+  const descriptor = objectGetOwnPropertyDescriptor(response, "headers");
   return descriptor && "value" in descriptor ? descriptor.value : null;
 }
 
@@ -528,13 +540,13 @@ function responseStatusWithoutUserGetter(response) {
     }
   }
   if (status === undefined) {
-    const descriptor = Object.getOwnPropertyDescriptor(response, "status");
+    const descriptor = objectGetOwnPropertyDescriptor(response, "status");
     if (!descriptor || !("value" in descriptor)) {
       throw new TypeError("Torii response status must be an own data property");
     }
     status = descriptor.value;
   }
-  if (!Number.isInteger(status) || status < 0 || status > 999) {
+  if (!numberIsInteger(status) || status < 0 || status > 999) {
     throw new TypeError("Torii response status must be an integer HTTP status");
   }
   return status;
@@ -548,7 +560,7 @@ function responseStatusTextWithoutUserGetter(response) {
       // Custom fetch responses may expose an own data property instead.
     }
   }
-  const descriptor = Object.getOwnPropertyDescriptor(response, "statusText");
+  const descriptor = objectGetOwnPropertyDescriptor(response, "statusText");
   return descriptor && "value" in descriptor && typeof descriptor.value === "string"
     ? descriptor.value
     : null;
@@ -615,7 +627,7 @@ function signalIsAborted(signal) {
   if (hasAbortSignalBrand(signal)) {
     return abortSignalAbortedGetter.call(signal);
   }
-  const descriptor = Object.getOwnPropertyDescriptor(signal, "aborted");
+  const descriptor = objectGetOwnPropertyDescriptor(signal, "aborted");
   if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "boolean") {
     throw new TypeError("signal.aborted must be an own boolean data property");
   }
@@ -629,7 +641,7 @@ function signalAbortReason(signal) {
       ? undefined
       : abortSignalReasonGetter.call(signal);
   }
-  const descriptor = Object.getOwnPropertyDescriptor(signal, "reason");
+  const descriptor = objectGetOwnPropertyDescriptor(signal, "reason");
   return descriptor && "value" in descriptor ? descriptor.value : undefined;
 }
 
@@ -1241,7 +1253,7 @@ export class ToriiHttpError extends Error {
     details,
   }) {
     const expectedLabel =
-      Array.isArray(expected) && expected.length > 0
+      arrayIsArray(expected) && expected.length > 0
         ? expected.slice().sort((a, b) => a - b).join(", ")
         : "none";
     const statusLabel = statusText ? `${status} ${statusText}` : String(status);
@@ -1263,7 +1275,7 @@ export class ToriiHttpError extends Error {
     this.name = "ToriiHttpError";
     this.status = status;
     this.statusText = statusText ?? null;
-    this.expected = Array.isArray(expected) ? [...expected] : [];
+    this.expected = arrayIsArray(expected) ? [...expected] : [];
     this.code = code ?? null;
     this.rejectCode = rejectCode ?? null;
     this.errorMessage = errorMessage ?? null;
@@ -1506,14 +1518,14 @@ function stripBase64Padding(value) {
 }
 
 function sortJsonForErrorMessage(value) {
-  if (Array.isArray(value)) {
+  if (arrayIsArray(value)) {
     return value.map((item) => sortJsonForErrorMessage(item));
   }
   if (!value || typeof value !== "object") {
     return value;
   }
   const sorted = {};
-  for (const key of Object.keys(value).sort()) {
+  for (const key of objectKeys(value).sort()) {
     sorted[key] = sortJsonForErrorMessage(value[key]);
   }
   return sorted;
@@ -2178,7 +2190,7 @@ export class ToriiClient {
           page,
           perPage: normalized.perPage,
         });
-        const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
+        const items = arrayIsArray(pageResult?.items) ? pageResult.items : [];
         if (items.length === 0) {
           return;
         }
@@ -2360,7 +2372,7 @@ export class ToriiClient {
           page,
           perPage: normalized.perPage,
         });
-        const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
+        const items = arrayIsArray(pageResult?.items) ? pageResult.items : [];
         if (items.length === 0) {
           return;
         }
@@ -2439,7 +2451,7 @@ export class ToriiClient {
       delete params.asset_id;
     }
     const response = await this._request("GET", `/v1/accounts/${encodedId}/assets`, {
-      params: Object.keys(params).length > 0 ? params : undefined,
+      params: objectKeys(params).length > 0 ? params : undefined,
       headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
@@ -2708,7 +2720,7 @@ export class ToriiClient {
       params.result_ok = requireBooleanLike(rest.resultOk, "resultOk");
     }
     const response = await this._request("GET", "/v1/contracts/events", {
-      params: Object.keys(params).length > 0 ? params : undefined,
+      params: objectKeys(params).length > 0 ? params : undefined,
       headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
@@ -3343,11 +3355,11 @@ export class ToriiClient {
       normalizedBinding,
       normalizedCheckpoint,
     );
-    const promotedCheckpoint = Object.freeze({
+    const promotedCheckpoint = objectFreeze({
       height: projection.evaluated_block_height,
       contextId: projection.evaluated_context_id,
     });
-    return Object.freeze({
+    return objectFreeze({
       proofNorito,
       projection,
       promotedCheckpoint,
@@ -3403,7 +3415,7 @@ export class ToriiClient {
       }
       checkpoint = page.promotedCheckpoint;
       if (!page.projection.more_available) {
-        return Object.freeze({
+        return objectFreeze({
           ...page,
           binding: normalizedBinding,
           pagesVerified,
@@ -3429,8 +3441,8 @@ export class ToriiClient {
       "lookupRetailRecipient request",
     );
     if (
-      Object.prototype.hasOwnProperty.call(requestRecord, "accountId") &&
-      Object.prototype.hasOwnProperty.call(requestRecord, "account_id") &&
+      objectHasOwn(requestRecord, "accountId") &&
+      objectHasOwn(requestRecord, "account_id") &&
       requestRecord.accountId !== requestRecord.account_id
     ) {
       throw new TypeError(
@@ -3438,8 +3450,8 @@ export class ToriiClient {
       );
     }
     if (
-      Object.prototype.hasOwnProperty.call(requestRecord, "aliasFqn") &&
-      Object.prototype.hasOwnProperty.call(requestRecord, "alias_fqn") &&
+      objectHasOwn(requestRecord, "aliasFqn") &&
+      objectHasOwn(requestRecord, "alias_fqn") &&
       requestRecord.aliasFqn !== requestRecord.alias_fqn
     ) {
       throw new TypeError(
@@ -4141,38 +4153,14 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getSorafsReputationLatest(options = {}) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    return getSorafsReputationJson(
+      this,
+      "/v1/sorafs/reputation/latest",
       options,
       "getSorafsReputationLatest",
-    );
-    assertSupportedOptionKeys(
-      rest,
-      SORAFS_REPUTATION_CACHE_OPTION_KEYS,
-      "getSorafsReputationLatest options",
-    );
-    const auth = buildSorafsReputationRequestAuth(
-      rest,
-      this._config.defaultHeaders,
-      "getSorafsReputationLatest",
-    );
-    const response = await this._request("GET", "/v1/sorafs/reputation/latest", {
-      headers: auth.headers,
-      canonicalAuth: auth.canonicalAuth,
-      disableRetries: true,
-      redirect: "error",
-      signal,
-    });
-    await this._expectStatus(response, [200, 304, 404]);
-    if (response.status === 304 || response.status === 404) {
-      return null;
-    }
-    const payload = await this._readBoundedLosslessIntegerJson(
-      response,
-      SORAFS_REPUTATION_JSON_MAX_BYTES,
       "sorafs reputation latest endpoint",
-      { signal },
+      parseSorafsReputationSnapshot,
     );
-    return parseSorafsReputationSnapshot(payload, "sorafs reputation latest endpoint");
   }
 
   /**
@@ -4187,44 +4175,13 @@ export class ToriiClient {
       providerId,
       "getSorafsReputationProvider.providerId",
     );
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    return getSorafsReputationJson(
+      this,
+      `/v1/sorafs/reputation/providers/${normalizedProvider}`,
       options,
       "getSorafsReputationProvider",
-    );
-    assertSupportedOptionKeys(
-      rest,
-      SORAFS_REPUTATION_CACHE_OPTION_KEYS,
-      "getSorafsReputationProvider options",
-    );
-    const auth = buildSorafsReputationRequestAuth(
-      rest,
-      this._config.defaultHeaders,
-      "getSorafsReputationProvider",
-    );
-    const response = await this._request(
-      "GET",
-      `/v1/sorafs/reputation/providers/${normalizedProvider}`,
-      {
-        headers: auth.headers,
-        canonicalAuth: auth.canonicalAuth,
-        disableRetries: true,
-        redirect: "error",
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200, 304, 404]);
-    if (response.status === 304 || response.status === 404) {
-      return null;
-    }
-    const payload = await this._readBoundedLosslessIntegerJson(
-      response,
-      SORAFS_REPUTATION_JSON_MAX_BYTES,
       "sorafs reputation provider endpoint",
-      { signal },
-    );
-    return parseSorafsReputationProviderResponse(
-      payload,
-      "sorafs reputation provider endpoint",
+      parseSorafsReputationProviderResponse,
       normalizedProvider,
     );
   }
@@ -4241,44 +4198,13 @@ export class ToriiClient {
       snapshotIdHex,
       "getSorafsReputationSnapshot.snapshotIdHex",
     );
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    return getSorafsReputationJson(
+      this,
+      `/v1/sorafs/reputation/snapshots/${normalizedSnapshotId}`,
       options,
       "getSorafsReputationSnapshot",
-    );
-    assertSupportedOptionKeys(
-      rest,
-      SORAFS_REPUTATION_CACHE_OPTION_KEYS,
-      "getSorafsReputationSnapshot options",
-    );
-    const auth = buildSorafsReputationRequestAuth(
-      rest,
-      this._config.defaultHeaders,
-      "getSorafsReputationSnapshot",
-    );
-    const response = await this._request(
-      "GET",
-      `/v1/sorafs/reputation/snapshots/${normalizedSnapshotId}`,
-      {
-        headers: auth.headers,
-        canonicalAuth: auth.canonicalAuth,
-        disableRetries: true,
-        redirect: "error",
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200, 304, 404]);
-    if (response.status === 304 || response.status === 404) {
-      return null;
-    }
-    const payload = await this._readBoundedLosslessIntegerJson(
-      response,
-      SORAFS_REPUTATION_JSON_MAX_BYTES,
       "sorafs reputation snapshot endpoint",
-      { signal },
-    );
-    return parseSorafsReputationSnapshot(
-      payload,
-      "sorafs reputation snapshot endpoint",
+      parseSorafsReputationSnapshot,
       { expectedSnapshotId: normalizedSnapshotId },
     );
   }
@@ -4290,40 +4216,13 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getSorafsReputationWeights(options = {}) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    return getSorafsReputationJson(
+      this,
+      "/v1/sorafs/reputation/weights",
       options,
       "getSorafsReputationWeights",
-    );
-    assertSupportedOptionKeys(
-      rest,
-      SORAFS_REPUTATION_CACHE_OPTION_KEYS,
-      "getSorafsReputationWeights options",
-    );
-    const auth = buildSorafsReputationRequestAuth(
-      rest,
-      this._config.defaultHeaders,
-      "getSorafsReputationWeights",
-    );
-    const response = await this._request("GET", "/v1/sorafs/reputation/weights", {
-      headers: auth.headers,
-      canonicalAuth: auth.canonicalAuth,
-      disableRetries: true,
-      redirect: "error",
-      signal,
-    });
-    await this._expectStatus(response, [200, 304, 404]);
-    if (response.status === 304 || response.status === 404) {
-      return null;
-    }
-    const payload = await this._readBoundedLosslessIntegerJson(
-      response,
-      SORAFS_REPUTATION_JSON_MAX_BYTES,
       "sorafs reputation weights endpoint",
-      { signal },
-    );
-    return parseSorafsReputationWeightsResponse(
-      payload,
-      "sorafs reputation weights endpoint",
+      parseSorafsReputationWeightsResponse,
     );
   }
 
@@ -5526,7 +5425,7 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
-        params: Object.keys(params).length === 0 ? undefined : params,
+        params: objectKeys(params).length === 0 ? undefined : params,
       },
     );
     await this._expectStatus(response, [200]);
@@ -5692,7 +5591,7 @@ export class ToriiClient {
       if (value === null || value === undefined) {
         return { route };
       }
-      if (typeof value === "object" && !Array.isArray(value)) {
+      if (typeof value === "object" && !arrayIsArray(value)) {
         return { ...value, route };
       }
       return { value, route };
@@ -5736,7 +5635,7 @@ export class ToriiClient {
    */
   async submitTransactionBatch(payloads, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "submitTransactionBatch");
-    if (!Array.isArray(payloads)) {
+    if (!arrayIsArray(payloads)) {
       throw new TypeError("submitTransactionBatch payloads must be an array");
     }
     if (payloads.length === 0) {
@@ -5936,7 +5835,7 @@ export class ToriiClient {
     if (
       typeof payload === "object" &&
       payload !== null &&
-      Object.keys(payload).length === 0
+      objectKeys(payload).length === 0
     ) {
       return null;
     }
@@ -6403,7 +6302,7 @@ export class ToriiClient {
 
   async _submitSoracloudAppInfraMutation(path, request, options, context) {
     const { signal } = normalizeSignalOnlyOption(options, context);
-    if (request == null || typeof request !== "object" || Array.isArray(request)) {
+    if (request == null || typeof request !== "object" || arrayIsArray(request)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         "request must be an object",
@@ -6664,7 +6563,7 @@ export class ToriiClient {
     const record = requirePlainObjectOption(options, "getSccpRecentMessages.options", {
       message: "must be a plain object",
     });
-    const unknown = Object.keys(record).find(
+    const unknown = objectKeys(record).find(
       (key) =>
         key !== "from" && key !== "after_index" && key !== "limit" && key !== "signal",
     );
@@ -6673,7 +6572,7 @@ export class ToriiClient {
     }
     const params = {};
     if (record.from !== undefined) {
-      if (!Number.isSafeInteger(record.from) || record.from < 1) {
+      if (!numberIsSafeInteger(record.from) || record.from < 1) {
         throw new TypeError(
           "getSccpRecentMessages.options.from must be a positive safe integer",
         );
@@ -6685,7 +6584,7 @@ export class ToriiClient {
         throw new TypeError("getSccpRecentMessages.options.after_index requires from");
       }
       if (
-        !Number.isSafeInteger(record.after_index) ||
+        !numberIsSafeInteger(record.after_index) ||
         record.after_index < 0 ||
         record.after_index > 511
       ) {
@@ -6696,7 +6595,7 @@ export class ToriiClient {
       params.after_index = String(record.after_index);
     }
     if (record.limit !== undefined) {
-      if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
+      if (!numberIsSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
         throw new TypeError("getSccpRecentMessages.options.limit must be an integer in 1..50");
       }
       params.limit = String(record.limit);
@@ -8076,7 +7975,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/sumeragi/evidence", {
       headers: JSON_ACCEPT_HEADERS,
-      params: Object.keys(params).length > 0 ? params : undefined,
+      params: objectKeys(params).length > 0 ? params : undefined,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -8097,7 +7996,7 @@ export class ToriiClient {
       "sumeragi evidence count response",
     );
     const count = Number(payload.count ?? 0);
-    if (!Number.isFinite(count) || count < 0) {
+    if (!numberIsFinite(count) || count < 0) {
       throw new TypeError("sumeragi evidence count response.count must be a non-negative number");
     }
     return { count };
@@ -8219,7 +8118,7 @@ export class ToriiClient {
       params.per_page = normalizedOptions.perPage;
     }
     const response = await this._request("GET", "/v1/explorer/blocks", {
-      params: Object.keys(params).length > 0 ? params : undefined,
+      params: objectKeys(params).length > 0 ? params : undefined,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalizedOptions.signal,
     });
@@ -8252,7 +8151,7 @@ export class ToriiClient {
       params.filter = filterPayload;
     }
     return this._streamSse("/v1/events/sse", {
-      params: Object.keys(params).length > 0 ? params : undefined,
+      params: objectKeys(params).length > 0 ? params : undefined,
       signal,
     });
   }
@@ -8330,7 +8229,7 @@ export class ToriiClient {
       }
     }
     return this._streamSse("/v1/contracts/events/sse", {
-      params: Object.keys(params).length > 0 ? params : undefined,
+      params: objectKeys(params).length > 0 ? params : undefined,
       signal,
     });
   }
@@ -8674,7 +8573,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/connect/app/apps", {
       headers: JSON_ACCEPT_HEADERS,
-      params: Object.keys(params).length === 0 ? undefined : params,
+      params: objectKeys(params).length === 0 ? undefined : params,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -10065,7 +9964,7 @@ export class ToriiClient {
       "signal",
       "retryProfile",
     ]);
-    const unsupportedKeys = Object.keys(resolvedOptions).filter((key) => !allowedKeys.has(key));
+    const unsupportedKeys = objectKeys(resolvedOptions).filter((key) => !allowedKeys.has(key));
     if (unsupportedKeys.length > 0) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -10408,10 +10307,10 @@ export class ToriiClient {
         originMatches,
       });
     }
-    if (options.params && Object.keys(options.params).length > 0) {
+    if (options.params && objectKeys(options.params).length > 0) {
       const search = new URLSearchParams();
-      for (const [key, value] of Object.entries(options.params)) {
-        if (Array.isArray(value)) {
+      for (const [key, value] of objectEntries(options.params)) {
+        if (arrayIsArray(value)) {
           for (const item of value) {
             search.append(key, String(item));
           }
@@ -10444,7 +10343,7 @@ export class ToriiClient {
         body: bodyForSigning,
         privateKey: canonicalAuth.privateKey,
       });
-      for (const [key, value] of Object.entries(canonicalHeaders)) {
+      for (const [key, value] of objectEntries(canonicalHeaders)) {
         setHeader(initHeaders, key, value);
       }
     }
@@ -10772,7 +10671,7 @@ export class ToriiClient {
         return;
       }
       if (typeof source === "object") {
-        for (const [key, value] of Object.entries(source)) {
+        for (const [key, value] of objectEntries(source)) {
           if (value === null) {
             deleteHeader(headers, key);
             continue;
@@ -11034,7 +10933,7 @@ export class ToriiClient {
     if (typeof value === "string") {
       return this._trimErrorBodyText(value);
     }
-    if (Array.isArray(value)) {
+    if (arrayIsArray(value)) {
       for (const item of value) {
         const nested = this._extractErrorMessageValue(item);
         if (nested) {
@@ -11057,7 +10956,7 @@ export class ToriiClient {
       "description",
     ];
     const caseInsensitiveValues = new Map();
-    for (const [key, entryValue] of Object.entries(value)) {
+    for (const [key, entryValue] of objectEntries(value)) {
       const normalizedKey = String(key).toLowerCase();
       if (!caseInsensitiveValues.has(normalizedKey)) {
         caseInsensitiveValues.set(normalizedKey, entryValue);
@@ -11141,7 +11040,7 @@ export class ToriiClient {
     }
     const record = ToriiClient._requirePlainObject(filters, "prover filters");
     const params = {};
-    for (const [rawKey, rawValue] of Object.entries(record)) {
+    for (const [rawKey, rawValue] of objectEntries(record)) {
       if (rawValue === undefined || rawValue === null) {
         continue;
       }
@@ -11325,7 +11224,7 @@ export class ToriiClient {
           break;
         case "retry": {
           const parsed = Number(value);
-          if (Number.isFinite(parsed)) {
+          if (numberIsFinite(parsed)) {
             retry = parsed;
           }
           break;
@@ -11364,7 +11263,7 @@ export class ToriiClient {
 
   _acceptHeader() {
     const headers = this._config?.defaultHeaders ?? {};
-    for (const [key, value] of Object.entries(headers)) {
+    for (const [key, value] of objectEntries(headers)) {
       if (value !== undefined && value !== null && key.toLowerCase() === "accept") {
         return String(value);
       }
@@ -11514,7 +11413,7 @@ export class ToriiClient {
         );
       }
       const declaredBytes = Number(contentLength);
-      if (!Number.isSafeInteger(declaredBytes)) {
+      if (!numberIsSafeInteger(declaredBytes)) {
         rejectResponse(
           new RangeError(
             `${context} Content-Length exceeds the safe integer range`,
@@ -11559,7 +11458,7 @@ export class ToriiClient {
 
     const configuredTimeoutMs = Number(this._config?.timeoutMs);
     const readTimeoutMs =
-      Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+      numberIsFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
         ? Math.min(configuredTimeoutMs, BOUNDED_JSON_MAX_READ_TIMEOUT_MS)
         : BOUNDED_JSON_MAX_READ_TIMEOUT_MS;
     let rejectDeadline;
@@ -11824,11 +11723,11 @@ export class ToriiClient {
         const page = await fetchPage.call(self, pageOptions);
         if (page && page.total !== undefined && page.total !== null) {
           const parsedTotal = Number(page.total);
-          if (Number.isFinite(parsedTotal)) {
+          if (numberIsFinite(parsedTotal)) {
             knownTotal = Math.max(0, parsedTotal);
           }
         }
-        const items = Array.isArray(page?.items) ? page.items : [];
+        const items = arrayIsArray(page?.items) ? page.items : [];
         if (items.length === 0) {
           return;
         }
@@ -11945,14 +11844,14 @@ export class ToriiClient {
     })();
 
     function extractOffsetItems(page) {
-      if (Array.isArray(page)) {
+      if (arrayIsArray(page)) {
         return page;
       }
       if (!page || typeof page !== "object") {
         return [];
       }
       for (const key of normalizedItemKeys) {
-        if (Array.isArray(page[key])) {
+        if (arrayIsArray(page[key])) {
           return page[key];
         }
       }
@@ -11974,7 +11873,7 @@ export class ToriiClient {
         }
         return [trimmed];
       }
-      if (!Array.isArray(rawKeys)) {
+      if (!arrayIsArray(rawKeys)) {
         throw new Error(`${contextLabel} item keys must be a string or array of strings`);
       }
       const keys = [];
@@ -12053,7 +11952,7 @@ export class ToriiClient {
           signal,
         };
         const page = await fetchPage.call(self, pageOptions);
-        const items = Array.isArray(page?.items) ? page.items : [];
+        const items = arrayIsArray(page?.items) ? page.items : [];
         if (items.length === 0) {
           return;
         }
@@ -12132,7 +12031,7 @@ export class ToriiClient {
           signal,
         };
         const page = await fetchPage.call(self, pageOptions);
-        const items = Array.isArray(page?.instances) ? page.instances : [];
+        const items = arrayIsArray(page?.instances) ? page.instances : [];
         if (items.length === 0) {
           return;
         }
@@ -12154,7 +12053,7 @@ export class ToriiClient {
   }
 
   static _validateIterablePayload(payload) {
-    if (!payload || typeof payload !== "object" || !Array.isArray(payload.items)) {
+    if (!payload || typeof payload !== "object" || !arrayIsArray(payload.items)) {
       throw new Error("iterable endpoint returned unexpected payload");
     }
     const hasTotal = payload.total !== undefined && payload.total !== null;
@@ -12180,7 +12079,7 @@ export class ToriiClient {
         : null;
     if (
       totalValue !== null &&
-      (!Number.isFinite(totalValue) || totalValue < 0 || !Number.isInteger(totalValue))
+      (!numberIsFinite(totalValue) || totalValue < 0 || !numberIsInteger(totalValue))
     ) {
       throw new Error("iterable endpoint returned invalid total count");
     }
@@ -12317,7 +12216,7 @@ export class ToriiClient {
       buffer = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
     } else if (value instanceof ArrayBuffer) {
       buffer = Buffer.from(value);
-    } else if (Array.isArray(value)) {
+    } else if (arrayIsArray(value)) {
       buffer = normalizeByteArray(value, path);
     } else {
       throw createValidationError(
@@ -12899,7 +12798,7 @@ export class ToriiClient {
     ) {
       params.include_expired = "true";
     }
-    return Object.keys(params).length === 0 ? undefined : params;
+    return objectKeys(params).length === 0 ? undefined : params;
   }
 
   static _normalizeOptionalString(value, context) {
@@ -13010,7 +12909,7 @@ export class ToriiClient {
       });
       return trimmed;
     }
-    if (Array.isArray(sort)) {
+    if (arrayIsArray(sort)) {
       if (sort.length === 0) {
         return undefined;
       }
@@ -13085,7 +12984,7 @@ export class ToriiClient {
       envelope.query = name;
     }
     if (options.select !== undefined && options.select !== null) {
-      if (!Array.isArray(options.select)) {
+      if (!arrayIsArray(options.select)) {
         throw createValidationError(
           ValidationErrorCode.INVALID_OBJECT,
           "select must be an array of projection field paths or objects",
@@ -13176,7 +13075,7 @@ export class ToriiClient {
 
   static _validateFilterExpression(node, context, rules) {
     const expr = ToriiClient._requirePlainObject(node, context);
-    const operators = Object.keys(expr);
+    const operators = objectKeys(expr);
     if (operators.length !== 1) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -13204,7 +13103,7 @@ export class ToriiClient {
         return;
       }
       case "Not": {
-        if (Array.isArray(operand)) {
+        if (arrayIsArray(operand)) {
           if (operand.length !== 1) {
             throw createValidationError(
               ValidationErrorCode.INVALID_OBJECT,
@@ -13362,7 +13261,7 @@ export class ToriiClient {
   }
 
   static _extractFilterFieldName(operand, operator, context) {
-    if (Array.isArray(operand)) {
+    if (arrayIsArray(operand)) {
       if (operand.length === 0) {
         throw createValidationError(
           ValidationErrorCode.INVALID_OBJECT,
@@ -13400,7 +13299,7 @@ export class ToriiClient {
   }
 
   static _assertFilterNumberValue(value, context) {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
+    if (typeof value !== "number" || !numberIsFinite(value)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
         `${context} must be numeric`,
@@ -13411,7 +13310,7 @@ export class ToriiClient {
   }
 
   static _requireArray(value, context, { expectedLength = null, allowEmpty = true } = {}) {
-    if (!Array.isArray(value)) {
+    if (!arrayIsArray(value)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         `${context} must be an array`,
@@ -13441,7 +13340,7 @@ export class ToriiClient {
     if (sort === undefined || sort === null) {
       return [];
     }
-    if (Array.isArray(sort)) {
+    if (arrayIsArray(sort)) {
       return sort.map((entry, index) => {
         if (!entry || typeof entry !== "object" || typeof entry.key !== "string") {
           throw createValidationError(
@@ -13552,7 +13451,7 @@ export class ToriiClient {
     if (options.offset !== undefined && options.offset !== null) {
       params.offset = ToriiClient._normalizeOffset(options.offset);
     }
-    return Object.keys(params).length === 0 ? undefined : params;
+    return objectKeys(params).length === 0 ? undefined : params;
   }
 
   static _normalizeOffset(value) {
@@ -13568,7 +13467,7 @@ export class ToriiClient {
     const max = options.max;
     let numeric;
     if (typeof value === "number") {
-      if (!Number.isFinite(value) || !Number.isInteger(value)) {
+      if (!numberIsFinite(value) || !numberIsInteger(value)) {
         const qualifier = allowZero ? "non-negative integer" : "positive integer";
         throw createValidationError(
           ValidationErrorCode.INVALID_NUMERIC,
@@ -13584,7 +13483,7 @@ export class ToriiClient {
           name,
         );
       }
-      if (!Number.isSafeInteger(value)) {
+      if (!numberIsSafeInteger(value)) {
         throw createValidationError(
           ValidationErrorCode.VALUE_OUT_OF_RANGE,
           `${name} must be at most ${MAX_SAFE_INTEGER}`,
@@ -13670,7 +13569,7 @@ function normalizeUint64DecimalString(value, name, options = {}) {
   const allowZero = options.allowZero !== false;
   let integer;
   if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
+    if (!numberIsFinite(value) || !numberIsInteger(value) || !numberIsSafeInteger(value)) {
       const qualifier = allowZero ? "non-negative integer" : "positive integer";
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
@@ -13820,7 +13719,7 @@ function normalizeIsoStatusHistory(value, context) {
   if (value === undefined || value === null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) => {
@@ -13906,7 +13805,7 @@ function normalizeIsoSubmissionOptions(options, context, extraAllowedKeys = []) 
     );
   }
   const allowedKeys = new Set(["signal", "contentType", "retryProfile", "profile", ...extraAllowedKeys]);
-  const extras = Object.keys(options).filter((key) => !allowedKeys.has(key));
+  const extras = objectKeys(options).filter((key) => !allowedKeys.has(key));
   if (extras.length > 0) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -13968,7 +13867,7 @@ function normalizeIsoStatusOptions(options, context) {
       optionPath,
     );
   }
-  const extras = Object.keys(options).filter(
+  const extras = objectKeys(options).filter(
     (key) => key !== "signal" && key !== "retryProfile",
   );
   if (extras.length > 0) {
@@ -14038,7 +13937,7 @@ function normalizeIsoStringArray(value, name) {
   if (value === undefined || value === null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${name} must be an array of strings`);
   }
   return value.map((entry, index) => {
@@ -14120,7 +14019,7 @@ function normalizeTimeStatusResponse(payload) {
     { allowZero: true },
   );
   const rawSamples = record.samples === undefined ? [] : record.samples;
-  if (!Array.isArray(rawSamples)) {
+  if (!arrayIsArray(rawSamples)) {
     throw new TypeError("time status response.samples must be an array");
   }
   const samples = rawSamples.map((entry, index) => {
@@ -14145,7 +14044,7 @@ function normalizeTimeStatusResponse(payload) {
   const rttRecord = ensureRecord(record.rtt ?? {}, "time status response.rtt");
   const rawBuckets =
     rttRecord.buckets === undefined ? [] : rttRecord.buckets;
-  if (!Array.isArray(rawBuckets)) {
+  if (!arrayIsArray(rawBuckets)) {
     throw new TypeError("time status response.rtt.buckets must be an array");
   }
   const buckets = rawBuckets.map((entry, index) => {
@@ -14224,7 +14123,7 @@ function parseStatusPayload(payload) {
       payload.lane_governance_sealed_aliases,
       "status.lane_governance_sealed_aliases",
     ),
-    raw: Object.freeze({ ...payload }),
+    raw: objectFreeze({ ...payload }),
   };
 }
 
@@ -14335,7 +14234,7 @@ function parseGovernanceActivations(payload) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(
       "governance.recent_manifest_activations must be an array",
     );
@@ -14396,14 +14295,14 @@ function normalizePipelineStatusPayload(payload) {
     : record.status;
   const status = normalizePipelineStatusStatus(statusValue);
   const normalizedContent =
-    contentRecord === null ? null : Object.freeze({ ...contentRecord });
-  return Object.freeze({
+    contentRecord === null ? null : objectFreeze({ ...contentRecord });
+  return objectFreeze({
     kind,
     hashHex,
     authority,
     status,
     content: normalizedContent,
-    raw: Object.freeze({ ...record }),
+    raw: objectFreeze({ ...record }),
   });
 }
 
@@ -14412,17 +14311,17 @@ function normalizePipelineStatusStatus(value) {
     return null;
   }
   if (typeof value === "string") {
-    return Object.freeze({ kind: value, content: null, raw: value });
+    return objectFreeze({ kind: value, content: null, raw: value });
   }
   if (isPlainObject(value)) {
     const record = ensureRecord(value, "pipeline status payload.status");
-    return Object.freeze({
+    return objectFreeze({
       kind: record.kind == null ? null : String(record.kind),
       content: record.content ?? null,
-      raw: Object.freeze({ ...record }),
+      raw: objectFreeze({ ...record }),
     });
   }
-  return Object.freeze({
+  return objectFreeze({
     kind: String(value),
     content: null,
     raw: value,
@@ -14433,7 +14332,7 @@ function parseLaneCommitments(payload) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError("status.lane_commitments must be an array");
   }
   return payload.map((entry, index) => {
@@ -14469,7 +14368,7 @@ function parseDataspaceCommitments(payload) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError("status.dataspace_commitments must be an array");
   }
   return payload.map((entry, index) => {
@@ -14510,7 +14409,7 @@ function parseDataspaceCatalog(payload) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError("status.dataspace_catalog must be an array");
   }
   return payload.map((entry, index) => {
@@ -14568,7 +14467,7 @@ function parseLanePrivacyCommitments(payload, context) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   return payload.map((entry, index) =>
@@ -14609,7 +14508,7 @@ function parseSumeragiNexusFeeSchedule(value, context) {
     ],
     context,
   );
-  return Object.freeze({
+  return objectFreeze({
     tx_bytes_len: parseSumeragiUnsigned(record.tx_bytes_len, `${context}.tx_bytes_len`),
     instruction_count: parseSumeragiUnsigned(
       record.instruction_count,
@@ -14649,7 +14548,7 @@ function parseSumeragiNexusFeeReceipt(value, context) {
   if (version !== 1) {
     throw new RangeError(`${context}.version must equal 1`);
   }
-  return Object.freeze({
+  return objectFreeze({
     version,
     source_id: parseSumeragiByte32(record.source_id, `${context}.source_id`),
     dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
@@ -14769,7 +14668,7 @@ function parseSumeragiNativeAmxBody(value, context) {
   ) {
     throw new RangeError(`${context} contains inconsistent round or quorum fields`);
   }
-  return Object.freeze({
+  return objectFreeze({
     round,
     epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
     chain_id_hash: parseSumeragiHash(record.chain_id_hash, `${context}.chain_id_hash`),
@@ -14920,7 +14819,7 @@ function parseSumeragiBlsNormalPeerId(value, context) {
       cause: error,
     });
   }
-  return Object.freeze({
+  return objectFreeze({
     literal: matched[1],
     orderingKey: Buffer.concat([Buffer.from([2]), compressed]),
   });
@@ -14941,7 +14840,7 @@ function parseSumeragiBlsNormalValidatorSet(value, context) {
       `${context} must be strictly ordered by canonical validator id`,
     );
   }
-  return Object.freeze(parsed.map((validator) => validator.literal));
+  return objectFreeze(parsed.map((validator) => validator.literal));
 }
 
 function encodeSumeragiNativeU32(value) {
@@ -15170,7 +15069,7 @@ function computeSumeragiNativeParticipantSettlementHash(settlement) {
   ]));
 }
 
-export const __sumeragiNativeAmxTestHelpers = Object.freeze({
+export const __sumeragiNativeAmxTestHelpers = objectFreeze({
   computeDescriptorHash: computeSumeragiNativeDescriptorHash,
   computeParticipantSettlementHash:
     computeSumeragiNativeParticipantSettlementHash,
@@ -15225,7 +15124,7 @@ function parseSumeragiNativeAmxQc(value, context) {
   ) {
     throw new TypeError(`${context} committee fields differ from its signed body`);
   }
-  const pops = Object.freeze(
+  const pops = objectFreeze(
     assertSumeragiArrayBound(
       record.validator_set_pops,
       validators.length,
@@ -15259,7 +15158,7 @@ function parseSumeragiNativeAmxQc(value, context) {
   if (signature.every((byte) => byte === 0)) {
     throw new TypeError(`${context}.bls_aggregate_signature must not be all zeroes`);
   }
-  return Object.freeze({
+  return objectFreeze({
     body,
     validator_set_hash_version: version,
     validator_set_hash: validatorSetHash,
@@ -15304,11 +15203,11 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     "previous_lane_block_descriptor_hash",
   ]);
   for (const field of requiredFields) {
-    if (!Object.prototype.hasOwnProperty.call(descriptor, field)) {
+    if (!objectHasOwn(descriptor, field)) {
       throw new TypeError(`${descriptorContext} is missing required field ${field}`);
     }
   }
-  for (const field of Object.keys(descriptor)) {
+  for (const field of objectKeys(descriptor)) {
     if (!allowedFields.has(field)) {
       throw new TypeError(`${descriptorContext} contains unknown field ${field}`);
     }
@@ -15320,11 +15219,11 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   );
   let previousDescriptorHash = null;
   if (previousHeight === 0) {
-    if (Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
+    if (objectHasOwn(descriptor, "previous_lane_block_descriptor_hash")) {
       throw new TypeError(`${descriptorContext} must omit the genesis predecessor hash`);
     }
   } else {
-    if (!Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
+    if (!objectHasOwn(descriptor, "previous_lane_block_descriptor_hash")) {
       throw new TypeError(`${descriptorContext} must carry a predecessor descriptor hash`);
     }
     previousDescriptorHash = parseSumeragiNonzeroHash(
@@ -15341,7 +15240,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     throw new RangeError(`${descriptorContext} lane-block heights must be contiguous`);
   }
 
-  const acceptedCandidateIndices = Object.freeze(
+  const acceptedCandidateIndices = objectFreeze(
     assertSumeragiArrayBound(
       descriptor.accepted_candidate_indices,
       4096,
@@ -15354,7 +15253,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
       ),
     ),
   );
-  const acceptedTransactionHashes = Object.freeze(
+  const acceptedTransactionHashes = objectFreeze(
     assertSumeragiArrayBound(
       descriptor.accepted_transaction_hashes,
       4096,
@@ -15490,8 +15389,8 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
       `${context}.proposal_hash does not match its canonical preimage`,
     );
   }
-  return Object.freeze({
-    descriptor: Object.freeze(normalizedDescriptor),
+  return objectFreeze({
+    descriptor: objectFreeze(normalizedDescriptor),
     proposal_hash: proposalHash,
   });
 }
@@ -15523,13 +15422,13 @@ function parseSumeragiNativeAmxLeg(value, context) {
     `${context}.participant_settlement`,
   );
   if (
-    !Array.isArray(settlementWire.native_amx_receipts) ||
+    !arrayIsArray(settlementWire.native_amx_receipts) ||
     settlementWire.native_amx_receipts.length !== 0
   ) {
     throw new TypeError(`${context}.participant_settlement must be terminal`);
   }
   if (
-    !Array.isArray(settlementWire.nexus_fee_receipts) ||
+    !arrayIsArray(settlementWire.nexus_fee_receipts) ||
     settlementWire.nexus_fee_receipts.length !== 0
   ) {
     throw new TypeError(`${context}.participant_settlement cannot contain fee receipts`);
@@ -15651,7 +15550,7 @@ function parseSumeragiNativeAmxLeg(value, context) {
   ) {
     throw new TypeError(`${context} participant settlement differs from its signed body`);
   }
-  return Object.freeze({
+  return objectFreeze({
     lane_id: laneId,
     dataspace_id: dataspaceId,
     participant_proposal: participantProposal,
@@ -15715,7 +15614,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
     record.coordinator_proposal_hash,
     `${context}.coordinator_proposal_hash`,
   );
-  const legs = Object.freeze(
+  const legs = objectFreeze(
     assertSumeragiArrayBound(record.legs, 255, `${context}.legs`, 1).map((leg, index) =>
       parseSumeragiNativeAmxLeg(leg, `${context}.legs[${index}]`),
     ),
@@ -15755,7 +15654,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
       throw new TypeError(`${context}.legs contain mismatched signed identities`);
     }
   }
-  return Object.freeze({
+  return objectFreeze({
     version,
     source_id: sourceId,
     chain_id_hash: chainIdHash,
@@ -15844,7 +15743,7 @@ function parseLaneSettlementCommitments(payload) {
       };
     }
     const receiptsRecord = record.receipts;
-    if (!Array.isArray(receiptsRecord)) {
+    if (!arrayIsArray(receiptsRecord)) {
       throw new TypeError(
         `status.lane_settlement_commitments[${index}].receipts must be an array`,
       );
@@ -15889,7 +15788,7 @@ function parseLaneSettlementCommitments(payload) {
         ),
       };
     });
-    const nexusFeeReceipts = Object.freeze(
+    const nexusFeeReceipts = objectFreeze(
       assertSumeragiArrayBound(
         record.nexus_fee_receipts,
         Number.MAX_SAFE_INTEGER,
@@ -15901,7 +15800,7 @@ function parseLaneSettlementCommitments(payload) {
         ),
       ),
     );
-    const nativeAmxReceipts = Object.freeze(
+    const nativeAmxReceipts = objectFreeze(
       assertSumeragiArrayBound(
         record.native_amx_receipts,
         MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
@@ -16091,7 +15990,7 @@ function parseLaneGovernance(payload) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError("status.lane_governance must be an array");
   }
   return payload.map((entry, index) => {
@@ -16200,7 +16099,7 @@ function parseSumeragiStatusPayload(payload) {
     "last_commit_qc",
     "liveness",
   ]);
-  const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
+  const unknownField = objectKeys(record).find((field) => !allowedFields.has(field));
   if (unknownField !== undefined) {
     throw new TypeError(`sumeragi status payload contains unknown field ${unknownField}`);
   }
@@ -16281,7 +16180,7 @@ function parseSumeragiStatusPayload(payload) {
     }
   }
 
-  return Object.freeze({
+  return objectFreeze({
     protocol_version: protocolVersion,
     node_fingerprint: parseSumeragiHash(
       record.node_fingerprint,
@@ -16355,7 +16254,7 @@ function parseSumeragiStatusPayload(payload) {
   });
 }
 
-const SUMERAGI_PIPELINE_EXECUTION_FIELDS = Object.freeze([
+const SUMERAGI_PIPELINE_EXECUTION_FIELDS = objectFreeze([
   "tx_vertices_total",
   "tx_edges_total",
   "overlay_count_total",
@@ -16403,12 +16302,12 @@ function parseSumeragiDiagnosticsPayload(payload) {
     "autonomous_lane_executions",
   ];
   const allowedFields = new Set([...requiredFields, "npos"]);
-  const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
+  const unknown = objectKeys(record).find((field) => !allowedFields.has(field));
   if (unknown !== undefined) {
     throw new TypeError(`${context} contains unknown field ${unknown}`);
   }
   const missing = requiredFields.find(
-    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+    (field) => !objectHasOwn(record, field),
   );
   if (missing !== undefined) {
     throw new TypeError(`${context} is missing required field ${missing}`);
@@ -16419,7 +16318,7 @@ function parseSumeragiDiagnosticsPayload(payload) {
     SUMERAGI_PIPELINE_EXECUTION_FIELDS,
     `${context}.pipeline_execution`,
   );
-  const pipelineExecution = Object.freeze(Object.fromEntries(
+  const pipelineExecution = objectFreeze(Object.fromEntries(
     SUMERAGI_PIPELINE_EXECUTION_FIELDS.map((field) => [
       field,
       parseSumeragiUnsigned(
@@ -16471,7 +16370,7 @@ function parseSumeragiDiagnosticsPayload(payload) {
     throw new TypeError(`${context}.tx_queue_saturated disagrees with its causes`);
   }
 
-  const sealedAliases = Object.freeze(
+  const sealedAliases = objectFreeze(
     assertSumeragiArrayBound(
       record.lane_governance_sealed_aliases,
       128,
@@ -16494,7 +16393,7 @@ function parseSumeragiDiagnosticsPayload(payload) {
     );
   }
 
-  return Object.freeze({
+  return objectFreeze({
     pipeline_execution: pipelineExecution,
     tx_queue_depth: txQueueDepth,
     tx_queue_capacity: txQueueCapacity,
@@ -16578,7 +16477,7 @@ function parseSumeragiNposDiagnostics(value) {
   if (!epochSeed.some((byte) => byte !== 0)) {
     throw new TypeError(`${context}.epoch_seed must not be zero`);
   }
-  return Object.freeze({
+  return objectFreeze({
     epoch_length_blocks: epochLength,
     vrf_commit_deadline_offset: commit,
     vrf_reveal_deadline_offset: reveal,
@@ -16615,11 +16514,11 @@ function parseSumeragiDiagnosticLaneCommitments(value) {
     "teu_total",
     "block_hash",
   ];
-  return Object.freeze(
+  return objectFreeze(
     assertSumeragiArrayBound(value, 1024, context).map((item, index) => {
       const itemContext = `${context}[${index}]`;
       const record = assertExactSumeragiRecord(item, fields, itemContext);
-      return Object.freeze({
+      return objectFreeze({
         block_height: parseSumeragiUnsigned(
           record.block_height,
           `${itemContext}.block_height`,
@@ -16655,11 +16554,11 @@ function parseSumeragiDiagnosticDataspaceCommitments(value) {
     "teu_total",
     "block_hash",
   ];
-  return Object.freeze(
+  return objectFreeze(
     assertSumeragiArrayBound(value, 128, context).map((item, index) => {
       const itemContext = `${context}[${index}]`;
       const record = assertExactSumeragiRecord(item, fields, itemContext);
-      return Object.freeze({
+      return objectFreeze({
         block_height: parseSumeragiUnsigned(
           record.block_height,
           `${itemContext}.block_height`,
@@ -16701,7 +16600,7 @@ function parseSumeragiDiagnosticLaneGovernance(value) {
     "protected_namespaces",
     "runtime_upgrade",
   ];
-  return Object.freeze(
+  return objectFreeze(
     assertSumeragiArrayBound(value, 128, context).map((item, index) => {
       const itemContext = `${context}[${index}]`;
       const record = assertExactSumeragiRecord(item, fields, itemContext);
@@ -16728,7 +16627,7 @@ function parseSumeragiDiagnosticLaneGovernance(value) {
       if (quorum !== null && quorum > validatorIds.length) {
         throw new RangeError(`${itemContext}.quorum exceeds the validator roster`);
       }
-      return Object.freeze({
+      return objectFreeze({
         lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
           max: 0xffffffff,
         }),
@@ -16777,7 +16676,7 @@ function parseSumeragiDiagnosticRuntimeUpgrade(value, context) {
   if (new Set(allowedIds).size !== allowedIds.length) {
     throw new TypeError(`${context}.allowed_ids contains duplicates`);
   }
-  return Object.freeze({
+  return objectFreeze({
     allow: parseSumeragiBoolean(record.allow, `${context}.allow`),
     require_metadata: parseSumeragiBoolean(
       record.require_metadata,
@@ -16791,7 +16690,7 @@ function parseSumeragiDiagnosticRuntimeUpgrade(value, context) {
 }
 
 function parseSumeragiDiagnosticStringArray(value, context) {
-  return Object.freeze(
+  return objectFreeze(
     assertSumeragiArrayBound(value, 128, context).map((item, index) =>
       requireExactNonEmptyString(item, `${context}[${index}]`),
     ),
@@ -16819,14 +16718,14 @@ function parseSumeragiNativeParticipantApplications(value) {
     "application_block_hash",
   ];
   let previousKey = null;
-  return Object.freeze(
+  return objectFreeze(
     assertSumeragiArrayBound(value, 1024, context).map((item, index) => {
       const itemContext = `${context}[${index}]`;
       const record = ensureRecord(item, itemContext);
       const allowed = new Set([...requiredFields, ...optionalFields]);
-      const unknown = Object.keys(record).find((field) => !allowed.has(field));
+      const unknown = objectKeys(record).find((field) => !allowed.has(field));
       const missing = requiredFields.find(
-        (field) => !Object.prototype.hasOwnProperty.call(record, field),
+        (field) => !objectHasOwn(record, field),
       );
       if (unknown !== undefined || missing !== undefined) {
         throw new TypeError(
@@ -16907,7 +16806,7 @@ function parseSumeragiNativeParticipantApplications(value) {
           `${itemContext} durably applied evidence requires an application block`,
         );
       }
-      return Object.freeze({
+      return objectFreeze({
         lane_id: laneId,
         dataspace_id: dataspaceId,
         lane_incarnation: laneIncarnation,
@@ -16969,13 +16868,13 @@ function parseSumeragiAutonomousLaneExecutions(value) {
     "queue_finalization_unverifiable", "evidence_conflict",
   ]);
   let previousKey = null;
-  return Object.freeze(assertSumeragiArrayBound(value, 128, context).map((item, index) => {
+  return objectFreeze(assertSumeragiArrayBound(value, 128, context).map((item, index) => {
     const itemContext = `${context}[${index}]`;
     const record = ensureRecord(item, itemContext);
     const allowed = new Set([...required, ...optional]);
-    const unknown = Object.keys(record).find((field) => !allowed.has(field));
+    const unknown = objectKeys(record).find((field) => !allowed.has(field));
     const missing = required.find(
-      (field) => !Object.prototype.hasOwnProperty.call(record, field),
+      (field) => !objectHasOwn(record, field),
     );
     if (unknown !== undefined || missing !== undefined) {
       throw new TypeError(unknown !== undefined
@@ -17066,7 +16965,7 @@ function parseSumeragiAutonomousLaneExecutions(value) {
         throw new TypeError(`${itemContext} evidence does not match durable stage`);
       }
     }
-    return Object.freeze({
+    return objectFreeze({
       lane_id: laneId, dataspace_id: dataspaceId, lane_incarnation: incarnation,
       lane_block_height: laneHeight, lane_block_view: laneView,
       proposal_height: proposalHeight, proposal_view: proposalView,
@@ -17115,13 +17014,13 @@ function parseSumeragiLivenessStatus(value, context, active) {
     "blocker",
     "ignore_counts",
   ]);
-  const unknown = Object.keys(record).find((field) => !fields.has(field));
+  const unknown = objectKeys(record).find((field) => !fields.has(field));
   if (unknown !== undefined) {
     throw new TypeError(`${context} contains unknown field ${unknown}`);
   }
   for (const field of fields) {
     if (field !== "last_progress" && field !== "blocker" &&
-        !Object.prototype.hasOwnProperty.call(record, field)) {
+        !objectHasOwn(record, field)) {
       throw new TypeError(`${context} is missing required field ${field}`);
     }
   }
@@ -17209,7 +17108,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       ) {
         throw new RangeError(`${itemContext} does not form its advertised dual quorum`);
       }
-      return Object.freeze({
+      return objectFreeze({
         round,
         signer_count: signerCount,
         signed_power: signedPower,
@@ -17223,7 +17122,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       `${itemContext}.proposal_round`,
     );
     validateSumeragiProposalRound(proposalRound, round, itemContext);
-    return Object.freeze({
+    return objectFreeze({
       round,
       proposal_round: proposalRound,
       subject: parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`),
@@ -17237,7 +17136,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       total_power: totalPower,
     });
   };
-  const voteQuorums = (field, phase) => Object.freeze(
+  const voteQuorums = (field, phase) => objectFreeze(
     assertSumeragiArrayBound(record[field], 128, `${context}.${field}`).map(
       (item, index) => checkedPartialQuorum(
         item,
@@ -17246,7 +17145,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       ),
     ),
   );
-  const timeoutQuorums = Object.freeze(
+  const timeoutQuorums = objectFreeze(
     assertSumeragiArrayBound(
       record.timeout_quorums,
       128,
@@ -17265,7 +17164,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
     "prepare_qc",
     "commit_qc",
   ]);
-  const outboundIntents = Object.freeze(
+  const outboundIntents = objectFreeze(
     assertSumeragiArrayBound(
       record.outbound_intents,
       7,
@@ -17281,12 +17180,12 @@ function parseSumeragiLivenessStatus(value, context, active) {
         "execution_commitment",
         "stage",
       ]);
-      const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
+      const unknownField = objectKeys(item).find((field) => !allowedFields.has(field));
       if (unknownField !== undefined) {
         throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
       }
       for (const field of ["kind", "round", "stage"]) {
-        if (!Object.prototype.hasOwnProperty.call(item, field)) {
+        if (!objectHasOwn(item, field)) {
           throw new TypeError(`${itemContext} is missing required field ${field}`);
         }
       }
@@ -17341,7 +17240,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       if (proposalRound !== null) {
         validateSumeragiProposalRound(proposalRound, round, itemContext);
       }
-      return Object.freeze({
+      return objectFreeze({
         kind,
         round,
         proposal_round: proposalRound,
@@ -17357,8 +17256,8 @@ function parseSumeragiLivenessStatus(value, context, active) {
     ["candidate", "body_recovery", "body_store", "validation", "application", "successor_height"],
     `${context}.work`,
   );
-  const work = Object.freeze(Object.fromEntries(
-    Object.keys(workRecord).map((field) => [
+  const work = objectFreeze(Object.fromEntries(
+    objectKeys(workRecord).map((field) => [
       field,
       parseSumeragiTaggedUnit(
         workRecord[field],
@@ -17370,7 +17269,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
   ));
 
   const queueNames = new Set();
-  const queues = Object.freeze(
+  const queues = objectFreeze(
     assertSumeragiArrayBound(record.queues, 10, `${context}.queues`).map((raw, index) => {
       const itemContext = `${context}.queues[${index}]`;
       const item = ensureRecord(raw, itemContext);
@@ -17381,12 +17280,12 @@ function parseSumeragiLivenessStatus(value, context, active) {
         "oldest_age_ms",
         "service_debt",
       ]);
-      const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
+      const unknownField = objectKeys(item).find((field) => !allowedFields.has(field));
       if (unknownField !== undefined) {
         throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
       }
       for (const field of ["queue", "depth", "capacity", "service_debt"]) {
-        if (!Object.prototype.hasOwnProperty.call(item, field)) {
+        if (!objectHasOwn(item, field)) {
           throw new TypeError(`${itemContext} is missing required field ${field}`);
         }
       }
@@ -17424,7 +17323,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       if (depth > capacity || ((depth === 0) !== (oldestAge === null))) {
         throw new RangeError(`${itemContext} has inconsistent occupancy and age`);
       }
-      return Object.freeze({
+      return objectFreeze({
         queue,
         depth,
         capacity,
@@ -17451,7 +17350,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
     if (progressGeneration > generation) {
       throw new RangeError(`${context}.last_progress.generation is from the future`);
     }
-    lastProgress = Object.freeze({
+    lastProgress = objectFreeze({
       generation: progressGeneration,
       round: checkedRound(progress.round, `${context}.last_progress.round`),
       transition: parseSumeragiTaggedUnit(
@@ -17498,7 +17397,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       );
 
   const ignoreReasons = new Set();
-  const ignoreCounts = Object.freeze(
+  const ignoreCounts = objectFreeze(
     assertSumeragiArrayBound(record.ignore_counts, 12, `${context}.ignore_counts`).map(
       (raw, index) => {
         const itemContext = `${context}.ignore_counts[${index}]`;
@@ -17526,7 +17425,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
           throw new TypeError(`${itemContext}.reason is duplicated`);
         }
         ignoreReasons.add(reason.reason);
-        return Object.freeze({
+        return objectFreeze({
           reason,
           count: parseSumeragiUnsigned(item.count, `${itemContext}.count`),
         });
@@ -17534,7 +17433,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
     ),
   );
 
-  return Object.freeze({
+  return objectFreeze({
     generation,
     prepare_quorums: voteQuorums("prepare_quorums", "prepare"),
     commit_quorums: voteQuorums("commit_quorums", "commit"),
@@ -17566,7 +17465,7 @@ function parseSumeragiSafetyHalt(value, context) {
     "conflicting_parent_state_root",
     "conflicting_post_state_root",
   ]);
-  const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
+  const unknownField = objectKeys(record).find((field) => !allowedFields.has(field));
   if (unknownField !== undefined) {
     throw new TypeError(`${context} contains unknown field ${unknownField}`);
   }
@@ -17576,7 +17475,7 @@ function parseSumeragiSafetyHalt(value, context) {
   if (reason !== null && typeof reason !== "string") {
     throw new TypeError(`${context}.reason must be a string or null`);
   }
-  return Object.freeze({
+  return objectFreeze({
     active: parseSumeragiBoolean(record.active, `${context}.active`),
     reason,
     height: parseSumeragiUnsigned(record.height, `${context}.height`),
@@ -17596,7 +17495,7 @@ function parseSumeragiUnsigned(value, context, options = {}) {
   if (
     (
       typeof value !== "number" ||
-      !Number.isSafeInteger(value) ||
+      !numberIsSafeInteger(value) ||
       Object.is(value, -0)
     ) &&
     typeof value !== "bigint"
@@ -17638,7 +17537,7 @@ function sumeragiRoundsEqual(left, right) {
 }
 
 function parseSumeragiExactUnsigned(value, context, options = {}) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+  if (typeof value !== "number" || !numberIsSafeInteger(value)) {
     throw new TypeError(`${context} must be an unsigned integer`);
   }
   return parseSumeragiUnsigned(value, context, options);
@@ -17693,12 +17592,12 @@ function parseSumeragiByte32(value, context) {
 }
 
 function parseSumeragiByteVector(value, length, context) {
-  if (!Array.isArray(value) || value.length !== length) {
+  if (!arrayIsArray(value) || value.length !== length) {
     throw new TypeError(`${context} must contain exactly ${length} byte values`);
   }
-  return Object.freeze(
+  return objectFreeze(
     value.map((byte, index) => {
-      if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
+      if (!numberIsInteger(byte) || byte < 0 || byte > 0xff) {
         throw new TypeError(`${context}[${index}] must be an integer byte`);
       }
       return byte;
@@ -17707,7 +17606,7 @@ function parseSumeragiByteVector(value, length, context) {
 }
 
 function assertSumeragiArrayBound(value, maximum, context, minimum = 0) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   if (value.length < minimum) {
@@ -17722,13 +17621,13 @@ function assertSumeragiArrayBound(value, maximum, context, minimum = 0) {
 function assertExactSumeragiRecord(value, fields, context) {
   const record = ensureRecord(value, context);
   const expected = new Set(fields);
-  for (const field of Object.keys(record)) {
+  for (const field of objectKeys(record)) {
     if (!expected.has(field)) {
       throw new TypeError(`${context} contains unknown field ${field}`);
     }
   }
   for (const field of fields) {
-    if (!Object.prototype.hasOwnProperty.call(record, field)) {
+    if (!objectHasOwn(record, field)) {
       throw new TypeError(`${context} is missing required field ${field}`);
     }
   }
@@ -17736,10 +17635,10 @@ function assertExactSumeragiRecord(value, fields, context) {
 }
 
 function parseSumeragiContextId(value, context) {
-  if (!Array.isArray(value) || value.length !== 1) {
+  if (!arrayIsArray(value) || value.length !== 1) {
     throw new TypeError(`${context} must be a one-element hash tuple`);
   }
-  return Object.freeze([parseSumeragiHash(value[0], `${context}[0]`)]);
+  return objectFreeze([parseSumeragiHash(value[0], `${context}[0]`)]);
 }
 
 function parseSumeragiTaggedUnit(value, tag, allowed, context) {
@@ -17754,22 +17653,22 @@ function parseSumeragiTaggedUnit(value, tag, allowed, context) {
 
 function parseSumeragiTaggedUnitWithContent(value, tag, content, allowed, context) {
   const record = ensureRecord(value, context);
-  if (Object.keys(record).some((field) => field !== tag && field !== content)) {
+  if (objectKeys(record).some((field) => field !== tag && field !== content)) {
     throw new TypeError(`${context} contains an unknown tagged-enum field`);
   }
   const variant = requireNonEmptyString(record[tag], `${context}.${tag}`);
   if (!allowed.includes(variant)) {
     throw new TypeError(`${context}.${tag} is not a supported v2 variant`);
   }
-  if (!Object.prototype.hasOwnProperty.call(record, content) || record[content] !== null) {
+  if (!objectHasOwn(record, content) || record[content] !== null) {
     throw new TypeError(`${context}.${content} must be explicitly null`);
   }
-  return Object.freeze({ [tag]: variant, [content]: null });
+  return objectFreeze({ [tag]: variant, [content]: null });
 }
 
 function parseSumeragiRound(value, context) {
   const record = ensureRecord(value, context);
-  return Object.freeze({
+  return objectFreeze({
     context_id: parseSumeragiContextId(record.context_id, `${context}.context_id`),
     height: parseSumeragiUnsigned(record.height, `${context}.height`),
     view: parseSumeragiUnsigned(record.view, `${context}.view`),
@@ -17790,7 +17689,7 @@ function validateSumeragiProposalRound(proposalRound, round, context) {
 
 function parseSumeragiBlockSubject(value, context) {
   const record = ensureRecord(value, context);
-  return Object.freeze({
+  return objectFreeze({
     parent_block_hash:
       record.parent_block_hash == null
         ? null
@@ -17818,7 +17717,7 @@ function parseSumeragiExecutionCommitment(value, context) {
     "native_amx_application_manifest_count",
     "executed_block_wire_hash",
   ]);
-  const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
+  const unknown = objectKeys(record).find((field) => !allowedFields.has(field));
   if (unknown !== undefined) {
     throw new TypeError(`${context} contains unknown field ${unknown}`);
   }
@@ -17863,7 +17762,7 @@ function parseSumeragiExecutionCommitment(value, context) {
       `${context}.native_amx_application_manifest_count must be zero exactly for the canonical empty root`,
     );
   }
-  return Object.freeze({
+  return objectFreeze({
     parent_state_root: parseSumeragiHash(
       record.parent_state_root,
       `${context}.parent_state_root`,
@@ -17902,7 +17801,7 @@ function parseSumeragiQcReference(value, context) {
     `${context}.phase`,
   );
   validateSumeragiProposalRound(proposalRound, round, context);
-  return Object.freeze({
+  return objectFreeze({
     round,
     proposal_round: proposalRound,
     phase,
@@ -17916,7 +17815,7 @@ function parseSumeragiQcReference(value, context) {
 
 function parseSumeragiTimeoutReference(value, context) {
   const record = ensureRecord(value, context);
-  return Object.freeze({
+  return objectFreeze({
     round: parseSumeragiRound(record.round, `${context}.round`),
     highest_prepare_qc:
       record.highest_prepare_qc == null
@@ -17940,7 +17839,7 @@ function parseSumeragiHeightContext(value, context) {
     { positive: true, max: 128 },
   );
   const quorumRecord = ensureRecord(record.quorum, `${context}.quorum`);
-  const quorum = Object.freeze({
+  const quorum = objectFreeze({
     min_signers: parseSumeragiUnsigned(
       quorumRecord.min_signers,
       `${context}.quorum.min_signers`,
@@ -17966,7 +17865,7 @@ function parseSumeragiHeightContext(value, context) {
     throw new RangeError(`${context}.quorum.total_power must equal validator_count in permissioned mode`);
   }
   const epochSeed = parseSumeragiByte32(record.epoch_seed, `${context}.epoch_seed`);
-  return Object.freeze({
+  return objectFreeze({
     epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
     epoch_end_height: parseSumeragiUnsigned(
       record.epoch_end_height,
@@ -18015,7 +17914,7 @@ function parseSumeragiCommitQcStatus(value, context) {
   ) {
     throw new RangeError(`${context} does not satisfy its frozen dual quorum`);
   }
-  return Object.freeze({
+  return objectFreeze({
     certificate: parseSumeragiQcReference(record.certificate, `${context}.certificate`),
     validator_count: validatorCount,
     signer_count: signerCount,
@@ -18028,7 +17927,7 @@ function parseSumeragiCommitQcStatus(value, context) {
 function parseSumeragiOperatorStatus(value, context) {
   const record = ensureRecord(value, context);
   const adapter = ensureRecord(record.adapter_queues, `${context}.adapter_queues`);
-  const adapterQueues = Object.freeze({
+  const adapterQueues = objectFreeze({
     ingress_keys: parseSumeragiUnsigned(adapter.ingress_keys, `${context}.adapter_queues.ingress_keys`),
     ingress_capacity: parseSumeragiUnsigned(
       adapter.ingress_capacity,
@@ -18064,7 +17963,7 @@ function parseSumeragiOperatorStatus(value, context) {
     throw new RangeError(`${context}.adapter_queues occupancy exceeds capacity`);
   }
   const queue = ensureRecord(record.tx_queue, `${context}.tx_queue`);
-  const txQueue = Object.freeze({
+  const txQueue = objectFreeze({
     tracked_transactions: parseSumeragiUnsigned(
       queue.tracked_transactions,
       `${context}.tx_queue.tracked_transactions`,
@@ -18109,7 +18008,7 @@ function parseSumeragiOperatorStatus(value, context) {
   ) {
     throw new RangeError(`${context}.tx_queue occupancy exceeds capacity`);
   }
-  return Object.freeze({
+  return objectFreeze({
     view_change_install_total: parseSumeragiUnsigned(
       record.view_change_install_total,
       `${context}.view_change_install_total`,
@@ -18124,18 +18023,18 @@ function parseSumeragiOperatorStatus(value, context) {
 }
 
 function parseSumeragiRecordArray(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
-  return Object.freeze(
-    value.map((entry, index) => Object.freeze({ ...ensureRecord(entry, `${context}[${index}]`) })),
+  return objectFreeze(
+    value.map((entry, index) => objectFreeze({ ...ensureRecord(entry, `${context}[${index}]`) })),
   );
 }
 
 function parseSumeragiLanePayloadOwnerships(value) {
   const context = "status.lane_payload_ownerships";
   assertSumeragiArrayBound(value, 128, context);
-  return Object.freeze(value.map((entry, index) => {
+  return objectFreeze(value.map((entry, index) => {
     const itemContext = `${context}[${index}]`;
     const record = assertExactSumeragiRecord(
       entry,
@@ -18167,7 +18066,7 @@ function parseSumeragiLanePayloadOwnerships(value) {
       `${itemContext}.lane_block_height`,
       { positive: true },
     );
-    if (!Array.isArray(record.accepted_candidate_indices)) {
+    if (!arrayIsArray(record.accepted_candidate_indices)) {
       throw new TypeError(`${itemContext}.accepted_candidate_indices must be an array`);
     }
     const acceptedCandidateIndices = record.accepted_candidate_indices.map((candidate, offset) =>
@@ -18181,7 +18080,7 @@ function parseSumeragiLanePayloadOwnerships(value) {
         throw new TypeError(`${itemContext}.accepted_candidate_indices must be strictly ordered`);
       }
     }
-    if (!Array.isArray(record.accepted_transaction_hashes)) {
+    if (!arrayIsArray(record.accepted_transaction_hashes)) {
       throw new TypeError(`${itemContext}.accepted_transaction_hashes must be an array`);
     }
     const acceptedTransactionHashes = record.accepted_transaction_hashes.map((hash, offset) =>
@@ -18242,7 +18141,7 @@ function parseSumeragiLanePayloadOwnerships(value) {
     if (record.lane_block_descriptor_hash == null) {
       throw new TypeError(`${itemContext}.lane_block_descriptor_hash is required`);
     }
-    return Object.freeze({
+    return objectFreeze({
       proposal_height: parseSumeragiUnsigned(record.proposal_height, `${itemContext}.proposal_height`),
       proposal_view: parseSumeragiUnsigned(record.proposal_view, `${itemContext}.proposal_view`),
       lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
@@ -18252,15 +18151,15 @@ function parseSumeragiLanePayloadOwnerships(value) {
       lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
       subject_hash: parseSumeragiHash(record.subject_hash, `${itemContext}.subject_hash`),
       qc_mode_tag: requireNonEmptyString(record.qc_mode_tag, `${itemContext}.qc_mode_tag`),
-      accepted_candidate_indices: Object.freeze(acceptedCandidateIndices),
-      accepted_transaction_hashes: Object.freeze(acceptedTransactionHashes),
+      accepted_candidate_indices: objectFreeze(acceptedCandidateIndices),
+      accepted_transaction_hashes: objectFreeze(acceptedTransactionHashes),
       previous_lane_block_height: previousHeight,
       previous_lane_block_descriptor_hash: previousDescriptor,
       lane_block_descriptor_hash: parseSumeragiHash(
         record.lane_block_descriptor_hash,
         `${itemContext}.lane_block_descriptor_hash`,
       ),
-      lane_block_descriptor_validator_set: Object.freeze(validators),
+      lane_block_descriptor_validator_set: objectFreeze(validators),
       lane_block_descriptor_validator_count: validatorCount,
       lane_block_descriptor_min_quorum: minQuorum,
       payload_ownership_hash: parseSumeragiHash(
@@ -18278,7 +18177,7 @@ function parseSumeragiLanePayloadOwnerships(value) {
 function parseSumeragiCommittedLaneBlocks(value) {
   const context = "status.committed_lane_blocks";
   assertSumeragiArrayBound(value, 128, context);
-  return Object.freeze(value.map((entry, index) => {
+  return objectFreeze(value.map((entry, index) => {
     const itemContext = `${context}[${index}]`;
     const record = assertExactSumeragiRecord(
       entry,
@@ -18361,7 +18260,7 @@ function parseSumeragiCommittedLaneBlocks(value) {
     ) {
       throw new RangeError(`${itemContext} carries an impossible certified quorum`);
     }
-    return Object.freeze({
+    return objectFreeze({
       lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
       dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
       lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
@@ -18386,7 +18285,7 @@ function parseSumeragiCommittedLaneBlocks(value) {
 function parseSumeragiLaneBlockSessions(value) {
   const context = "status.lane_block_sessions";
   assertSumeragiArrayBound(value, 128, context);
-  return Object.freeze(value.map((entry, index) => {
+  return objectFreeze(value.map((entry, index) => {
     const itemContext = `${context}[${index}]`;
     const record = assertExactSumeragiRecord(
       entry,
@@ -18442,7 +18341,7 @@ function parseSumeragiLaneBlockSessions(value) {
     ) {
       throw new RangeError(`${itemContext} carries impossible session quorum counts`);
     }
-    return Object.freeze({
+    return objectFreeze({
       lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
       dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
       lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
@@ -18496,9 +18395,9 @@ function normalizeSumeragiCommitQcRecord(payload, context) {
     { allowScheme: true },
   );
   if (record.commit_qc == null) {
-    return Object.freeze({ subject_block_hash, commit_qc: null });
+    return objectFreeze({ subject_block_hash, commit_qc: null });
   }
-  return Object.freeze({
+  return objectFreeze({
     subject_block_hash,
     commit_qc: normalizeSumeragiCommitQcPayload(record.commit_qc, `${context}.commit_qc`),
   });
@@ -18506,7 +18405,7 @@ function normalizeSumeragiCommitQcRecord(payload, context) {
 
 function normalizeSumeragiCommitQcPayload(payload, context) {
   const record = ensureRecord(payload, context);
-  return Object.freeze({
+  return objectFreeze({
     phase: requireNonEmptyString(record.phase, `${context}.phase`),
     parent_state_root: normalizeHex32String(
       record.parent_state_root,
@@ -18547,7 +18446,7 @@ function normalizeSumeragiCommitQcPayload(payload, context) {
 }
 
 function normalizeStringArray(payload, context) {
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   return payload.map((value, index) =>
@@ -18670,7 +18569,7 @@ function normalizeSumeragiPhasesEma(payload, context) {
 function normalizeSumeragiBlsKeysMap(payload) {
   const record = ensureRecord(payload, "sumeragi BLS keys payload");
   const normalized = {};
-  for (const [key, value] of Object.entries(record)) {
+  for (const [key, value] of objectEntries(record)) {
     const peerId = requireNonEmptyString(key, "sumeragi BLS key peer id");
     if (value == null) {
       normalized[peerId] = null;
@@ -18765,7 +18664,7 @@ function normalizeSumeragiTelemetryAvailabilityCollectors(payload, context) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   return payload.map((entry, index) =>
@@ -18786,7 +18685,7 @@ function normalizeSumeragiTelemetryQcLatencyList(payload, context) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   return payload.map((entry, index) =>
@@ -18870,7 +18769,7 @@ function normalizeSumeragiTelemetryNumericArray(payload, context) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   return payload.map((value, index) => coerceInteger(value, `${context}[${index}]`));
@@ -18880,7 +18779,7 @@ function normalizeSumeragiTelemetryVrfLateRevealList(payload, context) {
   if (payload == null) {
     return [];
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   return payload.map((entry, index) =>
@@ -18938,7 +18837,7 @@ function parseGovernanceProposalRecord(payload) {
 }
 
 function parseGovernanceProposalKind(payload, context) {
-  const entries = Object.entries(payload);
+  const entries = objectEntries(payload);
   if (entries.length !== 1) {
     throw new TypeError(`${context} must contain exactly one variant entry`);
   }
@@ -18956,7 +18855,7 @@ function parseGovernanceProposalKind(payload, context) {
       throw new TypeError("SccpRouteGovernance proposal kind expects an object payload");
     }
     const proposal = ensureRecord(details, `${context}.SccpRouteGovernance`);
-    const fields = Object.keys(proposal);
+    const fields = objectKeys(proposal);
     if (fields.length !== 1 || fields[0] !== "action") {
       throw new TypeError(
         `${context}.SccpRouteGovernance must contain only \`action\``,
@@ -19057,7 +18956,7 @@ function parseGovernanceLocksResult(payload) {
     throw new TypeError("governance locks payload `locks` must be an object");
   }
   const locks = {};
-  for (const [accountId, entry] of Object.entries(locksPayload)) {
+  for (const [accountId, entry] of objectEntries(locksPayload)) {
     if (typeof accountId !== "string" || !accountId) {
       throw new TypeError("governance locks keys must be non-empty account identifiers");
     }
@@ -19095,7 +18994,7 @@ function parseGovernanceLockRecord(payload, context) {
   };
 }
 
-const GOVERNANCE_LOCK_CUSTODY_KEYS = Object.freeze([
+const GOVERNANCE_LOCK_CUSTODY_KEYS = objectFreeze([
   "escrowed",
   "asset_definition_id",
   "bond_escrow_account",
@@ -19182,7 +19081,7 @@ function normalizeErrorPath(context) {
 }
 
 function normalizeGovernanceCouncilMembers(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
       `${context} must be an array`,
@@ -19212,7 +19111,7 @@ function normalizeProtectedNamespaceList(input) {
   if (input === undefined || input === null) {
     throw new TypeError("protected namespaces input is required");
   }
-  const values = Array.isArray(input) ? input : [input];
+  const values = arrayIsArray(input) ? input : [input];
   if (values.length === 0) {
     throw new TypeError("protected namespaces list must not be empty");
   }
@@ -19861,7 +19760,7 @@ function requireVpnEnum(value, allowed, context) {
 }
 
 function requireVpnProfileExitClasses(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   const exits = value.map((entry, index) =>
@@ -20005,7 +19904,7 @@ function normalizeVpnOptionalTxInstruction(payload, context) {
 }
 
 function normalizeVpnTxInstructionList(payload, context, { min = 0, max } = {}) {
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   if (payload.length < min || (max !== undefined && payload.length > max)) {
@@ -20323,7 +20222,7 @@ function normalizeVpnReceiptListResponse(payload) {
     VPN_RECEIPT_LIST_RESPONSE_FIELDS,
     "vpn receipts response",
   );
-  if (!Array.isArray(record.items)) {
+  if (!arrayIsArray(record.items)) {
     throw new TypeError("vpn receipts response.items must be an array");
   }
   if (record.items.length > 24) {
@@ -20346,7 +20245,7 @@ function normalizeVpnReceiptListResponse(payload) {
 function assertVpnResponseFields(record, requiredFields, context) {
   assertSupportedOptionKeys(record, requiredFields, context);
   const missing = [...requiredFields].filter(
-    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+    (field) => !objectHasOwn(record, field),
   );
   if (missing.length > 0) {
     throw createValidationError(
@@ -20408,11 +20307,11 @@ function normalizeSnsSuffixPolicy(payload) {
     "sns suffix policy.referral_cap_bps",
     { allowZero: true },
   );
-  const reservedLabels = Array.isArray(record.reserved_labels)
+  const reservedLabels = arrayIsArray(record.reserved_labels)
     ? record.reserved_labels.map((entry, index) => normalizeReservedLabel(entry, `sns suffix policy.reserved_labels[${index}]`))
     : [];
   const paymentAssetId = requireNonEmptyString(record.payment_asset_id, "sns suffix policy.payment_asset_id");
-  const pricing = Array.isArray(record.pricing)
+  const pricing = arrayIsArray(record.pricing)
     ? record.pricing.map((entry, index) => normalizeSnsPricingTier(entry, `sns suffix policy.pricing[${index}]`))
     : [];
   const feeSplit = normalizeSnsFeeSplit(record.fee_split, "sns suffix policy.fee_split");
@@ -20541,7 +20440,7 @@ function normalizeSnsControllers(value, context) {
   if (value === undefined || value === null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array of controllers`);
   }
   return value.map((entry, index) => normalizeSnsController(entry, `${context}[${index}]`));
@@ -20690,7 +20589,7 @@ function normalizeSnsNameStatus(payload, context) {
 }
 
 function normalizeStringList(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) => requireNonEmptyString(entry, `${context}[${index}]`));
@@ -20713,7 +20612,7 @@ function normalizeExplorerNftRecord(payload, context) {
 function normalizeExplorerNftPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer nfts response");
   const items = record.items;
-  if (!Array.isArray(items)) {
+  if (!arrayIsArray(items)) {
     throw new TypeError("explorer nfts response.items must be an array");
   }
   return {
@@ -20767,7 +20666,7 @@ function normalizeExplorerRwaRecord(payload, context) {
 function normalizeExplorerRwaPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer rwas response");
   const items = record.items;
-  if (!Array.isArray(items)) {
+  if (!arrayIsArray(items)) {
     throw new TypeError("explorer rwas response.items must be an array");
   }
   return {
@@ -20784,7 +20683,7 @@ function normalizeExplorerRwaPage(payload) {
 function normalizeExplorerBlocksPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer blocks response");
   const items = record.items;
-  if (!Array.isArray(items)) {
+  if (!arrayIsArray(items)) {
     throw new TypeError("explorer blocks response.items must be an array");
   }
   return {
@@ -20897,7 +20796,7 @@ function normalizeExplorerBlockRecord(payload, context) {
 function normalizeRuntimeUpgradesListResponse(payload) {
   const record = ensureRecord(payload, "runtime upgrades list response");
   const items = record.items ?? [];
-  if (!Array.isArray(items)) {
+  if (!arrayIsArray(items)) {
     throw new TypeError("runtime upgrades list response.items must be an array");
   }
   return items.map((item, index) =>
@@ -20975,7 +20874,7 @@ function normalizeRuntimeUpgradeManifest(value, context) {
 
 function normalizeRuntimeUpgradeStatus(value, context) {
   const record = ensureRecord(value, context);
-  const keys = Object.keys(record);
+  const keys = objectKeys(record);
   if (keys.length !== 1) {
     throw new TypeError(`${context} must contain exactly one status key`);
   }
@@ -21084,7 +20983,7 @@ function parseIntegerArray(value, context) {
   if (value === undefined || value === null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) => {
@@ -21189,7 +21088,7 @@ function parseStringArray(value, context) {
   if (value == null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array of strings`);
   }
   return value.map((entry, index) => {
@@ -21204,14 +21103,14 @@ function parseRecordArray(value, context) {
   if (value == null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array of objects`);
   }
   return value.map((entry, index) => ensureRecord(entry, `${context}[${index}]`));
 }
 
 function isPlainObject(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (value === null || typeof value !== "object" || arrayIsArray(value)) {
     return false;
   }
   const proto = Object.getPrototypeOf(value);
@@ -21260,7 +21159,7 @@ function optionalStringArray(value, context) {
   if (value === undefined || value === null) {
     return null;
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array when present`);
   }
   return value.map((entry, index) => {
@@ -21272,7 +21171,7 @@ function optionalStringArray(value, context) {
 }
 
 function requireStringArray(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) => {
@@ -21284,7 +21183,7 @@ function requireStringArray(value, context) {
 }
 
 function requireUnsignedIntegerArray(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) =>
@@ -21352,7 +21251,7 @@ function normalizeUaidPortfolioResponse(payload) {
     ),
   };
   const dataspacesValue = record.dataspaces ?? [];
-  if (!Array.isArray(dataspacesValue)) {
+  if (!arrayIsArray(dataspacesValue)) {
     throw new TypeError("uaid portfolio response.dataspaces must be an array");
   }
   const dataspaces = dataspacesValue.map((entry, index) =>
@@ -21367,7 +21266,7 @@ function normalizeUaidPortfolioResponse(payload) {
 function normalizeUaidPortfolioDataspace(value, context) {
   const record = ensureRecord(value, context);
   const accountsValue = record.accounts ?? [];
-  if (!Array.isArray(accountsValue)) {
+  if (!arrayIsArray(accountsValue)) {
     throw new TypeError(`${context}.accounts must be an array`);
   }
   return {
@@ -21386,7 +21285,7 @@ function normalizeUaidPortfolioDataspace(value, context) {
 function normalizeUaidPortfolioAccount(value, context) {
   const record = ensureRecord(value, context);
   const assetsValue = record.assets ?? [];
-  if (!Array.isArray(assetsValue)) {
+  if (!arrayIsArray(assetsValue)) {
     throw new TypeError(`${context}.assets must be an array`);
   }
   return {
@@ -21414,7 +21313,7 @@ function normalizeUaidBindingsResponse(payload) {
   const record = ensureRecord(payload, "uaid bindings response");
   const uaid = normalizeUaidLiteral(record.uaid, "uaid bindings response.uaid");
   const dataspacesValue = record.dataspaces ?? [];
-  if (!Array.isArray(dataspacesValue)) {
+  if (!arrayIsArray(dataspacesValue)) {
     throw new TypeError("uaid bindings response.dataspaces must be an array");
   }
   const dataspaces = dataspacesValue.map((entry, index) =>
@@ -21443,7 +21342,7 @@ function normalizeUaidManifestsResponse(payload) {
   const record = ensureRecord(payload, "uaid manifests response");
   const uaid = normalizeUaidLiteral(record.uaid, "uaid manifests response.uaid");
   const manifestsValue = record.manifests ?? [];
-  if (!Array.isArray(manifestsValue)) {
+  if (!arrayIsArray(manifestsValue)) {
     throw new TypeError("uaid manifests response.manifests must be an array");
   }
   const manifests = manifestsValue.map((entry, index) =>
@@ -21511,7 +21410,7 @@ function normalizeUaidManifestLifecycle(value, context) {
 function normalizeUaidManifest(value, context) {
   const record = ensureRecord(value, context);
   const entriesValue = record.entries ?? [];
-  if (!Array.isArray(entriesValue)) {
+  if (!arrayIsArray(entriesValue)) {
     throw new TypeError(`${context}.entries must be an array`);
   }
   return {
@@ -21613,7 +21512,7 @@ function isTruthyFilter(filters, key) {
 
 function extractExtraFields(record, recognizedKeys) {
   const extra = {};
-  for (const [key, value] of Object.entries(record)) {
+  for (const [key, value] of objectEntries(record)) {
     if (!recognizedKeys.has(key)) {
       extra[key] = value;
     }
@@ -21717,9 +21616,9 @@ const PROVER_FILTER_DEFINITIONS = {
 
 const PROVER_FILTER_ALIAS_MAP = (() => {
   const map = new Map();
-  for (const [key, spec] of Object.entries(PROVER_FILTER_DEFINITIONS)) {
+  for (const [key, spec] of objectEntries(PROVER_FILTER_DEFINITIONS)) {
     map.set(key, { key, spec });
-    const aliases = Array.isArray(spec.aliases) ? spec.aliases : [];
+    const aliases = arrayIsArray(spec.aliases) ? spec.aliases : [];
     for (const alias of aliases) {
       map.set(alias, { key, spec });
     }
@@ -21795,7 +21694,7 @@ function toBuffer(value) {
   if (value instanceof ArrayBuffer) {
     return Buffer.from(value);
   }
-  if (Array.isArray(value)) {
+  if (arrayIsArray(value)) {
     if (value.length === 0) {
       return Buffer.alloc(0);
     }
@@ -21806,7 +21705,7 @@ function toBuffer(value) {
 
 function normalizeByteArray(value, context) {
   const bytes = value.map((entry, index) => {
-    if (!Number.isInteger(entry) || entry < 0 || entry > 255) {
+    if (!numberIsInteger(entry) || entry < 0 || entry > 255) {
       throw createValidationError(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
         `${context}[${index}] must be an integer between 0 and 255`,
@@ -21856,7 +21755,7 @@ function findHeaderKey(headers, name) {
     return null;
   }
   const target = String(name).toLowerCase();
-  for (const key of Object.keys(headers)) {
+  for (const key of objectKeys(headers)) {
     if (key.toLowerCase() === target) {
       return key;
     }
@@ -21888,7 +21787,7 @@ function hasHeader(headers, name) {
 function cloneHeadersForFetch(headers) {
   const clone = {};
   if (headers && typeof headers === "object") {
-    for (const [key, value] of Object.entries(headers)) {
+    for (const [key, value] of objectEntries(headers)) {
       clone[key] = value;
     }
   }
@@ -22182,7 +22081,7 @@ function requireExactJsonUnsignedInteger(value, name, options = {}) {
   const minimum = options.allowZero === false ? 1 : 0;
   if (
     typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
+    !numberIsSafeInteger(value) ||
     value < minimum
   ) {
     throw createValidationError(
@@ -22296,14 +22195,14 @@ function normalizeStorageTicketHex(value, name) {
 
 function coerceIntegerLike(value, context) {
   if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isSafeInteger(value)) {
+    if (!numberIsFinite(value) || !numberIsSafeInteger(value)) {
       throw new RangeError(`${context} must be a safe integer`);
     }
     return value;
   }
   if (typeof value === "bigint") {
     const numeric = Number(value);
-    if (!Number.isSafeInteger(numeric)) {
+    if (!numberIsSafeInteger(numeric)) {
       throw new RangeError(`${context} must be a safe integer`);
     }
     return numeric;
@@ -22314,7 +22213,7 @@ function coerceIntegerLike(value, context) {
       throw new TypeError(`${context} must be an integer`);
     }
     const numeric = Number(trimmed);
-    if (!Number.isFinite(numeric) || !Number.isSafeInteger(numeric)) {
+    if (!numberIsFinite(numeric) || !numberIsSafeInteger(numeric)) {
       throw new RangeError(`${context} must be a safe integer`);
     }
     return numeric;
@@ -22338,7 +22237,7 @@ function requireExactPositiveIntegerLike(value, context) {
     throw new TypeError(`${context} is required`);
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0) {
+    if (!numberIsFinite(value) || !numberIsSafeInteger(value) || value <= 0) {
       throw new RangeError(`${context} must be a positive integer`);
     }
     if (value > MAX_SIGNED_INT32) {
@@ -22406,10 +22305,10 @@ function pickOverride(source, snakeName, camelName) {
   if (!source || typeof source !== "object") {
     return undefined;
   }
-  if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
+  if (objectHasOwn(source, snakeName)) {
     return source[snakeName];
   }
-  if (Object.prototype.hasOwnProperty.call(source, camelName)) {
+  if (objectHasOwn(source, camelName)) {
     return source[camelName];
   }
   return undefined;
@@ -22422,7 +22321,7 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
     ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
     ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
   ]) {
-    if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
+    if (objectHasOwn(source, snakeName)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         `${context} uses unsupported snake_case validation fee field ${snakeName}; use ${camelName}`,
@@ -22580,7 +22479,7 @@ function assertExactManifestResponseValueType(value, context) {
     return;
   }
   const record = exactManifestResponseRecord(value, ["nodes"], context);
-  if (!Array.isArray(record.nodes)) {
+  if (!arrayIsArray(record.nodes)) {
     return;
   }
   record.nodes.forEach((node, index) => {
@@ -22633,7 +22532,7 @@ function assertExactManifestResponseShape(value, context) {
       ["dynamic_reads", access.dynamic_reads],
       ["dynamic_writes", access.dynamic_writes],
     ]) {
-      if (!Array.isArray(hints)) {
+      if (!arrayIsArray(hints)) {
         continue;
       }
       hints.forEach((hint, index) => {
@@ -22646,7 +22545,7 @@ function assertExactManifestResponseShape(value, context) {
     }
   }
 
-  if (Array.isArray(manifest.entrypoints)) {
+  if (arrayIsArray(manifest.entrypoints)) {
     manifest.entrypoints.forEach((entrypoint, index) => {
       const entrypointContext = `${context}.entrypoints[${index}]`;
       const entrypointRecord = exactManifestResponseRecord(
@@ -22672,7 +22571,7 @@ function assertExactManifestResponseShape(value, context) {
         ["kind", "value"],
         `${entrypointContext}.kind`,
       );
-      if (Array.isArray(entrypointRecord.params)) {
+      if (arrayIsArray(entrypointRecord.params)) {
         entrypointRecord.params.forEach((param, paramIndex) => {
           exactManifestResponseRecord(
             param,
@@ -22690,7 +22589,7 @@ function assertExactManifestResponseShape(value, context) {
           ["fields"],
           `${entrypointContext}.argument_schema`,
         );
-        if (Array.isArray(argumentSchema.fields)) {
+        if (arrayIsArray(argumentSchema.fields)) {
           argumentSchema.fields.forEach((field, fieldIndex) => {
             const fieldContext =
               `${entrypointContext}.argument_schema.fields[${fieldIndex}]`;
@@ -22707,7 +22606,7 @@ function assertExactManifestResponseShape(value, context) {
         entrypointRecord.return_schema,
         `${entrypointContext}.return_schema`,
       );
-      if (Array.isArray(entrypointRecord.triggers)) {
+      if (arrayIsArray(entrypointRecord.triggers)) {
         entrypointRecord.triggers.forEach((trigger, triggerIndex) => {
           const triggerContext = `${entrypointContext}.triggers[${triggerIndex}]`;
           const triggerRecord = exactManifestResponseRecord(
@@ -22730,7 +22629,7 @@ function assertExactManifestResponseShape(value, context) {
     });
   }
 
-  if (Array.isArray(manifest.states)) {
+  if (arrayIsArray(manifest.states)) {
     manifest.states.forEach((state, index) => {
       exactManifestResponseRecord(
         state,
@@ -22739,7 +22638,7 @@ function assertExactManifestResponseShape(value, context) {
       );
     });
   }
-  if (Array.isArray(manifest.error_codes)) {
+  if (arrayIsArray(manifest.error_codes)) {
     manifest.error_codes.forEach((errorCode, index) => {
       exactManifestResponseRecord(
         errorCode,
@@ -22748,7 +22647,7 @@ function assertExactManifestResponseShape(value, context) {
       );
     });
   }
-  if (Array.isArray(manifest.kotoba)) {
+  if (arrayIsArray(manifest.kotoba)) {
     manifest.kotoba.forEach((entry, index) => {
       const entryContext = `${context}.kotoba[${index}]`;
       const entryRecord = exactManifestResponseRecord(
@@ -22756,7 +22655,7 @@ function assertExactManifestResponseShape(value, context) {
         ["msg_id", "translations"],
         entryContext,
       );
-      if (Array.isArray(entryRecord.translations)) {
+      if (arrayIsArray(entryRecord.translations)) {
         entryRecord.translations.forEach((translation, translationIndex) => {
           exactManifestResponseRecord(
             translation,
@@ -22802,17 +22701,17 @@ function normalizeManifestPayload(manifest, context) {
     "kotoba",
     "provenance",
   ]);
-  const unknownFields = Object.keys(manifest).filter((field) => !allowedFields.has(field));
+  const unknownFields = objectKeys(manifest).filter((field) => !allowedFields.has(field));
   if (unknownFields.length !== 0) {
     throw new TypeError(
       `${context} contains unsupported fields: ${unknownFields.sort().join(", ")}`,
     );
   }
   const hasField = (...keys) =>
-    keys.some((key) => Object.prototype.hasOwnProperty.call(manifest, key));
+    keys.some((key) => objectHasOwn(manifest, key));
   const getField = (...keys) => {
     const present = keys.filter((key) =>
-      Object.prototype.hasOwnProperty.call(manifest, key),
+      objectHasOwn(manifest, key),
     );
     if (present.length > 1) {
       throw new TypeError(`${context} contains conflicting aliases: ${present.join(", ")}`);
@@ -22891,7 +22790,7 @@ function normalizeManifestPayload(manifest, context) {
     const entries = getField("entrypoints", "entryPoints");
     if (entries === null) {
       normalized.entrypoints = null;
-    } else if (!Array.isArray(entries)) {
+    } else if (!arrayIsArray(entries)) {
       throw new TypeError(`${context}.entrypoints must be an array`);
     } else {
       normalized.entrypoints = entries.map((entry, index) => {
@@ -23074,7 +22973,7 @@ function validateManifestDynamicAccessHintStateMaps(accessSetHints, states, cont
 }
 
 function normalizeManifestKotobaPayload(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) => {
@@ -23093,7 +22992,7 @@ function normalizeManifestKotobaPayload(value, context) {
 }
 
 function normalizeManifestKotobaTranslationsPayload(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((translation, index) => {
@@ -23150,7 +23049,7 @@ function normalizeManifestSignaturePayload(value, context) {
   let body;
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
     body = Buffer.from(value).toString("hex");
-  } else if (Array.isArray(value)) {
+  } else if (arrayIsArray(value)) {
     body = normalizeByteArray(value, context).toString("hex");
   } else {
     const literal = requireNonEmptyString(value, context).trim();
@@ -23183,7 +23082,7 @@ function normalizeAccessSetHintsPayload(payload, context) {
     if (value === undefined || value === null) {
       return [];
     }
-    if (!Array.isArray(value)) {
+    if (!arrayIsArray(value)) {
       throw new TypeError(`${name} must be an array of strings`);
     }
     return value.map((entry, index) =>
@@ -23194,7 +23093,7 @@ function normalizeAccessSetHintsPayload(payload, context) {
     if (value === undefined || value === null) {
       return [];
     }
-    if (!Array.isArray(value)) {
+    if (!arrayIsArray(value)) {
       throw new TypeError(`${name} must be an array of dynamic access hints`);
     }
     return value.map((entry, index) => {
@@ -23281,8 +23180,8 @@ function normalizeAccessSetHintsPayload(payload, context) {
 }
 
 function selectEqualManifestAlias(record, snakeCase, camelCase, context) {
-  const hasSnakeCase = Object.prototype.hasOwnProperty.call(record, snakeCase);
-  const hasCamelCase = Object.prototype.hasOwnProperty.call(record, camelCase);
+  const hasSnakeCase = objectHasOwn(record, snakeCase);
+  const hasCamelCase = objectHasOwn(record, camelCase);
   if (
     hasSnakeCase &&
     hasCamelCase &&
@@ -23403,7 +23302,7 @@ function normalizeManifestEntrypointParams(value, context) {
   if (value === undefined || value === null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   if (value.length > 13) {
@@ -23440,7 +23339,7 @@ function normalizeManifestArgumentSchema(value, context) {
     return null;
   }
   const record = ensureRecord(value, context);
-  if (!Array.isArray(record.fields)) {
+  if (!arrayIsArray(record.fields)) {
     throw new TypeError(`${context}.fields must be an array`);
   }
   if (record.fields.length === 0 || record.fields.length > 13) {
@@ -23480,7 +23379,7 @@ function normalizeManifestValueType(value, context) {
 
 function normalizeRequiredManifestValueType(value, context) {
   const record = ensureRecord(value, context);
-  if (!Array.isArray(record.nodes)) {
+  if (!arrayIsArray(record.nodes)) {
     throw new TypeError(`${context}.nodes must be an array`);
   }
   const normalized = {
@@ -23526,7 +23425,7 @@ function normalizeManifestValueTypeNode(value, context) {
       return { kind, value: null };
     case "List": {
       const list = ensureRecord(record.value, `${context}.value`);
-      const fields = Object.keys(list);
+      const fields = objectKeys(list);
       if (fields.length !== 1 || fields[0] !== "capacity") {
         throw new TypeError(
           `${context}.value must contain exactly capacity; the element subtree follows in the nodes tape`,
@@ -23604,7 +23503,7 @@ function normalizeManifestStringArray(value, context) {
   if (value === undefined || value === null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) =>
@@ -23619,7 +23518,7 @@ function requireManifestNull(value, context) {
 }
 
 function normalizeManifestStatesPayload(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((state, index) => {
@@ -23650,7 +23549,7 @@ function normalizeManifestStatesPayload(value, context) {
 }
 
 function normalizeManifestErrorCodesPayload(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((errorCode, index) => {
@@ -23685,7 +23584,7 @@ function normalizeManifestTriggersPayload(value, context) {
   if (value === undefined || value === null) {
     return [];
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((trigger, index) => {
@@ -23733,7 +23632,7 @@ function normalizeManifestTriggersPayload(value, context) {
 
 function normalizeManifestRepeatsPayload(value, context) {
   const record = ensureRecord(value, context);
-  const keys = Object.keys(record);
+  const keys = objectKeys(record);
   if (keys.length !== 1) {
     throw new TypeError(`${context} must contain exactly one repeat variant`);
   }
@@ -23912,7 +23811,7 @@ function normalizeHex32String(value, name, options = {}) {
   if (value instanceof ArrayBuffer) {
     return normalizeHex32String(Buffer.from(value).toString("hex"), name, options);
   }
-  if (Array.isArray(value)) {
+  if (arrayIsArray(value)) {
     return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
   let normalized = requireNonEmptyString(value, name);
@@ -23977,7 +23876,7 @@ function normalizeHexBytesString(value, name) {
   if (value instanceof ArrayBuffer) {
     return Buffer.from(value).toString("hex");
   }
-  if (Array.isArray(value)) {
+  if (arrayIsArray(value)) {
     return normalizeByteArray(value, name).toString("hex");
   }
   const normalized = requireHexString(value, name);
@@ -24094,7 +23993,7 @@ function normalizeHashLike32(value, name, options = {}) {
   if (value instanceof ArrayBuffer) {
     return normalizeHex32String(Buffer.from(value).toString("hex"), name, options);
   }
-  if (Array.isArray(value)) {
+  if (arrayIsArray(value)) {
     return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
   const normalized = requireNonEmptyString(value, name);
@@ -24195,7 +24094,7 @@ function cloneJsonValueInternal(value, path, state, depth) {
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
+    if (!numberIsFinite(value)) {
       throw new TypeError(`${path} must not contain non-finite numbers`);
     }
     return value;
@@ -24211,10 +24110,10 @@ function cloneJsonValueInternal(value, path, state, depth) {
   }
   state.ancestors.add(value);
   try {
-    if (Array.isArray(value)) {
-      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (arrayIsArray(value)) {
+      const lengthDescriptor = objectGetOwnPropertyDescriptor(value, "length");
       const length = lengthDescriptor?.value;
-      if (!Number.isSafeInteger(length) || length < 0) {
+      if (!numberIsSafeInteger(length) || length < 0) {
         throw new TypeError(`${path} must be an exact JSON array`);
       }
       if (length > JSON_CLONE_MAX_NODES) {
@@ -24235,7 +24134,7 @@ function cloneJsonValueInternal(value, path, state, depth) {
       }
       const result = new Array(length);
       for (let index = 0; index < length; index += 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        const descriptor = objectGetOwnPropertyDescriptor(value, String(index));
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
           throw new TypeError(`${path}[${index}] must be an enumerable data property`);
         }
@@ -24253,7 +24152,7 @@ function cloneJsonValueInternal(value, path, state, depth) {
       if (typeof key !== "string") {
         throw new TypeError(`${path} keys must be strings without symbols`);
       }
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      const descriptor = objectGetOwnPropertyDescriptor(value, key);
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
         throw new TypeError(`${path}.${key} must be an enumerable data property`);
       }
@@ -24326,7 +24225,7 @@ function normalizeSpaceDirectoryManifestPayload(input, context) {
     );
   }
   const entriesRaw = manifest.entries ?? manifest.Entries;
-  if (!Array.isArray(entriesRaw) || entriesRaw.length === 0) {
+  if (!arrayIsArray(entriesRaw) || entriesRaw.length === 0) {
     throw new TypeError(`${context}.entries must be a non-empty array`);
   }
   normalized.entries = entriesRaw.map((entry, index) => {
@@ -24768,7 +24667,7 @@ function normalizeGovernanceDraftResponse(
 ) {
   const record = ensureRecord(payload, context);
   const instructionsValue = record.tx_instructions ?? [];
-  if (!Array.isArray(instructionsValue)) {
+  if (!arrayIsArray(instructionsValue)) {
     throw new TypeError(`${context}.tx_instructions must be an array`);
   }
   const txInstructions = instructionsValue.map((entry, index) => {
@@ -25011,7 +24910,7 @@ function normalizeGovernancePublicInputs(value, name) {
   normalizeGovernancePublicInputHex(normalized, "nullifier", name);
   ensureGovernanceLockHintsComplete(normalized, name);
   if (
-    Object.prototype.hasOwnProperty.call(normalized, "amount") &&
+    objectHasOwn(normalized, "amount") &&
     normalized.amount !== null
   ) {
     normalized.amount = requireCanonicalQuantity(
@@ -25020,7 +24919,7 @@ function normalizeGovernancePublicInputs(value, name) {
     );
   }
   if (
-    Object.prototype.hasOwnProperty.call(normalized, "owner") &&
+    objectHasOwn(normalized, "owner") &&
     normalized.owner !== null
   ) {
     normalized.owner = ensureCanonicalAccountId(normalized.owner, `${name}.owner`);
@@ -25029,7 +24928,7 @@ function normalizeGovernancePublicInputs(value, name) {
 }
 
 function normalizeGovernancePublicInputHex(target, key, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
+  if (!objectHasOwn(target, key)) {
     return;
   }
   const value = target[key];
@@ -25064,7 +24963,7 @@ function normalizeGovernancePublicInputHex(target, key, name) {
 }
 
 function rejectGovernancePublicInputKey(target, key, canonicalKey, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
+  if (!objectHasOwn(target, key)) {
     return;
   }
   throw createValidationError(
@@ -25262,7 +25161,7 @@ function normalizeGovernanceZkBallotProofPayload(input) {
     "nullifier",
     ballotContext,
   );
-  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "root_hint")) {
+  if (objectHasOwn(normalizedBallot, "root_hint")) {
     const rootHint = normalizedBallot.root_hint;
     if (rootHint !== null) {
       normalizedBallot.root_hint = normalizeHex32String(
@@ -25272,7 +25171,7 @@ function normalizeGovernanceZkBallotProofPayload(input) {
       );
     }
   }
-  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "nullifier")) {
+  if (objectHasOwn(normalizedBallot, "nullifier")) {
     const nullifier = normalizedBallot.nullifier;
     if (nullifier !== null) {
       normalizedBallot.nullifier = normalizeHex32String(
@@ -25284,7 +25183,7 @@ function normalizeGovernanceZkBallotProofPayload(input) {
   }
   ensureGovernanceLockHintsComplete(normalizedBallot, ballotContext);
   if (
-    Object.prototype.hasOwnProperty.call(normalizedBallot, "amount") &&
+    objectHasOwn(normalizedBallot, "amount") &&
     normalizedBallot.amount !== null
   ) {
     normalizedBallot.amount = normalizeQuantityInput(
@@ -25293,7 +25192,7 @@ function normalizeGovernanceZkBallotProofPayload(input) {
     );
   }
   if (
-    Object.prototype.hasOwnProperty.call(normalizedBallot, "owner") &&
+    objectHasOwn(normalizedBallot, "owner") &&
     normalizedBallot.owner !== null
   ) {
     normalizedBallot.owner = ensureCanonicalAccountId(
@@ -25738,7 +25637,7 @@ function normalizeContractCallSimulateResponse(payload) {
       "contractCall simulation response.gas_used",
       { allowZero: true },
     ),
-    queued_instructions: Array.isArray(record.queued_instructions)
+    queued_instructions: arrayIsArray(record.queued_instructions)
       ? record.queued_instructions.map((instruction, index) =>
           cloneJsonValue(
             instruction,
@@ -25835,7 +25734,7 @@ function normalizeZkIvmProvedPayload(value, context) {
     record.bytecode,
     `${context}.bytecode`,
   );
-  if (!Array.isArray(record.overlay)) {
+  if (!arrayIsArray(record.overlay)) {
     throw new TypeError(`${context}.overlay must be an array`);
   }
   const overlay = cloneJsonValue(record.overlay, `${context}.overlay`, {
@@ -25869,7 +25768,7 @@ function exactEnumerableDataRecord(value, expectedKeys, context) {
   }
   const snapshot = {};
   for (const key of expectedKeys) {
-    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    const descriptor = objectGetOwnPropertyDescriptor(record, key);
     if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
       throw new TypeError(`${context}.${key} must be an enumerable data property`);
     }
@@ -26030,10 +25929,10 @@ function normalizeExactJsonByteArray(
   context,
   { exactLength = null, maxLength = null } = {},
 ) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an exact byte array`);
   }
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  const lengthDescriptor = objectGetOwnPropertyDescriptor(value, "length");
   if (!lengthDescriptor || !("value" in lengthDescriptor)) {
     throw new TypeError(`${context} must be an exact byte array`);
   }
@@ -26053,18 +25952,18 @@ function normalizeExactJsonByteArray(
   const bytes = new Uint8ArrayIntrinsic(length);
   let enumerableKeys = 0;
   for (const key in value) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+    if (!objectHasOwn(value, key)) {
       throw new TypeError(`${context} must not inherit enumerable fields`);
     }
     if (key !== String(enumerableKeys) || enumerableKeys >= length) {
       throw new TypeError(`${context} must be a dense exact byte array`);
     }
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const descriptor = objectGetOwnPropertyDescriptor(value, key);
     const byte = descriptor && "value" in descriptor ? descriptor.value : null;
     if (
       !descriptor?.enumerable ||
       typeof byte !== "number" ||
-      !Number.isInteger(byte) ||
+      !numberIsInteger(byte) ||
       byte < 0 ||
       byte > 0xff
     ) {
@@ -26113,7 +26012,7 @@ function normalizeZkIvmProveJobCreatedResponse(payload) {
 
 function normalizeZkIvmProveJobResponse(payload) {
   const candidate = ensureRecord(payload, "IVM prove job status response");
-  const statusDescriptor = Object.getOwnPropertyDescriptor(candidate, "status");
+  const statusDescriptor = objectGetOwnPropertyDescriptor(candidate, "status");
   if (
     !statusDescriptor ||
     !("value" in statusDescriptor) ||
@@ -26241,7 +26140,7 @@ function normalizeMultisigProposalsQueryRequest(input, context) {
   const record = ensureRecord(input, context);
   const payload = normalizeMultisigAccountSelector(record, context);
   if (record.status !== undefined) {
-    if (!Array.isArray(record.status)) {
+    if (!arrayIsArray(record.status)) {
       throw new TypeError(`${context}.status must be an array`);
     }
     payload.status = record.status.map((status, index) =>
@@ -26267,7 +26166,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
     Buffer.isBuffer(value) ||
     ArrayBuffer.isView(value) ||
     value instanceof ArrayBuffer ||
-    Array.isArray(value)
+    arrayIsArray(value)
   ) {
     return value;
   }
@@ -26288,7 +26187,7 @@ function normalizeMultisigProposeRequest(input) {
   rejectRetiredFeeSelectionFields(record, "proposeMultisig request");
   const selector = normalizeMultisigAccountSelector(record, "proposeMultisig request");
   const instructionsValue = pickOverride(record, "instructions", "instructions");
-  if (!Array.isArray(instructionsValue) || instructionsValue.length === 0) {
+  if (!arrayIsArray(instructionsValue) || instructionsValue.length === 0) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
       "proposeMultisig request.instructions must be a non-empty array",
@@ -26635,7 +26534,7 @@ function normalizeMultisigProposalsQueryResponse(
 ) {
   const record = ensureRecord(payload, context);
   const proposalsValue = record.proposals;
-  if (!Array.isArray(proposalsValue)) {
+  if (!arrayIsArray(proposalsValue)) {
     throw new TypeError(`${context}.proposals must be an array`);
   }
   return {
@@ -26762,7 +26661,7 @@ function normalizeContractCodeBytesResponse(payload) {
       "contract code bytes response must contain exactly the code_b64 field",
     );
   }
-  const descriptor = Object.getOwnPropertyDescriptor(record, "code_b64");
+  const descriptor = objectGetOwnPropertyDescriptor(record, "code_b64");
   if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
     throw new TypeError(
       "contract code bytes response code_b64 must be an enumerable data property",
@@ -26913,7 +26812,7 @@ function normalizeManifestEntrypointsPayload(value, name) {
   if (value === undefined || value === null) {
     return null;
   }
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${name} must be an array of entrypoints`);
   }
   if (value.length === 0) {
@@ -27050,7 +26949,7 @@ function normalizeAliasLookupByAccountResponse(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   const accountId = ToriiClient._requireAccountId(record.account_id, `${context}.account_id`);
-  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const rawItems = arrayIsArray(record.items) ? record.items : [];
   const items = rawItems.map((item, index) => {
     const aliasRecord = ensureRecord(item, `${context}.items[${index}]`);
     const alias = requireNonEmptyString(aliasRecord.alias, `${context}.items[${index}].alias`);
@@ -27245,7 +27144,7 @@ function rejectRetiredFeeSelectionFields(
     retired.push(["gasLimit", "feePayment.value.gas_limit"]);
   }
   for (const [field, replacement] of retired) {
-    if (Object.prototype.hasOwnProperty.call(record, field)) {
+    if (objectHasOwn(record, field)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         `${context}.${field} is retired; use ${replacement}`,
@@ -27455,11 +27354,11 @@ function normalizeFeeQuoteResponse(payload, context = "fee quote response") {
 }
 
 function requireDenseArray(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   for (let index = 0; index < value.length; index += 1) {
-    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+    if (!objectHasOwn(value, index)) {
       throw new TypeError(`${context} must be a dense array`);
     }
   }
@@ -27780,7 +27679,7 @@ function requireBfvUint(value, name, options = {}) {
   if (typeof value === "bigint") {
     integer = value;
   } else if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
+    if (!numberIsFinite(value) || !numberIsInteger(value) || !numberIsSafeInteger(value)) {
       throw createValidationError(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
         `${name} must be a safe integer number, bigint, or decimal string`,
@@ -27836,7 +27735,7 @@ function normalizeIdentifierBfvUint(value, name, options = {}) {
 }
 
 function normalizeIdentifierBfvUintArray(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) =>
@@ -28299,7 +28198,7 @@ function normalizeIdentifierPolicyListResponse(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   const itemsValue = record.items;
-  if (!Array.isArray(itemsValue)) {
+  if (!arrayIsArray(itemsValue)) {
     throw new Error(`${context}.items must be an array`);
   }
   return {
@@ -28320,7 +28219,7 @@ function normalizeRamLfeProgramPolicyListResponse(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   const itemsValue = record.items;
-  if (!Array.isArray(itemsValue)) {
+  if (!arrayIsArray(itemsValue)) {
     throw new Error(`${context}.items must be an array`);
   }
   return {
@@ -29122,7 +29021,7 @@ function buildSorafsAliasListParams(options = {}) {
       { allowZero: true },
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function buildSorafsPinListParams(options = {}) {
@@ -29161,7 +29060,7 @@ function buildSorafsPinListParams(options = {}) {
       { allowZero: true },
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function buildSorafsReplicationListParams(options = {}) {
@@ -29206,7 +29105,7 @@ function buildSorafsReplicationListParams(options = {}) {
       { allowZero: true },
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function normalizeSorafsReputationProviderId(value, context) {
@@ -29233,6 +29132,49 @@ function normalizeSorafsReputationProviderId(value, context) {
     );
   }
   return providerId;
+}
+
+async function getSorafsReputationJson(
+  client,
+  path,
+  options,
+  methodContext,
+  responseContext,
+  parser,
+  parserOptions,
+) {
+  const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    options,
+    methodContext,
+  );
+  assertSupportedOptionKeys(
+    rest,
+    SORAFS_REPUTATION_CACHE_OPTION_KEYS,
+    `${methodContext} options`,
+  );
+  const auth = buildSorafsReputationRequestAuth(
+    rest,
+    client._config.defaultHeaders,
+    methodContext,
+  );
+  const response = await client._request("GET", path, {
+    headers: auth.headers,
+    canonicalAuth: auth.canonicalAuth,
+    disableRetries: true,
+    redirect: "error",
+    signal,
+  });
+  await client._expectStatus(response, [200, 304, 404]);
+  if (response.status === 304 || response.status === 404) {
+    return null;
+  }
+  const payload = await client._readBoundedLosslessIntegerJson(
+    response,
+    SORAFS_REPUTATION_JSON_MAX_BYTES,
+    responseContext,
+    { signal },
+  );
+  return parser(payload, responseContext, parserOptions);
 }
 
 function normalizeReputationSnapshotIdHex(value, context) {
@@ -29268,7 +29210,7 @@ function normalizeSorafsHedgingBillingDigest(value, context) {
 function normalizeSorafsHedgingBillingLimit(value, context) {
   if (
     typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
+    !numberIsSafeInteger(value) ||
     value < 1 ||
     value > 100
   ) {
@@ -29318,7 +29260,7 @@ function sorafsReputationCanonicalAuthEntries(headers, context) {
     return new Map();
   }
   const entries = new Map();
-  for (const [rawName, rawValue] of Object.entries(headers)) {
+  for (const [rawName, rawValue] of objectEntries(headers)) {
     const normalizedName = String(rawName).toLowerCase();
     if (!SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS.has(normalizedName)) {
       continue;
@@ -29448,7 +29390,7 @@ function buildSorafsReputationHeaders(
         `${context}.headers`,
       );
     }
-    for (const [key, value] of Object.entries(options.headers)) {
+    for (const [key, value] of objectEntries(options.headers)) {
       if (value !== undefined && value !== null) {
         headers[key] = SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS.has(
           key.toLowerCase(),
@@ -29487,7 +29429,7 @@ function normalizeSorafsReputationDecimal(
 ) {
   let integer;
   if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) {
+    if (!numberIsSafeInteger(value)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
         `${context} must be a safe integer, bigint, or canonical decimal string`,
@@ -29542,7 +29484,7 @@ function buildSorafsReputationEventsParams(options = {}, context) {
       { allowZero: false, max: 500n },
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function buildSorafsOrderbookHeaders(options = {}, context, { cache = false } = {}) {
@@ -29555,7 +29497,7 @@ function buildSorafsOrderbookHeaders(options = {}, context, { cache = false } = 
         `${context}.headers`,
       );
     }
-    for (const [key, value] of Object.entries(options.headers)) {
+    for (const [key, value] of objectEntries(options.headers)) {
       if (value !== undefined && value !== null) {
         headers[key] = String(value);
       }
@@ -29625,7 +29567,7 @@ function buildSorafsOrderbookReadParams(options = {}, context) {
       `${context}.afterIdHex`,
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function appendSorafsOrderbookEventCursor(params, options, context) {
@@ -29679,7 +29621,7 @@ function buildSorafsOrderbookEventsParams(options = {}, context) {
     );
   }
   appendSorafsOrderbookEventCursor(params, options, context);
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function normalizeSorafsOrderbookFinalizedSource(value, context) {
@@ -29737,7 +29679,7 @@ function normalizeSorafsOrderbookLedgerStatus(payload, context) {
 }
 
 function normalizeSorafsOrderbookRecordArray(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) => ({
@@ -29883,7 +29825,7 @@ function normalizeSorafsOrderbookEventsResponse(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   const page = ensureRecord(record.events, `${context}.events`);
-  if (!Array.isArray(page.events)) {
+  if (!arrayIsArray(page.events)) {
     throw new TypeError(`${context}.events.events must be an array`);
   }
   if (typeof page.has_more !== "boolean") {
@@ -29971,7 +29913,7 @@ function normalizeSorafsXorQuantity(value, context) {
 
 function rejectRetiredSorafsMonetaryFields(record, retiredNames, context) {
   const present = retiredNames.filter((name) =>
-    Object.prototype.hasOwnProperty.call(record, name),
+    objectHasOwn(record, name),
   );
   if (present.length > 0) {
     throw createValidationError(
@@ -29982,106 +29924,105 @@ function rejectRetiredSorafsMonetaryFields(record, retiredNames, context) {
   }
 }
 
-const SORAFS_REPUTATION_SNAPSHOT_FIELDS = new Set([
-  "snapshot_id_hex",
-  "generated_at_unix",
-  "previous_snapshot_id_hex",
-  "merkle_root_hex",
-  "provider_count",
-  "returned_provider_count",
-  "limit",
-  "truncated_providers",
-  "alpha_bps",
-  "current_score_weight_bps",
-  "weights",
-  "providers",
-]);
-const SORAFS_REPUTATION_PROVIDER_RESPONSE_FIELDS = new Set([
-  "snapshot_id_hex",
-  "generated_at_unix",
-  "merkle_root_hex",
-  "provider",
-  "proof",
-]);
-const SORAFS_REPUTATION_WEIGHTS_RESPONSE_FIELDS = new Set([
-  "snapshot_id_hex",
-  "generated_at_unix",
-  "alpha_bps",
-  "current_score_weight_bps",
-  "weights",
-]);
-const SORAFS_REPUTATION_WEIGHTS_FIELDS = new Set([
-  "version",
-  "por_success_bps",
-  "pdp_success_bps",
-  "potr_success_bps",
-  "latency_bps",
-  "dispute_bps",
-  "token_violation_bps",
-  "repair_breach_bps",
-]);
-const SORAFS_REPUTATION_PROVIDER_FIELDS = new Set([
-  "provider_id",
-  "score_bps",
-  "degradation_flags",
-  "raw_metrics",
-  "raw_metrics_hash_hex",
-]);
-const SORAFS_REPUTATION_PROVIDER_METRICS_FIELDS = new Set([
-  "version",
-  "por_success_bps",
-  "pdp_success_bps",
-  "potr_success_bps",
-  "latency_health_bps",
-  "dispute_rate_bps",
-  "token_violation_rate_bps",
-  "repair_breach_rate_bps",
-]);
-const SORAFS_REPUTATION_DEGRADATION_FLAG_FIELDS = new Set(["flag", "value"]);
-const SORAFS_REPUTATION_PROOF_FIELDS = new Set([
-  "provider_id",
-  "leaf_index",
-  "leaf_count",
-  "siblings_hex",
-]);
-const SORAFS_REPUTATION_EVENT_FIELDS = new Set([
-  "version",
-  "sequence",
-  "snapshot_id_hex",
-  "generated_at_unix",
-  "merkle_root_hex",
-  "provider_count",
-  "previous_snapshot_id_hex",
-]);
-const SORAFS_REPUTATION_EVENT_PAGE_FIELDS = new Set([
-  "since",
-  "limit",
-  "count",
-  "next_since",
-  "events",
-]);
-const SORAFS_REPUTATION_DEGRADATION_FLAG_ORDER = Object.freeze([
-  "reserve_warning",
-  "reserve_grace",
-  "reserve_delinquent",
-  "reserve_default",
-  "proof_success_below90",
-  "proof_success_below80",
-  "active_dispute",
-  "slashing_event",
-  "low_score",
-]);
-const SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX = new Map(
-  SORAFS_REPUTATION_DEGRADATION_FLAG_ORDER.map((flag, index) => [flag, index]),
-);
-
+const SORAFS_REPUTATION_SNAPSHOT_FIELDS = {
+  snapshot_id_hex: [normalizeReputationSnapshotIdHex],
+  generated_at_unix: [parseSorafsReputationU64, { minimum: 1n }],
+  previous_snapshot_id_hex: [parseSorafsReputationOptionalSnapshotId],
+  merkle_root_hex: [parseSorafsReputationDigest],
+  provider_count: [parseSorafsReputationBoundedInteger, 1, 65_536],
+  returned_provider_count: [parseSorafsReputationBoundedInteger, 1, 500],
+  limit: [parseSorafsReputationBoundedInteger, 1, 500],
+  truncated_providers: [parseSumeragiBoolean],
+  alpha_bps: [parseSorafsReputationExactInteger, 8_500],
+  current_score_weight_bps: [parseSorafsReputationExactInteger, 7_000],
+  weights: [parseSorafsReputationWeights],
+  providers: [parseSorafsReputationProviders],
+};
+const SORAFS_REPUTATION_PROVIDER_RESPONSE_FIELDS = {
+  snapshot_id_hex: [normalizeReputationSnapshotIdHex],
+  generated_at_unix: [parseSorafsReputationU64, { minimum: 1n }],
+  merkle_root_hex: [parseSorafsReputationDigest],
+  provider: [parseSorafsReputationProvider],
+  proof: [parseSorafsReputationProof],
+};
+const SORAFS_REPUTATION_WEIGHTS_RESPONSE_FIELDS = {
+  snapshot_id_hex: [normalizeReputationSnapshotIdHex],
+  generated_at_unix: [parseSorafsReputationU64, { minimum: 1n }],
+  alpha_bps: [parseSorafsReputationExactInteger, 8_500],
+  current_score_weight_bps: [parseSorafsReputationExactInteger, 7_000],
+  weights: [parseSorafsReputationWeights],
+};
+const SORAFS_REPUTATION_WEIGHTS_FIELDS = {
+  version: 0,
+  por_success_bps: 0,
+  pdp_success_bps: 0,
+  potr_success_bps: 0,
+  latency_bps: 0,
+  dispute_bps: 0,
+  token_violation_bps: 0,
+  repair_breach_bps: 0,
+};
+const SORAFS_REPUTATION_PROVIDER_FIELDS = {
+  provider_id: [normalizeSorafsReputationProviderId],
+  score_bps: [parseSorafsReputationBoundedInteger, 500, 9_900],
+  degradation_flags: [parseSorafsReputationDegradationFlags],
+  raw_metrics: [parseSorafsReputationProviderMetrics],
+  raw_metrics_hash_hex: [parseSorafsReputationDigest],
+};
+const SORAFS_REPUTATION_PROVIDER_METRICS_FIELDS = {
+  version: 0,
+  por_success_bps: 0,
+  pdp_success_bps: 0,
+  potr_success_bps: 0,
+  latency_health_bps: 0,
+  dispute_rate_bps: 0,
+  token_violation_rate_bps: 0,
+  repair_breach_rate_bps: 0,
+};
+const SORAFS_REPUTATION_DEGRADATION_FLAG_FIELDS = { flag: 0, value: 0 };
+const SORAFS_REPUTATION_PROOF_FIELDS = {
+  provider_id: [normalizeSorafsReputationProviderId],
+  leaf_index: [parseSorafsReputationBoundedInteger, 0, 65_535],
+  leaf_count: [parseSorafsReputationBoundedInteger, 1, 65_536],
+  siblings_hex: [parseSorafsReputationDigests],
+};
+const SORAFS_REPUTATION_EVENT_FIELDS = {
+  version: [parseSorafsReputationExactInteger, 1],
+  sequence: [parseSorafsReputationU64, { minimum: 1n }],
+  snapshot_id_hex: [normalizeReputationSnapshotIdHex],
+  generated_at_unix: [parseSorafsReputationU64, { minimum: 1n }],
+  merkle_root_hex: [parseSorafsReputationDigest],
+  provider_count: [parseSorafsReputationBoundedInteger, 1, 65_536],
+  previous_snapshot_id_hex: [parseSorafsReputationOptionalSnapshotId],
+};
+const SORAFS_REPUTATION_EVENT_PAGE_FIELDS = {
+  since: [parseSorafsReputationOptionalU64],
+  limit: [parseSorafsReputationBoundedInteger, 1, 500],
+  count: [parseSorafsReputationBoundedInteger, 0, 500],
+  next_since: [parseSorafsReputationOptionalU64, { minimum: 1n }],
+  events: [parseSorafsReputationEvents],
+};
+const SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX = objectFreeze({
+  reserve_warning: 0,
+  reserve_grace: 1,
+  reserve_delinquent: 2,
+  reserve_default: 3,
+  proof_success_below90: 4,
+  proof_success_below80: 5,
+  active_dispute: 6,
+  slashing_event: 7,
+  low_score: 8,
+});
 function requireSorafsReputationExactObject(value, expectedFields, context) {
   const record = ensureRecord(value, context);
-  const actualFields = Object.keys(record);
-  const missing = [...expectedFields].filter(
-    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  const actualFields = objectKeys(record);
+  const canonicalFields = objectKeys(expectedFields);
+  const missing = canonicalFields.filter(
+    (field) => !objectHasOwn(record, field),
   );
-  const extra = actualFields.filter((field) => !expectedFields.has(field));
+  const extra = actualFields.filter(
+    (field) => !objectHasOwn(expectedFields, field),
+  );
   if (missing.length !== 0 || extra.length !== 0) {
     throw new TypeError(
       `${context} fields are not canonical; missing=[${missing.join(
@@ -30093,7 +30034,7 @@ function requireSorafsReputationExactObject(value, expectedFields, context) {
 }
 
 function requireSorafsReputationArray(value, context) {
-  if (!Array.isArray(value)) {
+  if (!arrayIsArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
   return value;
@@ -30107,7 +30048,7 @@ function parseSorafsReputationU64(
   let integer;
   if (
     typeof value === "number" &&
-    Number.isSafeInteger(value) &&
+    numberIsSafeInteger(value) &&
     !Object.is(value, -0)
   ) {
     integer = BigInt(value);
@@ -30136,24 +30077,16 @@ function parseSorafsReputationBoundedInteger(value, context, minimum, maximum) {
 }
 
 function parseSorafsReputationExactInteger(value, context, expected) {
-  const parsed = parseSorafsReputationBoundedInteger(
+  return parseSorafsReputationBoundedInteger(
     value,
     context,
     expected,
     expected,
   );
-  if (parsed !== expected) {
-    throw new RangeError(`${context} must equal ${expected}`);
-  }
-  return parsed;
-}
-
-function parseSorafsReputationSnapshotId(value, context) {
-  return normalizeReputationSnapshotIdHex(value, context);
 }
 
 function parseSorafsReputationOptionalSnapshotId(value, context) {
-  return value === null ? null : parseSorafsReputationSnapshotId(value, context);
+  return value === null ? null : normalizeReputationSnapshotIdHex(value, context);
 }
 
 function parseSorafsReputationDigest(value, context) {
@@ -30165,70 +30098,61 @@ function parseSorafsReputationDigest(value, context) {
   return value;
 }
 
-function parseSorafsReputationWeights(value, context) {
-  const weights = requireSorafsReputationExactObject(
+function parseSorafsReputationRecordFields(record, context, schema) {
+  const parsed = {};
+  for (const field of objectKeys(schema)) {
+    const rule = schema[field];
+    parsed[field] = rule[0](
+      record[field],
+      `${context}.${field}`,
+      rule[1],
+      rule[2],
+    );
+  }
+  return parsed;
+}
+
+function parseSorafsReputationRecord(value, context, schema) {
+  return parseSorafsReputationRecordFields(
+    requireSorafsReputationExactObject(value, schema, context),
+    context,
+    schema,
+  );
+}
+
+function parseSorafsReputationBpsRecord(
+  value,
+  context,
+  fields,
+  requireExactTotal,
+) {
+  const record = requireSorafsReputationExactObject(
     value,
-    SORAFS_REPUTATION_WEIGHTS_FIELDS,
+    fields,
     context,
   );
-  const parsed = {
-    version: parseSorafsReputationExactInteger(
-      weights.version,
-      `${context}.version`,
-      1,
-    ),
-    por_success_bps: parseSorafsReputationBoundedInteger(
-      weights.por_success_bps,
-      `${context}.por_success_bps`,
-      0,
-      10_000,
-    ),
-    pdp_success_bps: parseSorafsReputationBoundedInteger(
-      weights.pdp_success_bps,
-      `${context}.pdp_success_bps`,
-      0,
-      10_000,
-    ),
-    potr_success_bps: parseSorafsReputationBoundedInteger(
-      weights.potr_success_bps,
-      `${context}.potr_success_bps`,
-      0,
-      10_000,
-    ),
-    latency_bps: parseSorafsReputationBoundedInteger(
-      weights.latency_bps,
-      `${context}.latency_bps`,
-      0,
-      10_000,
-    ),
-    dispute_bps: parseSorafsReputationBoundedInteger(
-      weights.dispute_bps,
-      `${context}.dispute_bps`,
-      0,
-      10_000,
-    ),
-    token_violation_bps: parseSorafsReputationBoundedInteger(
-      weights.token_violation_bps,
-      `${context}.token_violation_bps`,
-      0,
-      10_000,
-    ),
-    repair_breach_bps: parseSorafsReputationBoundedInteger(
-      weights.repair_breach_bps,
-      `${context}.repair_breach_bps`,
-      0,
-      10_000,
-    ),
-  };
-  const total =
-    parsed.por_success_bps +
-    parsed.pdp_success_bps +
-    parsed.potr_success_bps +
-    parsed.latency_bps +
-    parsed.dispute_bps +
-    parsed.token_violation_bps +
-    parsed.repair_breach_bps;
-  if (total !== 10_000) {
+  const parsed = {};
+  let total = 0;
+  for (const field of objectKeys(fields)) {
+    const parsedValue =
+      field === "version"
+        ? parseSorafsReputationExactInteger(
+            record[field],
+            `${context}.${field}`,
+            1,
+          )
+        : parseSorafsReputationBoundedInteger(
+            record[field],
+            `${context}.${field}`,
+            0,
+            10_000,
+          );
+    parsed[field] = parsedValue;
+    if (field !== "version") {
+      total += parsedValue;
+    }
+  }
+  if (requireExactTotal && total !== 10_000) {
     throw new RangeError(
       `${context} basis-point fields must sum to exactly 10000`,
     );
@@ -30236,83 +30160,34 @@ function parseSorafsReputationWeights(value, context) {
   return parsed;
 }
 
-function parseSorafsReputationProviderMetrics(value, context) {
-  const metrics = requireSorafsReputationExactObject(
+function parseSorafsReputationWeights(value, context) {
+  return parseSorafsReputationBpsRecord(
     value,
-    SORAFS_REPUTATION_PROVIDER_METRICS_FIELDS,
     context,
+    SORAFS_REPUTATION_WEIGHTS_FIELDS,
+    true,
   );
-  return {
-    version: parseSorafsReputationExactInteger(
-      metrics.version,
-      `${context}.version`,
-      1,
-    ),
-    por_success_bps: parseSorafsReputationBoundedInteger(
-      metrics.por_success_bps,
-      `${context}.por_success_bps`,
-      0,
-      10_000,
-    ),
-    pdp_success_bps: parseSorafsReputationBoundedInteger(
-      metrics.pdp_success_bps,
-      `${context}.pdp_success_bps`,
-      0,
-      10_000,
-    ),
-    potr_success_bps: parseSorafsReputationBoundedInteger(
-      metrics.potr_success_bps,
-      `${context}.potr_success_bps`,
-      0,
-      10_000,
-    ),
-    latency_health_bps: parseSorafsReputationBoundedInteger(
-      metrics.latency_health_bps,
-      `${context}.latency_health_bps`,
-      0,
-      10_000,
-    ),
-    dispute_rate_bps: parseSorafsReputationBoundedInteger(
-      metrics.dispute_rate_bps,
-      `${context}.dispute_rate_bps`,
-      0,
-      10_000,
-    ),
-    token_violation_rate_bps: parseSorafsReputationBoundedInteger(
-      metrics.token_violation_rate_bps,
-      `${context}.token_violation_rate_bps`,
-      0,
-      10_000,
-    ),
-    repair_breach_rate_bps: parseSorafsReputationBoundedInteger(
-      metrics.repair_breach_rate_bps,
-      `${context}.repair_breach_rate_bps`,
-      0,
-      10_000,
-    ),
-  };
 }
 
-function parseSorafsReputationProvider(value, context) {
-  const provider = requireSorafsReputationExactObject(
+function parseSorafsReputationProviderMetrics(value, context) {
+  return parseSorafsReputationBpsRecord(
     value,
-    SORAFS_REPUTATION_PROVIDER_FIELDS,
     context,
+    SORAFS_REPUTATION_PROVIDER_METRICS_FIELDS,
+    false,
   );
-  const flags = requireSorafsReputationArray(
-    provider.degradation_flags,
-    `${context}.degradation_flags`,
-  );
+}
+
+function parseSorafsReputationDegradationFlags(value, context) {
+  const flags = requireSorafsReputationArray(value, context);
   if (flags.length > 5) {
-    throw new RangeError(
-      `${context}.degradation_flags must contain at most five entries`,
-    );
+    throw new RangeError(`${context} must contain at most five entries`);
   }
   let previousFlagIndex = -1;
-  const parsedFlags = flags.map((value, index) => {
-    const flagContext = `${context}.degradation_flags[${index}]`;
+  return flags.map((entry, index) => {
+    const flagContext = `${context}[${index}]`;
     const flag = requireSorafsReputationExactObject(
-      value,
+      entry,
       SORAFS_REPUTATION_DEGRADATION_FLAG_FIELDS,
       flagContext,
     );
@@ -30322,39 +30197,26 @@ function parseSorafsReputationProvider(value, context) {
     if (typeof flag.flag !== "string") {
       throw new TypeError(`${flagContext}.flag must be a string`);
     }
-    const flagIndex = SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX.get(flag.flag);
-    if (flagIndex === undefined) {
+    if (!objectHasOwn(SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX, flag.flag)) {
       throw new TypeError(`${flagContext}.flag is unsupported`);
     }
+    const flagIndex = SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX[flag.flag];
     if (flagIndex <= previousFlagIndex) {
       throw new TypeError(
-        `${context}.degradation_flags must use canonical enum order without duplicates`,
+        `${context} must use canonical enum order without duplicates`,
       );
     }
     previousFlagIndex = flagIndex;
     return { flag: flag.flag, value: null };
   });
-  return {
-    provider_id: normalizeSorafsReputationProviderId(
-      provider.provider_id,
-      `${context}.provider_id`,
-    ),
-    score_bps: parseSorafsReputationBoundedInteger(
-      provider.score_bps,
-      `${context}.score_bps`,
-      500,
-      9_900,
-    ),
-    degradation_flags: parsedFlags,
-    raw_metrics: parseSorafsReputationProviderMetrics(
-      provider.raw_metrics,
-      `${context}.raw_metrics`,
-    ),
-    raw_metrics_hash_hex: parseSorafsReputationDigest(
-      provider.raw_metrics_hash_hex,
-      `${context}.raw_metrics_hash_hex`,
-    ),
-  };
+}
+
+function parseSorafsReputationProvider(value, context) {
+  return parseSorafsReputationRecord(
+    value,
+    context,
+    SORAFS_REPUTATION_PROVIDER_FIELDS,
+  );
 }
 
 function sorafsReputationMerkleDepth(leafCount) {
@@ -30367,20 +30229,26 @@ function sorafsReputationMerkleDepth(leafCount) {
   return depth;
 }
 
+function parseSorafsReputationDigests(value, context) {
+  return requireSorafsReputationArray(value, context).map((digest, index) =>
+    parseSorafsReputationDigest(digest, `${context}[${index}]`),
+  );
+}
+
 function parseSorafsReputationProof(value, context) {
-  const proof = requireSorafsReputationExactObject(
+  const record = requireSorafsReputationExactObject(
     value,
     SORAFS_REPUTATION_PROOF_FIELDS,
     context,
   );
   const leafIndex = parseSorafsReputationBoundedInteger(
-    proof.leaf_index,
+    record.leaf_index,
     `${context}.leaf_index`,
     0,
     65_535,
   );
   const leafCount = parseSorafsReputationBoundedInteger(
-    proof.leaf_count,
+    record.leaf_count,
     `${context}.leaf_count`,
     1,
     65_536,
@@ -30388,87 +30256,50 @@ function parseSorafsReputationProof(value, context) {
   if (leafIndex >= leafCount) {
     throw new RangeError(`${context}.leaf_index must be less than leaf_count`);
   }
-  const siblings = requireSorafsReputationArray(
-    proof.siblings_hex,
-    `${context}.siblings_hex`,
-  ).map((sibling, index) =>
-    parseSorafsReputationDigest(
-      sibling,
-      `${context}.siblings_hex[${index}]`,
-    ),
+  const proof = parseSorafsReputationRecordFields(
+    record,
+    context,
+    SORAFS_REPUTATION_PROOF_FIELDS,
   );
-  if (siblings.length !== sorafsReputationMerkleDepth(leafCount)) {
+  if (
+    proof.siblings_hex.length !==
+    sorafsReputationMerkleDepth(proof.leaf_count)
+  ) {
     throw new RangeError(
       `${context}.siblings_hex must have the exact Merkle depth for leaf_count`,
     );
   }
-  return {
-    provider_id: normalizeSorafsReputationProviderId(
-      proof.provider_id,
-      `${context}.provider_id`,
-    ),
-    leaf_index: leafIndex,
-    leaf_count: leafCount,
-    siblings_hex: siblings,
-  };
+  return proof;
 }
 
 function parseSorafsReputationEvent(value, context) {
-  const event = requireSorafsReputationExactObject(
+  const event = parseSorafsReputationRecord(
     value,
-    SORAFS_REPUTATION_EVENT_FIELDS,
     context,
+    SORAFS_REPUTATION_EVENT_FIELDS,
   );
-  const snapshotId = parseSorafsReputationSnapshotId(
-    event.snapshot_id_hex,
-    `${context}.snapshot_id_hex`,
-  );
-  const previousSnapshotId = parseSorafsReputationOptionalSnapshotId(
-    event.previous_snapshot_id_hex,
-    `${context}.previous_snapshot_id_hex`,
-  );
-  if (previousSnapshotId === snapshotId) {
+  if (event.previous_snapshot_id_hex === event.snapshot_id_hex) {
     throw new TypeError(
       `${context}.previous_snapshot_id_hex must differ from snapshot_id_hex`,
     );
   }
-  return {
-    version: parseSorafsReputationExactInteger(
-      event.version,
-      `${context}.version`,
-      1,
-    ),
-    sequence: parseSorafsReputationU64(event.sequence, `${context}.sequence`, {
-      minimum: 1n,
-    }),
-    snapshot_id_hex: snapshotId,
-    generated_at_unix: parseSorafsReputationU64(
-      event.generated_at_unix,
-      `${context}.generated_at_unix`,
-      { minimum: 1n },
-    ),
-    merkle_root_hex: parseSorafsReputationDigest(
-      event.merkle_root_hex,
-      `${context}.merkle_root_hex`,
-    ),
-    provider_count: parseSorafsReputationBoundedInteger(
-      event.provider_count,
-      `${context}.provider_count`,
-      1,
-      65_536,
-    ),
-    previous_snapshot_id_hex: previousSnapshotId,
-  };
+  return event;
+}
+
+function parseSorafsReputationProviders(value, context) {
+  return requireSorafsReputationArray(value, context).map((provider, index) =>
+    parseSorafsReputationProvider(provider, `${context}[${index}]`),
+  );
 }
 
 function parseSorafsReputationSnapshot(value, context, options = {}) {
-  const snapshot = requireSorafsReputationExactObject(
+  const record = requireSorafsReputationExactObject(
     value,
     SORAFS_REPUTATION_SNAPSHOT_FIELDS,
     context,
   );
-  const snapshotId = parseSorafsReputationSnapshotId(
-    snapshot.snapshot_id_hex,
+  const snapshotId = normalizeReputationSnapshotIdHex(
+    record.snapshot_id_hex,
     `${context}.snapshot_id_hex`,
   );
   if (
@@ -30478,7 +30309,7 @@ function parseSorafsReputationSnapshot(value, context, options = {}) {
     throw new TypeError(`${context} does not match the requested snapshot`);
   }
   const previousSnapshotId = parseSorafsReputationOptionalSnapshotId(
-    snapshot.previous_snapshot_id_hex,
+    record.previous_snapshot_id_hex,
     `${context}.previous_snapshot_id_hex`,
   );
   if (previousSnapshotId === snapshotId) {
@@ -30486,93 +30317,43 @@ function parseSorafsReputationSnapshot(value, context, options = {}) {
       `${context}.previous_snapshot_id_hex must differ from snapshot_id_hex`,
     );
   }
-  const providerCount = parseSorafsReputationBoundedInteger(
-    snapshot.provider_count,
-    `${context}.provider_count`,
-    1,
-    65_536,
+  const snapshot = parseSorafsReputationRecordFields(
+    record,
+    context,
+    SORAFS_REPUTATION_SNAPSHOT_FIELDS,
   );
-  const returnedProviderCount = parseSorafsReputationBoundedInteger(
-    snapshot.returned_provider_count,
-    `${context}.returned_provider_count`,
-    1,
-    500,
-  );
-  const limit = parseSorafsReputationBoundedInteger(
-    snapshot.limit,
-    `${context}.limit`,
-    1,
-    500,
-  );
-  const providers = requireSorafsReputationArray(
-    snapshot.providers,
-    `${context}.providers`,
-  ).map((provider, index) =>
-    parseSorafsReputationProvider(
-      provider,
-      `${context}.providers[${index}]`,
-    ),
-  );
-  if (providers.length !== returnedProviderCount) {
+  if (snapshot.providers.length !== snapshot.returned_provider_count) {
     throw new RangeError(
       `${context}.returned_provider_count must equal providers.length`,
     );
   }
-  if (returnedProviderCount !== Math.min(providerCount, limit)) {
+  if (
+    snapshot.returned_provider_count !==
+    Math.min(snapshot.provider_count, snapshot.limit)
+  ) {
     throw new RangeError(
       `${context}.returned_provider_count must equal min(provider_count, limit)`,
     );
   }
-  for (let index = 1; index < providers.length; index += 1) {
-    if (providers[index - 1].provider_id >= providers[index].provider_id) {
+  for (let index = 1; index < snapshot.providers.length; index += 1) {
+    if (
+      snapshot.providers[index - 1].provider_id >=
+      snapshot.providers[index].provider_id
+    ) {
       throw new TypeError(
         `${context}.providers must be strictly ordered by provider_id`,
       );
     }
   }
-  if (typeof snapshot.truncated_providers !== "boolean") {
-    throw new TypeError(`${context}.truncated_providers must be a boolean`);
-  }
   if (
     snapshot.truncated_providers !==
-    (providerCount > returnedProviderCount)
+    (snapshot.provider_count > snapshot.returned_provider_count)
   ) {
     throw new TypeError(
       `${context}.truncated_providers is inconsistent with provider counts`,
     );
   }
-  return {
-    snapshot_id_hex: snapshotId,
-    generated_at_unix: parseSorafsReputationU64(
-      snapshot.generated_at_unix,
-      `${context}.generated_at_unix`,
-      { minimum: 1n },
-    ),
-    previous_snapshot_id_hex: previousSnapshotId,
-    merkle_root_hex: parseSorafsReputationDigest(
-      snapshot.merkle_root_hex,
-      `${context}.merkle_root_hex`,
-    ),
-    provider_count: providerCount,
-    returned_provider_count: returnedProviderCount,
-    limit,
-    truncated_providers: snapshot.truncated_providers,
-    alpha_bps: parseSorafsReputationExactInteger(
-      snapshot.alpha_bps,
-      `${context}.alpha_bps`,
-      8_500,
-    ),
-    current_score_weight_bps: parseSorafsReputationExactInteger(
-      snapshot.current_score_weight_bps,
-      `${context}.current_score_weight_bps`,
-      7_000,
-    ),
-    weights: parseSorafsReputationWeights(
-      snapshot.weights,
-      `${context}.weights`,
-    ),
-    providers,
-  };
+  return snapshot;
 }
 
 function parseSorafsReputationProviderResponse(
@@ -30580,75 +30361,26 @@ function parseSorafsReputationProviderResponse(
   context,
   expectedProviderId,
 ) {
-  const response = requireSorafsReputationExactObject(
+  const response = parseSorafsReputationRecord(
     value,
-    SORAFS_REPUTATION_PROVIDER_RESPONSE_FIELDS,
     context,
+    SORAFS_REPUTATION_PROVIDER_RESPONSE_FIELDS,
   );
-  const provider = parseSorafsReputationProvider(
-    response.provider,
-    `${context}.provider`,
-  );
-  const proof = parseSorafsReputationProof(
-    response.proof,
-    `${context}.proof`,
-  );
-  if (provider.provider_id !== proof.provider_id) {
+  if (response.provider.provider_id !== response.proof.provider_id) {
     throw new TypeError(`${context}.proof must reference the returned provider`);
   }
-  if (provider.provider_id !== expectedProviderId) {
+  if (response.provider.provider_id !== expectedProviderId) {
     throw new TypeError(`${context} does not match the requested provider`);
   }
-  return {
-    snapshot_id_hex: parseSorafsReputationSnapshotId(
-      response.snapshot_id_hex,
-      `${context}.snapshot_id_hex`,
-    ),
-    generated_at_unix: parseSorafsReputationU64(
-      response.generated_at_unix,
-      `${context}.generated_at_unix`,
-      { minimum: 1n },
-    ),
-    merkle_root_hex: parseSorafsReputationDigest(
-      response.merkle_root_hex,
-      `${context}.merkle_root_hex`,
-    ),
-    provider,
-    proof,
-  };
+  return response;
 }
 
 function parseSorafsReputationWeightsResponse(value, context) {
-  const response = requireSorafsReputationExactObject(
+  return parseSorafsReputationRecord(
     value,
-    SORAFS_REPUTATION_WEIGHTS_RESPONSE_FIELDS,
     context,
+    SORAFS_REPUTATION_WEIGHTS_RESPONSE_FIELDS,
   );
-  return {
-    snapshot_id_hex: parseSorafsReputationSnapshotId(
-      response.snapshot_id_hex,
-      `${context}.snapshot_id_hex`,
-    ),
-    generated_at_unix: parseSorafsReputationU64(
-      response.generated_at_unix,
-      `${context}.generated_at_unix`,
-      { minimum: 1n },
-    ),
-    alpha_bps: parseSorafsReputationExactInteger(
-      response.alpha_bps,
-      `${context}.alpha_bps`,
-      8_500,
-    ),
-    current_score_weight_bps: parseSorafsReputationExactInteger(
-      response.current_score_weight_bps,
-      `${context}.current_score_weight_bps`,
-      7_000,
-    ),
-    weights: parseSorafsReputationWeights(
-      response.weights,
-      `${context}.weights`,
-    ),
-  };
 }
 
 function parseSorafsReputationOptionalU64(value, context, options = {}) {
@@ -30661,14 +30393,20 @@ function sorafsReputationU64BigInt(value) {
   return typeof value === "bigint" ? value : BigInt(value);
 }
 
+function parseSorafsReputationEvents(value, context) {
+  return requireSorafsReputationArray(value, context).map((event, index) =>
+    parseSorafsReputationEvent(event, `${context}[${index}]`),
+  );
+}
+
 function parseSorafsReputationEventPage(value, context, options = {}) {
-  const page = requireSorafsReputationExactObject(
+  const record = requireSorafsReputationExactObject(
     value,
     SORAFS_REPUTATION_EVENT_PAGE_FIELDS,
     context,
   );
   const since = parseSorafsReputationOptionalU64(
-    page.since,
+    record.since,
     `${context}.since`,
   );
   const expectedSince =
@@ -30682,7 +30420,7 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
     throw new TypeError(`${context}.since does not match the requested cursor`);
   }
   const limit = parseSorafsReputationBoundedInteger(
-    page.limit,
+    record.limit,
     `${context}.limit`,
     1,
     500,
@@ -30693,43 +30431,32 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
   ) {
     throw new TypeError(`${context}.limit does not match the requested limit`);
   }
-  const count = parseSorafsReputationBoundedInteger(
-    page.count,
-    `${context}.count`,
-    0,
-    500,
+  const page = parseSorafsReputationRecordFields(
+    record,
+    context,
+    SORAFS_REPUTATION_EVENT_PAGE_FIELDS,
   );
-  const events = requireSorafsReputationArray(
-    page.events,
-    `${context}.events`,
-  ).map((event, index) =>
-    parseSorafsReputationEvent(event, `${context}.events[${index}]`),
-  );
-  if (count !== events.length) {
+  if (page.count !== page.events.length) {
     throw new RangeError(`${context}.count must equal events.length`);
   }
-  if (count > limit) {
+  if (page.count > page.limit) {
     throw new RangeError(`${context}.count must not exceed limit`);
   }
-  const nextSince = parseSorafsReputationOptionalU64(
-    page.next_since,
-    `${context}.next_since`,
-    { minimum: 1n },
-  );
   if (
-    (events.length === 0 && nextSince !== null) ||
-    (events.length !== 0 &&
-      (nextSince === null ||
-        sorafsReputationU64BigInt(nextSince) !==
-          sorafsReputationU64BigInt(events.at(-1).sequence)))
+    (page.events.length === 0 && page.next_since !== null) ||
+    (page.events.length !== 0 &&
+      (page.next_since === null ||
+        sorafsReputationU64BigInt(page.next_since) !==
+          sorafsReputationU64BigInt(page.events.at(-1).sequence)))
   ) {
     throw new TypeError(
       `${context}.next_since must equal the last event sequence`,
     );
   }
-  let previousSequence = since === null ? 0n : sorafsReputationU64BigInt(since);
-  for (let index = 0; index < events.length; index += 1) {
-    const sequence = sorafsReputationU64BigInt(events[index].sequence);
+  let previousSequence =
+    page.since === null ? 0n : sorafsReputationU64BigInt(page.since);
+  for (let index = 0; index < page.events.length; index += 1) {
+    const sequence = sorafsReputationU64BigInt(page.events[index].sequence);
     if (
       (index === 0 && sequence <= previousSequence) ||
       (index > 0 && sequence !== previousSequence + 1n)
@@ -30740,9 +30467,9 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
     }
     previousSequence = sequence;
   }
-  for (let index = 1; index < events.length; index += 1) {
-    const previous = events[index - 1];
-    const current = events[index];
+  for (let index = 1; index < page.events.length; index += 1) {
+    const previous = page.events[index - 1];
+    const current = page.events[index];
     if (current.previous_snapshot_id_hex !== previous.snapshot_id_hex) {
       throw new TypeError(
         `${context} previous_snapshot_id_hex must link adjacent events`,
@@ -30757,7 +30484,7 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
       );
     }
   }
-  return { since, limit, count, next_since: nextSince, events };
+  return page;
 }
 
 function parseSorafsReputationSseU64(raw, context) {
@@ -30881,7 +30608,7 @@ function buildSorafsPorStatusParams(options = {}) {
       "sorafsPorStatus.pageTokenHex",
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function buildSorafsPorExportParams(options = {}) {
@@ -30906,13 +30633,13 @@ function buildSorafsPorExportParams(options = {}) {
       { allowZero: false },
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function normalizeSorafsPinListResponse(payload, context = "sorafs pin list response") {
   const record = ensureRecord(payload ?? {}, context);
   const manifestsValue = record.manifests;
-  if (!Array.isArray(manifestsValue)) {
+  if (!arrayIsArray(manifestsValue)) {
     throw new TypeError(`${context}.manifests must be an array`);
   }
   return {
@@ -30945,11 +30672,11 @@ function normalizeSorafsPinManifestResponse(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   const aliasesValue = record.aliases;
-  if (!Array.isArray(aliasesValue)) {
+  if (!arrayIsArray(aliasesValue)) {
     throw new TypeError(`${context}.aliases must be an array`);
   }
   const ordersValue = record.replication_orders;
-  if (!Array.isArray(ordersValue)) {
+  if (!arrayIsArray(ordersValue)) {
     throw new TypeError(`${context}.replication_orders must be an array`);
   }
   return {
@@ -30997,7 +30724,7 @@ function normalizeSorafsManifestRecord(payload, context) {
       record.status_timestamp_unix,
       `${context}.status_timestamp_unix`,
     ),
-    governance_refs: Array.isArray(record.governance_refs)
+    governance_refs: arrayIsArray(record.governance_refs)
       ? record.governance_refs.map((entry, index) =>
           normalizeSorafsGovernanceReference(entry, `${context}.governance_refs[${index}]`),
         )
@@ -31133,7 +30860,7 @@ function normalizeSorafsAliasListResponse(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   const aliasesValue = record.aliases;
-  if (!Array.isArray(aliasesValue)) {
+  if (!arrayIsArray(aliasesValue)) {
     throw new TypeError(`${context}.aliases must be an array`);
   }
   return {
@@ -31238,7 +30965,7 @@ function normalizeSorafsReplicationListResponse(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   const ordersValue = record.replication_orders;
-  if (!Array.isArray(ordersValue)) {
+  if (!arrayIsArray(ordersValue)) {
     throw new TypeError(`${context}.replication_orders must be an array`);
   }
   return {
@@ -31268,7 +30995,7 @@ function normalizeSorafsReplicationListResponse(
 function normalizeSorafsReplicationOrderRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const receiptsValue = record.receipts ?? [];
-  if (!Array.isArray(receiptsValue)) {
+  if (!arrayIsArray(receiptsValue)) {
     throw new TypeError(`${context}.receipts must be an array`);
   }
   return {
@@ -31359,7 +31086,7 @@ function normalizePipelineTransactionStatus(
   payload,
   context = "pipeline transaction status response",
 ) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  if (!payload || typeof payload !== "object" || arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an object`);
   }
   const record = ensureRecord(payload ?? {}, context);
@@ -31381,14 +31108,14 @@ function normalizePipelineTransactionStatus(
       kind: statusKind,
       content:
         statusRecord.content === undefined
-          ? Object.keys(statusCompatContent).length > 0
+          ? objectKeys(statusCompatContent).length > 0
             ? statusCompatContent
             : null
           : statusRecord.content,
     };
     return {
       ...record,
-      routes: Array.isArray(record.routes) ? record.routes : [],
+      routes: arrayIsArray(record.routes) ? record.routes : [],
       kind: record.kind == null ? "Transaction" : String(record.kind),
       status: normalizedStatus,
       content: {
@@ -31438,7 +31165,7 @@ function normalizePipelineTransactionStatus(
   };
   return {
     ...record,
-    ...(Array.isArray(record.routes) ? { routes: record.routes } : {}),
+    ...(arrayIsArray(record.routes) ? { routes: record.routes } : {}),
     kind,
     content: normalizedContent,
   };
@@ -31529,7 +31256,7 @@ function classifyPipelineTransactionStatusResolution(
   }
   if (kind === "Applied") {
     if (
-      !Number.isSafeInteger(status.block_height) ||
+      !numberIsSafeInteger(status.block_height) ||
       status.block_height <= 0
     ) {
       throw createValidationError(
@@ -31664,9 +31391,9 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
         `${context}.fees.successful_claim_fee_exempt_authorities`,
       ),
     },
-    raw: Object.freeze({ ...record }),
+    raw: objectFreeze({ ...record }),
   };
-  return Object.freeze({
+  return objectFreeze({
     ...normalized,
     isStatusStalled(status) {
       return isStatusQueueStalled(
@@ -31688,7 +31415,7 @@ function normalizePipelineRecoverySidecar(payload, context = "pipeline recovery 
   });
   const dag = normalizePipelineDagSnapshot(record.dag, `${context}.dag`);
   const rawTxs = record.txs ?? [];
-  if (!Array.isArray(rawTxs)) {
+  if (!arrayIsArray(rawTxs)) {
     throw new TypeError(`${context}.txs must be an array`);
   }
   return {
@@ -31707,7 +31434,7 @@ function normalizePipelineRecoveryFastpqProofs(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   const rawProofs = record.proofs ?? [];
-  if (!Array.isArray(rawProofs)) {
+  if (!arrayIsArray(rawProofs)) {
     throw new TypeError(`${context}.proofs must be an array`);
   }
   return {
@@ -31758,7 +31485,7 @@ function normalizePipelineRecoveryFastpqProof(payload, context) {
       record.batch_reconstruction_error,
       `${context}.batch_reconstruction_error`,
     ),
-    raw: Object.freeze({ ...record }),
+    raw: objectFreeze({ ...record }),
   };
 }
 
@@ -31905,7 +31632,7 @@ const SORAFS_REGISTER_FIELD_MISSING = Symbol("sorafs-register-field-missing");
 function pickSorafsRegisterField(record, aliases, context) {
   const present = aliases.filter(
     (alias) =>
-      Object.prototype.hasOwnProperty.call(record, alias) &&
+      objectHasOwn(record, alias) &&
       record[alias] !== undefined,
   );
   if (present.length > 1) {
@@ -32110,7 +31837,7 @@ function normalizeChunkFetchPlanV1(plan, context) {
   if (!isPlainObject(plan)) {
     throw new TypeError(`${context} must be a canonical chunk fetch plan object`);
   }
-  for (const field of Object.keys(plan)) {
+  for (const field of objectKeys(plan)) {
     if (!CHUNK_FETCH_PLAN_V1_FIELDS.has(field)) {
       throw new TypeError(`${context} contains unsupported field ${field}`);
     }
@@ -32127,7 +31854,7 @@ function normalizeChunkFetchPlanV1(plan, context) {
       `${context}.payload_digest_blake3_hex must be a non-zero canonical lowercase 32-byte hex digest`,
     );
   }
-  if (!Array.isArray(plan.chunk_fetch_specs)) {
+  if (!arrayIsArray(plan.chunk_fetch_specs)) {
     throw new TypeError(`${context}.chunk_fetch_specs must be an array`);
   }
   return plan;
@@ -32291,7 +32018,7 @@ function normalizeProofSummaryOption(value, context) {
     normalized.sampleSeed = sampleSeed;
   }
   if (leafIndexes !== undefined) {
-    if (!Array.isArray(leafIndexes)) {
+    if (!arrayIsArray(leafIndexes)) {
       throw new TypeError(`${context}.leafIndexes must be an array`);
     }
     normalized.leafIndexes = leafIndexes.slice();
@@ -32397,7 +32124,7 @@ function inferChunkerHandleFromManifest(manifestJson) {
 }
 
 function normalizeDaGatewayProviders(value, context) {
-  if (!Array.isArray(value) || value.length === 0) {
+  if (!arrayIsArray(value) || value.length === 0) {
     throw new TypeError(`${context} must be a non-empty array`);
   }
   return value.map((entry, index) => {
@@ -32599,10 +32326,10 @@ function normalizeDaRentQuote(payload, context = "da rent quote") {
 }
 
 function decodeDaDigestTuple(value, expectedLength, name) {
-  if (!Array.isArray(value) || value.length === 0) {
+  if (!arrayIsArray(value) || value.length === 0) {
     throw new TypeError(`${name} must be an array`);
   }
-  const bytes = Array.isArray(value[0]) ? value[0] : value;
+  const bytes = arrayIsArray(value[0]) ? value[0] : value;
   if (bytes.length !== expectedLength) {
     throw new TypeError(`${name} must contain ${expectedLength} entries`);
   }
@@ -32691,7 +32418,7 @@ function normalizeIsoWeekLabel(input, name) {
 }
 
 function normalizePeerListResponse(payload, context = "peer list response") {
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   return payload.map((entry, index) => {
@@ -32716,7 +32443,7 @@ function normalizePeerListResponse(payload, context = "peer list response") {
 }
 
 function normalizeTelemetryPeersInfoList(payload) {
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError("telemetry peers response must be an array");
   }
   return payload.map((entry, index) =>
@@ -32746,7 +32473,7 @@ function normalizeTelemetryPeerInfo(value, context) {
     result.location = normalizeTelemetryPeerLocation(locationValue, `${context}.location`);
   }
   if (record.connected_peers !== undefined && record.connected_peers !== null) {
-    if (!Array.isArray(record.connected_peers)) {
+    if (!arrayIsArray(record.connected_peers)) {
       throw new TypeError(`${context}.connected_peers must be an array`);
     }
     result.connectedPeers = record.connected_peers.map((entry, idx) =>
@@ -32826,7 +32553,7 @@ function normalizeExplorerDurationMs(value, context) {
 }
 
 function requireFiniteNumber(value, context) {
-  if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value)) {
+  if (typeof value !== "number" || Number.isNaN(value) || !numberIsFinite(value)) {
     throw new TypeError(`${context} must be a finite number`);
   }
   return value;
@@ -32834,7 +32561,7 @@ function requireFiniteNumber(value, context) {
 
 function normalizeKaigiRelaySummaryList(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay summary response");
-  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const rawItems = arrayIsArray(record.items) ? record.items : [];
   const items = rawItems.map((entry, index) =>
     normalizeKaigiRelaySummary(entry, `kaigi relay summary response.items[${index}]`),
   );
@@ -32965,7 +32692,7 @@ function normalizeKaigiRelayDomainMetrics(payload, context) {
 
 function normalizeKaigiRelayHealthSnapshot(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay health snapshot");
-  const rawDomains = Array.isArray(record.domains) ? record.domains : [];
+  const rawDomains = arrayIsArray(record.domains) ? record.domains : [];
   const domains = rawDomains.map((entry, index) =>
     normalizeKaigiRelayDomainMetrics(entry, `kaigi relay health snapshot.domains[${index}]`),
   );
@@ -33175,7 +32902,7 @@ function normalizeKaigiCallSignal(payload, context) {
 
 function normalizeKaigiCallSignalsList(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi call signals");
-  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const rawItems = arrayIsArray(record.items) ? record.items : [];
   return {
     total: ToriiClient._normalizeUnsignedInteger(
       record.total ?? rawItems.length,
@@ -33319,7 +33046,7 @@ function buildKaigiRelayEventParams(options = {}) {
     params.relay = requireNonEmptyString(normalizedOptions.relay, "kaigiRelayEvents.relay");
   }
   if (normalizedOptions.kind !== undefined && normalizedOptions.kind !== null) {
-    const values = Array.isArray(normalizedOptions.kind)
+    const values = arrayIsArray(normalizedOptions.kind)
       ? normalizedOptions.kind
       : String(normalizedOptions.kind)
           .split(",")
@@ -33337,7 +33064,7 @@ function buildKaigiRelayEventParams(options = {}) {
       params.kind = normalized.join(",");
     }
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function buildKaigiCallSignalsQuery(options = {}) {
@@ -33382,7 +33109,7 @@ function buildKaigiCallSignalsQuery(options = {}) {
       { allowZero: true },
     );
   }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+  return { signal, params: objectKeys(params).length === 0 ? undefined : params };
 }
 
 function buildKaigiCallEventParams(options = {}) {
@@ -33394,7 +33121,7 @@ function buildKaigiCallEventParams(options = {}) {
         });
   const params = {};
   if (normalizedOptions.kind !== undefined && normalizedOptions.kind !== null) {
-    const values = Array.isArray(normalizedOptions.kind)
+    const values = arrayIsArray(normalizedOptions.kind)
       ? normalizedOptions.kind
       : String(normalizedOptions.kind)
           .split(",")
@@ -33412,7 +33139,7 @@ function buildKaigiCallEventParams(options = {}) {
       params.kind = normalized.join(",");
     }
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return objectKeys(params).length === 0 ? undefined : params;
 }
 
 function buildTriggerListQuery(options = {}) {
@@ -33441,7 +33168,7 @@ function buildTriggerListQuery(options = {}) {
       allowZero: true,
     });
   }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+  return { signal, params: objectKeys(params).length === 0 ? undefined : params };
 }
 
 function buildSubscriptionPlanListQuery(options = {}) {
@@ -33482,7 +33209,7 @@ function buildSubscriptionPlanListQuery(options = {}) {
       { allowZero: true },
     );
   }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+  return { signal, params: objectKeys(params).length === 0 ? undefined : params };
 }
 
 function normalizeSubscriptionStatusFilter(value, context) {
@@ -33540,7 +33267,7 @@ function buildSubscriptionListQuery(options = {}) {
       { allowZero: true },
     );
   }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+  return { signal, params: objectKeys(params).length === 0 ? undefined : params };
 }
 
 function normalizeAccountListResponse(payload) {
@@ -33592,7 +33319,7 @@ function normalizeSignalOption(options, context) {
 function normalizeSignalOnlyOption(options, context) {
   const { signal } = normalizeSignalOption(options, context);
   if (options !== undefined) {
-    const extras = Object.keys(options).filter((key) => key !== "signal");
+    const extras = objectKeys(options).filter((key) => key !== "signal");
     if (extras.length > 0) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -33652,12 +33379,12 @@ function normalizeSccpSoraOutboundMaterialRoute(value, context) {
     message: "must be a plain object",
   });
   const expectedFields = ["sourceProfile", "routeId", "assetKey", "revision"];
-  const unknown = Object.keys(record).find((field) => !expectedFields.includes(field));
+  const unknown = objectKeys(record).find((field) => !expectedFields.includes(field));
   if (unknown !== undefined) {
     throw new TypeError(`${context} contains unknown field \`${unknown}\``);
   }
   for (const field of expectedFields) {
-    if (!Object.prototype.hasOwnProperty.call(record, field)) {
+    if (!objectHasOwn(record, field)) {
       throw new TypeError(`${context} is missing required field \`${field}\``);
     }
   }
@@ -33670,13 +33397,13 @@ function normalizeSccpSoraOutboundMaterialRoute(value, context) {
     }
   }
   if (
-    !Number.isSafeInteger(record.revision) ||
+    !numberIsSafeInteger(record.revision) ||
     record.revision < 1 ||
     record.revision > 0xffff_ffff
   ) {
     throw new TypeError(`${context}.revision must be a nonzero uint32`);
   }
-  return Object.freeze({
+  return objectFreeze({
     sourceProfile: record.sourceProfile,
     routeId: record.routeId,
     assetKey: record.assetKey,
@@ -33688,7 +33415,7 @@ function normalizeSccpTypedReadOptions(options, context) {
   const record = requirePlainObjectOption(options, `${context}.options`, {
     message: "must be a plain object",
   });
-  const unknown = Object.keys(record).find((key) => key !== "format" && key !== "signal");
+  const unknown = objectKeys(record).find((key) => key !== "format" && key !== "signal");
   if (unknown !== undefined) {
     throw new TypeError(`${context}.options contains unknown field \`${unknown}\``);
   }
@@ -33740,7 +33467,7 @@ async function readSccpNoritoResponse(
 }
 
 async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
-  if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
+  if (!numberIsSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
     throw new TypeError(`${label} response byte-size bound is invalid`);
   }
 
@@ -33757,7 +33484,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
       throw error;
     }
     const declaredLength = Number(rawContentLength);
-    if (!Number.isSafeInteger(declaredLength) || declaredLength > maximumBodyBytes) {
+    if (!numberIsSafeInteger(declaredLength) || declaredLength > maximumBodyBytes) {
       const error = new TypeError(
         `${label} response exceeds its ${maximumBodyBytes}-byte size bound`,
       );
@@ -33871,7 +33598,7 @@ function requirePlainObjectOption(value, context, { message } = {}) {
 }
 
 function assertSupportedOptionKeys(record, allowedKeys, context) {
-  const extras = Object.keys(record).filter((key) => !allowedKeys.has(key));
+  const extras = objectKeys(record).filter((key) => !allowedKeys.has(key));
   if (extras.length > 0) {
     const path = typeof context === "string" ? context.replace(/\s+/g, ".") : context;
     throw createValidationError(
@@ -34067,7 +33794,7 @@ function normalizeProductionEventFilterBackendPayload(filter, context) {
   if (
     filter === null ||
     typeof filter !== "object" ||
-    Array.isArray(filter)
+    arrayIsArray(filter)
   ) {
     return filter;
   }
@@ -34075,15 +33802,15 @@ function normalizeProductionEventFilterBackendPayload(filter, context) {
   let normalized = filter;
   for (const eventKind of ["VerifyingKey", "Proof"]) {
     const body = filter[eventKind];
-    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    if (body === null || typeof body !== "object" || arrayIsArray(body)) {
       continue;
     }
     const matcher = body.id_matcher;
     if (
       matcher === null ||
       typeof matcher !== "object" ||
-      Array.isArray(matcher) ||
-      !Object.prototype.hasOwnProperty.call(matcher, "backend")
+      arrayIsArray(matcher) ||
+      !objectHasOwn(matcher, "backend")
     ) {
       continue;
     }
@@ -34096,19 +33823,19 @@ function normalizeProductionEventFilterBackendPayload(filter, context) {
       backend,
     };
     if (eventKind === "Proof") {
-      if (Object.prototype.hasOwnProperty.call(matcher, "hash_hex")) {
+      if (objectHasOwn(matcher, "hash_hex")) {
         normalizedMatcher.hash_hex = normalizeHex32String(
           matcher.hash_hex,
           `${context}.${eventKind}.id_matcher.hash_hex`,
         );
       }
-      if (Object.prototype.hasOwnProperty.call(matcher, "proof_hash_hex")) {
+      if (objectHasOwn(matcher, "proof_hash_hex")) {
         normalizedMatcher.proof_hash_hex = normalizeHex32String(
           matcher.proof_hash_hex,
           `${context}.${eventKind}.id_matcher.proof_hash_hex`,
         );
       }
-    } else if (Object.prototype.hasOwnProperty.call(matcher, "name")) {
+    } else if (objectHasOwn(matcher, "name")) {
       normalizedMatcher.name = normalizeVerifyingKeyEventMatcherName(
         matcher.name,
         `${context}.${eventKind}.id_matcher.name`,
@@ -34297,7 +34024,7 @@ function normalizeRepoGovernance(value, context) {
 }
 
 function normalizeAttachmentMetadataList(payload, context = "attachment list response") {
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   return payload.map((entry, index) =>
@@ -34313,7 +34040,7 @@ function normalizeAttachmentUploadPayload(value, context) {
     Buffer.isBuffer(value) ||
     ArrayBuffer.isView(value) ||
     value instanceof ArrayBuffer ||
-    Array.isArray(value)
+    arrayIsArray(value)
   ) {
     return toBuffer(value);
   }
@@ -34432,7 +34159,7 @@ function buildVerifyingKeyListQuery(options = {}) {
       "listVerifyingKeys.idsOnly",
     );
   }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+  return { signal, params: objectKeys(params).length === 0 ? undefined : params };
 }
 
 function normalizeVerifyingKeyListPayload(
@@ -34442,13 +34169,13 @@ function normalizeVerifyingKeyListPayload(
   if (payload === undefined || payload === null) {
     return [];
   }
-  if (Array.isArray(payload)) {
+  if (arrayIsArray(payload)) {
     return payload.map((entry, index) =>
       normalizeVerifyingKeyListItem(entry, `${context}[${index}]`),
     );
   }
   const record = ensureRecord(payload, context);
-  if (!Array.isArray(record.items)) {
+  if (!arrayIsArray(record.items)) {
     throw new TypeError(`${context} must be an array or { items: [] } object`);
   }
   return record.items.map((entry, index) =>
@@ -35153,7 +34880,7 @@ function normalizeProverReportList(payload, filters, context) {
   if (payload == null) {
     return { kind: "reports", reports: [] };
   }
-  if (!Array.isArray(payload)) {
+  if (!arrayIsArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
   if (payload.length === 0) {
@@ -35175,7 +34902,7 @@ function normalizeProverReportList(payload, filters, context) {
   }
   if (
     isPlainObject(first) &&
-    Object.keys(first).every((key) => key === "id" || key === "error")
+    objectKeys(first).every((key) => key === "id" || key === "error")
   ) {
     if (!messagesOnlyRequested) {
       throw new Error(
@@ -35253,7 +34980,7 @@ function normalizeProverReportRecord(value, context) {
 function normalizeSumeragiEvidenceListResponse(payload) {
   const record = ensureRecord(payload, "sumeragi evidence response");
   const rawItems = record.items;
-  if (!Array.isArray(rawItems)) {
+  if (!arrayIsArray(rawItems)) {
     throw new TypeError("sumeragi evidence response.items must be an array");
   }
   const items = rawItems.map((item, index) =>
@@ -35453,7 +35180,7 @@ function normalizeAssetDefinitionListItem(value, context) {
 }
 
 function rejectAliasField(record, context, aliasKey, canonicalKey) {
-  if (Object.prototype.hasOwnProperty.call(record, aliasKey)) {
+  if (objectHasOwn(record, aliasKey)) {
     throw new TypeError(
       `${context}.${aliasKey} is not supported; use ${canonicalKey}`,
     );
@@ -35782,7 +35509,7 @@ function normalizeTriggerUpsertPayload(input) {
     } catch {
       throw new TypeError("registerTrigger.action must be a valid base64 string");
     }
-  } else if (!Array.isArray(actionValue) && typeof actionValue === "object") {
+  } else if (!arrayIsArray(actionValue) && typeof actionValue === "object") {
     payload.action = cloneJsonValue(actionValue, "registerTrigger.action");
   } else {
     throw new TypeError(
@@ -35798,7 +35525,7 @@ function normalizeTriggerUpsertPayload(input) {
     delete payload.metadata;
   } else if (
     typeof payload.metadata !== "object" ||
-    Array.isArray(payload.metadata)
+    arrayIsArray(payload.metadata)
   ) {
     throw new TypeError("registerTrigger.metadata must be an object when provided");
   }
@@ -35944,7 +35671,7 @@ function normalizeTriggerRecord(payload, context) {
 function normalizeTriggerListResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const rawItems = record.items ?? [];
-  if (!Array.isArray(rawItems)) {
+  if (!arrayIsArray(rawItems)) {
     throw new TypeError(`${context}.items must be an array`);
   }
   const items = rawItems.map((entry, index) =>
@@ -36050,7 +35777,7 @@ function normalizeSubscriptionActionResponse(payload, context) {
 function normalizeSubscriptionPlanListResponse(payload) {
   const record = ensureRecord(payload ?? {}, "subscription plan list response");
   const rawItems = record.items ?? [];
-  if (!Array.isArray(rawItems)) {
+  if (!arrayIsArray(rawItems)) {
     throw new TypeError("subscription plan list response.items must be an array");
   }
   const items = rawItems.map((entry, index) => {
@@ -36094,7 +35821,7 @@ function normalizeSubscriptionPlanListResponse(payload) {
 function normalizeSubscriptionListResponse(payload) {
   const record = ensureRecord(payload ?? {}, "subscription list response");
   const rawItems = record.items ?? [];
-  if (!Array.isArray(rawItems)) {
+  if (!arrayIsArray(rawItems)) {
     throw new TypeError("subscription list response.items must be an array");
   }
   const items = rawItems.map((entry, index) =>
@@ -36263,7 +35990,7 @@ function normalizeConnectAppRecord(payload, context) {
 function normalizeConnectAppRegistryPage(payload) {
   const record = ensureRecord(payload ?? {}, "connect app registry response");
   const rawItems = record.items ?? [];
-  if (!Array.isArray(rawItems)) {
+  if (!arrayIsArray(rawItems)) {
     throw new TypeError("connect app registry response.items must be an array");
   }
   const items = rawItems.map((entry, index) =>
@@ -36438,7 +36165,7 @@ function normalizeConnectAdmissionManifest(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const manifestRecord = isPlainObject(record.manifest) ? record.manifest : record;
   const rawEntries = manifestRecord.entries ?? [];
-  if (!Array.isArray(rawEntries)) {
+  if (!arrayIsArray(rawEntries)) {
     throw new TypeError(`${context}.entries must be an array`);
   }
   const entries = rawEntries.map((entry, index) =>
@@ -36531,7 +36258,7 @@ function toConnectAdmissionManifestPayload(input, context) {
 
 function normalizeConnectStatusSnapshot(payload, context) {
   const record = ensureRecord(payload, context);
-  const perIpRaw = Array.isArray(record.per_ip_sessions) ? record.per_ip_sessions : [];
+  const perIpRaw = arrayIsArray(record.per_ip_sessions) ? record.per_ip_sessions : [];
   const perIpSessions = perIpRaw.map((entry, index) =>
     normalizeConnectPerIpSessions(entry, `${context}.per_ip_sessions[${index}]`),
   );
@@ -36762,7 +36489,7 @@ function buildSorafsOrderbookEventsWebSocketUrlInternal(baseUrl, options, contex
   endpoint.protocol = mapHttpProtocolToWebSocket(endpoint.protocol, context);
   endpoint.search = "";
   const query = buildSorafsOrderbookEventsParams(params, context) ?? {};
-  for (const [key, value] of Object.entries(query)) {
+  for (const [key, value] of objectEntries(query)) {
     endpoint.searchParams.set(key, String(value));
   }
   return endpoint.toString();
@@ -36901,7 +36628,7 @@ function extractWebSocketMessageData(args) {
     args.length === 1 &&
     first &&
     typeof first === "object" &&
-    Object.prototype.hasOwnProperty.call(first, "data")
+    objectHasOwn(first, "data")
   ) {
     return first.data;
   }
@@ -37087,13 +36814,13 @@ function openConnectWebSocketInternal(options, context) {
   const finalProtocols = supportsHeaders
     ? protocols
     : attachProtocolToken(protocols, buildConnectProtocolToken(token), context);
-  if (Object.keys(headerContainer).length > 0) {
+  if (objectKeys(headerContainer).length > 0) {
     resolvedOptions.headers = headerContainer;
   } else if (!websocketOptions) {
     delete resolvedOptions.headers;
   }
   const shouldPassOptions =
-    websocketOptions !== undefined || Object.keys(headerContainer).length > 0;
+    websocketOptions !== undefined || objectKeys(headerContainer).length > 0;
   if (shouldPassOptions) {
     if (finalProtocols !== undefined) {
       return new WebSocketClass(url, finalProtocols, resolvedOptions);
@@ -37153,7 +36880,7 @@ function attachProtocolToken(protocols, tokenProtocol, context) {
   if (typeof protocols === "string") {
     return protocols === tokenProtocol ? protocols : [tokenProtocol, protocols];
   }
-  if (Array.isArray(protocols)) {
+  if (arrayIsArray(protocols)) {
     if (protocols.includes(tokenProtocol)) {
       return [...protocols];
     }
@@ -37272,7 +36999,7 @@ function identifierNormalizeUnsignedBigInt(value, context) {
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
+    if (!numberIsInteger(value) || value < 0 || !numberIsSafeInteger(value)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
         `${context} must be a non-negative safe integer`,
@@ -37506,7 +37233,7 @@ function identifierMultisigMemberPayload(member, context) {
 
 function identifierCanonicalU16(value, context) {
   const integer = Number(identifierNormalizeUnsignedBigInt(value, context));
-  if (!Number.isInteger(integer) || integer < 0 || integer > 0xffff) {
+  if (!numberIsInteger(integer) || integer < 0 || integer > 0xffff) {
     throw createValidationError(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
       `${context} must fit in u16`,
@@ -37527,7 +37254,7 @@ function identifierNoritoVec(values, encode, context) {
 }
 
 function identifierMultisigPolicyPayload(policy, context) {
-  if (!Array.isArray(policy.members) || policy.members.length === 0) {
+  if (!arrayIsArray(policy.members) || policy.members.length === 0) {
     throw new Error(`${context} multisig policy must contain at least one member`);
   }
   return Buffer.concat([
@@ -37545,7 +37272,7 @@ function identifierMultisigPolicyPayload(policy, context) {
 
 function identifierCanonicalU8(value, context) {
   const integer = Number(identifierNormalizeUnsignedBigInt(value, context));
-  if (!Number.isInteger(integer) || integer < 0 || integer > 0xff) {
+  if (!numberIsInteger(integer) || integer < 0 || integer > 0xff) {
     throw createValidationError(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
       `${context} must fit in u8`,
