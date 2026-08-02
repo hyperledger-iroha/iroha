@@ -8109,10 +8109,8 @@ mod tests {
             }
             .into();
         assert!(
-            iroha_executor_data_model::permission::query::CanReadAccountData::try_from(
-                &permission
-            )
-            .is_ok(),
+            iroha_executor_data_model::permission::query::CanReadAccountData::try_from(&permission)
+                .is_ok(),
             "permission should decode as CanReadAccountData"
         );
         Grant::account_permission(permission.clone(), holder_id.clone())
@@ -8757,7 +8755,10 @@ mod tests {
         let escrow_account_id =
             iroha_data_model::offline::offline_escrow_account_id(&chain_id, &asset_definition_id);
         let mut metadata = Metadata::default();
-        metadata.insert("offline.enabled".parse().expect("legacy metadata key"), Json::new(true));
+        metadata.insert(
+            "offline.enabled".parse().expect("legacy metadata key"),
+            Json::new(true),
+        );
         let mut asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
             .with_name(asset_definition_id.name().to_string())
             .build(&authority);
@@ -11982,10 +11983,7 @@ mod tests {
             Some(&Json::new(false))
         );
         assert!(
-            tx.settlement
-                .offline
-                .escrow_accounts
-                .is_empty(),
+            tx.settlement.offline.escrow_accounts.is_empty(),
             "legacy-looking metadata must not materialize offline state"
         );
     }
@@ -12037,10 +12035,7 @@ mod tests {
             "metadata must be removed"
         );
         assert!(
-            tx.settlement
-                .offline
-                .escrow_accounts
-                .is_empty(),
+            tx.settlement.offline.escrow_accounts.is_empty(),
             "metadata removal must not materialize offline state"
         );
     }
@@ -12087,10 +12082,7 @@ mod tests {
             "metadata should be stored unchanged"
         );
         assert!(
-            tx.settlement
-                .offline
-                .escrow_accounts
-                .is_empty(),
+            tx.settlement.offline.escrow_accounts.is_empty(),
             "legacy-looking metadata must not materialize offline state"
         );
     }

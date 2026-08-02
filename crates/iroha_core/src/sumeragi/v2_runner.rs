@@ -55,9 +55,9 @@ use super::{
     },
     v2_body_store::{BlockSignaturePolicy, V2BodyStore},
     v2_candidate::{
-        CandidateAttachments, CandidateDescriptor, CandidateLimits, CandidateParent,
-        CandidateRequest, CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
-        V2CandidateAssembler,
+        CandidateAssemblyOutcome, CandidateAttachments, CandidateDescriptor, CandidateLimits,
+        CandidateParent, CandidateRequest, CandidateWorkProvider, CandidateWorkUnavailable,
+        PreparedCandidateWork, V2CandidateAssembler,
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
@@ -2362,7 +2362,7 @@ fn schedule_local_proposal(
             &carrier_context_header,
             npos_vrf,
         )?;
-        let candidate = if proposal_state.heartbeat_only == Some(owner) {
+        let assembly = if proposal_state.heartbeat_only == Some(owner) {
             assembler.assemble(CandidateRequest {
                 context,
                 directive,
@@ -2373,6 +2373,7 @@ fn schedule_local_proposal(
                 key_pair,
                 output_guard,
                 attachments,
+                allow_empty_recovery_heartbeat: true,
                 work_provider: HeartbeatOnlyWorkProvider,
             })?
         } else {
@@ -2386,8 +2387,34 @@ fn schedule_local_proposal(
                 key_pair,
                 output_guard,
                 attachments,
+                allow_empty_recovery_heartbeat: false,
                 work_provider: &mut *lane_work,
             })?
+        };
+        let candidate = match assembly {
+            CandidateAssemblyOutcome::Assembled(candidate) => candidate,
+            CandidateAssemblyOutcome::NoProposalWork(report) => {
+                let now = Instant::now();
+                if report.work_deferred > 0 {
+                    proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound);
+                } else {
+                    // A clean idle height is not recovery work. Keep a bounded
+                    // recheck so asynchronous queue/lane arrivals are observed
+                    // promptly without manufacturing a cadence heartbeat.
+                    proposal_state.candidate_work_wait = Some(CandidateWorkWait {
+                        owner,
+                        started_at: now,
+                        next_retry: deadline_after(now, CANDIDATE_WORK_RECHECK),
+                    });
+                }
+                iroha_logger::trace!(
+                    height = owner.tag.height(),
+                    view = owner.tag.view(),
+                    ?report,
+                    "deferred Sumeragi v2 proposal because no proposal work is ready"
+                );
+                return Ok(());
+            }
         };
         let tag = candidate.tag();
         if tag != owner.tag {
@@ -4291,6 +4318,7 @@ fn candidate_attachments(
         Default::default()
     };
     Ok(CandidateAttachments {
+        time_triggers_due: state.time_triggers_due_for_block_fast(round_header),
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()

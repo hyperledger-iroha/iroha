@@ -91,12 +91,7 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         ) {
             continue;
         }
-        if !ntru::check_ortho_norm(
-            LOG_DEGREE,
-            &**f,
-            &**g,
-            &mut workspace.temporary_fxr,
-        ) {
+        if !ntru::check_ortho_norm(LOG_DEGREE, &**f, &**g, &mut workspace.temporary_fxr) {
             continue;
         }
         if !ntru::solve_NTRU(
@@ -112,13 +107,7 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         }
 
         let (division_temporary, _) = workspace.temporary_u16.split_at_mut(DEGREE);
-        comm::mq::mqpoly_div_small(
-            LOG_DEGREE,
-            &**f,
-            &**g,
-            &mut **h,
-            division_temporary,
-        );
+        comm::mq::mqpoly_div_small(LOG_DEGREE, &**f, &**g, &mut **h, division_temporary);
         if ntru_equation_holds(&**f, &**g, &**capital_f, &**capital_g)
             && public_key_equation_holds(&**f, &**g, &**h)
         {
@@ -146,11 +135,7 @@ fn ntru_equation_holds(
     equation[0] == i64::from(MODULUS) && equation[1..].iter().all(|value| *value == 0)
 }
 
-fn public_key_equation_holds(
-    f: &[i8; DEGREE],
-    g: &[i8; DEGREE],
-    h: &[u16; DEGREE],
-) -> bool {
+fn public_key_equation_holds(f: &[i8; DEGREE], g: &[i8; DEGREE], h: &[u16; DEGREE]) -> bool {
     let modulus = i64::from(MODULUS);
     let mut product = Box::new(Zeroizing::new([0_i64; DEGREE]));
     for (left_index, left) in f.iter().copied().enumerate() {
@@ -165,8 +150,7 @@ fn public_key_equation_holds(
         }
     }
     for destination in 0..DEGREE {
-        if product[destination].rem_euclid(modulus)
-            != i64::from(g[destination]).rem_euclid(modulus)
+        if product[destination].rem_euclid(modulus) != i64::from(g[destination]).rem_euclid(modulus)
         {
             return false;
         }
@@ -188,8 +172,7 @@ fn negacyclic_accumulate_i8(
             } else {
                 (degree - DEGREE, -1_i64)
             };
-            output[destination] +=
-                outer_sign * wrap_sign * i64::from(left) * i64::from(right);
+            output[destination] += outer_sign * wrap_sign * i64::from(left) * i64::from(right);
         }
     }
 }

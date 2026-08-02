@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-use super::fxp::{FXR, FXC, GM_TAB};
+use super::fxp::{FXC, FXR, GM_TAB};
 
-// ======================================================================== 
+// ========================================================================
 // Fixed-point vector operations
-// ======================================================================== 
+// ========================================================================
 
 // In FFT representation, we only keep half of the coefficients, because
 // all our vectors are real in non-FFT; thus, the FFT representation is
@@ -23,8 +23,14 @@ pub(crate) fn vect_FFT(logn: u32, f: &mut [FXR]) {
         for i in 0..(m >> 1) {
             let s = GM_TAB[m + i];
             for j in j0..(j0 + ht) {
-                let x = FXC { re: f[j], im: f[j + hn] };
-                let y = FXC { re: f[j + ht], im: f[j + ht + hn] };
+                let x = FXC {
+                    re: f[j],
+                    im: f[j + hn],
+                };
+                let y = FXC {
+                    re: f[j + ht],
+                    im: f[j + ht + hn],
+                };
                 let z = s * y;
                 let w1 = x + z;
                 f[j] = w1.re;
@@ -82,8 +88,14 @@ pub(crate) fn vect_iFFT(logn: u32, f: &mut [FXR]) {
         for i in 0..(m >> 1) {
             let s = GM_TAB[m + i].conj();
             for j in j0..(j0 + ht) {
-                let x = FXC { re: f[j], im: f[j + hn] };
-                let y = FXC { re: f[j + ht], im: f[j + ht + hn] };
+                let x = FXC {
+                    re: f[j],
+                    im: f[j + hn],
+                };
+                let y = FXC {
+                    re: f[j + ht],
+                    im: f[j + ht + hn],
+                };
                 let z1 = (x + y).half();
                 f[j] = z1.re;
                 f[j + hn] = z1.im;
@@ -131,8 +143,14 @@ pub(crate) fn vect_mul2e(logn: u32, a: &mut [FXR], e: u32) {
 pub(crate) fn vect_mul_fft(logn: u32, a: &mut [FXR], b: &[FXR]) {
     let hn = 1usize << (logn - 1);
     for i in 0..hn {
-        let x = FXC { re: a[i], im: a[i + hn] };
-        let y = FXC { re: b[i], im: b[i + hn] };
+        let x = FXC {
+            re: a[i],
+            im: a[i + hn],
+        };
+        let y = FXC {
+            re: b[i],
+            im: b[i + hn],
+        };
         let z = x * y;
         a[i] = z.re;
         a[i + hn] = z.im;
@@ -188,9 +206,7 @@ pub(crate) fn vect_norm_fft(logn: u32, d: &mut [FXR], a: &[FXR], b: &[FXR]) {
 // Compute d = (2^e)/(a*adj(a) + b*adj(b)). Polynomials are in FFT
 // representation. Since d is self-adjoint, it is half-size (only the
 // low half is set, the high half is implicitly zero).
-pub(crate) fn vect_invnorm_fft(logn: u32, d: &mut [FXR],
-    a: &[FXR], b: &[FXR], e: u32)
-{
+pub(crate) fn vect_invnorm_fft(logn: u32, d: &mut [FXR], a: &[FXR], b: &[FXR], e: u32) {
     let hn = 1usize << (logn - 1);
     let r = FXR::from_i32(1i32 << e);
     for i in 0..hn {
@@ -201,4 +217,3 @@ pub(crate) fn vect_invnorm_fft(logn: u32, d: &mut [FXR],
 }
 
 // ========================================================================
-

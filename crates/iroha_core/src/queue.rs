@@ -3509,6 +3509,14 @@ impl Queue {
                 // Ordinary FIFO ownership and order remain untouched.
                 continue;
             };
+            if durable_claim.global_admission_identity.is_none() {
+                // A locally durable gossip/ingress claim is valid FIFO ownership, but it is not
+                // yet eligible for autonomous lane reservation. QueuePlanSynced promotion will
+                // replace this exact claim with a globally bound one. Treat the ordinary claim
+                // as pending instead of misclassifying its intentionally absent identity as a
+                // durability fault.
+                continue;
+            }
             let admission_binding = match durable_claim.global_admission_binding() {
                 Ok(binding) => binding,
                 Err(reason) => {
