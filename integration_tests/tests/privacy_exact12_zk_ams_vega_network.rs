@@ -4,8 +4,10 @@
 //!
 //! This release gate intentionally leaves the network's DA/RBC configuration
 //! untouched. A validator is stopped only after all negative probes converge,
-//! then both exact proof transactions are finalized by the remaining quorum
-//! and recovered byte-for-byte by the restarted validator.
+//! then both protocol lineages are finalized by the remaining quorum and
+//! recovered byte-for-byte by the restarted validator. The ZK-AMS lineage
+//! includes the two canonical eight-member admissions required for a minimum
+//! ring, successor-root account provisioning, and persisted key-image replay.
 
 use std::{
     num::NonZeroU32,
@@ -24,11 +26,14 @@ use iroha_core::{
             VegaPrivacyActionWitnessMaterialV1, build_signed_vega_privacy_action_with_rng_v1,
         },
         zk_ams::{
-            ZkAmsBatchCredentialWitnessV1, ZkAmsMaskedProverConfigV1,
-            ZkAmsPrivacyActionGovernanceV1, ZkAmsPrivacyActionTransactionContextV1,
-            ZkAmsSeedSecretV1, prepare_zk_ams_batch_admission_transaction_intent_v1,
-            prove_zk_ams_batch_admission_v1, validate_zk_ams_privacy_action_transaction_intent_v1,
-            verify_zk_ams_batch_admission_v1, zk_ams_generator_digest_v1,
+            ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZkAmsBatchCredentialWitnessV1,
+            ZkAmsMaskedProverConfigV1, ZkAmsPrivacyActionGovernanceV1,
+            ZkAmsPrivacyActionTransactionContextV1, ZkAmsSeedSecretV1,
+            prepare_zk_ams_batch_admission_transaction_intent_v1,
+            prepare_zk_ams_provision_account_transaction_intent_v1,
+            prove_zk_ams_batch_admission_v1, sign_zk_ams_provision_statement_v1,
+            validate_zk_ams_privacy_action_transaction_intent_v1, verify_zk_ams_batch_admission_v1,
+            verify_zk_ams_provision_statement_v1, zk_ams_generator_digest_v1, zk_ams_key_image_v1,
             zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
         },
     },
@@ -45,9 +50,9 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     permission::Permission,
-    prelude::QueryBuilderExt,
+    prelude::{AccountId, QueryBuilderExt},
     privacy::{
-        IrohaZkAmsProofV1, PrivacyActiveLifecycleV1, PrivacyCapabilityRowV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyActiveLifecycleV1, PrivacyCapabilityRowV1,
         PrivacyCapabilitySnapshotV1, PrivacyChallengeV1, PrivacyCompiledProfileResultV1,
         PrivacyCompiledProfileSnapshotV1, PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1,
         PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
@@ -58,14 +63,19 @@ use iroha_data_model::{
         PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
         PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
         PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsAdmissionAnchorV1,
-        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
-        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsRegistryBootstrapV1,
-        PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
-        PrivacyZkAmsSubjectCommitmentV1, VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
+        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryRecordDigestV1,
+        PrivacyZkAmsSeedPublicKeyV1, PrivacyZkAmsSubjectCommitmentV1,
+        VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
         VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, VEGA_MDL_MSO_PAYLOAD_BYTES_V1,
         ZK_AMS_PHC_VERSION_V1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
+        zk_ams_registry_record_digest_v1,
     },
-    query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
+    query::{
+        account::prelude::FindAccounts, block::prelude::FindBlocks,
+        transaction::prelude::FindTransactions,
+    },
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
         TransactionPayload,
@@ -73,6 +83,7 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_test_samples::gen_account_in;
 use p256::ecdsa::{
     Signature as P256Signature, SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _,
 };
@@ -158,11 +169,34 @@ impl RngCore for DeterministicCryptoRng {
 impl CryptoRng for DeterministicCryptoRng {}
 
 #[derive(Clone)]
-struct ZkAmsFixture {
-    bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+struct ZkAmsCredentialFixture {
     credential: PrivacyZkAmsPersonhoodCredentialV1,
     issuer_signature: [u8; 64],
     seed_secret_bytes: [u8; 32],
+}
+
+#[derive(Clone)]
+struct ZkAmsFixture {
+    bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+    credentials: Vec<ZkAmsCredentialFixture>,
+}
+
+#[derive(Clone, Copy)]
+struct ZkAmsRegistryStateV1 {
+    root: PrivacyRootV1,
+    epoch: u64,
+    record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+}
+
+struct ZkAmsBatchActionV1 {
+    transaction: SignedTransaction,
+    next_state: ZkAmsRegistryStateV1,
+}
+
+struct ZkAmsProvisionActionV1 {
+    transaction: SignedTransaction,
+    account_id: AccountId,
+    key_image: PrivacyZkAmsKeyImageV1,
 }
 
 struct VegaFixture {
@@ -498,6 +532,83 @@ async fn wait_for_transactions_on_peers(
     }
 }
 
+fn assert_zk_ams_account_state(
+    client: &Client,
+    provisioned_account: &AccountId,
+    rejected_accounts: &[&AccountId],
+    context: &str,
+) -> Result<()> {
+    let accounts = client
+        .query(FindAccounts)
+        .execute_all()
+        .wrap_err_with(|| format!("{context}: query accounts"))?;
+    let provisioned = accounts
+        .iter()
+        .filter(|account| &account.id == provisioned_account)
+        .collect::<Vec<_>>();
+    ensure!(
+        provisioned.len() == 1,
+        "{context}: expected exactly one provisioned ZK-AMS account, found {}",
+        provisioned.len()
+    );
+    let provisioned = provisioned[0];
+    ensure!(
+        provisioned.metadata == Metadata::default()
+            && provisioned.label.is_none()
+            && provisioned.uaid.is_none()
+            && provisioned.opaque_ids.is_empty(),
+        "{context}: provisioned ZK-AMS account carries unexpected mutable state"
+    );
+    for rejected_account in rejected_accounts {
+        ensure!(
+            accounts
+                .iter()
+                .all(|account| &account.id != *rejected_account),
+            "{context}: key-image replay unexpectedly created account {rejected_account}"
+        );
+    }
+    Ok(())
+}
+
+async fn wait_for_zk_ams_account_state_on_peers(
+    clients: &[Client],
+    provisioned_account: &AccountId,
+    rejected_accounts: &[&AccountId],
+    context: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
+    let mut last_observed = Vec::new();
+    loop {
+        last_observed.clear();
+        let mut exact = 0_usize;
+        for (peer_index, client) in clients.iter().enumerate() {
+            match assert_zk_ams_account_state(
+                client,
+                provisioned_account,
+                rejected_accounts,
+                context,
+            ) {
+                Ok(()) => {
+                    exact += 1;
+                    last_observed.push(format!("peer {peer_index}: exact ZK-AMS account state"));
+                }
+                Err(error) => last_observed.push(format!("peer {peer_index}: {error}")),
+            }
+        }
+        if exact == clients.len() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "{context}: ZK-AMS account state did not converge within \
+                 {PEER_CONVERGENCE_TIMEOUT:?}; {}",
+                last_observed.join("; ")
+            ));
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+}
+
 fn p256_public_key(signing_key: &P256SigningKey) -> Result<PrivacyP256PointV1> {
     let encoded = signing_key.verifying_key().to_encoded_point(true);
     let bytes: [u8; 33] = encoded
@@ -533,27 +644,70 @@ fn zk_ams_fixture() -> Result<ZkAmsFixture> {
         .validate()
         .map_err(|error| eyre!("validate ZK-AMS bootstrap fixture: {error}"))?;
 
-    let seed_secret = zk_ams_seed_secret(41)?;
-    let mut seed_secret_bytes = [0_u8; 32];
-    seed_secret_bytes[..8].copy_from_slice(&41_u64.to_le_bytes());
-    let credential = PrivacyZkAmsPersonhoodCredentialV1 {
-        version: ZK_AMS_PHC_VERSION_V1,
-        issuer_id,
-        policy_id,
-        subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new([0x41; 32]),
-        seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(&seed_secret)),
-        credential_nonce: PrivacyZkAmsCredentialNonceV1::new([0x51; 32]),
-    };
-    let signature: P256Signature = issuer_signing_key
-        .sign_prehash(credential.digest().as_bytes())
-        .map_err(|_| eyre!("sign fixed ZK-AMS credential"))?;
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let mut seed_material = (0..16_usize)
+        .map(|index| {
+            let seed = 41_u64
+                .checked_add(u64::try_from(index).expect("sixteen fixture indices fit u64"))
+                .ok_or_else(|| eyre!("ZK-AMS fixture seed overflowed"))?;
+            let mut seed_secret_bytes = [0_u8; 32];
+            seed_secret_bytes[..8].copy_from_slice(&seed.to_le_bytes());
+            let seed_secret = zk_ams_seed_secret(seed)?;
+            Ok((zk_ams_seed_public_key_v1(&seed_secret), seed_secret_bytes))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    seed_material.sort_by_key(|(public_key, _)| *public_key);
+    ensure!(
+        seed_material.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "ZK-AMS fixture ring must be strictly increasing"
+    );
+    let credentials = seed_material
+        .into_iter()
+        .enumerate()
+        .map(|(index, (seed_public_key, seed_secret_bytes))| {
+            let index = u8::try_from(index).expect("sixteen fixture indices fit u8");
+            let credential = PrivacyZkAmsPersonhoodCredentialV1 {
+                version: ZK_AMS_PHC_VERSION_V1,
+                issuer_id,
+                policy_id,
+                subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new(
+                    [0x41_u8
+                        .checked_add(index)
+                        .expect("sixteen subject fixtures fit u8"); 32],
+                ),
+                seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new(seed_public_key),
+                credential_nonce: PrivacyZkAmsCredentialNonceV1::new(
+                    [0x51_u8
+                        .checked_add(index)
+                        .expect("sixteen nonce fixtures fit u8"); 32],
+                ),
+            };
+            let signature: P256Signature = issuer_signing_key
+                .sign_prehash(credential.digest().as_bytes())
+                .map_err(|_| eyre!("sign fixed ZK-AMS credential"))?;
+            let signature = signature.normalize_s().unwrap_or(signature);
+            Ok(ZkAmsCredentialFixture {
+                credential,
+                issuer_signature: signature.to_bytes().into(),
+                seed_secret_bytes,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        credentials.len() == 16,
+        "ZK-AMS minimum-ring fixture must contain sixteen credentials"
+    );
     Ok(ZkAmsFixture {
         bootstrap,
-        credential,
-        issuer_signature: signature.to_bytes().into(),
-        seed_secret_bytes,
+        credentials,
     })
+}
+
+fn zk_ams_initial_registry_state(fixture: &ZkAmsFixture) -> ZkAmsRegistryStateV1 {
+    ZkAmsRegistryStateV1 {
+        root: fixture.bootstrap.initial_registry_root,
+        epoch: fixture.bootstrap.initial_registry_epoch,
+        record_digest: fixture.bootstrap.registry_record_digest(),
+    }
 }
 
 fn zk_ams_transaction_context(
@@ -607,44 +761,81 @@ fn build_transaction_from_envelope(
     Ok(signed)
 }
 
-fn build_zk_ams_action(
+fn zk_ams_binding_v1<'a>(
+    statement: &'a IrohaZkAmsStatementV1,
+    canonical_genesis_hash: [u8; 32],
+) -> Result<TranscriptBindingV1<'a>> {
+    let statement_digest = PrivacyStatementV1::IrohaZkAmsV1(statement.clone())
+        .digest()
+        .wrap_err("derive canonical ZK-AMS statement digest")?;
+    Ok(TranscriptBindingV1 {
+        chain_id: statement.context.chain_id.as_str().as_bytes(),
+        genesis_hash: canonical_genesis_hash,
+        action_index: statement.context.action_index,
+        statement_digest: *statement_digest.as_bytes(),
+        parameter_id: *statement.context.parameter_id.as_bytes(),
+        parameter_digest: *statement.context.parameter_digest.as_bytes(),
+        verifier_digest: *statement.context.verifier_digest.as_bytes(),
+        statement_schema_digest: *statement.context.statement_schema_digest.as_bytes(),
+        engine_manifest_digest: *statement.context.engine_manifest_digest.as_bytes(),
+        generator_digest: zk_ams_generator_digest_v1(),
+    })
+}
+
+fn build_zk_ams_batch_action(
     client: &Client,
     fixture: &ZkAmsFixture,
+    credentials: &[ZkAmsCredentialFixture],
+    current_state: ZkAmsRegistryStateV1,
     canonical_genesis_hash: [u8; 32],
     nonce: u32,
     proof_seed: [u8; 32],
-) -> Result<SignedTransaction> {
+) -> Result<ZkAmsBatchActionV1> {
+    ensure!(
+        !credentials.is_empty() && credentials.len() <= ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1,
+        "ZK-AMS admission fixture must contain between one and eight credentials"
+    );
     let context = zk_ams_transaction_context(client, now_duration()?, nonce);
-    let anchor = PrivacyZkAmsAdmissionAnchorV1 {
-        phc_hash: fixture.credential.digest(),
-        seed_public_key: fixture.credential.seed_public_key,
-    };
-    let current_epoch = fixture.bootstrap.initial_registry_epoch;
-    let next_epoch = current_epoch
+    let anchors = credentials
+        .iter()
+        .map(|fixture| PrivacyZkAmsAdmissionAnchorV1 {
+            phc_hash: fixture.credential.digest(),
+            seed_public_key: fixture.credential.seed_public_key,
+        })
+        .collect::<Vec<_>>();
+    let next_epoch = current_state
+        .epoch
         .checked_add(1)
         .ok_or_else(|| eyre!("ZK-AMS registry epoch overflowed"))?;
-    let next_root = zk_ams_registry_transition_root_v1(
-        fixture.bootstrap.registry_id,
-        fixture.bootstrap.initial_registry_root,
-        current_epoch,
-        next_epoch,
-        1,
-        0,
-        anchor,
+    let batch_size = u32::try_from(anchors.len())
+        .map_err(|_| eyre!("ZK-AMS admission batch length exceeded u32"))?;
+    let next_root = anchors.iter().copied().enumerate().fold(
+        current_state.root,
+        |prior_root, (index, anchor)| {
+            zk_ams_registry_transition_root_v1(
+                fixture.bootstrap.registry_id,
+                prior_root,
+                current_state.epoch,
+                next_epoch,
+                batch_size,
+                u32::try_from(index).expect("ZK-AMS admission batch is bounded to eight"),
+                anchor,
+            )
+        },
     );
     let action = PrivacyZkAmsBatchAdmissionV1 {
-        account_registry_root: fixture.bootstrap.initial_registry_root,
-        account_registry_root_epoch: current_epoch,
+        account_registry_root: current_state.root,
+        account_registry_root_epoch: current_state.epoch,
         next_account_registry_root: next_root,
         next_account_registry_root_epoch: next_epoch,
-        anchors: vec![anchor],
+        anchors: anchors.clone(),
     };
     let governance = ZkAmsPrivacyActionGovernanceV1 {
         issuer_id: fixture.bootstrap.issuer_id,
         issuer_public_key: fixture.bootstrap.issuer_public_key,
         issuer_policy_record_digest: fixture.bootstrap.issuer_policy_record_digest(),
         registry_id: fixture.bootstrap.registry_id,
-        registry_record_digest: fixture.bootstrap.registry_record_digest(),
+        registry_record_digest: current_state.record_digest,
         policy_id: fixture.bootstrap.policy_id,
         policy_digest: fixture.bootstrap.policy_digest,
     };
@@ -661,25 +852,25 @@ fn build_zk_ams_action(
     let statement_digest = typed_statement
         .digest()
         .wrap_err("derive canonical ZK-AMS statement digest")?;
-    let binding = TranscriptBindingV1 {
-        chain_id: statement.context.chain_id.as_str().as_bytes(),
-        genesis_hash: canonical_genesis_hash,
-        action_index: statement.context.action_index,
-        statement_digest: *statement_digest.as_bytes(),
-        parameter_id: *statement.context.parameter_id.as_bytes(),
-        parameter_digest: *statement.context.parameter_digest.as_bytes(),
-        verifier_digest: *statement.context.verifier_digest.as_bytes(),
-        statement_schema_digest: *statement.context.statement_schema_digest.as_bytes(),
-        engine_manifest_digest: *statement.context.engine_manifest_digest.as_bytes(),
-        generator_digest: zk_ams_generator_digest_v1(),
-    };
-    let seed_secret = ZkAmsSeedSecretV1::from_bytes(fixture.seed_secret_bytes)
-        .map_err(|error| eyre!("restore canonical ZK-AMS seed secret: {error}"))?;
-    let witnesses = [ZkAmsBatchCredentialWitnessV1::new(
-        &fixture.credential,
-        &fixture.issuer_signature,
-        &seed_secret,
-    )];
+    let binding = zk_ams_binding_v1(&statement, canonical_genesis_hash)?;
+    let seed_secrets = credentials
+        .iter()
+        .map(|fixture| {
+            ZkAmsSeedSecretV1::from_bytes(fixture.seed_secret_bytes)
+                .map_err(|error| eyre!("restore canonical ZK-AMS seed secret: {error}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let witnesses = credentials
+        .iter()
+        .zip(&seed_secrets)
+        .map(|(fixture, secret)| {
+            ZkAmsBatchCredentialWitnessV1::new(
+                &fixture.credential,
+                &fixture.issuer_signature,
+                secret,
+            )
+        })
+        .collect::<Vec<_>>();
     let mut rng = DeterministicCryptoRng::new(proof_seed);
     let proof = prove_zk_ams_batch_admission_v1(
         &statement,
@@ -693,9 +884,12 @@ fn build_zk_ams_action(
     let effect = verify_zk_ams_batch_admission_v1(&statement, &binding, &proof)
         .map_err(|error| eyre!("verify locally produced ZK-AMS proof: {error}"))?;
     ensure!(
-        effect.next_root == next_root
+        effect.current_root == current_state.root
+            && effect.current_epoch == current_state.epoch
+            && effect.registry_record_digest == current_state.record_digest
+            && effect.next_root == next_root
             && effect.next_epoch == next_epoch
-            && effect.anchors == vec![anchor],
+            && effect.anchors == anchors,
         "locally verified ZK-AMS state effect drifted"
     );
 
@@ -716,7 +910,136 @@ fn build_zk_ams_action(
             PrivacyProofBytesV1::new(proof),
         )),
     };
-    build_transaction_from_envelope(&context, envelope, client)
+    let transaction = build_transaction_from_envelope(&context, envelope, client)?;
+    let next_state = ZkAmsRegistryStateV1 {
+        root: next_root,
+        epoch: next_epoch,
+        record_digest: zk_ams_registry_record_digest_v1(
+            fixture.bootstrap.issuer_id,
+            fixture.bootstrap.registry_id,
+            fixture.bootstrap.policy_id,
+            fixture.bootstrap.issuer_policy_record_digest(),
+            fixture.bootstrap.policy_digest,
+            next_root,
+            next_epoch,
+        ),
+    };
+    Ok(ZkAmsBatchActionV1 {
+        transaction,
+        next_state,
+    })
+}
+
+fn build_zk_ams_provision_action(
+    client: &Client,
+    fixture: &ZkAmsFixture,
+    current_state: ZkAmsRegistryStateV1,
+    account_id: AccountId,
+    canonical_genesis_hash: [u8; 32],
+    nonce: u32,
+    proof_seed: [u8; 32],
+) -> Result<ZkAmsProvisionActionV1> {
+    ensure!(
+        fixture.credentials.len() == 16,
+        "ZK-AMS provisioning fixture must use the canonical minimum ring"
+    );
+    let context = zk_ams_transaction_context(client, now_duration()?, nonce);
+    let ring = fixture
+        .credentials
+        .iter()
+        .map(|fixture| fixture.credential.seed_public_key)
+        .collect::<Vec<_>>();
+    ensure!(
+        ring.windows(2).all(|pair| pair[0] < pair[1]),
+        "ZK-AMS provisioning ring must be strictly increasing"
+    );
+    let signer_index = 5_usize;
+    let signer_secret = ZkAmsSeedSecretV1::from_bytes(
+        fixture
+            .credentials
+            .get(signer_index)
+            .ok_or_else(|| eyre!("ZK-AMS provisioning signer is outside the ring"))?
+            .seed_secret_bytes,
+    )
+    .map_err(|error| eyre!("restore ZK-AMS provisioning signer secret: {error}"))?;
+    let key_image = PrivacyZkAmsKeyImageV1::new(
+        zk_ams_key_image_v1(&signer_secret)
+            .map_err(|error| eyre!("derive canonical ZK-AMS key image: {error}"))?,
+    );
+    let governance = ZkAmsPrivacyActionGovernanceV1 {
+        issuer_id: fixture.bootstrap.issuer_id,
+        issuer_public_key: fixture.bootstrap.issuer_public_key,
+        issuer_policy_record_digest: fixture.bootstrap.issuer_policy_record_digest(),
+        registry_id: fixture.bootstrap.registry_id,
+        registry_record_digest: current_state.record_digest,
+        policy_id: fixture.bootstrap.policy_id,
+        policy_digest: fixture.bootstrap.policy_digest,
+    };
+    let action = PrivacyZkAmsProvisionAccountV1 {
+        account_registry_root: current_state.root,
+        account_registry_root_epoch: current_state.epoch,
+        admitted_seed_key_ring: ring.clone(),
+        account_id: account_id.clone(),
+        key_image,
+    };
+    let statement =
+        prepare_zk_ams_provision_account_transaction_intent_v1(&context, governance, action)
+            .map_err(|error| eyre!("prepare canonical ZK-AMS provisioning intent: {error}"))?;
+    let intent = validate_zk_ams_privacy_action_transaction_intent_v1(&context, &statement)
+        .map_err(|error| eyre!("revalidate canonical ZK-AMS provisioning intent: {error}"))?;
+    ensure!(
+        intent == statement.context.transaction_intent_digest,
+        "ZK-AMS provisioning intent differs from the statement"
+    );
+    let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+    let statement_digest = typed_statement
+        .digest()
+        .wrap_err("derive canonical ZK-AMS provisioning statement digest")?;
+    let binding = zk_ams_binding_v1(&statement, canonical_genesis_hash)?;
+    let mut rng = DeterministicCryptoRng::new(proof_seed);
+    let proof = sign_zk_ams_provision_statement_v1(
+        &statement,
+        &binding,
+        signer_index,
+        &signer_secret,
+        &mut rng,
+    )
+    .map_err(|error| eyre!("prove canonical ZK-AMS account provisioning: {error}"))?;
+    let effect = verify_zk_ams_provision_statement_v1(&statement, &binding, &proof)
+        .map_err(|error| eyre!("verify locally produced ZK-AMS provisioning proof: {error}"))?;
+    ensure!(
+        effect.current_root == current_state.root
+            && effect.current_epoch == current_state.epoch
+            && effect.registry_record_digest == current_state.record_digest
+            && effect.ring == ring
+            && effect.account_id == account_id
+            && effect.key_image == key_image,
+        "locally verified ZK-AMS provisioning effect drifted"
+    );
+
+    let profile = compiled_privacy_profile_v1(ZK_AMS_PROTOCOL)
+        .wrap_err("load canonical compiled ZK-AMS profile for provisioning envelope")?;
+    let envelope = PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest,
+        statement: typed_statement,
+        proof: PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
+            PrivacyProofBytesV1::new(proof),
+        )),
+    };
+    let transaction = build_transaction_from_envelope(&context, envelope, client)?;
+    Ok(ZkAmsProvisionActionV1 {
+        transaction,
+        account_id,
+        key_image,
+    })
 }
 
 fn cbor_head(major: u8, argument: u64) -> Vec<u8> {
@@ -1291,8 +1614,16 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         .await?;
 
         let zk_fixture = zk_ams_fixture()?;
-        let zk_preactivation =
-            build_zk_ams_action(&client, &zk_fixture, genesis_hash, 11, [0x11; 32])?;
+        let zk_preactivation = build_zk_ams_batch_action(
+            &client,
+            &zk_fixture,
+            &zk_fixture.credentials[..1],
+            zk_ams_initial_registry_state(&zk_fixture),
+            genesis_hash,
+            11,
+            [0x11; 32],
+        )?
+        .transaction;
         let (vega_issuer_record, vega_preactivation) =
             build_vega_action(&client, genesis_hash, 21, 0x31, [0x21; 32])?;
         submit_instruction(
@@ -1437,7 +1768,100 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "bootstrap canonical active ZK-AMS registry",
         )
         .await?;
-        let zk_final = build_zk_ams_action(&client, &zk_fixture, genesis_hash, 12, [0x12; 32])?;
+        let (first_admission, second_admission) = zk_fixture
+            .credentials
+            .split_at(ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1);
+        ensure!(
+            first_admission.len() == ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
+                && second_admission.len() == ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1,
+            "ZK-AMS minimum ring must be assembled from two exact eight-member batches"
+        );
+        let zk_admission_one = build_zk_ams_batch_action(
+            &client,
+            &zk_fixture,
+            first_admission,
+            zk_ams_initial_registry_state(&zk_fixture),
+            genesis_hash,
+            12,
+            [0x12; 32],
+        )?;
+        let zk_admission_two = build_zk_ams_batch_action(
+            &client,
+            &zk_fixture,
+            second_admission,
+            zk_admission_one.next_state,
+            genesis_hash,
+            13,
+            [0x13; 32],
+        )?;
+        let provisioned_account = gen_account_in("zk-ams-provisioned").0;
+        let replay_account = gen_account_in("zk-ams-key-image-replay").0;
+        let restart_replay_account = gen_account_in("zk-ams-restart-key-image-replay").0;
+        ensure!(
+            provisioned_account != replay_account
+                && provisioned_account != restart_replay_account
+                && replay_account != restart_replay_account,
+            "ZK-AMS provisioning and replay targets must be distinct"
+        );
+        let accounts_before_provision = client
+            .query(FindAccounts)
+            .execute_all()
+            .wrap_err("query accounts before ZK-AMS provisioning")?;
+        for account_id in [
+            &provisioned_account,
+            &replay_account,
+            &restart_replay_account,
+        ] {
+            ensure!(
+                accounts_before_provision
+                    .iter()
+                    .all(|account| &account.id != account_id),
+                "ZK-AMS fixture target account already exists: {account_id}"
+            );
+        }
+        let zk_provision = build_zk_ams_provision_action(
+            &client,
+            &zk_fixture,
+            zk_admission_two.next_state,
+            provisioned_account.clone(),
+            genesis_hash,
+            14,
+            [0x14; 32],
+        )?;
+        let zk_key_image_replay = build_zk_ams_provision_action(
+            &client,
+            &zk_fixture,
+            zk_admission_two.next_state,
+            replay_account.clone(),
+            genesis_hash,
+            15,
+            [0x15; 32],
+        )?;
+        let zk_restart_key_image_replay = build_zk_ams_provision_action(
+            &client,
+            &zk_fixture,
+            zk_admission_two.next_state,
+            restart_replay_account.clone(),
+            genesis_hash,
+            16,
+            [0x16; 32],
+        )?;
+        ensure!(
+            zk_provision.account_id == provisioned_account
+                && zk_key_image_replay.account_id == replay_account
+                && zk_restart_key_image_replay.account_id == restart_replay_account
+                && zk_provision.key_image == zk_key_image_replay.key_image
+                && zk_provision.key_image == zk_restart_key_image_replay.key_image,
+            "independently proved ZK-AMS replay fixtures must share only the key image"
+        );
+        ensure!(
+            zk_provision.transaction.hash() != zk_key_image_replay.transaction.hash()
+                && zk_provision.transaction.hash()
+                    != zk_restart_key_image_replay.transaction.hash()
+                && zk_key_image_replay.transaction.hash()
+                    != zk_restart_key_image_replay.transaction.hash(),
+            "independently proved ZK-AMS key-image replays must have distinct transaction hashes"
+        );
         let (final_issuer_record, vega_final) =
             build_vega_action(&client, genesis_hash, 22, 0x33, [0x22; 32])?;
         ensure!(
@@ -1445,10 +1869,11 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "Vega action fixture drifted from registered issuer state"
         );
 
-        let stale_zk = independently_resigned_stale_intent(&zk_final, 112, &client)?;
+        let stale_zk =
+            independently_resigned_stale_intent(&zk_admission_one.transaction, 112, &client)?;
         let stale_vega = independently_resigned_stale_intent(&vega_final, 122, &client)?;
         let tampered_zk = independently_resigned_governance_tamper(
-            &zk_final,
+            &zk_admission_one.transaction,
             GovernanceTamper::ZkAmsRegistryRecord,
             &client,
         )?;
@@ -1517,23 +1942,26 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "selected Active privacy validator was not running before restart coverage"
         );
 
-        let submitted_zk =
-            submit_signed_transaction(&client, &zk_final, "submit canonical active ZK-AMS action")
-                .await?;
-        ensure!(
-            *submitted_zk.as_ref() == *zk_final.hash().as_ref(),
-            "submitted ZK-AMS transaction hash differs from signed bytes"
-        );
-        let submitted_vega =
-            submit_signed_transaction(&client, &vega_final, "submit canonical active Vega action")
-                .await?;
-        ensure!(
-            *submitted_vega.as_ref() == *vega_final.hash().as_ref(),
-            "submitted Vega transaction hash differs from signed bytes"
-        );
+        for (label, transaction) in [
+            ("ZK-AMS admission one", &zk_admission_one.transaction),
+            ("ZK-AMS admission two", &zk_admission_two.transaction),
+            ("Vega", &vega_final),
+            ("ZK-AMS account provision", &zk_provision.transaction),
+        ] {
+            let submitted = submit_signed_transaction(
+                &client,
+                transaction,
+                &format!("submit canonical active {label} action"),
+            )
+            .await?;
+            ensure!(
+                *submitted.as_ref() == *transaction.hash().as_ref(),
+                "submitted {label} transaction hash differs from signed bytes"
+            );
+        }
         let finalized_height = client
             .get_privacy_capabilities()
-            .wrap_err("query height after ZK-AMS/Vega finality")?
+            .wrap_err("query height after ZK-AMS admission/provision and Vega finality")?
             .committed_height;
         let healthy_clients = network
             .peers()
@@ -1544,12 +1972,55 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             .collect::<Vec<_>>();
         wait_for_transactions_on_peers(
             &healthy_clients,
-            &[("ZK-AMS", &zk_final), ("Vega", &vega_final)],
-            "healthy-validator ZK-AMS/Vega finality",
+            &[
+                ("ZK-AMS admission one", &zk_admission_one.transaction),
+                ("ZK-AMS admission two", &zk_admission_two.transaction),
+                ("ZK-AMS provision", &zk_provision.transaction),
+                ("Vega", &vega_final),
+            ],
+            "healthy-validator ZK-AMS lineage and Vega finality",
+        )
+        .await?;
+        wait_for_zk_ams_account_state_on_peers(
+            &healthy_clients,
+            &provisioned_account,
+            &[&replay_account, &restart_replay_account],
+            "healthy-validator ZK-AMS account creation",
         )
         .await?;
 
-        for (label, transaction) in [("ZK-AMS", &zk_final), ("Vega", &vega_final)] {
+        assert_rejected_with(
+            &client,
+            &zk_key_image_replay.transaction,
+            "independently proved same-key-image ZK-AMS replay",
+            &[
+                "verified ZK-AMS provisioning key image was already consumed",
+                "provisioning key image was already consumed",
+            ],
+        )
+        .await?;
+        ensure!(
+            client
+                .get_privacy_capabilities()
+                .wrap_err("query height after independent ZK-AMS key-image replay")?
+                .committed_height
+                == finalized_height,
+            "independent ZK-AMS key-image replay unexpectedly committed another block"
+        );
+        wait_for_zk_ams_account_state_on_peers(
+            &healthy_clients,
+            &provisioned_account,
+            &[&replay_account, &restart_replay_account],
+            "healthy-validator ZK-AMS key-image replay rejection",
+        )
+        .await?;
+
+        for (label, transaction) in [
+            ("ZK-AMS admission one", &zk_admission_one.transaction),
+            ("ZK-AMS admission two", &zk_admission_two.transaction),
+            ("ZK-AMS provision", &zk_provision.transaction),
+            ("Vega", &vega_final),
+        ] {
             let replay_error = client
                 .submit_transaction(transaction)
                 .expect_err("exact finalized privacy transaction replay was accepted");
@@ -1591,12 +2062,50 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             .collect::<Vec<_>>();
         wait_for_transactions_on_peers(
             &all_clients,
-            &[("ZK-AMS", &zk_final), ("Vega", &vega_final)],
-            "post-restart exact finalized transaction visibility",
+            &[
+                ("ZK-AMS admission one", &zk_admission_one.transaction),
+                ("ZK-AMS admission two", &zk_admission_two.transaction),
+                ("ZK-AMS provision", &zk_provision.transaction),
+                ("Vega", &vega_final),
+            ],
+            "post-restart exact ZK-AMS lineage and Vega transaction visibility",
+        )
+        .await?;
+        wait_for_zk_ams_account_state_on_peers(
+            &all_clients,
+            &provisioned_account,
+            &[&replay_account, &restart_replay_account],
+            "post-restart ZK-AMS account and rejected-target persistence",
+        )
+        .await?;
+        let restarted_client = bounded_client(restart_peer.client());
+        assert_rejected_with(
+            &restarted_client,
+            &zk_restart_key_image_replay.transaction,
+            "post-restart independently proved same-key-image ZK-AMS replay",
+            &[
+                "verified ZK-AMS provisioning key image was already consumed",
+                "provisioning key image was already consumed",
+            ],
         )
         .await?;
         ensure!(
-            canonical_genesis_hash(&bounded_client(restart_peer.client()))? == genesis_hash,
+            restarted_client
+                .get_privacy_capabilities()
+                .wrap_err("query restarted height after persisted key-image replay")?
+                .committed_height
+                == finalized_height,
+            "post-restart ZK-AMS key-image replay unexpectedly committed another block"
+        );
+        wait_for_zk_ams_account_state_on_peers(
+            &all_clients,
+            &provisioned_account,
+            &[&replay_account, &restart_replay_account],
+            "post-restart ZK-AMS key-image replay persistence",
+        )
+        .await?;
+        ensure!(
+            canonical_genesis_hash(&restarted_client)? == genesis_hash,
             "restarted validator derived a different canonical genesis hash"
         );
         Ok(())

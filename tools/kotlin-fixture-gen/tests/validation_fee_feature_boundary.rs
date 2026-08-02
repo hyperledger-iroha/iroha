@@ -50,7 +50,7 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
         genesis_hash: [7; 32],
         policy_version: 1,
         previous_policy_hash: None,
-        ds_asset_id: AssetDefinitionId::new(
+        ds_asset_id: AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "validation").expect("domain id"),
             Name::from_str("fee").expect("asset name"),
         ),
@@ -65,7 +65,7 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
     };
     assert_eq!(policy.policy_invariant_error(), None);
     let plain_electorate_rules = ValidationFeePlainElectorateRulesV1 {
-        voting_asset_id: AssetDefinitionId::new(
+        voting_asset_id: AssetDefinitionId::derive_from_components(
             DomainId::try_new("governance", "validation").expect("governance domain id"),
             Name::from_str("vote").expect("voting asset name"),
         ),

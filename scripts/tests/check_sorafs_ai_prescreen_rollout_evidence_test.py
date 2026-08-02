@@ -435,35 +435,26 @@ def transparency_publication(*, missing_source: str | None = None) -> dict:
         "moderation-commit-reveal-status",
         "moderation-ballots-executor",
     ]
-    probes = [
+    producers = [
         {
             "source_kind": source_kind,
-            "payload_path": f"{source_kind}.json",
-            "request_bytes": 128,
-            "request_body_blake3": DIGEST,
-            "response_status": 201,
-            "response_success": True,
-            "response_bytes": 16,
-            "response_body_blake3": DIGEST,
-            "payload_bytes_included": False,
-            "private_payloads_included": False,
-            "response_body_included": False,
+            "producer_id": f"moderation-{index}",
+            "producer_route": f"internal:moderation/{index}",
+            "provenance_digest_hex": f"{index + 1:x}" * 64,
+            "durable_checkpoint_verified": True,
         }
-        for source_kind in source_kinds
+        for index, source_kind in enumerate(source_kinds)
         if source_kind != missing_source
     ]
     return with_context({
-        "schema": "sorafs.transparency.source_entry.canary.v1",
-        "source": "iroha_cli",
+        "schema": "sorafs.moderation.transparency_source.producer_evidence.v1",
         "status": "passed",
         "workflow_digest_hex": DIGEST,
-        "probe_count": len(probes),
-        "passed_probe_count": len(probes),
-        "source_entry_probe_count": len(probes),
+        "producer_count": len(producers),
+        "generic_public_ingress_absent": True,
         "payload_bytes_included": False,
         "private_payloads_included": False,
-        "response_bodies_included": False,
-        "probes": probes,
+        "producers": producers,
     })
 
 
@@ -695,7 +686,8 @@ def test_fixture_inventories_cover_checker_required_sets() -> None:
         artifact["name"]: artifact["kind"] for artifact in executor_artifacts
     } == MODULE.REQUIRED_EXECUTOR_ARTIFACT_KINDS
     assert tuple(
-        probe["source_kind"] for probe in transparency_publication()["probes"]
+        producer["source_kind"]
+        for producer in transparency_publication()["producers"]
     ) == MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS
 
     governance = governance_dag()
@@ -1012,34 +1004,6 @@ def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
             ("private_payloads_included",),
         ),
         (
-            "transparency-response-bodies",
-            "transparency_publication",
-            "transparency-publication.json",
-            transparency_publication,
-            ("response_bodies_included",),
-        ),
-        (
-            "transparency-probe-payload-bytes",
-            "transparency_publication",
-            "transparency-publication.json",
-            transparency_publication,
-            ("probes", 0, "payload_bytes_included"),
-        ),
-        (
-            "transparency-probe-private-payloads",
-            "transparency_publication",
-            "transparency-publication.json",
-            transparency_publication,
-            ("probes", 0, "private_payloads_included"),
-        ),
-        (
-            "transparency-probe-response-body",
-            "transparency_publication",
-            "transparency-publication.json",
-            transparency_publication,
-            ("probes", 0, "response_body_included"),
-        ),
-        (
             "governance-payload-bytes",
             "governance_dag",
             "governance-dag.json",
@@ -1228,13 +1192,6 @@ def test_path_evidence_fields_must_be_archive_portable_without_leaking(
             "execution_summary.path",
             "summaries/C%3A/private_key.json",
         ),
-        (
-            "transparency-publication.json",
-            "transparency_publication",
-            transparency_publication(),
-            "probes.0.payload_path",
-            "payloads/%252e%252e/private_key.json",
-        ),
     )
 
     for index, (file_name, kind, payload, field, unsafe_path) in enumerate(cases):
@@ -1245,8 +1202,6 @@ def test_path_evidence_fields_must_be_archive_portable_without_leaking(
             payload["artifacts"][0]["path"] = unsafe_path
         elif field == "execution_summary.path":
             payload["execution_summary"]["path"] = unsafe_path
-        elif field == "probes.0.payload_path":
-            payload["probes"][0]["payload_path"] = unsafe_path
         else:
             payload[field] = unsafe_path
         write_json(case_dir / file_name, payload)
@@ -2441,21 +2396,18 @@ def test_transparency_publication_requires_moderation_source_kinds(tmp_path: Pat
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["transparency_publication"]["artifacts"][0]
-    assert "source_entry_probe_count must be at least 8" in artifact["errors"]
     assert (
-        "probes must include source_kind `moderation-juror-notifications-canary`"
+        "producers must include source_kind `moderation-juror-notifications-canary`"
         in artifact["errors"]
     )
 
 
-def test_transparency_probe_count_must_match_unique_source_kinds(
+def test_transparency_producer_count_must_match_inventory(
     tmp_path: Path,
 ) -> None:
     write_complete_evidence(tmp_path)
     payload = transparency_publication()
-    payload["probe_count"] += 1
-    payload["passed_probe_count"] = payload["probe_count"]
-    payload["source_entry_probe_count"] = payload["probe_count"]
+    payload["producer_count"] += 1
     write_json(tmp_path / "transparency-publication.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -2464,21 +2416,15 @@ def test_transparency_probe_count_must_match_unique_source_kinds(
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["transparency_publication"]["artifacts"][0]
     assert artifact["valid"] is False
-    assert "probe_count must equal probes length" in artifact["errors"]
-    assert "probe_count must match unique probes count" in artifact["errors"]
-    assert (
-        "source_entry_probe_count must match unique probes count"
-        in artifact["errors"]
-    )
+    assert "producer_count must equal producers length" in artifact["errors"]
+    assert "producer_count must match unique producers count" in artifact["errors"]
 
 
-def test_transparency_probes_must_not_duplicate_source_kind(tmp_path: Path) -> None:
+def test_transparency_producers_must_not_duplicate_source_kind(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = transparency_publication()
-    payload["probes"].append(dict(payload["probes"][0]))
-    payload["probe_count"] = len(payload["probes"])
-    payload["passed_probe_count"] = len(payload["probes"])
-    payload["source_entry_probe_count"] = len(payload["probes"])
+    payload["producers"].append(dict(payload["producers"][0]))
+    payload["producer_count"] = len(payload["producers"])
     write_json(tmp_path / "transparency-publication.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -2487,12 +2433,8 @@ def test_transparency_probes_must_not_duplicate_source_kind(tmp_path: Path) -> N
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["transparency_publication"]["artifacts"][0]
     assert artifact["valid"] is False
-    assert "probes must not contain duplicate values" in artifact["errors"]
-    assert "probe_count must match unique probes count" in artifact["errors"]
-    assert (
-        "source_entry_probe_count must match unique probes count"
-        in artifact["errors"]
-    )
+    assert "producers must not contain duplicate values" in artifact["errors"]
+    assert "producer_count must match unique producers count" in artifact["errors"]
 
 
 def test_transparency_source_kinds_must_not_include_unknown_values(
@@ -2500,22 +2442,14 @@ def test_transparency_source_kinds_must_not_include_unknown_values(
 ) -> None:
     write_complete_evidence(tmp_path)
     payload = transparency_publication()
-    payload["probes"].append({
+    payload["producers"].append({
         "source_kind": "moderation-debug-source",
-        "payload_path": "moderation-debug-source.json",
-        "request_bytes": 128,
-        "request_body_blake3": DIGEST,
-        "response_status": 201,
-        "response_success": True,
-        "response_bytes": 16,
-        "response_body_blake3": DIGEST,
-        "payload_bytes_included": False,
-        "private_payloads_included": False,
-        "response_body_included": False,
+        "producer_id": "moderation-unknown",
+        "producer_route": "internal:moderation/unknown",
+        "provenance_digest_hex": DIGEST,
+        "durable_checkpoint_verified": True,
     })
-    payload["probe_count"] = len(payload["probes"])
-    payload["passed_probe_count"] = len(payload["probes"])
-    payload["source_entry_probe_count"] = len(payload["probes"])
+    payload["producer_count"] = len(payload["producers"])
     write_json(tmp_path / "transparency-publication.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -2524,15 +2458,18 @@ def test_transparency_source_kinds_must_not_include_unknown_values(
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["transparency_publication"]["artifacts"][0]
     assert artifact["valid"] is False
-    assert "probes must not include unknown values" in artifact["errors"]
+    assert "producers must not include unknown values" in artifact["errors"]
 
 
-def test_transparency_source_entry_probe_count_must_match_probe_count(
+def test_transparency_producer_evidence_rejects_generic_public_ingress(
     tmp_path: Path,
 ) -> None:
     write_complete_evidence(tmp_path)
     payload = transparency_publication()
-    payload["source_entry_probe_count"] -= 1
+    payload["generic_public_ingress_absent"] = False
+    payload["producers"][0]["producer_route"] = (
+        "/v1/sorafs/transparency/source-entries/moderation-reviewed-quarantine"
+    )
     write_json(tmp_path / "transparency-publication.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -2541,7 +2478,8 @@ def test_transparency_source_entry_probe_count_must_match_probe_count(
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["transparency_publication"]["artifacts"][0]
     assert artifact["valid"] is False
-    assert "source_entry_probe_count must equal probe_count" in artifact["errors"]
+    assert "generic_public_ingress_absent must be true" in artifact["errors"]
+    assert MODULE.TRUSTED_TRANSPARENCY_PRODUCER_ROUTE_ERROR in artifact["errors"]
 
 
 def test_transparency_publication_payload_free_flags_are_required(
@@ -2550,7 +2488,6 @@ def test_transparency_publication_payload_free_flags_are_required(
     for field in (
         "payload_bytes_included",
         "private_payloads_included",
-        "response_bodies_included",
     ):
         root = tmp_path / field
         root.mkdir()
@@ -2568,11 +2505,11 @@ def test_transparency_publication_payload_free_flags_are_required(
         assert f"{field} must be false" in artifact["errors"]
 
 
-def test_transparency_probe_byte_counts_are_validated(tmp_path: Path) -> None:
+def test_transparency_producer_provenance_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = transparency_publication()
-    payload["probes"][0]["request_bytes"] = 0
-    payload["probes"][0]["response_bytes"] = -1
+    payload["producers"][0]["provenance_digest_hex"] = "not-a-digest"
+    payload["producers"][0]["durable_checkpoint_verified"] = False
     write_json(tmp_path / "transparency-publication.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -2581,8 +2518,11 @@ def test_transparency_probe_byte_counts_are_validated(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["transparency_publication"]["artifacts"][0]
     assert artifact["valid"] is False
-    assert "request_bytes must be a positive integer" in artifact["errors"]
-    assert "response_bytes must be a non-negative integer" in artifact["errors"]
+    assert (
+        "producers[0].provenance_digest_hex must be 64 lowercase hex characters"
+        in artifact["errors"]
+    )
+    assert "producers[0].durable_checkpoint_verified must be true" in artifact["errors"]
 
 
 def test_governance_dag_must_be_config_bound(tmp_path: Path) -> None:

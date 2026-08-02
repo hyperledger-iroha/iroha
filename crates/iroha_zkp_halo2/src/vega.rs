@@ -21,6 +21,10 @@ use thiserror::Error;
 
 #[path = "vega/algebra.rs"]
 mod algebra;
+#[path = "vega/bulletproof_t256.rs"]
+mod bulletproof_t256;
+#[path = "vega/canonical_mc.rs"]
+mod canonical_mc;
 #[path = "vega/circuit.rs"]
 mod circuit;
 #[path = "vega/commitment.rs"]
@@ -60,33 +64,148 @@ mod wire;
 #[path = "vega/zk_ams.rs"]
 mod zk_ams;
 
-pub use curve::{
+pub(super) use curve::{
     VEGA_T256_BASE_MODULUS_BE_V1, VegaCurveError, VegaT256PointV1, derive_t256_generators_v1,
 };
 pub use engine::{
     MAX_VEGA_PROVER_RELEASE_MEMORY_CEILING_BYTES_V1, MAX_VEGA_PROVER_WORKERS_V1,
     VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1, VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
-    VEGA_MDL_CANONICAL_RELATION_DIGEST_V1, VEGA_MDL_COMPILED_PROFILE_DIGEST_V1,
+    VEGA_MDL_ACTION_INDEX_V1, VEGA_MDL_CANONICAL_RELATION_DIGEST_V1,
+    VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, VEGA_MDL_COMPILED_PROFILE_DIGEST_V1,
+    VEGA_MDL_COMPILED_PROFILE_MANIFEST_V1, VEGA_MDL_MC_STEP_COUNT_V1,
     VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1, VegaMdlProofContextV1, VegaMdlProofDimensionsV1,
     VegaMdlProofErrorV1, VegaMdlProverConfigV1, VegaRandomSourceErrorV1, VegaRandomSourceV1,
     prove_vega_mdl_figure9_v1, vega_mdl_canonical_relation_digest_v1,
-    vega_mdl_compiled_profile_digest_v1, vega_mdl_proof_dimensions_v1, verify_vega_mdl_figure9_v1,
+    vega_mdl_compiled_profile_digest_v1, vega_mdl_proof_dimensions_v1, vega_mdl_verifier_digest_v1,
+    verify_vega_mdl_figure9_v1,
 };
 pub use figure9::{
     VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaMdlFigure9ErrorV1, VegaMdlFigure9WitnessV1,
     validate_vega_mdl_figure9_encoding_v1, validate_vega_mdl_figure9_relation_v1,
 };
 pub use masked_relaxed::{MaskedRelaxedRandomErrorV1, MaskedRelaxedRandomSourceV1};
-pub use transcript::{VegaTranscriptError, VegaTranscriptV1};
-pub use wire::{VegaPointWireV1, VegaScalarWireV1, VegaWireError, validate_proof_byte_cap_v1};
+pub(super) use transcript::{VegaTranscriptError, VegaTranscriptV1};
+pub(super) use wire::{VegaPointWireV1, VegaScalarWireV1};
 pub use zk_ams::{
-    MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1,
-    ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1, ZkAmsAdmissionPublicInputV1,
+    MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, ZK_AMS_ACTION_INDEX_V1,
+    ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1, ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1,
+    ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1, ZK_AMS_MKHE_EVIDENCE_CHUNK_BYTES_V1,
+    ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZK_AMS_PHASE3_MAX_TERMINAL_PROOF_BYTES_V1,
+    ZK_AMS_PHASE23_FRESHNESS_CERTIFIES_HIDDEN_MASK_SHARES_V1,
+    ZK_AMS_PHASE23_FRESHNESS_COMMIT_WIRE_BYTES_V1, ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1,
+    ZK_AMS_PHASE23_FRESHNESS_REVEAL_WIRE_BYTES_V1, ZK_AMS_PHASE23_MAX_CANONICAL_SPARSE_ENTRIES_V1,
+    ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1, ZK_AMS_PHASE23_RELEASE_MAP_SET_KAT_DIGEST_V1,
+    ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
+    ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1,
+    ZK_AMS_T256_GALOIS_KEY_COUNT_V1, ZK_AMS_T256_GALOIS_KEY_SCHEDULE_DIGEST_V1,
+    ZK_AMS_T256_MAX_LOGICAL_VALUES_V1, ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_PACKED_OUTPUT_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1,
+    ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_TRANSFORMED_RNS_KAT_DIGEST_V1, ZkAmsAdmissionPublicInputV1,
     ZkAmsAdmissionRelationDimensionsV1, ZkAmsAdmissionRelationErrorV1,
-    ZkAmsAdmissionRelationWitnessV1, ZkAmsMaskedProverConfigV1, ZkAmsProofContextV1,
-    prove_zk_ams_admission_relation_v1, verify_zk_ams_admission_relation_v1,
-    zk_ams_admission_relation_dimensions_v1, zk_ams_compiled_profile_digest_v1,
-    zk_ams_t256_generator_digest_v1,
+    ZkAmsAdmissionRelationWitnessV1, ZkAmsMaskedProverConfigV1, ZkAmsMkheAbortReasonV1,
+    ZkAmsMkheActiveCollectivePublicKeyStatementV1, ZkAmsMkheActiveCollectivePublicKeyWitnessV1,
+    ZkAmsMkheActiveContributionV1, ZkAmsMkheActivePartySecretV1,
+    ZkAmsMkheActiveRkgLinearProofSecurityV1, ZkAmsMkheActiveRkgProofV1,
+    ZkAmsMkheActiveRkgRoundOneStatementV1, ZkAmsMkheActiveRkgRoundOneWitnessV1,
+    ZkAmsMkheActiveRkgRoundTwoStatementV1, ZkAmsMkheActiveRkgRoundTwoWitnessV1,
+    ZkAmsMkheActiveRoundReceiptV1, ZkAmsMkheActiveRoundV1, ZkAmsMkheAuthenticatedCksContributionV1,
+    ZkAmsMkheAuthenticatedDecryptionShareV1, ZkAmsMkheAuthenticationWireV1,
+    ZkAmsMkheCksAbortReasonV1, ZkAmsMkheCksContributionWireV1, ZkAmsMkheCksProofV1,
+    ZkAmsMkheCksResourceEvidenceV1, ZkAmsMkheCksSourceCiphertextV1, ZkAmsMkheCksStatementV1,
+    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveCiphertextWireV1,
+    ZkAmsMkheCollectiveCksDigitEvidenceV1, ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
+    ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
+    ZkAmsMkheCollectiveEvaluatedKeyProviderV1, ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1,
+    ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1,
+    ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1, ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
+    ZkAmsMkheCollectiveEvidenceRecordFooterV1, ZkAmsMkheCollectiveEvidenceRecordHeaderV1,
+    ZkAmsMkheCollectiveEvidenceRecordKindV1, ZkAmsMkheCollectiveEvidenceSetFooterV1,
+    ZkAmsMkheCollectiveEvidenceSetHeaderV1, ZkAmsMkheCollectiveEvidenceSetKindV1,
+    ZkAmsMkheCollectiveLevelOneV1, ZkAmsMkheCollectivePartyStateV1,
+    ZkAmsMkheCollectivePublicKeyShareV1, ZkAmsMkheCollectivePublicKeyV1,
+    ZkAmsMkheCollectiveSourceProofEvidenceV1, ZkAmsMkheCollectiveSourceStatementEvidenceV1,
+    ZkAmsMkheDecryptedPlaintextV1, ZkAmsMkheDecryptionAbortReasonV1, ZkAmsMkheDecryptionProofV1,
+    ZkAmsMkheDecryptionResourceEvidenceV1, ZkAmsMkheDecryptionSplitTransportV1,
+    ZkAmsMkheDecryptionStatementV1, ZkAmsMkheDecryptionTransportComponentKindV1,
+    ZkAmsMkheDecryptionTransportManifestV1, ZkAmsMkheDecryptionTransportPointerV1,
+    ZkAmsMkheDirectAdmittedContributionSetV1, ZkAmsMkheDirectCeremonyContextV1,
+    ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheDirectCoordinatorV1,
+    ZkAmsMkheDirectEvaluatedKeySetAdmissionV1, ZkAmsMkheDirectEvaluatedKeyTargetV1,
+    ZkAmsMkheDirectNoiseCertificateV1, ZkAmsMkheDirectNoiseIntegrationCertificateV1,
+    ZkAmsMkheDirectPolynomialRoleV1, ZkAmsMkheDirectPolynomialStreamReceiptV1,
+    ZkAmsMkheDirectPolynomialStreamV1, ZkAmsMkheDirectProofAuditV1,
+    ZkAmsMkheDirectResourceCertificateV1, ZkAmsMkheDirectVerifiedContributionProviderV1,
+    ZkAmsMkheDirectVerifiedContributionV1, ZkAmsMkheErrorV1, ZkAmsMkheEvaluatedKeySorafsPointerV1,
+    ZkAmsMkheFullRosterDecryptionResultV1, ZkAmsMkheGovernedActiveRosterV1,
+    ZkAmsMkheGovernedCollectiveKeyMaterialIdentityV1, ZkAmsMkheGovernedParticipantV1,
+    ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheIdentifiableAbortV1, ZkAmsMkheIdentifiableCksAbortV1,
+    ZkAmsMkheIdentifiableDecryptionAbortV1, ZkAmsMkheNoiseCertificateV1,
+    ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1, ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1,
+    ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1, ZkAmsMkheProofEnvelopeWireV1,
+    ZkAmsMkheProofKindV1, ZkAmsMkheReadinessV1, ZkAmsMkheReleaseManifestV1,
+    ZkAmsMkheResourceCertificateV1, ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheRosterKeyProofV1,
+    ZkAmsMkheSecurityAttackRecordV1, ZkAmsMkheSecurityAttackV1, ZkAmsMkheSecurityCandidateV1,
+    ZkAmsMkheSecurityCertificateV1, ZkAmsMkheSecurityEstimatorSuiteV1, ZkAmsMkheSeededRkgKeyWireV1,
+    ZkAmsMkheSeekableEvaluatedKeyAccountingV1, ZkAmsMkheWireBindingV1, ZkAmsPhase3BatchAnchorV1,
+    ZkAmsPhase3FoldHistoryV1, ZkAmsPhase3GovernedBatchV1, ZkAmsPhase3TerminalContextV1,
+    ZkAmsPhase3TerminalImplementationV1, ZkAmsPhase3TerminalProverOutputV1,
+    ZkAmsPhase3TerminalReceiptV1, ZkAmsPhase23AccumulatorShapeV1,
+    ZkAmsPhase23CommitmentPreimageLayoutV1, ZkAmsPhase23CrossTermCommitmentV1,
+    ZkAmsPhase23EncryptedBindingV1, ZkAmsPhase23EncryptedImplementationV1,
+    ZkAmsPhase23EquationCertificateV1, ZkAmsPhase23FreshnessCommitV1,
+    ZkAmsPhase23FreshnessContextV1, ZkAmsPhase23FreshnessPhaseV1, ZkAmsPhase23FreshnessReceiptV1,
+    ZkAmsPhase23FreshnessRevealV1, ZkAmsPhase23MapKindV1, ZkAmsPhase23MaterializedAccumulatorsV1,
+    ZkAmsPhase23PackedAccumulatorSetV1, ZkAmsPhase23PendingRevealV1,
+    ZkAmsPhase23PublicAccumulatorV1, ZkAmsPhase23PublicChallengeFamilyV1,
+    ZkAmsPhase23PublicChallengeRoleV1, ZkAmsPhase23PublicChallengeV1,
+    ZkAmsPhase23PublicFoldHistoryV1, ZkAmsPhase23PublicFoldRecordV1, ZkAmsPhase23ReleaseMapsV1,
+    ZkAmsPhase23SparseMapV1, ZkAmsPhase23StrictPublicInstanceV1, ZkAmsPhase23VerifiedCommitSetV1,
+    ZkAmsProofContextV1, ZkAmsT256GaloisKeyScheduleEntryV1, ZkAmsT256GaloisKeyScheduleV1,
+    ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1, ZkAmsT256ReleasePackingCertificateV1,
+    ZkAmsT256RotationCertificateV1, ZkAmsT256RotationDirectionV1, ZkAmsT256RotationV1,
+    admit_zk_ams_mkhe_direct_contribution_set_v1, aggregate_zk_ams_mkhe_collective_public_key_v1,
+    combine_zk_ams_mkhe_cks_v1, commit_zk_ams_phase23_freshness_v1,
+    decode_zk_ams_t256_packed_plaintext_v1, encode_zk_ams_t256_packed_plaintext_v1,
+    encrypt_zk_ams_mkhe_collective_packed_v1, finalize_zk_ams_phase23_freshness_v1,
+    generate_zk_ams_mkhe_collective_party_state_v1, open_zk_ams_phase23_freshness_reveal_v1,
+    permute_zk_ams_t256_slots_v1, prove_zk_ams_admission_relation_v1,
+    prove_zk_ams_mkhe_active_collective_public_key_v1, prove_zk_ams_mkhe_active_rkg_round_one_v1,
+    prove_zk_ams_mkhe_active_rkg_round_two_v1, prove_zk_ams_mkhe_cks_contribution_v1,
+    prove_zk_ams_mkhe_decryption_share_v1, prove_zk_ams_phase3_terminal_v1,
+    reconstruct_zk_ams_mkhe_decryption_share_v1, rotate_zk_ams_t256_packed_plaintext_v1,
+    split_zk_ams_mkhe_decryption_share_v1, validate_zk_ams_t256_galois_key_exponents_v1,
+    validate_zk_ams_t256_galois_key_schedule_v1, verify_combine_decode_zk_ams_mkhe_decryption_v1,
+    verify_zk_ams_admission_relation_v1, verify_zk_ams_mkhe_active_collective_public_key_v1,
+    verify_zk_ams_mkhe_active_rkg_round_one_v1, verify_zk_ams_mkhe_active_rkg_round_two_v1,
+    verify_zk_ams_mkhe_cks_contribution_v1, verify_zk_ams_mkhe_decryption_share_v1,
+    verify_zk_ams_phase3_terminal_v1, zk_ams_admission_relation_dimensions_v1,
+    zk_ams_compiled_profile_digest_v1, zk_ams_mkhe_active_collective_public_a_v1,
+    zk_ams_mkhe_active_rkg_linear_proof_security_v1, zk_ams_mkhe_cks_resource_evidence_v1,
+    zk_ams_mkhe_cks_statement_digest_v1, zk_ams_mkhe_collect_active_round_v1,
+    zk_ams_mkhe_compact_key_switch_ring_multiplications_v1,
+    zk_ams_mkhe_decryption_resource_evidence_v1, zk_ams_mkhe_direct_noise_certificate_v1,
+    zk_ams_mkhe_direct_noise_integration_certificate_v1,
+    zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1, zk_ams_mkhe_direct_proof_audit_v1,
+    zk_ams_mkhe_direct_resource_certificate_v1, zk_ams_mkhe_manifest_digest_v1,
+    zk_ams_mkhe_noise_certificate_v1, zk_ams_mkhe_readiness_digest_v1, zk_ams_mkhe_readiness_v1,
+    zk_ams_mkhe_release_manifest_v1, zk_ams_mkhe_resource_certificate_digest_v1,
+    zk_ams_mkhe_resource_certificate_v1, zk_ams_mkhe_security_candidate_input_digest_v1,
+    zk_ams_mkhe_security_candidate_v1, zk_ams_mkhe_security_certificate_v1,
+    zk_ams_mkhe_seekable_evaluated_key_accounting_v1, zk_ams_phase3_nifs_verifier_digest_v1,
+    zk_ams_phase3_ordered_public_inputs_digest_v1, zk_ams_phase3_terminal_implementation_v1,
+    zk_ams_phase23_cross_term_v1, zk_ams_phase23_encrypted_implementation_v1,
+    zk_ams_phase23_equation_certificate_digest_v1, zk_ams_phase23_equation_certificate_v1,
+    zk_ams_phase23_fold_linear_v1, zk_ams_phase23_fold_quadratic_v1,
+    zk_ams_phase23_materialize_release_accumulators_v1, zk_ams_phase23_release_map_set_digest_v1,
+    zk_ams_phase23_release_maps_v1, zk_ams_release_candidate_profile_digest_v1,
+    zk_ams_t256_galois_key_schedule_v1, zk_ams_t256_generator_digest_v1,
+    zk_ams_t256_packed_subfield_conjugation_exponent_v1, zk_ams_t256_packing_layout_v1,
+    zk_ams_t256_release_packing_certificate_v1, zk_ams_t256_rotation_certificate_v1,
+    zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
+    zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
 };
 
 /// Exact canonical COSE `Sig_structure` width in the released Figure 9 relation.
@@ -147,13 +266,13 @@ pub struct VegaT256ScalarV1(Fq);
 impl VegaT256ScalarV1 {
     /// Return the additive identity.
     #[must_use]
-    pub fn zero() -> Self {
+    pub const fn zero() -> Self {
         Self(Fq::ZERO)
     }
 
     /// Return the multiplicative identity.
     #[must_use]
-    pub fn one() -> Self {
+    pub const fn one() -> Self {
         Self(Fq::ONE)
     }
 

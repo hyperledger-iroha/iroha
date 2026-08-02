@@ -16,7 +16,7 @@ use std::{
 use iroha_crypto::Hash;
 
 use crate::{
-    ast::{Item, Program, SourceUnitKind},
+    ast::{FunctionKind, Item, Program, SourceUnitKind},
     builtins::{Builtin, BuiltinSurface},
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourceSpan,
@@ -154,6 +154,8 @@ pub struct LinkedSourceGraph {
 pub struct ValidatedSourcePackageGraph {
     /// Domain-separated identity of the local and locked source graph.
     pub fingerprint: Hash,
+    /// Domain-separated digest of the exact typed exports exposed by the local package.
+    pub interface_fingerprint: Hash,
     /// Unique production functions exposed by the local package manifest.
     pub exports: BTreeSet<String>,
 }
@@ -680,11 +682,75 @@ impl ModuleBuildGraph {
             });
         }
 
-        TypedLinker::new(options).validate_package_graph(resolved_packages, &local_identity)?;
+        let interface_fingerprint =
+            TypedLinker::new(options).validate_package_graph(resolved_packages, &local_identity)?;
         Ok(ValidatedSourcePackageGraph {
             fingerprint,
+            interface_fingerprint,
             exports: local_exports,
         })
+    }
+
+    /// Link and compile one explicit local test root with its exact package graph.
+    ///
+    /// The suite and deployable runtime projection are derived from the same
+    /// linked typed HIR. This keeps external module calls bound to the supplied
+    /// package identities while avoiding source rewriting between test and
+    /// production compilation.
+    pub fn build_test_project(
+        &self,
+        request: SourceLinkRequest,
+        options: crate::compiler::CompilerOptions,
+        source_name: &str,
+    ) -> Result<crate::session::TestCompileOutput, DiagnosticBundle> {
+        if options.mode != crate::compiler::CompilerMode::Test {
+            return Err(DiagnosticBundle::single(Diagnostic::error(
+                "E_TEST_ONLY_PRODUCTION",
+                DiagnosticPhase::Semantic,
+                "the linked test compiler requires an explicit test-mode compiler policy",
+                None,
+            )));
+        }
+
+        let session = crate::session::CompilerSession::new(options.clone());
+        let _chain_discriminant = session.enter_chain_discriminant();
+        let linked = self
+            .link(
+                request,
+                LinkerOptions {
+                    zk_enabled: options.force_zk,
+                    test_builtins_enabled: true,
+                    include_tests: true,
+                },
+            )
+            .map_err(SourceGraphError::into_diagnostics)?;
+        let suite_typed = linked.program;
+        let runtime_typed =
+            semantic::project_test_target_to_production(suite_typed.clone(), options.force_zk)
+                .map_err(|error| {
+                    DiagnosticBundle::single(Diagnostic::error(
+                        error.code(),
+                        phase_for_semantic_failure(error.code()),
+                        error.message(),
+                        None,
+                    ))
+                })?;
+        let suite = session.build_typed_program(suite_typed, Some(source_name))?;
+        let has_runtime_entrypoint = runtime_typed.items.iter().any(|item| {
+            let TypedItem::Function(function) = item;
+            function.modifiers.kind != FunctionKind::Private
+        });
+        let runtime = if has_runtime_entrypoint {
+            let mut runtime_options = options;
+            runtime_options.mode = crate::compiler::CompilerMode::Production;
+            Some(
+                crate::session::CompilerSession::new(runtime_options)
+                    .build_typed_program(runtime_typed, Some(source_name))?,
+            )
+        } else {
+            None
+        };
+        Ok(crate::session::TestCompileOutput { suite, runtime })
     }
 
     #[cfg(test)]
@@ -1629,7 +1695,7 @@ impl TypedLinker {
         &self,
         mut packages: Vec<PackageUnit>,
         local_identity: &str,
-    ) -> Result<(), LinkError> {
+    ) -> Result<Hash, LinkError> {
         validate_linker_options(self.options)?;
         if !packages
             .iter()
@@ -1641,6 +1707,11 @@ impl TypedLinker {
             });
         }
         let resolved_packages = resolve_packages(self.options, &mut packages)?;
+        let interface_fingerprint = resolved_packages
+            .iter()
+            .find(|package| package.identity == local_identity)
+            .map(package_interface_fingerprint)
+            .expect("validated local package remains in the resolved graph");
         let import_diagnostics = resolved_packages
             .iter()
             .flat_map(|package| {
@@ -1654,7 +1725,8 @@ impl TypedLinker {
                 import_diagnostics,
             )));
         }
-        link_resolved_packages(self.options, &resolved_packages, None).map(|_| ())
+        link_resolved_packages(self.options, &resolved_packages, None)?;
+        Ok(interface_fingerprint)
     }
 }
 
@@ -1677,6 +1749,141 @@ struct ResolvedPackage<'request> {
     imports: BTreeMap<String, usize>,
     modules: Vec<ResolvedModule<'request>>,
     exports: BTreeMap<String, ResolvedExport>,
+}
+
+fn package_interface_fingerprint(package: &ResolvedPackage<'_>) -> Hash {
+    let mut transcript = b"kotodama-package-interface-v1\0".to_vec();
+    interface_count(&mut transcript, package.exports.len());
+    for (name, export) in &package.exports {
+        interface_field(&mut transcript, name.as_bytes());
+        let signature = &export.signature;
+        interface_count(&mut transcript, signature.params.len());
+        for parameter in &signature.params {
+            interface_field(&mut transcript, parameter.name.as_bytes());
+            transcript.push(u8::from(parameter.is_state));
+            interface_type(&mut transcript, &parameter.ty);
+        }
+        interface_type(&mut transcript, &signature.return_type);
+        transcript.push(u8::from(signature.requires_named_arguments));
+        interface_modifiers(&mut transcript, &signature.modifiers);
+    }
+    Hash::new(transcript)
+}
+
+fn interface_field(transcript: &mut Vec<u8>, value: &[u8]) {
+    transcript.extend_from_slice(
+        &u64::try_from(value.len())
+            .expect("bounded Kotodama interface field length fits u64")
+            .to_le_bytes(),
+    );
+    transcript.extend_from_slice(value);
+}
+
+fn interface_count(transcript: &mut Vec<u8>, count: usize) {
+    transcript.extend_from_slice(
+        &u64::try_from(count)
+            .expect("bounded Kotodama interface collection length fits u64")
+            .to_le_bytes(),
+    );
+}
+
+fn interface_optional_field(transcript: &mut Vec<u8>, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            transcript.push(1);
+            interface_field(transcript, value.as_bytes());
+        }
+        None => transcript.push(0),
+    }
+}
+
+fn interface_modifiers(transcript: &mut Vec<u8>, modifiers: &crate::ast::FunctionModifiers) {
+    transcript.push(match modifiers.kind {
+        FunctionKind::Private => 0,
+        FunctionKind::Kotoage => 1,
+        FunctionKind::Hajimari => 2,
+        FunctionKind::Kaizen => 3,
+        FunctionKind::View => 4,
+    });
+    interface_optional_field(transcript, modifiers.permission.as_deref());
+    for values in [&modifiers.access_reads, &modifiers.access_writes] {
+        let mut values = values.iter().map(String::as_str).collect::<Vec<_>>();
+        values.sort_unstable();
+        interface_count(transcript, values.len());
+        for value in values {
+            interface_field(transcript, value.as_bytes());
+        }
+    }
+    transcript.push(u8::from(modifiers.is_test));
+    interface_optional_field(transcript, modifiers.test_fixture.as_deref());
+}
+
+fn interface_type(transcript: &mut Vec<u8>, ty: &Type) {
+    match ty {
+        Type::Int => transcript.push(0),
+        Type::Decimal => transcript.push(1),
+        Type::Quantity => transcript.push(2),
+        Type::Bool => transcript.push(3),
+        Type::String => transcript.push(4),
+        Type::Bytes => transcript.push(5),
+        Type::DataSpaceId => transcript.push(6),
+        Type::AxtDescriptor => transcript.push(7),
+        Type::AssetHandle => transcript.push(8),
+        Type::ProofBlob => transcript.push(9),
+        Type::SoracloudRequest => transcript.push(10),
+        Type::SoracloudResponse => transcript.push(11),
+        Type::AccountId => transcript.push(12),
+        Type::AssetDefinitionId => transcript.push(13),
+        Type::AssetId => transcript.push(14),
+        Type::NftId => transcript.push(15),
+        Type::DomainId => transcript.push(16),
+        Type::Name => transcript.push(17),
+        Type::Json => transcript.push(18),
+        Type::Unit => transcript.push(19),
+        Type::Secret(inner) => {
+            transcript.push(20);
+            interface_type(transcript, inner);
+        }
+        Type::StateMap(key, value) => {
+            transcript.push(21);
+            interface_type(transcript, key);
+            interface_type(transcript, value);
+        }
+        Type::Option(inner) => {
+            transcript.push(22);
+            interface_type(transcript, inner);
+        }
+        Type::Result(ok, error) => {
+            transcript.push(23);
+            interface_type(transcript, ok);
+            interface_type(transcript, error);
+        }
+        Type::List(element, capacity) => {
+            transcript.push(24);
+            interface_type(transcript, element);
+            transcript.push(*capacity);
+        }
+        Type::Tuple(items) => {
+            transcript.push(25);
+            interface_count(transcript, items.len());
+            for item in items {
+                interface_type(transcript, item);
+            }
+        }
+        Type::Struct { name, fields } => {
+            transcript.push(26);
+            interface_field(transcript, name.as_bytes());
+            interface_count(transcript, fields.len());
+            for (field, ty) in fields.iter() {
+                interface_field(transcript, field.as_bytes());
+                interface_type(transcript, ty);
+            }
+        }
+        Type::NamedStruct(name) => {
+            transcript.push(27);
+            interface_field(transcript, name.as_bytes());
+        }
+    }
 }
 
 fn semantic_link_error(module: &ModuleUnit, failures: semantic::SemanticFailures) -> LinkError {
@@ -3935,6 +4142,98 @@ mod tests {
             .validate_package(request, LinkerOptions::default())
             .expect("typed package graph");
         assert_eq!(validated.exports, BTreeSet::from(["quote".to_owned()]));
+    }
+
+    #[test]
+    fn package_interface_fingerprint_tracks_types_not_function_bodies() {
+        let validate = |source: &str| {
+            ModuleBuildGraph::default()
+                .validate_package(
+                    SourcePackageGraphRequest {
+                        package: publish_package(
+                            vec![source_module("src/lib.ko", source)],
+                            &["quote"],
+                        ),
+                        dependencies: Vec::new(),
+                    },
+                    LinkerOptions::default(),
+                )
+                .expect("typed package graph")
+        };
+        let first = validate("module Quotes { fn quote() -> int { return 1; } }");
+        let body_changed = validate("module Quotes { fn quote() -> int { return 2; } }");
+        let type_changed = validate("module Quotes { fn quote() -> bool { return true; } }");
+
+        assert_ne!(first.fingerprint, body_changed.fingerprint);
+        assert_eq!(
+            first.interface_fingerprint,
+            body_changed.interface_fingerprint
+        );
+        assert_ne!(
+            first.interface_fingerprint,
+            type_changed.interface_fingerprint
+        );
+    }
+
+    #[test]
+    fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
+        let dependency_identity = "std/math@1.0.0".to_owned();
+        let output = ModuleBuildGraph::default()
+            .build_test_project(
+                SourceLinkRequest {
+                    root: source_module(
+                        "tests/unit.ko",
+                        r#"
+                        seiyaku App {
+                            view fn current() -> int { return calc::value(); }
+                            #[test]
+                            fn dependency_is_linked() {
+                                test::assert(calc::value() == 7);
+                            }
+                        }
+                        "#,
+                    ),
+                    imports: vec![ImportBinding {
+                        alias: "calc".to_owned(),
+                        package: dependency_identity.clone(),
+                    }],
+                    packages: vec![SourcePackageUnit {
+                        identity: dependency_identity,
+                        modules: vec![source_module(
+                            "src/lib.ko",
+                            "module Math { fn value() -> int { return 7; } }",
+                        )],
+                        exports: BTreeSet::from(["value".to_owned()]),
+                        imports: Vec::new(),
+                    }],
+                },
+                crate::compiler::CompilerOptions {
+                    chain_discriminant: 753,
+                    mode: crate::compiler::CompilerMode::Test,
+                    ..crate::compiler::CompilerOptions::default()
+                },
+                "tests/unit.ko",
+            )
+            .expect("compile exact linked test graph");
+
+        assert!(output.runtime.is_some());
+        assert!(
+            output
+                .suite
+                .report
+                .budget_report
+                .iter()
+                .any(|entry| entry.function_name == "dependency_is_linked")
+        );
+        assert!(
+            output
+                .runtime
+                .expect("public view has a runtime projection")
+                .report
+                .budget_report
+                .iter()
+                .all(|entry| entry.function_name != "dependency_is_linked")
+        );
     }
 
     #[test]

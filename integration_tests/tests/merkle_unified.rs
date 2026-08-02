@@ -18,19 +18,25 @@ fn byte_merkle_roots_and_proofs_match_across_crates() {
     let tree_ivm: ivm::MerkleTree<[u8; 32]> =
         ivm::MerkleTree::from_byte_chunks(&data, 32).expect("valid chunk");
     let root_ivm = tree_ivm.root().unwrap();
+    let commitment_crypto = tree_crypto.commitment().expect("non-empty crypto tree");
+    let commitment_ivm = tree_ivm.commitment().expect("non-empty IVM tree");
 
     assert_eq!(root_crypto, root_ivm, "roots must match across crates");
+    assert_eq!(
+        commitment_crypto, commitment_ivm,
+        "root/count commitments must match across crates"
+    );
 
     // Take a proof and verify against the other tree's root
     let idx = 2u32;
     let proof = tree_crypto.get_proof(idx).expect("proof exists");
     let leaf = tree_crypto.leaves().nth(idx as usize).unwrap();
     assert!(
-        proof.clone().verify_sha256(&leaf, &root_ivm, 9),
-        "proof must verify against ivm root"
+        proof.verify_sha256(&leaf, &commitment_ivm),
+        "proof must verify against IVM commitment"
     );
     assert!(
-        proof.verify_sha256(&leaf, &root_crypto, 9),
-        "proof must verify against crypto root"
+        proof.verify_sha256(&leaf, &commitment_crypto),
+        "proof must verify against crypto commitment"
     );
 }

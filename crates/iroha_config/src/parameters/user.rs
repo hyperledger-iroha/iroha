@@ -147,7 +147,7 @@ enum KyberKeyConfig {
 }
 use hex::FromHex;
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey,
+    Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, RamLfeSecret,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
     },
@@ -174,7 +174,7 @@ use iroha_data_model::{
         HijiriFeePolicy as ModelHijiriFeePolicy, Q16 as ModelQ16,
     },
     jurisdiction::JdgSignatureScheme,
-    name::{self, Name},
+    name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
@@ -182,6 +182,7 @@ use iroha_data_model::{
         UniversalAccountId,
     },
     peer::{Peer, PeerId},
+    privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     role::RoleId,
     sorafs::{
         pin_registry::{
@@ -711,11 +712,6 @@ pub struct Root {
     #[config(env = "TRUSTED_PEERS", default)]
     trusted_peers: WithOrigin<TrustedPeers>,
     #[config(
-        env = "DEFAULT_ACCOUNT_DOMAIN_LABEL",
-        default = "defaults::common::default_account_domain_label()"
-    )]
-    default_account_domain_label: WithOrigin<String>,
-    #[config(
         env = "CHAIN_DISCRIMINANT",
         default = "defaults::common::chain_discriminant()"
     )]
@@ -837,9 +833,6 @@ pub enum ParseError {
     /// Compute lane configuration contained invalid or inconsistent values.
     #[error("Invalid compute configuration")]
     InvalidComputeConfig,
-    /// IVM configuration contained invalid or inconsistent values.
-    #[error("Invalid IVM configuration")]
-    InvalidIvmConfig,
     /// Concurrency configuration contained invalid values.
     #[error("Invalid concurrency configuration")]
     InvalidConcurrencyConfig,
@@ -855,9 +848,6 @@ pub enum ParseError {
     /// Snapshot configuration contained an invalid audited-bootstrap policy.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
-    /// Common address-related configuration contained invalid values.
-    #[error("Invalid common configuration")]
-    InvalidCommonConfig,
 }
 
 struct AccountAddressParseScope {
@@ -865,16 +855,7 @@ struct AccountAddressParseScope {
 }
 
 impl AccountAddressParseScope {
-    fn enter(
-        default_domain_label: &str,
-        chain_discriminant: u16,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Self {
-        if let Err(err) = name::canonicalize_domain_label(default_domain_label) {
-            emitter.emit(Report::new(ParseError::InvalidCommonConfig).attach(format!(
-                "invalid default_account_domain_label `{default_domain_label}`: {err}",
-            )));
-        }
+    fn enter(chain_discriminant: u16) -> Self {
         Self {
             _chain_discriminant: iroha_data_model::account::address::ChainDiscriminantGuard::enter(
                 chain_discriminant,
@@ -1059,11 +1040,8 @@ impl Root {
     #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> Result<actual::Root, ParseError> {
         let mut emitter = Emitter::new();
-        let _account_address_scope = AccountAddressParseScope::enter(
-            self.default_account_domain_label.value(),
-            *self.chain_discriminant.value(),
-            &mut emitter,
-        );
+        let _account_address_scope =
+            AccountAddressParseScope::enter(*self.chain_discriminant.value());
 
         let (private_key, private_key_origin) = self.private_key.into_tuple();
         let (public_key, public_key_origin) = self.public_key.into_tuple();
@@ -1188,16 +1166,6 @@ impl Root {
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
         }
-        if let Some(ref compute) = compute
-            && !compute
-                .resource_profiles
-                .contains_key(&ivm.memory_budget_profile)
-        {
-            emitter.emit(Report::new(ParseError::InvalidIvmConfig).attach(format!(
-                "ivm.memory_budget_profile `{}` missing from compute.resource_profiles",
-                ivm.memory_budget_profile
-            )));
-        }
         if let Err(message) = snapshot.bootstrap.validate() {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
@@ -1238,7 +1206,6 @@ impl Root {
             key_pair,
             peer,
             trusted_peers,
-            default_account_domain_label: self.default_account_domain_label,
             chain_discriminant: self.chain_discriminant,
         };
 
@@ -2621,18 +2588,6 @@ pub struct Concurrency {
         default = "defaults::concurrency::SUMERAGI_STACK_BYTES"
     )]
     pub sumeragi_stack_bytes: usize,
-    /// Guest stack size (bytes) for IVM instances.
-    #[config(
-        env = "CONCURRENCY_GUEST_STACK_BYTES",
-        default = "defaults::concurrency::GUEST_STACK_BYTES"
-    )]
-    pub guest_stack_bytes: u64,
-    /// Gas→stack multiplier (bytes of stack available per unit of gas).
-    #[config(
-        env = "CONCURRENCY_GAS_TO_STACK_MULTIPLIER",
-        default = "defaults::concurrency::GAS_TO_STACK_MULTIPLIER"
-    )]
-    pub gas_to_stack_multiplier: u64,
 }
 
 impl Concurrency {
@@ -2646,8 +2601,6 @@ impl Concurrency {
             scheduler_stack_bytes: self.scheduler_stack_bytes,
             prover_stack_bytes: self.prover_stack_bytes,
             sumeragi_stack_bytes: self.sumeragi_stack_bytes,
-            guest_stack_bytes: self.guest_stack_bytes,
-            gas_to_stack_multiplier: self.gas_to_stack_multiplier,
         }
     }
 }
@@ -3905,30 +3858,12 @@ pub struct Zk {
     #[config(nested)]
     /// SCCP proof-admission and deterministic verifier-work limits.
     pub sccp: Sccp,
-    /// Maximum number of recent shielded Merkle roots kept per asset.
-    #[config(
-        env = "ZK_ROOT_HISTORY_CAP",
-        default = "defaults::zk::ledger::ROOT_HISTORY_CAP"
-    )]
-    pub root_history_cap: usize,
     /// Maximum number of recent ballot ciphertexts kept per election.
     #[config(
         env = "ZK_BALLOT_HISTORY_CAP",
         default = "defaults::zk::vote::BALLOT_HISTORY_CAP"
     )]
     pub ballot_history_cap: usize,
-    /// Include explicit empty-tree root for assets with no commitments.
-    #[config(
-        env = "ZK_EMPTY_ROOT_ON_EMPTY",
-        default = "defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY"
-    )]
-    pub empty_root_on_empty: bool,
-    /// Depth to use when computing the explicit empty-tree root.
-    #[config(
-        env = "ZK_MERKLE_DEPTH",
-        default = "defaults::zk::ledger::EMPTY_ROOT_DEPTH"
-    )]
-    pub merkle_depth: u8,
     /// Maximum accepted proof size for stateless pre-verification (bytes).
     #[config(
         env = "ZK_PREVERIFY_MAX_BYTES",
@@ -3998,10 +3933,7 @@ impl Zk {
             fastpq: self.fastpq.parse(),
             stark: self.stark.parse(),
             sccp: self.sccp.parse(),
-            root_history_cap: self.root_history_cap,
             ballot_history_cap: self.ballot_history_cap,
-            empty_root_on_empty: self.empty_root_on_empty,
-            merkle_depth: self.merkle_depth,
             preverify_max_bytes: self.preverify_max_bytes,
             preverify_budget_bytes: self.preverify_budget_bytes,
             proof_history_cap: self.proof_history_cap,
@@ -4577,12 +4509,9 @@ impl Fastpq {
     }
 }
 
-/// IVM/runtime presentation toggles (user view).
-#[derive(Debug, ReadConfig, Clone)]
+/// IVM runtime presentation toggles (user view).
+#[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct Ivm {
-    /// Compute resource profile name used to cap IVM guest stack budgets.
-    #[config(default = "defaults::ivm::memory_budget_profile()")]
-    pub memory_budget_profile: Name,
     /// Startup banner settings.
     #[config(nested)]
     pub banner: Banner,
@@ -4591,7 +4520,6 @@ pub struct Ivm {
 impl Ivm {
     fn parse(self) -> actual::Ivm {
         actual::Ivm {
-            memory_budget_profile: self.memory_budget_profile,
             banner: self.banner.parse(),
         }
     }
@@ -4600,7 +4528,6 @@ impl Ivm {
 impl Default for Ivm {
     fn default() -> Self {
         Self {
-            memory_budget_profile: defaults::ivm::memory_budget_profile(),
             banner: Banner::default(),
         }
     }
@@ -5627,12 +5554,13 @@ pub struct Genesis {
     /// Optional path to genesis manifest JSON for startup validation.
     #[config(env = "GENESIS_MANIFEST_JSON")]
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Exact genesis consensus-header hash used as a normal-startup trust anchor.
+    /// Exact genesis consensus-header hash used as the startup trust anchor.
     ///
-    /// This may be omitted when a local signed genesis file is configured. When both are present,
-    /// they must identify the same signed genesis instance.
+    /// This is mandatory even when a local signed genesis file is configured. Requiring an
+    /// independently provisioned value prevents the artifact being authenticated from selecting
+    /// its own trust root.
     #[config(env = "GENESIS_EXPECTED_HASH")]
-    pub expected_hash: Option<WithOrigin<HashOf<BlockHeader>>>,
+    pub expected_hash: WithOrigin<HashOf<BlockHeader>>,
 }
 
 impl From<Genesis> for actual::Genesis {
@@ -5641,7 +5569,7 @@ impl From<Genesis> for actual::Genesis {
             public_key: genesis.public_key.into_value(),
             file: genesis.file,
             manifest_json: genesis.manifest_json,
-            expected_hash: genesis.expected_hash.map(WithOrigin::into_value),
+            expected_hash: genesis.expected_hash.into_value(),
         }
     }
 }
@@ -6686,12 +6614,6 @@ pub struct SoranetVpn {
     pub meter_family: String,
     /// Optional 32-byte shared secret (hex) used to mint helper-authenticated VPN tickets.
     pub helper_ticket_secret_hex: Option<String>,
-    /// XOR asset definition used for escrowed VPN fees.
-    #[config(default = "defaults::soranet::vpn::fee_asset_id()")]
-    pub fee_asset_id: String,
-    /// Account that receives escrowed VPN lease fees.
-    #[config(default = "defaults::soranet::vpn::escrow_account_id()")]
-    pub escrow_account_id: String,
     /// Relay operator account eligible for receipt settlement.
     #[config(default = "defaults::soranet::vpn::operator_account_id()")]
     pub operator_account_id: String,
@@ -6710,8 +6632,12 @@ pub struct SoranetVpn {
     /// DNS servers pushed to VPN clients.
     #[config(default = "defaults::soranet::vpn::dns_servers()")]
     pub dns_servers: Vec<String>,
-    /// Optional SHA-256 SPKI pin for the relay TLS certificate.
-    pub relay_tls_spki_sha256_hex: Option<String>,
+    /// Relay Ed25519 identity selected from the authenticated guard directory.
+    pub relay_id_hex: Option<String>,
+    /// Exact Norito guard-directory snapshot used to establish VPN relay trust.
+    pub guard_directory_path: Option<PathBuf>,
+    /// Externally provisioned digest authenticating the exact snapshot bytes.
+    pub guard_directory_digest_hex: Option<String>,
 }
 
 impl Default for SoranetVpn {
@@ -6731,15 +6657,15 @@ impl Default for SoranetVpn {
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
             helper_ticket_secret_hex: None,
-            fee_asset_id: defaults::soranet::vpn::fee_asset_id(),
-            escrow_account_id: defaults::soranet::vpn::escrow_account_id(),
             operator_account_id: defaults::soranet::vpn::operator_account_id(),
             lease_fee: defaults::soranet::vpn::lease_fee(),
             settlement_grace_secs: defaults::soranet::vpn::SETTLEMENT_GRACE_SECS,
             route_pushes: defaults::soranet::vpn::route_pushes(),
             excluded_routes: defaults::soranet::vpn::excluded_routes(),
             dns_servers: defaults::soranet::vpn::dns_servers(),
-            relay_tls_spki_sha256_hex: None,
+            relay_id_hex: None,
+            guard_directory_path: None,
+            guard_directory_digest_hex: None,
         }
     }
 }
@@ -6761,15 +6687,15 @@ impl SoranetVpn {
             exit_class,
             meter_family,
             helper_ticket_secret_hex,
-            fee_asset_id,
-            escrow_account_id,
             operator_account_id,
             lease_fee,
             settlement_grace_secs,
             route_pushes,
             excluded_routes,
             dns_servers,
-            relay_tls_spki_sha256_hex,
+            relay_id_hex,
+            guard_directory_path,
+            guard_directory_digest_hex,
         } = self;
 
         let default_cell_size = defaults::soranet::vpn::CELL_SIZE_BYTES;
@@ -6814,14 +6740,6 @@ impl SoranetVpn {
         if enabled && helper_ticket_secret.is_none() {
             panic!("network.soranet_vpn.helper_ticket_secret_hex must be set when VPN is enabled");
         }
-        let fee_asset_id =
-            validate_nexus_fee_asset_selector_literal(&fee_asset_id).unwrap_or_else(|err| {
-                panic!("invalid network.soranet_vpn.fee_asset_id `{fee_asset_id}`: {err}")
-            });
-        let escrow_account_id = parse_account_id_literal(
-            &escrow_account_id,
-            "invalid network.soranet_vpn.escrow_account_id",
-        );
         let operator_account_id = parse_account_id_literal(
             &operator_account_id,
             "invalid network.soranet_vpn.operator_account_id",
@@ -6832,28 +6750,47 @@ impl SoranetVpn {
         if enabled && dns_servers.is_empty() {
             panic!("network.soranet_vpn.dns_servers must not be empty when VPN is enabled");
         }
-        let relay_tls_spki_sha256_hex = relay_tls_spki_sha256_hex
-            .map(|value| value.trim().to_string())
+        let parse_trust_digest = |value: String, field: &str| {
+            if value.len() != 64
+                || !value
+                    .as_bytes()
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+            {
+                panic!("{field} must be exactly 64 lowercase hexadecimal characters");
+            }
+            let decoded = hex::decode(&value)
+                .expect("canonical hexadecimal validation makes decoding infallible");
+            let bytes: [u8; 32] = decoded
+                .try_into()
+                .unwrap_or_else(|_| panic!("{field} must decode to 32 bytes"));
+            if bytes.iter().all(|byte| *byte == 0) {
+                panic!("{field} must not be all zero");
+            }
+            bytes
+        };
+        let relay_id = relay_id_hex.filter(|value| !value.is_empty()).map(|value| {
+            let bytes = parse_trust_digest(value, "network.soranet_vpn.relay_id_hex");
+            PublicKey::from_bytes(Algorithm::Ed25519, &bytes).unwrap_or_else(|error| {
+                panic!("network.soranet_vpn.relay_id_hex is not a valid Ed25519 key: {error}")
+            });
+            bytes
+        });
+        let guard_directory_path = guard_directory_path.filter(|path| !path.as_os_str().is_empty());
+        let guard_directory_digest = guard_directory_digest_hex
             .filter(|value| !value.is_empty())
             .map(|value| {
-                let normalized = value
-                    .trim_start_matches("0x")
-                    .trim_start_matches("0X")
-                    .to_ascii_lowercase();
-                let decoded = hex::decode(&normalized).unwrap_or_else(|err| {
-                    panic!("network.soranet_vpn.relay_tls_spki_sha256_hex must be valid hex: {err}")
-                });
-                if decoded.len() != 32 {
-                    panic!("network.soranet_vpn.relay_tls_spki_sha256_hex must decode to 32 bytes");
-                }
-                normalized
+                parse_trust_digest(value, "network.soranet_vpn.guard_directory_digest_hex")
             });
-        if enabled && relay_tls_spki_sha256_hex.is_none() {
-            panic!("network.soranet_vpn.relay_tls_spki_sha256_hex must be set when VPN is enabled");
+        if enabled && relay_id.is_none() {
+            panic!("network.soranet_vpn.relay_id_hex must be set when VPN is enabled");
         }
-        if enabled && escrow_account_id == operator_account_id {
+        if enabled && guard_directory_path.is_none() {
+            panic!("network.soranet_vpn.guard_directory_path must be set when VPN is enabled");
+        }
+        if enabled && guard_directory_digest.is_none() {
             panic!(
-                "network.soranet_vpn.escrow_account_id and operator_account_id must be different when VPN is enabled"
+                "network.soranet_vpn.guard_directory_digest_hex must be set when VPN is enabled"
             );
         }
         if lease_fee.is_zero() {
@@ -6875,15 +6812,15 @@ impl SoranetVpn {
             exit_class,
             meter_family,
             helper_ticket_secret,
-            fee_asset_id,
-            escrow_account_id,
             operator_account_id,
             lease_fee,
             settlement_grace: Duration::from_secs(settlement_grace_secs.max(1)),
             route_pushes,
             excluded_routes,
             dns_servers,
-            relay_tls_spki_sha256_hex,
+            relay_id,
+            guard_directory_path,
+            guard_directory_digest,
         }
     }
 }
@@ -6891,6 +6828,20 @@ impl SoranetVpn {
 #[cfg(test)]
 mod soranet_vpn_tests {
     use super::*;
+
+    const TEST_RELAY_ID_HEX: &str =
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+
+    fn enabled_vpn_config() -> SoranetVpn {
+        SoranetVpn {
+            enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            relay_id_hex: Some(TEST_RELAY_ID_HEX.to_owned()),
+            guard_directory_path: Some(PathBuf::from("guard-directory.to")),
+            guard_directory_digest_hex: Some("cd".repeat(32)),
+            ..SoranetVpn::default()
+        }
+    }
 
     #[test]
     #[should_panic(expected = "network.soranet_vpn.flow_label_bits must be 24")]
@@ -6948,7 +6899,6 @@ mod soranet_vpn_tests {
     fn soranet_vpn_defaults_to_disabled() {
         let parsed = SoranetVpn::default().parse();
         assert!(!parsed.enabled);
-        assert_eq!(parsed.fee_asset_id, defaults::soranet::vpn::fee_asset_id());
         assert_eq!(parsed.route_pushes, defaults::soranet::vpn::route_pushes());
         assert_eq!(parsed.dns_servers, defaults::soranet::vpn::dns_servers());
     }
@@ -6958,15 +6908,14 @@ mod soranet_vpn_tests {
     fn soranet_vpn_enabled_requires_helper_ticket_secret() {
         let cfg = SoranetVpn {
             enabled: true,
-            relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
             ..SoranetVpn::default()
         };
         let _ = cfg.parse();
     }
 
     #[test]
-    #[should_panic(expected = "VPN is enabled")]
-    fn soranet_vpn_enabled_requires_relay_tls_pin() {
+    #[should_panic(expected = "relay_id_hex must be set when VPN is enabled")]
+    fn soranet_vpn_enabled_requires_relay_identity() {
         let cfg = SoranetVpn {
             enabled: true,
             helper_ticket_secret_hex: Some("ab".repeat(32)),
@@ -6976,24 +6925,26 @@ mod soranet_vpn_tests {
     }
 
     #[test]
-    #[should_panic(expected = "escrow_account_id and operator_account_id must be different")]
-    fn soranet_vpn_enabled_requires_non_operator_escrow() {
-        let cfg = SoranetVpn {
-            enabled: true,
-            helper_ticket_secret_hex: Some("ab".repeat(32)),
-            relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
-            ..SoranetVpn::default()
-        };
+    #[should_panic(expected = "guard_directory_path must be set when VPN is enabled")]
+    fn soranet_vpn_enabled_requires_guard_directory_path() {
+        let mut cfg = enabled_vpn_config();
+        cfg.guard_directory_path = None;
         let _ = cfg.parse();
     }
 
     #[test]
-    #[should_panic(expected = "must be charged in XOR")]
-    fn soranet_vpn_rejects_non_xor_fee_asset() {
-        let cfg = SoranetVpn {
-            fee_asset_id: "pkr#paynet".to_owned(),
-            ..SoranetVpn::default()
-        };
+    #[should_panic(expected = "guard_directory_digest_hex must be set when VPN is enabled")]
+    fn soranet_vpn_enabled_requires_guard_directory_digest() {
+        let mut cfg = enabled_vpn_config();
+        cfg.guard_directory_digest_hex = None;
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "exactly 64 lowercase hexadecimal characters")]
+    fn soranet_vpn_rejects_noncanonical_trust_digest_hex() {
+        let mut cfg = enabled_vpn_config();
+        cfg.guard_directory_digest_hex = Some("CD".repeat(32));
         let _ = cfg.parse();
     }
 
@@ -8097,9 +8048,9 @@ pub struct Confidential {
     /// Grace window (in blocks) around policy activation for conversions.
     #[config(default = "defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS")]
     pub policy_transition_window_blocks: u64,
-    /// Commitment tree root history length to retain.
+    /// Non-zero commitment tree root history length to retain.
     #[config(default = "defaults::confidential::TREE_ROOTS_HISTORY_LEN")]
-    pub tree_roots_history_len: u64,
+    pub tree_roots_history_len: NonZeroUsize,
     /// Interval (in blocks) between frontier checkpoints.
     #[config(default = "defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL")]
     pub tree_frontier_checkpoint_interval: u64,
@@ -9429,6 +9380,32 @@ impl NexusStorage {
                 "nexus.storage.local_budget_bytes must be greater than zero when configured",
             ));
             return None;
+        }
+        if let Some(local_budget_bytes) = self.local_budget_bytes {
+            let total_bps = u64::from(defaults::nexus::storage::BPS_TOTAL);
+            let minimum_budget_bytes = [
+                weights.kura_blocks_bps,
+                weights.wsv_snapshots_bps,
+                weights.sorafs_bps,
+                weights.soranet_spool_bps,
+                weights.soravpn_spool_bps,
+            ]
+            .into_iter()
+            .map(|weight| {
+                let weight = u64::from(weight);
+                total_bps
+                    .checked_add(weight - 1)
+                    .expect("basis-point total is bounded")
+                    / weight
+            })
+            .max()
+            .expect("Nexus storage has a fixed non-empty component set");
+            if local_budget_bytes.get() < minimum_budget_bytes {
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.storage.local_budget_bytes must be at least {minimum_budget_bytes} bytes for every weighted component cap to remain non-zero"
+                )));
+                return None;
+            }
         }
         let local_budget_bytes = self.local_budget_bytes;
         Some(actual::NexusStorage {
@@ -12600,7 +12577,7 @@ pub struct Snapshot {
     /// Optional public key used to verify snapshot signatures (defaults to node identity key).
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
-    pub signing_private_key: Option<ExposedPrivateKey>,
+    pub signing_private_key: Option<PrivateKey>,
     /// Explicit authorization for a one-time audited hash-only snapshot boundary.
     #[config(nested)]
     pub bootstrap: SnapshotBootstrapPolicy,
@@ -13803,7 +13780,7 @@ pub struct Torii {
     pub receipt_public_key: Option<PublicKey>,
     /// Optional private key used to sign transaction submission receipts (must be paired).
     #[config(env = "TORII_RECEIPT_PRIVATE_KEY")]
-    pub receipt_private_key: Option<ExposedPrivateKey>,
+    pub receipt_private_key: Option<PrivateKey>,
     /// Maximum idle duration for long-running queries.
     #[config(default = "defaults::torii::QUERY_IDLE_TIME.into()")]
     pub query_idle_time_ms: DurationMs,
@@ -13937,8 +13914,15 @@ pub struct Torii {
     pub api_fee_amount: Option<Quantity>,
     /// Optional fee policy: receiver account id for fees.
     pub api_fee_receiver: Option<String>,
-    /// CIDR allowlist for bypassing API rate limits (IPv4/IPv6), e.g. `127.0.0.0/8`.
-    pub api_allow_cidrs: Option<Vec<String>>,
+    /// CIDRs whose effective transport sources bypass API rate limits only.
+    ///
+    /// This list does not grant internal-read access or target-account routing privileges.
+    pub api_rate_limit_bypass_cidrs: Option<Vec<String>>,
+    /// Exact effective transport source hosts trusted for internal API reads and routing.
+    ///
+    /// Every entry must use `/32` for IPv4 or `/128` for IPv6.
+    #[config(default = "defaults::torii::internal_api_trusted_cidrs()")]
+    pub internal_api_trusted_cidrs: Vec<String>,
     /// Optional Torii base URLs used to fetch peer telemetry metadata.
     #[config(default)]
     pub peer_telemetry_urls: Vec<Url>,
@@ -13948,6 +13932,9 @@ pub struct Torii {
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     #[config(nested)]
     pub soranet_privacy_ingest: crate::parameters::user::ToriiSoranetPrivacyIngest,
+    /// Authenticated native Bootle/Lantern blind-issuance service.
+    #[config(nested)]
+    pub privacy_bootle_lantern_issuer: ToriiBootleLanternIssuer,
     /// Emit filter-match debug traces (developer diagnostics only).
     #[config(default = "defaults::torii::DEBUG_MATCH_FILTERS")]
     pub debug_match_filters: bool,
@@ -13967,6 +13954,9 @@ pub struct Torii {
     pub preauth_burst_per_ip: Option<u32>,
     /// Temporary ban duration applied after rate/limit violations (milliseconds).
     pub preauth_ban_duration_ms: Option<DurationMs>,
+    /// Maximum number of temporary pre-auth bans retained in memory.
+    #[config(default = "defaults::torii::PREAUTH_BAN_CAPACITY")]
+    pub preauth_ban_capacity: NonZeroUsize,
     /// Explicit source hosts allowed to bypass pre-auth gating.
     ///
     /// IPv4 `/32` and IPv6 `/128` entries are accepted. `127.0.0.0/8` is
@@ -14279,6 +14269,333 @@ impl ToriiSoranetPrivacyIngest {
     }
 }
 
+/// User configuration for authenticated native Bootle/Lantern blind issuance.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiBootleLanternIssuer {
+    /// Enable the canonical authorization and issuance routes.
+    #[config(default = "defaults::torii::privacy_bootle_lantern_issuer::ENABLED")]
+    pub enabled: bool,
+    /// Durable one-shot authorization store directory.
+    #[config(default = "defaults::torii::privacy_bootle_lantern_issuer::state_dir()")]
+    pub state_dir: PathBuf,
+    /// Exact concurrent native-issuance bound. Required when enabled.
+    pub max_inflight: Option<usize>,
+    /// Exact governed issuer identifier as 64 lowercase hexadecimal characters.
+    pub issuer_id_hex: Option<String>,
+    /// Exact governed policy identifier as 64 lowercase hexadecimal characters.
+    pub policy_id_hex: Option<String>,
+    /// Validity window for one authenticated issuance authorization.
+    #[config(
+        default = "defaults::torii::privacy_bootle_lantern_issuer::AUTHORIZATION_LIFETIME_BLOCKS"
+    )]
+    pub authorization_lifetime_blocks: u64,
+    /// Maximum retained authorization records.
+    #[config(default = "defaults::torii::privacy_bootle_lantern_issuer::MAX_RECORDS")]
+    pub max_records: usize,
+    /// Maximum reserved canonical authorization-store bytes.
+    #[config(default = "defaults::torii::privacy_bootle_lantern_issuer::MAX_TOTAL_BYTES")]
+    pub max_total_bytes: Bytes<u64>,
+    /// Terminal records retained after their authoritative horizon.
+    #[config(
+        default = "defaults::torii::privacy_bootle_lantern_issuer::TERMINAL_RETENTION_BLOCKS"
+    )]
+    pub terminal_retention_blocks: u64,
+    /// Deployment-owned provider-registry handle.
+    pub runtime_provider_registry_handle: Option<String>,
+    /// Exact non-zero provider-registry public-policy revision.
+    pub runtime_provider_registry_revision: Option<u64>,
+    /// Exact non-zero provider-registry public-policy digest as lowercase hexadecimal.
+    pub runtime_provider_registry_policy_digest_hex: Option<String>,
+}
+
+impl Default for ToriiBootleLanternIssuer {
+    fn default() -> Self {
+        use defaults::torii::privacy_bootle_lantern_issuer as issuer;
+
+        Self {
+            enabled: issuer::ENABLED,
+            state_dir: issuer::state_dir(),
+            max_inflight: None,
+            issuer_id_hex: None,
+            policy_id_hex: None,
+            authorization_lifetime_blocks: issuer::AUTHORIZATION_LIFETIME_BLOCKS,
+            max_records: issuer::MAX_RECORDS,
+            max_total_bytes: issuer::MAX_TOTAL_BYTES,
+            terminal_retention_blocks: issuer::TERMINAL_RETENTION_BLOCKS,
+            runtime_provider_registry_handle: None,
+            runtime_provider_registry_revision: None,
+            runtime_provider_registry_policy_digest_hex: None,
+        }
+    }
+}
+
+impl ToriiBootleLanternIssuer {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiBootleLanternIssuer> {
+        use defaults::torii::privacy_bootle_lantern_issuer as limits;
+
+        fn parse_nonzero_fixed32(
+            emitter: &mut Emitter<ParseError>,
+            path: &str,
+            value: Option<&str>,
+        ) -> Option<[u8; 32]> {
+            let Some(value) = value else {
+                emit_torii_config_error(emitter, format!("{path} is required when enabled"));
+                return None;
+            };
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                emit_torii_config_error(
+                    emitter,
+                    format!("{path} must be exactly 64 lowercase hexadecimal characters"),
+                );
+                return None;
+            }
+            let mut bytes = [0_u8; 32];
+            hex::decode_to_slice(value, &mut bytes)
+                .expect("validated lowercase fixed-width hexadecimal");
+            if bytes == [0; 32] {
+                emit_torii_config_error(emitter, format!("{path} must be nonzero"));
+                return None;
+            }
+            Some(bytes)
+        }
+
+        let binding_fields_present = self.issuer_id_hex.is_some()
+            || self.policy_id_hex.is_some()
+            || self.runtime_provider_registry_handle.is_some()
+            || self.runtime_provider_registry_revision.is_some()
+            || self.runtime_provider_registry_policy_digest_hex.is_some();
+        if !self.enabled {
+            if binding_fields_present {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.privacy_bootle_lantern_issuer binding fields must be absent when disabled",
+                );
+            }
+            return None;
+        }
+
+        let mut policy_valid = true;
+        if self.state_dir.as_os_str().is_empty() || !self.state_dir.is_absolute() {
+            policy_valid = false;
+            emit_torii_config_error(
+                emitter,
+                "torii.privacy_bootle_lantern_issuer.state_dir must be a non-empty absolute path",
+            );
+        }
+        let max_inflight = self.max_inflight.and_then(NonZeroUsize::new);
+        if max_inflight.is_none_or(|value| value.get() > limits::MAX_INFLIGHT_HARD) {
+            policy_valid = false;
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.privacy_bootle_lantern_issuer.max_inflight is required when enabled and must be within 1..={}",
+                    limits::MAX_INFLIGHT_HARD
+                ),
+            );
+        }
+        if !(1..=limits::AUTHORIZATION_LIFETIME_BLOCKS_MAX)
+            .contains(&self.authorization_lifetime_blocks)
+        {
+            policy_valid = false;
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.privacy_bootle_lantern_issuer.authorization_lifetime_blocks must be within 1..={}",
+                    limits::AUTHORIZATION_LIFETIME_BLOCKS_MAX
+                ),
+            );
+        }
+        if self.max_records == 0 || self.max_records > limits::MAX_RECORDS_HARD {
+            policy_valid = false;
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.privacy_bootle_lantern_issuer.max_records must be within 1..={}",
+                    limits::MAX_RECORDS_HARD
+                ),
+            );
+        }
+        let required_store_bytes = u64::try_from(self.max_records)
+            .ok()
+            .and_then(|count| count.checked_mul(limits::MAX_RECORD_BYTES));
+        if self.max_total_bytes.0 == 0
+            || self.max_total_bytes.0 > limits::MAX_TOTAL_BYTES_HARD
+            || required_store_bytes.is_none_or(|required| self.max_total_bytes.0 < required)
+        {
+            policy_valid = false;
+            emit_torii_config_error(
+                emitter,
+                "torii.privacy_bootle_lantern_issuer.max_total_bytes must reserve one maximum canonical ILS1 record for every configured slot",
+            );
+        }
+        if self.terminal_retention_blocks == 0
+            || self.terminal_retention_blocks > limits::TERMINAL_RETENTION_BLOCKS_MAX
+        {
+            policy_valid = false;
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.privacy_bootle_lantern_issuer.terminal_retention_blocks must be within 1..={}",
+                    limits::TERMINAL_RETENTION_BLOCKS_MAX
+                ),
+            );
+        }
+
+        let issuer_id = parse_nonzero_fixed32(
+            emitter,
+            "torii.privacy_bootle_lantern_issuer.issuer_id_hex",
+            self.issuer_id_hex.as_deref(),
+        );
+        let policy_id = parse_nonzero_fixed32(
+            emitter,
+            "torii.privacy_bootle_lantern_issuer.policy_id_hex",
+            self.policy_id_hex.as_deref(),
+        );
+        let registry_policy_digest = parse_nonzero_fixed32(
+            emitter,
+            "torii.privacy_bootle_lantern_issuer.runtime_provider_registry_policy_digest_hex",
+            self.runtime_provider_registry_policy_digest_hex.as_deref(),
+        );
+        let registry_handle_valid = self
+            .runtime_provider_registry_handle
+            .as_deref()
+            .is_some_and(is_production_runtime_handle);
+        if !registry_handle_valid {
+            emit_torii_config_error(
+                emitter,
+                "torii.privacy_bootle_lantern_issuer.runtime_provider_registry_handle is required and must be a canonical non-test production handle",
+            );
+        }
+        let registry_revision = self.runtime_provider_registry_revision;
+        if registry_revision.is_none_or(|revision| revision == 0) {
+            emit_torii_config_error(
+                emitter,
+                "torii.privacy_bootle_lantern_issuer.runtime_provider_registry_revision must be nonzero",
+            );
+        }
+        if !policy_valid
+            || !registry_handle_valid
+            || registry_revision.is_none_or(|revision| revision == 0)
+        {
+            return None;
+        }
+
+        Some(actual::ToriiBootleLanternIssuer {
+            state_dir: self.state_dir,
+            max_inflight: max_inflight?,
+            issuer_id: PrivacyIssuerIdV1::new(issuer_id?),
+            policy_id: PrivacyPolicyIdV1::new(policy_id?),
+            authorization_lifetime_blocks: self.authorization_lifetime_blocks,
+            max_records: self.max_records,
+            max_total_bytes: self.max_total_bytes.0,
+            terminal_retention_blocks: self.terminal_retention_blocks,
+            runtime_provider_registry_handle: self.runtime_provider_registry_handle?,
+            runtime_provider_registry_revision: registry_revision?,
+            runtime_provider_registry_policy_digest: registry_policy_digest?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod torii_bootle_lantern_issuer_tests {
+    use super::*;
+
+    fn valid_config() -> ToriiBootleLanternIssuer {
+        ToriiBootleLanternIssuer {
+            enabled: true,
+            state_dir: PathBuf::from("/var/lib/iroha/privacy/bootle-lantern/issuer"),
+            max_inflight: Some(2),
+            issuer_id_hex: Some("41".repeat(32)),
+            policy_id_hex: Some("42".repeat(32)),
+            runtime_provider_registry_handle: Some(
+                "runtime://privacy/bootle-lantern/primary".to_owned(),
+            ),
+            runtime_provider_registry_revision: Some(7),
+            runtime_provider_registry_policy_digest_hex: Some("43".repeat(32)),
+            ..ToriiBootleLanternIssuer::default()
+        }
+    }
+
+    fn assert_rejected(config: ToriiBootleLanternIssuer) {
+        let mut emitter = Emitter::<ParseError>::new();
+        assert!(config.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn exact_nonsecret_issuer_policy_parses() {
+        let mut emitter = Emitter::<ParseError>::new();
+        let parsed = valid_config()
+            .parse(&mut emitter)
+            .expect("enabled Bootle/Lantern issuer policy");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.issuer_id, PrivacyIssuerIdV1::new([0x41; 32]));
+        assert_eq!(parsed.policy_id, PrivacyPolicyIdV1::new([0x42; 32]));
+        assert_eq!(parsed.max_inflight, NonZeroUsize::new(2).unwrap());
+        assert_eq!(parsed.runtime_provider_registry_revision, 7);
+        assert_eq!(parsed.runtime_provider_registry_policy_digest, [0x43; 32]);
+        assert_eq!(
+            parsed.max_total_bytes,
+            defaults::torii::privacy_bootle_lantern_issuer::MAX_TOTAL_BYTES.0
+        );
+    }
+
+    #[test]
+    fn disabled_issuer_rejects_stale_provider_claims() {
+        let mut config = ToriiBootleLanternIssuer::default();
+        config.runtime_provider_registry_handle =
+            Some("runtime://privacy/bootle-lantern/primary".to_owned());
+        assert_rejected(config);
+    }
+
+    #[test]
+    fn issuer_config_rejects_noncanonical_bindings_and_underreserved_store() {
+        let mut config = valid_config();
+        config.state_dir = PathBuf::from("relative/privacy-issuer");
+        config.issuer_id_hex = Some("AA".repeat(32));
+        config.policy_id_hex = Some("00".repeat(32));
+        config.runtime_provider_registry_handle =
+            Some("runtime://privacy/bootle-lantern/test".to_owned());
+        config.runtime_provider_registry_revision = Some(0);
+        config.runtime_provider_registry_policy_digest_hex = Some("00".repeat(32));
+        config.authorization_lifetime_blocks = 0;
+        config.max_total_bytes = Bytes(1);
+        config.terminal_retention_blocks = 0;
+        assert_rejected(config);
+    }
+
+    #[test]
+    fn enabled_issuer_requires_a_bounded_explicit_inflight_limit() {
+        let mut missing = valid_config();
+        missing.max_inflight = None;
+        let mut zero = valid_config();
+        zero.max_inflight = Some(0);
+        let mut excessive = valid_config();
+        excessive.max_inflight =
+            Some(defaults::torii::privacy_bootle_lantern_issuer::MAX_INFLIGHT_HARD + 1);
+        for config in [missing, zero, excessive] {
+            assert_rejected(config);
+        }
+    }
+
+    #[test]
+    fn issuer_config_rejects_every_partial_provider_binding() {
+        let mut missing_handle = valid_config();
+        missing_handle.runtime_provider_registry_handle = None;
+        let mut missing_revision = valid_config();
+        missing_revision.runtime_provider_registry_revision = None;
+        let mut missing_digest = valid_config();
+        missing_digest.runtime_provider_registry_policy_digest_hex = None;
+        for config in [missing_handle, missing_revision, missing_digest] {
+            assert_rejected(config);
+        }
+    }
+}
+
 /// Push-notification configuration (FCM/APNS bridge).
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiPush {
@@ -14491,7 +14808,7 @@ mod torii_push_tests {
 impl Torii {
     fn parse_receipt_signer(
         receipt_public_key: Option<&PublicKey>,
-        receipt_private_key: Option<&ExposedPrivateKey>,
+        receipt_private_key: Option<&PrivateKey>,
     ) -> Option<KeyPair> {
         match (receipt_public_key, receipt_private_key) {
             (None, None) => None,
@@ -14506,7 +14823,7 @@ impl Torii {
                 );
             }
             (Some(public_key), Some(private_key)) => {
-                let key_pair = KeyPair::new(public_key.clone(), private_key.0.clone())
+                let key_pair = KeyPair::new(public_key.clone(), private_key.clone())
                     .unwrap_or_else(|err| panic!("invalid torii receipt key pair: {err}"));
                 let algorithm = key_pair
                     .public_key()
@@ -14555,6 +14872,12 @@ impl Torii {
             &self.operator_auth.mtls_trusted_proxy_cidrs,
             false,
         );
+        validate_explicit_trust_cidrs(
+            emitter,
+            "torii.internal_api_trusted_cidrs",
+            &self.internal_api_trusted_cidrs,
+            false,
+        );
         if self.zk_prover_max_scan_bytes < defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1 {
             emit_torii_config_error(
                 emitter,
@@ -14595,6 +14918,7 @@ impl Torii {
         let webhook = self.webhook.parse();
         let webhook_security = self.webhook_security.parse();
         let push = self.push.parse();
+        let privacy_bootle_lantern_issuer = self.privacy_bootle_lantern_issuer.parse(emitter);
         let (
             sorafs_storage,
             sorafs_discovery,
@@ -14696,10 +15020,12 @@ impl Torii {
             api_fee_asset_id: self.api_fee_asset_id,
             api_fee_amount: self.api_fee_amount,
             api_fee_receiver: self.api_fee_receiver,
-            api_allow_cidrs: self.api_allow_cidrs.unwrap_or_default(),
+            api_rate_limit_bypass_cidrs: self.api_rate_limit_bypass_cidrs.unwrap_or_default(),
+            internal_api_trusted_cidrs: self.internal_api_trusted_cidrs,
             peer_telemetry_urls: self.peer_telemetry_urls,
             peer_geo: self.peer_geo.parse(),
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
+            privacy_bootle_lantern_issuer,
             debug_match_filters: self.debug_match_filters,
             operator_auth: self.operator_auth.parse(),
             operator_signatures: self.operator_signatures.parse(),
@@ -14722,6 +15048,7 @@ impl Torii {
                     .unwrap_or_else(|| super::defaults::torii::PREAUTH_BAN_DURATION.into())
                     .get(),
             ),
+            preauth_ban_capacity: self.preauth_ban_capacity,
             preauth_allow_cidrs: self.preauth_allow_cidrs.unwrap_or_default(),
             preauth_scheme_limits: self
                 .preauth_scheme_limits
@@ -14829,7 +15156,7 @@ mod torii_receipt_signer_tests {
             Algorithm::Ed25519,
         )
         .expect("fixture seed derives Torii receipt Ed25519 keypair");
-        let private_key = ExposedPrivateKey(key_pair.private_key().clone());
+        let private_key = key_pair.private_key().clone();
 
         let parsed = Torii::parse_receipt_signer(Some(key_pair.public_key()), Some(&private_key))
             .expect("receipt signer");
@@ -16251,7 +16578,6 @@ impl AccountOnboarding {
             "CanUpsertSorafsProviderCredit",
             "CanRegisterSorafsProviderOwner",
             "CanUnregisterSorafsProviderOwner",
-            "CanSetMusubiShortAlias",
             "CanIngestSoranetPrivacy",
             "CanRegisterOracleFeed",
             "CanProposeOracleChange",
@@ -16759,7 +17085,7 @@ pub struct ToriiKagemushaCommands {
     pub enabled: bool,
     /// Private key for the account submitting typed Kagemusha instructions.
     #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY")]
-    pub private_key: Option<ExposedPrivateKey>,
+    pub private_key: Option<PrivateKey>,
     /// Minimum live XOR balance required for the self-funded command authority.
     ///
     /// This has no default: enabling the command service requires an explicit,
@@ -16788,7 +17114,7 @@ impl ToriiKagemushaCommands {
                     .ok()
                     .filter(|value| !value.trim().is_empty())
                     .map(|value| {
-                        value.parse::<ExposedPrivateKey>().unwrap_or_else(|err| {
+                        value.parse::<PrivateKey>().unwrap_or_else(|err| {
                             panic!("invalid TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY: {err}")
                         })
                     })
@@ -16798,7 +17124,7 @@ impl ToriiKagemushaCommands {
                     "torii.kagemusha_commands.private_key or TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY is required"
                 )
             });
-        let key_pair = KeyPair::from_private_key(private_key.0.clone())
+        let key_pair = KeyPair::from_private_key(private_key.clone())
             .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.private_key: {err}"));
         let algorithm = key_pair
             .public_key()
@@ -16852,7 +17178,7 @@ mod torii_kagemusha_commands_tests {
         let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
         ToriiKagemushaCommands {
             enabled: true,
-            private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+            private_key: Some(key_pair.private_key().clone()),
             minimum_xor_balance: Quantity::from(25_u32),
             max_tx_value: defaults::torii::kagemusha_commands::max_tx_value(),
             operation_registry_max_entries:
@@ -16937,7 +17263,7 @@ mod torii_faucet_tests {
         let key_file = TestKeyFile::create(
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53\n",
         );
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("sora", "universal").expect("domain"),
             "xor".parse().expect("name"),
         )
@@ -17086,18 +17412,31 @@ impl ToriiRamLfe {
 }
 
 /// Per-program runtime material for Torii's RAM-LFE runtime.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiRamLfeProgram {
     /// On-chain RAM-LFE program identifier.
     pub program_id: String,
     /// Hidden derivation secret encoded as hex.
-    pub secret_hex: String,
+    pub secret_hex: RamLfeSecret,
     /// Norito-encoded hidden BFV RAM-FHE program encoded as hex.
     pub hidden_program_hex: Option<String>,
     /// Private key used to sign receipts for this program.
-    pub signer_private_key: ExposedPrivateKey,
+    pub signer_private_key: PrivateKey,
     /// Optional receipt TTL expressed in milliseconds.
     pub receipt_ttl_ms: Option<DurationMs>,
+}
+
+impl Debug for ToriiRamLfeProgram {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ToriiRamLfeProgram")
+            .field("program_id", &self.program_id)
+            .field("secret_hex", &self.secret_hex)
+            .field("hidden_program_hex", &"[REDACTED hidden RAM-FHE program]")
+            .field("signer_private_key", &"[REDACTED RAM-LFE signer]")
+            .field("receipt_ttl_ms", &self.receipt_ttl_ms)
+            .finish()
+    }
 }
 
 fn default_ram_lfe_hidden_program_hex() -> String {
@@ -17116,13 +17455,6 @@ impl ToriiRamLfeProgram {
                     self.program_id
                 )
             });
-        let secret_literal = self.secret_hex.trim().trim_start_matches("0x");
-        let secret = Vec::from_hex(secret_literal).unwrap_or_else(|err| {
-            panic!("invalid torii.ram_lfe.programs[{index}].secret_hex: {err}")
-        });
-        if secret.is_empty() {
-            panic!("torii.ram_lfe.programs[{index}].secret_hex must not be empty");
-        }
         let hidden_program_hex = self
             .hidden_program_hex
             .unwrap_or_else(default_ram_lfe_hidden_program_hex);
@@ -17142,7 +17474,7 @@ impl ToriiRamLfeProgram {
         });
         actual::ToriiRamLfeProgram {
             program_id,
-            secret,
+            secret: self.secret_hex,
             hidden_program,
             signer_private_key: self.signer_private_key,
             receipt_ttl: self.receipt_ttl_ms.map(DurationMs::get),
@@ -25777,7 +26109,7 @@ impl SorafsStorage {
             hedging_billing_runtime,
             provider_ingest_runtime,
             pdp_provider: self.pdp_provider.parse(emitter),
-            runtime: self.runtime.parse(),
+            runtime: self.runtime.parse(emitter),
             alias: self.alias.or_else(super::defaults::sorafs::storage::alias),
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
@@ -27363,10 +27695,26 @@ impl Default for SorafsRuntimeRetentionConfig {
 }
 
 impl SorafsRuntimeRetentionConfig {
-    fn parse(self) -> actual::SorafsRuntimeRetention {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsRuntimeRetention {
+        if self.state_entry_limit == 0
+            || self.state_entry_limit > defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX
+        {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.storage.runtime.state_entry_limit must be in 1..={}",
+                defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX
+            )));
+        }
+        if self.event_history_limit == 0 || self.event_history_limit > self.state_entry_limit {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.runtime.event_history_limit must be non-zero and not exceed state_entry_limit",
+            ));
+        }
+        let state_entry_limit = self
+            .state_entry_limit
+            .clamp(1, defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX);
         actual::SorafsRuntimeRetention {
-            event_history_limit: self.event_history_limit.max(1),
-            state_entry_limit: self.state_entry_limit.max(1),
+            event_history_limit: self.event_history_limit.clamp(1, state_entry_limit),
+            state_entry_limit,
             checkpoint_max_bytes: Bytes(self.checkpoint_max_bytes.0.max(1)),
             proof_outcome_forwarder_interval: Duration::from_millis(
                 self.proof_outcome_forwarder_interval_ms.get(),
@@ -28369,6 +28717,43 @@ mod sorafs_repair_gc_tests {
     }
 
     #[test]
+    fn sorafs_runtime_retention_enforces_shared_projection_ceiling() {
+        let maximum = defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX;
+        let mut emitter = Emitter::new();
+        let actual = SorafsRuntimeRetentionConfig {
+            state_entry_limit: maximum.saturating_add(1),
+            event_history_limit: maximum.saturating_add(1),
+            ..SorafsRuntimeRetentionConfig::default()
+        }
+        .parse(&mut emitter);
+        assert!(emitter.into_result().is_err());
+        assert_eq!(actual.state_entry_limit, maximum);
+        assert_eq!(actual.event_history_limit, maximum);
+
+        let mut emitter = Emitter::new();
+        let actual = SorafsRuntimeRetentionConfig {
+            state_entry_limit: 8,
+            event_history_limit: 9,
+            ..SorafsRuntimeRetentionConfig::default()
+        }
+        .parse(&mut emitter);
+        assert!(emitter.into_result().is_err());
+        assert_eq!(actual.state_entry_limit, 8);
+        assert_eq!(actual.event_history_limit, 8);
+
+        let mut emitter = Emitter::new();
+        let actual = SorafsRuntimeRetentionConfig {
+            state_entry_limit: 8,
+            event_history_limit: 4,
+            ..SorafsRuntimeRetentionConfig::default()
+        }
+        .parse(&mut emitter);
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(actual.state_entry_limit, 8);
+        assert_eq!(actual.event_history_limit, 4);
+    }
+
+    #[test]
     fn sorafs_appeal_finance_settlement_parse_binds_only_public_runtime_identity() {
         let key_pair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
             .expect("derive settlement submitter keypair");
@@ -28646,7 +29031,7 @@ mod sorafs_repair_gc_tests {
     #[test]
     fn sorafs_appeal_finance_rejects_invalid_asset_and_policy_bounds() {
         let mut config = SorafsAppealFinanceSettlement::default();
-        config.asset_definition_id = AssetDefinitionId::new(
+        config.asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("xor", "universal").expect("domain id"),
             "other".parse().expect("asset definition name"),
         );
@@ -29873,7 +30258,6 @@ impl SorafsGateway {
             enforce_capabilities,
             salt_schedule_dir,
             site_bindings: site_bindings.parse(),
-            cdn_policy_path: None,
             rate_limit: rate_limit.parse(),
             untrusted_hosting: untrusted_hosting.parse(),
             acme: acme.parse(emitter),
@@ -31515,7 +31899,7 @@ mod offline_cfg_tests {
 
     #[test]
     fn iso_bridge_json_deserializes() {
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fin", "universal").expect("domain"),
             "usd".parse().expect("name"),
         )
@@ -31891,14 +32275,14 @@ mod offline_cfg_tests {
         assert!(parsed.plain_voting_enabled);
         assert_eq!(
             parsed.voting_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+            iroha_data_model::asset::prelude::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap()
             )
         );
         assert_eq!(
             parsed.citizenship_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+            iroha_data_model::asset::prelude::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap()
             )
@@ -31929,7 +32313,7 @@ mod offline_cfg_tests {
         assert_eq!(parsed.parliament_min_stake, Quantity::from(456_u64));
         assert_eq!(
             parsed.parliament_eligibility_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+            iroha_data_model::asset::prelude::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("stake", "universal").unwrap(),
                 "SORA".parse().unwrap()
             )
@@ -32070,6 +32454,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -32089,6 +32474,117 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
+    }
+
+    #[test]
+    fn torii_preauth_ban_capacity_is_configurable_and_nonzero() {
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert("preauth_ban_capacity".into(), Value::Integer(17));
+        let actual = load_root(table);
+        assert_eq!(actual.torii.preauth_ban_capacity.get(), 17);
+
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert("preauth_ban_capacity".into(), Value::Integer(0));
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "a zero ban capacity would disable retention and defeat temporary bans"
+        );
+    }
+
+    #[test]
+    fn config_secret_subtree_debug_output_redacts_private_keys() {
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:config:test:debug-redaction".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("deterministic private key");
+        let private_key = key_pair.private_key().clone();
+        let canonical_private_key = ExposedPrivateKey(private_key.clone()).to_string();
+        let mut config = load_user_root(base_table());
+
+        config.snapshot.signing_private_key = Some(private_key.clone());
+        config.torii.receipt_public_key = Some(key_pair.public_key().clone());
+        config.torii.receipt_private_key = Some(private_key.clone());
+        config.torii.kagemusha_commands = Some(super::ToriiKagemushaCommands {
+            enabled: true,
+            private_key: Some(private_key.clone()),
+            minimum_xor_balance: Quantity::from(1_u64),
+            max_tx_value: defaults::torii::kagemusha_commands::max_tx_value(),
+            operation_registry_max_entries:
+                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES,
+            operation_registry_max_bytes:
+                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_BYTES,
+        });
+        config.torii.ram_lfe = Some(super::ToriiRamLfe {
+            enabled: true,
+            programs: vec![super::ToriiRamLfeProgram {
+                program_id: "phone_retail".to_owned(),
+                secret_hex: "01020304".parse().expect("valid RAM-LFE secret"),
+                hidden_program_hex: None,
+                signer_private_key: private_key,
+                receipt_ttl_ms: None,
+            }],
+        });
+
+        let debug_outputs = [
+            ("snapshot", format!("{:?}", config.snapshot)),
+            ("torii receipt", format!("{:?}", config.torii)),
+            (
+                "kagemusha commands",
+                format!(
+                    "{:?}",
+                    config
+                        .torii
+                        .kagemusha_commands
+                        .as_ref()
+                        .expect("configured commands")
+                ),
+            ),
+            (
+                "RAM-LFE program",
+                format!(
+                    "{:?}",
+                    &config
+                        .torii
+                        .ram_lfe
+                        .as_ref()
+                        .expect("configured RAM-LFE")
+                        .programs[0]
+                ),
+            ),
+        ];
+        for (subtree, debug) in debug_outputs {
+            assert!(debug.contains("REDACTED"), "{subtree}: {debug}");
+            assert!(
+                !debug.contains(&canonical_private_key),
+                "{subtree} leaked canonical private-key material: {debug}"
+            );
+        }
+
+        let actual = config.parse().expect("valid secret-bearing configuration");
+        for (subtree, debug) in [
+            ("actual snapshot", format!("{:?}", actual.snapshot)),
+            ("actual Torii", format!("{:?}", actual.torii)),
+            (
+                "actual Kagemusha commands",
+                format!("{:?}", actual.torii.kagemusha_commands),
+            ),
+            ("actual RAM-LFE", format!("{:?}", actual.torii.ram_lfe)),
+        ] {
+            assert!(debug.contains("REDACTED"), "{subtree}: {debug}");
+            assert!(
+                !debug.contains(&canonical_private_key),
+                "{subtree} leaked canonical private-key material: {debug}"
+            );
+        }
     }
 
     fn native_signer_binding_toml(
@@ -34677,14 +35173,14 @@ publish_delay_seconds = 17
 
     #[test]
     fn retired_peer_genesis_bootstrap_config_is_rejected() {
-        for field in [
-            "bootstrap_allowlist",
-            "bootstrap_max_bytes",
-            "bootstrap_response_throttle",
-            "bootstrap_request_timeout",
-            "bootstrap_retry_interval",
-            "bootstrap_max_attempts",
-            "bootstrap_enabled",
+        for (field, value) in [
+            ("bootstrap_allowlist", Value::Array(Vec::new())),
+            ("bootstrap_max_bytes", Value::Integer(1)),
+            ("bootstrap_response_throttle_ms", Value::Integer(1)),
+            ("bootstrap_request_timeout_ms", Value::Integer(1)),
+            ("bootstrap_retry_interval_ms", Value::Integer(1)),
+            ("bootstrap_max_attempts", Value::Integer(1)),
+            ("bootstrap_enabled", Value::Boolean(true)),
         ] {
             let mut table = base_table();
             let genesis = table
@@ -34692,13 +35188,28 @@ publish_delay_seconds = 17
                 .or_insert_with(|| Value::Table(Table::new()))
                 .as_table_mut()
                 .expect("genesis table");
-            genesis.insert(field.into(), Value::Boolean(true));
+            genesis.insert(field.into(), value);
 
             assert!(
                 actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
                 "retired genesis.{field} must not be accepted"
             );
         }
+    }
+
+    #[test]
+    fn genesis_expected_hash_is_required_during_configuration_normalization() {
+        let mut table = base_table();
+        table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .expect("genesis table")
+            .remove("expected_hash");
+
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "a signed artifact must not be allowed to select its own startup trust root"
+        );
     }
 
     #[test]
@@ -34778,6 +35289,24 @@ publish_delay_seconds = 17
         assert!(
             actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
             "zero would disable downstream enforcement and must fail parsing"
+        );
+    }
+
+    #[test]
+    fn storage_local_budget_rejects_zero_weighted_component_caps() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut storage = Table::new();
+        storage.insert("local_budget_bytes".into(), Value::Integer(1));
+        nexus.insert("storage".into(), Value::Table(storage));
+
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "a zero component cap means unlimited downstream and must fail parsing"
         );
     }
 

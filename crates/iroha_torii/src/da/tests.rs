@@ -65,6 +65,7 @@ use reqwest::Url;
 use sorafs_car::{CarBuildPlan, PersistedChunkRecord};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, CouncilSignature, ProfileId,
+    ProviderAdmissionCouncilPolicy, canonical_manifest_root_cid,
     pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
@@ -1163,6 +1164,7 @@ fn encode_alias_proof_bytes(
     expiry_epoch: u64,
     generated_at_unix: u64,
     expires_at_hint: u64,
+    council_seeds: &[[u8; 32]],
 ) -> Vec<u8> {
     let binding = AliasBindingV1 {
         alias: format!("{alias_namespace}/{alias_name}"),
@@ -1182,20 +1184,46 @@ fn encode_alias_proof_bytes(
     bundle.registry_root =
         alias_merkle_root(&bundle.binding, &bundle.merkle_path).expect("compute alias proof root");
     let digest = alias_proof_signature_digest(&bundle);
-    let council_key =
-        PrivateKey::from_bytes(Algorithm::Ed25519, &[0x33; 32]).expect("seeded council key");
-    let keypair = KeyPair::from_private_key(council_key).expect("derive council keypair");
-    let signature = checked_signature(keypair.private_key(), digest.as_ref());
-    let (_, signer_bytes) = keypair
-        .public_key()
-        .try_to_bytes()
-        .expect("fixture public key must be valid");
-    let signer: [u8; 32] = signer_bytes.try_into().expect("ed25519 pk length");
-    bundle.council_signatures.push(CouncilSignature {
-        signer,
-        signature: signature.payload().to_vec(),
-    });
+    bundle.council_signatures = council_seeds
+        .iter()
+        .map(|seed| {
+            let keypair = alias_council_keypair(seed);
+            let signature = checked_signature(keypair.private_key(), digest.as_ref());
+            let (_, signer_bytes) = keypair
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture public key must be valid");
+            CouncilSignature {
+                signer: signer_bytes.try_into().expect("ed25519 pk length"),
+                signature: signature.payload().to_vec(),
+            }
+        })
+        .collect();
+    bundle
+        .council_signatures
+        .sort_by_key(|signature| signature.signer);
     to_bytes(&bundle).expect("encode alias proof")
+}
+
+fn alias_council_keypair(seed: &[u8; 32]) -> KeyPair {
+    let private = PrivateKey::from_bytes(Algorithm::Ed25519, seed).expect("seeded council key");
+    KeyPair::from_private_key(private).expect("derive council keypair")
+}
+
+fn alias_council_policy(
+    council_seeds: &[[u8; 32]],
+    threshold: usize,
+) -> ProviderAdmissionCouncilPolicy {
+    let trusted_signers = council_seeds.iter().map(|seed| {
+        let keypair = alias_council_keypair(seed);
+        let (_, signer_bytes) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
+        signer_bytes.try_into().expect("ed25519 pk length")
+    });
+    ProviderAdmissionCouncilPolicy::new(trusted_signers, threshold)
+        .expect("valid fixture council policy")
 }
 
 fn build_ssm_bytes(
@@ -1206,7 +1234,8 @@ fn build_ssm_bytes(
     generated_at_unix: u64,
     expires_at_hint: u64,
 ) -> Vec<u8> {
-    build_ssm_bytes_with_publisher_algorithm(
+    build_ssm_bytes_with_alias_council(
+        manifest_hash,
         manifest_hash,
         car_digest,
         envelope_hash,
@@ -1214,6 +1243,7 @@ fn build_ssm_bytes(
         generated_at_unix,
         expires_at_hint,
         Algorithm::Ed25519,
+        &[[0x33; 32]],
     )
 }
 
@@ -1226,14 +1256,41 @@ fn build_ssm_bytes_with_publisher_algorithm(
     expires_at_hint: u64,
     publisher_algorithm: Algorithm,
 ) -> Vec<u8> {
+    build_ssm_bytes_with_alias_council(
+        manifest_hash,
+        manifest_hash,
+        car_digest,
+        envelope_hash,
+        segment_sequence,
+        generated_at_unix,
+        expires_at_hint,
+        publisher_algorithm,
+        &[[0x33; 32]],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_ssm_bytes_with_alias_council(
+    manifest_hash: BlobDigest,
+    alias_manifest_hash: BlobDigest,
+    car_digest: BlobDigest,
+    envelope_hash: BlobDigest,
+    segment_sequence: u64,
+    generated_at_unix: u64,
+    expires_at_hint: u64,
+    publisher_algorithm: Algorithm,
+    council_seeds: &[[u8; 32]],
+) -> Vec<u8> {
+    let manifest_cid = canonical_manifest_root_cid(*alias_manifest_hash.as_bytes());
     let alias_proof = encode_alias_proof_bytes(
         "sora",
         "docs",
-        b"cid-placeholder",
+        &manifest_cid,
         1,
         32,
         generated_at_unix,
         expires_at_hint,
+        council_seeds,
     );
     let alias_binding = ManifestAliasBinding {
         name: "docs".into(),
@@ -3662,6 +3719,48 @@ fn take_trm_entry_returns_payload_and_strips_metadata() {
     );
 }
 
+fn taikai_ssm_validation_fixture() -> (ManifestArtifacts, taikai_ingest::EnvelopeArtifacts) {
+    let mut request = sample_request();
+    request.metadata = taikai_metadata();
+    let canonical = normalize_payload(&request).expect("normalize payload");
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let metadata =
+        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
+    let rent_policy = DaRentPolicyV1::default();
+    let manifest = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &request.retention_policy,
+        1,
+        &rent_policy,
+    )
+    .expect("manifest");
+    let envelope = taikai_ingest::build_envelope(
+        &request,
+        &manifest,
+        &chunk_store,
+        canonical.as_slice(),
+        None,
+    )
+    .expect("envelope");
+    (manifest, envelope)
+}
+
+fn taikai_alias_cache_policy() -> crate::sorafs::AliasCachePolicy {
+    crate::sorafs::AliasCachePolicy::new(
+        Duration::from_secs(600),
+        Duration::from_secs(60),
+        Duration::from_secs(1_200),
+        Duration::from_secs(60),
+        Duration::from_secs(120),
+        Duration::from_secs(10_000),
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+    )
+}
+
 #[test]
 fn validate_taikai_ssm_accepts_matching_payload() {
     let mut request = sample_request();
@@ -3716,10 +3815,151 @@ fn validate_taikai_ssm_accepts_matching_payload() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect("ssm valid");
     assert_eq!(outcome.alias_label, "sora/docs");
+}
+
+#[test]
+fn validate_taikai_ssm_rejects_self_asserted_alias_council() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let attacker_ssm = build_ssm_bytes(
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+    );
+    let trusted_policy = alias_council_policy(&[[0x44; 32]], 1);
+    let (_, telemetry) = telemetry_handle_for_tests();
+
+    let err = taikai::validate_taikai_ssm(
+        &attacker_ssm,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&trusted_policy),
+        &telemetry,
+    )
+    .expect_err("self-asserted alias council must fail Taikai admission");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("not trusted"), "unexpected error: {}", err.1);
+}
+
+#[test]
+fn validate_taikai_ssm_accepts_trusted_alias_council_threshold() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let council_seeds = [[0x33; 32], [0x44; 32], [0x55; 32]];
+    let ssm = build_ssm_bytes_with_alias_council(
+        manifest.manifest_hash,
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+        Algorithm::Ed25519,
+        &council_seeds[..2],
+    );
+    let trusted_policy = alias_council_policy(&council_seeds, 2);
+    let (_, telemetry) = telemetry_handle_for_tests();
+
+    let outcome = taikai::validate_taikai_ssm(
+        &ssm,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&trusted_policy),
+        &telemetry,
+    )
+    .expect("trusted 2-of-3 alias council must authorize Taikai admission");
+
+    assert_eq!(outcome.alias_label, "sora/docs");
+}
+
+#[test]
+fn validate_taikai_ssm_rejects_alias_manifest_binding_mismatch() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let council_seeds = [[0x33; 32]];
+    let ssm = build_ssm_bytes_with_alias_council(
+        manifest.manifest_hash,
+        BlobDigest::from_hash(blake3_hash(b"different DA manifest")),
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+        Algorithm::Ed25519,
+        &council_seeds,
+    );
+    let trusted_policy = alias_council_policy(&council_seeds, 1);
+    let (_, telemetry) = telemetry_handle_for_tests();
+
+    let err = taikai::validate_taikai_ssm(
+        &ssm,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&trusted_policy),
+        &telemetry,
+    )
+    .expect_err("alias proof for another manifest must fail Taikai admission");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("does not commit to the canonical DA manifest"),
+        "unexpected error: {}",
+        err.1
+    );
+}
+
+#[test]
+fn validate_taikai_ssm_fails_closed_without_alias_council_policy() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let ssm = build_ssm_bytes(
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+    );
+    let (_, telemetry) = telemetry_handle_for_tests();
+
+    let err = taikai::validate_taikai_ssm(
+        &ssm,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        None,
+        &telemetry,
+    )
+    .expect_err("Taikai admission without a trust policy must fail closed");
+
+    assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err.1
+            .contains("requires a configured SoraFS council trust policy"),
+        "unexpected error: {}",
+        err.1
+    );
 }
 
 #[test]
@@ -3776,6 +4016,7 @@ fn validate_taikai_ssm_rejects_manifest_mismatch() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect_err("manifest mismatch must fail");
@@ -3840,6 +4081,7 @@ fn validate_taikai_ssm_rejects_tampered_signature() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect_err("tampered signature must fail");
@@ -3908,6 +4150,7 @@ fn validate_taikai_ssm_rejects_malformed_ed25519_signature_r() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect("valid SSM should verify before mutation");
@@ -3931,6 +4174,7 @@ fn validate_taikai_ssm_rejects_malformed_ed25519_signature_r() {
             &taikai.envelope_bytes,
             taikai.telemetry.segment_sequence,
             &alias_policy,
+            Some(&alias_council_policy(&[[0x33; 32]], 1)),
             &telemetry,
         )
         .expect_err("malformed Taikai SSM signature R must fail");
@@ -4000,6 +4244,7 @@ fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect("valid ML-DSA SSM should verify before mutation");
@@ -4025,6 +4270,7 @@ fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
             &taikai.envelope_bytes,
             taikai.telemetry.segment_sequence,
             &alias_policy,
+            Some(&alias_council_policy(&[[0x33; 32]], 1)),
             &telemetry,
         )
         .expect_err("malformed Taikai SSM ML-DSA signature length must fail");

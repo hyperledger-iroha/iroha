@@ -931,7 +931,7 @@ pub(crate) mod tests {
         let recipient = PrivacyRecipientIdV1::new(raw(11));
         PqMaspStarkStatementV1 {
             context: context(),
-            asset_definition_id: AssetDefinitionId::new(
+            asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("pq_note").expect("asset name"),
             ),
@@ -1441,7 +1441,7 @@ pub(crate) mod tests {
         ));
 
         let mut other_asset = statement.clone();
-        other_asset.asset_definition_id = AssetDefinitionId::new(
+        other_asset.asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("other_pq_note").expect("asset name"),
         );

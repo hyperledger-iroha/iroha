@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
@@ -120,6 +121,8 @@ public final class HttpClientTransportTests {
     submitSkipsRetryWhenNetworkRetriesDisabled();
     submitRetriesOnServerError();
     retryPolicyRecognizesRetryableStatus();
+    ledgerExecutedBlockWireIsExactBoundedAndFailClosed();
+    privacyCapabilitiesAreTypedAndExact();
     submitQueuesTransactionsWhenOffline();
     submitQueuesTransactionsWithExportedKey();
     submitReplaysPendingTransactions();
@@ -154,6 +157,7 @@ public final class HttpClientTransportTests {
     ramLfeReceiptVerifyUsesRawReceipt();
     ramLfeResponseParsersRejectNonExactFields();
     vpnProfileRequestParsesNativeLeaseFields();
+    vpnProfileRequiresHttpsAndValidatesAvailabilityBoundTrustTuple();
     vpnSessionParserRejectsNonCanonicalHelperTicketHex();
     vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields();
     vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds();
@@ -361,6 +365,349 @@ public final class HttpClientTransportTests {
     assert !custom.isRetryableStatus(503) : "Server errors must be disabled by policy";
     assert !custom.isRetryableStatus(429) : "429 must be disabled by policy";
     assert custom.isRetryableStatus(418) : "Custom retry codes must be honored";
+  }
+
+  private static void ledgerExecutedBlockWireIsExactBoundedAndFailClosed() {
+    final byte[] canonical = new byte[] {0x4e, 0x52, 0x54, 0x30};
+    final OneResponseExecutor success =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200,
+                canonical,
+                "ok",
+                Map.of(
+                    "Content-Type", List.of("application/x-norito"),
+                    "Content-Length", List.of(Integer.toString(canonical.length)))));
+    final HttpClientTransport client =
+        HttpClientTransport.withExecutor(
+            success,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .build());
+    final byte[] received =
+        client
+            .getLedgerExecutedBlockWire(new BigInteger("18446744073709551615"))
+            .join();
+    assert Arrays.equals(canonical, received);
+    assert success.requestCount == 1;
+    assert "GET".equals(success.lastRequest.method());
+    assert "/v1/ledger/block/18446744073709551615".equals(success.lastRequest.uri().getRawPath());
+    assert List.of("application/x-norito").equals(success.lastRequest.headers().get("Accept"));
+    assert Long.valueOf(32L * 1024L * 1024L).equals(success.lastRequest.maximumResponseBytes());
+
+    for (final BigInteger height :
+        List.of(BigInteger.ZERO, BigInteger.valueOf(-1L), BigInteger.ONE.shiftLeft(64))) {
+      boolean rejected = false;
+      try {
+        client.getLedgerExecutedBlockWire(height);
+      } catch (final IllegalArgumentException expected) {
+        rejected = true;
+      }
+      assert rejected : "invalid ledger height must fail before dispatch";
+    }
+    assert success.requestCount == 1 : "invalid heights must not dispatch";
+
+    final List<TransportResponse> hostile =
+        List.of(
+            new TransportResponse(
+                201, canonical, "", Map.of("Content-Type", List.of("application/x-norito"))),
+            new TransportResponse(
+                200,
+                canonical,
+                "",
+                Map.of("Content-Type", List.of("application/x-norito; charset=binary"))),
+            new TransportResponse(
+                200,
+                canonical,
+                "",
+                Map.of("Content-Type", List.of("application/x-norito", "application/x-norito"))),
+            new TransportResponse(
+                200,
+                canonical,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/x-norito"),
+                    "Content-Length", List.of("04"))),
+            new TransportResponse(
+                200,
+                canonical,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/x-norito"),
+                    "Content-Length", List.of("5"))),
+            new TransportResponse(
+                200,
+                new byte[0],
+                "",
+                Map.of("Content-Type", List.of("application/x-norito"))));
+    for (final TransportResponse response : hostile) {
+      boolean rejected = false;
+      try {
+        HttpClientTransport.withExecutor(
+                new OneResponseExecutor(response),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build())
+            .getLedgerExecutedBlockWire(1L)
+            .join();
+      } catch (final CompletionException expected) {
+        rejected = true;
+      }
+      assert rejected : "hostile executed-block response must fail closed";
+    }
+
+    final byte[] oversized = new byte[32 * 1024 * 1024 + 1];
+    boolean oversizedRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200,
+                      oversized,
+                      "",
+                      Map.of("Content-Type", List.of("application/x-norito")))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .getLedgerExecutedBlockWire(1L)
+          .join();
+    } catch (final CompletionException expected) {
+      oversizedRejected = true;
+    }
+    assert oversizedRejected : "oversized executed-block wire must fail closed";
+  }
+
+  private static void privacyCapabilitiesAreTypedAndExact() {
+    final byte[] body = privacyCapabilitySnapshotJson().getBytes(StandardCharsets.UTF_8);
+    final OneResponseExecutor executor =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200,
+                body,
+                "ok",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of(Integer.toString(body.length)))));
+    final HttpClientTransport client =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .build());
+    final org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1 snapshot =
+        client.getPrivacyCapabilities().join();
+    assert snapshot.committedHeight.equals(BigInteger.valueOf(42L));
+    assert snapshot.protocols.size() == 12;
+    assert "GET".equals(executor.lastRequest.method());
+    assert "/v1/privacy/capabilities".equals(executor.lastRequest.uri().getRawPath());
+    final List<String> requestAccepts = new ArrayList<>();
+    for (final Map.Entry<String, List<String>> entry :
+        executor.lastRequest.headers().entrySet()) {
+      if (entry.getKey().equalsIgnoreCase("Accept")) {
+        requestAccepts.addAll(entry.getValue());
+      }
+    }
+    assert List.of("application/json").equals(requestAccepts)
+        : "privacy capability request must contain exactly one canonical Accept value";
+    assert Long.valueOf(256L * 1024L).equals(executor.lastRequest.maximumResponseBytes());
+
+    final org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1 withoutContentLength =
+        HttpClientTransport.withExecutor(
+                new OneResponseExecutor(
+                    new TransportResponse(
+                        200,
+                        body,
+                        "ok",
+                        Map.of("Content-Type", List.of("application/json")))),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build())
+            .getPrivacyCapabilities()
+            .join();
+    assert withoutContentLength.committedHeight.equals(BigInteger.valueOf(42L))
+        : "Content-Length is optional when the remaining response is exact";
+
+    for (final String defaultAcceptName : List.of("Accept", "aCcEpT")) {
+      final OneResponseExecutor blockedExecutor =
+          new OneResponseExecutor(
+              new TransportResponse(
+                  200,
+                  body,
+                  "ok",
+                  Map.of("Content-Type", List.of("application/json"))));
+      boolean overrideRejected = false;
+      try {
+        HttpClientTransport.withExecutor(
+                blockedExecutor,
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .putDefaultHeader(defaultAcceptName, "application/json")
+                    .build())
+            .getPrivacyCapabilities();
+      } catch (final IllegalArgumentException expected) {
+        overrideRejected = true;
+      }
+      assert overrideRejected : "default Accept must be rejected case-insensitively";
+      assert blockedExecutor.requestCount == 0 : "invalid default Accept must not dispatch";
+    }
+
+    final String retired =
+        privacyCapabilitySnapshotJson()
+            .replace("zk-ace-pq-authorization-v0", "sis-with-hints");
+    boolean retiredRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200,
+                      retired.getBytes(StandardCharsets.UTF_8),
+                      "",
+                      Map.of("Content-Type", List.of("application/json")))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .getPrivacyCapabilities()
+          .join();
+    } catch (final CompletionException expected) {
+      retiredRejected = true;
+    }
+    assert retiredRejected : "retired privacy labels must fail closed";
+
+    final String bodyLength = Integer.toString(body.length);
+    final Map<String, List<String>> caseFoldedDuplicateContentType = new LinkedHashMap<>();
+    caseFoldedDuplicateContentType.put("Content-Type", List.of("application/json"));
+    caseFoldedDuplicateContentType.put("content-type", List.of("application/json"));
+    final Map<String, List<String>> caseFoldedDuplicateContentLength = new LinkedHashMap<>();
+    caseFoldedDuplicateContentLength.put("Content-Type", List.of("application/json"));
+    caseFoldedDuplicateContentLength.put("Content-Length", List.of(bodyLength));
+    caseFoldedDuplicateContentLength.put("content-length", List.of(bodyLength));
+    final List<TransportResponse> hostileResponses =
+        List.of(
+            new TransportResponse(
+                201, body, "", Map.of("Content-Type", List.of("application/json"))),
+            new TransportResponse(200, body, "", Map.of()),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of("Content-Type", List.of("application/json; charset=utf-8"))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of("Content-Type", List.of("Application/Json"))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json", "application/json"))),
+            new TransportResponse(200, body, "", caseFoldedDuplicateContentType),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of(bodyLength, bodyLength))),
+            new TransportResponse(200, body, "", caseFoldedDuplicateContentLength),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("0"))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("0" + bodyLength))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("+" + bodyLength))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of(bodyLength + " "))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("9".repeat(4096)))),
+            new TransportResponse(
+                200,
+                new byte[0],
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("0"))));
+    for (final TransportResponse hostileResponse : hostileResponses) {
+      assertPrivacyCapabilitiesResponseRejected(hostileResponse);
+    }
+
+    assertPrivacyCapabilitiesResponseRejected(
+        new TransportResponse(
+            200,
+            new byte[256 * 1024 + 1],
+            "",
+            Map.of("Content-Type", List.of("application/json"))));
+  }
+
+  private static void assertPrivacyCapabilitiesResponseRejected(
+      final TransportResponse response) {
+    boolean rejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(response),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .getPrivacyCapabilities()
+          .join();
+    } catch (final CompletionException expected) {
+      rejected = true;
+    }
+    assert rejected : "hostile privacy capability response must fail closed";
+  }
+
+  private static String privacyCapabilitySnapshotJson() {
+    final StringBuilder rows = new StringBuilder();
+    for (final org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 protocol :
+        org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.values()) {
+      if (rows.length() != 0) {
+        rows.append(',');
+      }
+      rows.append("{\"protocol_id\":{\"protocol\":\"")
+          .append(protocol.getCanonicalLabel())
+          .append(
+              "\",\"value\":null},\"compiled_profile\":{\"status\":\"unavailable\","
+                  + "\"value\":{\"reason\":\"engine-unavailable\",\"detail\":null}},"
+                  + "\"activation\":null}");
+    }
+    return "{\"version\":1,\"committed_height\":42,\"consensus_policy\":{"
+        + "\"current_limits\":{"
+        + "\"max_actions_per_transaction\":1,\"max_actions_per_block\":2,"
+        + "\"max_proof_bytes_per_action\":9437184,\"max_action_bytes\":9437184,"
+        + "\"max_privacy_bytes_per_transaction\":9437184,"
+        + "\"max_privacy_bytes_per_block\":18874368,"
+        + "\"max_statement_and_encrypted_output_bytes_per_transaction\":262144,"
+        + "\"max_nullifiers_per_action\":8,\"max_commitments_per_action\":8,"
+        + "\"retained_root_count\":2048},\"pending_tightening\":null},"
+        + "\"protocols\":["
+        + rows
+        + "]}";
   }
 
   private static void submitQueuesTransactionsWhenOffline() throws Exception {
@@ -2261,15 +2608,26 @@ public final class HttpClientTransportTests {
             + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
             + "\"mtu_bytes\":1280,"
             + "\"display_billing_label\":\"standard XOR\","
-            + "\"fee_asset_id\":\"xor#universal.universal\","
-            + "\"escrow_account_id\":\"sorauEscrow\","
-            + "\"operator_account_id\":\"sorauOperator\","
+            + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
             + "\"lease_fee\":\"1000000.25\","
             + "\"settlement_grace_secs\":120,"
             + "\"flow_label_bits\":24,"
             + "\"padding_budget_ms\":15,"
+            + "\"relay_id_hex\":\""
+            + VALID_ED25519_PUBLIC_KEY_HEX
+            + "\","
+            + "\"descriptor_commit_hex\":\""
+            + "cd".repeat(32)
+            + "\","
+            + "\"tls_server_name\":\"relay.example\","
             + "\"relay_tls_spki_sha256_hex\":\""
             + "ab".repeat(32)
+            + "\","
+            + "\"relay_certificate_sha256_hex\":\""
+            + "ef".repeat(32)
+            + "\","
+            + "\"directory_snapshot_digest_hex\":\""
+            + "42".repeat(32)
             + "\""
             + "}";
     final StubResponseExecutor executor =
@@ -2282,13 +2640,19 @@ public final class HttpClientTransportTests {
     final VpnProfile profile = transport.getVpnProfile().join();
 
     assert profile.available() : "VPN profile should be available";
-    assert "xor#universal.universal".equals(profile.feeAssetId()) : "VPN fee asset mismatch";
-    assert "sorauEscrow".equals(profile.escrowAccountId()) : "VPN escrow account mismatch";
-    assert "sorauOperator".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
+    assert "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
     assert "1000000.25".equals(profile.leaseFee()) : "VPN lease fee mismatch";
     assert profile.dnsPushIntervalSecs() == 60L : "VPN DNS push interval mismatch";
     assert profile.settlementGraceSecs() == 120L : "VPN settlement grace mismatch";
+    assert VALID_ED25519_PUBLIC_KEY_HEX.equals(profile.relayIdHex()) : "VPN relay id mismatch";
+    assert "cd".repeat(32).equals(profile.descriptorCommitHex())
+        : "VPN descriptor digest mismatch";
+    assert "relay.example".equals(profile.tlsServerName()) : "VPN TLS SNI mismatch";
     assert "ab".repeat(32).equals(profile.relayTlsSpkiSha256Hex()) : "VPN TLS pin mismatch";
+    assert "ef".repeat(32).equals(profile.relayCertificateSha256Hex())
+        : "VPN certificate digest mismatch";
+    assert "42".repeat(32).equals(profile.directorySnapshotDigestHex())
+        : "VPN directory snapshot digest mismatch";
     assert "GET".equals(executor.lastRequest().method()) : "VPN profile must use GET";
     assert executor.lastRequest().uri().toString().equals("https://torii.example/v1/vpn/profile")
         : "VPN profile URI mismatch";
@@ -2317,6 +2681,57 @@ public final class HttpClientTransportTests {
                 json.replace("ab".repeat(32), "AB".repeat(32))
                     .getBytes(StandardCharsets.UTF_8)),
         "VPN profile parser must reject uppercase TLS pins");
+  }
+
+  private static void vpnProfileRequiresHttpsAndValidatesAvailabilityBoundTrustTuple() {
+    final StubResponseExecutor insecureExecutor =
+        new StubResponseExecutor(200, vpnProfileJson().getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport insecureTransport =
+        HttpClientTransport.withExecutor(
+            insecureExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("http://torii.example")).build());
+    expectRuntimeException(
+        insecureTransport::getVpnProfile,
+        "VPN profile must reject insecure transport before dispatch");
+    assert insecureExecutor.lastRequest() == null : "insecure VPN request reached dispatch";
+
+    final Map<String, Object> unavailable = vpnJsonObject(vpnProfileJson());
+    unavailable.put("available", Boolean.FALSE);
+    for (final String field :
+        List.of(
+            "relay_endpoint",
+            "relay_id_hex",
+            "descriptor_commit_hex",
+            "tls_server_name",
+            "relay_tls_spki_sha256_hex",
+            "relay_certificate_sha256_hex",
+            "directory_snapshot_digest_hex")) {
+      unavailable.put(field, "");
+    }
+    final VpnProfile unavailableProfile =
+        VpnJsonParser.parseProfile(
+            JsonEncoder.encode(unavailable).getBytes(StandardCharsets.UTF_8));
+    assert !unavailableProfile.available();
+    assert unavailableProfile.relayEndpoint().isEmpty();
+    assert unavailableProfile.relayIdHex().isEmpty();
+
+    final Object[][] invalidValues = {
+      {"relay_id_hex", "00".repeat(32)},
+      {"descriptor_commit_hex", "00".repeat(32)},
+      {"descriptor_commit_hex", "0x" + "cd".repeat(32)},
+      {"tls_server_name", "Relay.Example"},
+      {"tls_server_name", "-relay.example"},
+      {"relay_endpoint", "/dns4/Relay.Example/udp/443/quic"},
+      {"relay_endpoint", "/dns4/relay.example/udp/0443/quic"},
+      {"relay_endpoint", "/dns4/relay.example/tcp/443/quic"}
+    };
+    for (final Object[] invalid : invalidValues) {
+      expectRuntimeException(
+          () ->
+              VpnJsonParser.parseProfile(
+                  vpnJsonWithField(vpnProfileJson(), (String) invalid[0], invalid[1])),
+          "VPN profile parser accepted malformed trust tuple field " + invalid[0]);
+    }
   }
 
   private static void vpnSessionParserRejectsNonCanonicalHelperTicketHex() {
@@ -2451,7 +2866,6 @@ public final class HttpClientTransportTests {
                     vpnJsonWithoutField(profile, "relay_tls_spki_sha256_hex")),
             () ->
                 VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "open_lease_instruction")),
-            () -> VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "tx_instructions")),
             () -> VpnJsonParser.parseSession(vpnJsonWithoutField(session, "route_pushes")),
             () ->
                 VpnJsonParser.parseReceipt(
@@ -2483,13 +2897,11 @@ public final class HttpClientTransportTests {
           "VPN profile parser must reject invalid " + violation[0]);
     }
 
-    final Object instruction = vpnJsonObject(quote).get("open_lease_instruction");
-    for (final List<Object> instructions :
-        List.of(Collections.emptyList(), List.of(instruction, instruction))) {
-      expectRuntimeException(
-          () -> VpnJsonParser.parseQuote(vpnJsonWithField(quote, "tx_instructions", instructions)),
-          "VPN quote parser must require exactly one transaction instruction");
-    }
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseQuote(
+                vpnJsonWithField(quote, "tx_instructions", Collections.emptyList())),
+        "VPN quote parser must reject the retired transaction instruction array");
     expectRuntimeException(
         () -> VpnJsonParser.parseSession(vpnJsonWithField(session, "status", "settled")),
         "VPN session parser must require active status");
@@ -2499,16 +2911,11 @@ public final class HttpClientTransportTests {
     expectRuntimeException(
         () -> VpnJsonParser.parseReceipt(vpnJsonWithField(receipt, "receipt_source", "operator")),
         "VPN receipt parser must reject unknown receipt sources");
-    final Map<String, Object> receiptInstruction =
-        Map.of("wire_id", "SettleVpnLease", "payload_hex", "abcd");
     expectRuntimeException(
         () ->
             VpnJsonParser.parseReceipt(
-                vpnJsonWithField(
-                    receipt,
-                    "tx_instructions",
-                    List.of(receiptInstruction, receiptInstruction))),
-        "VPN receipt parser must allow at most one transaction instruction");
+                vpnJsonWithField(receipt, "tx_instructions", Collections.emptyList())),
+        "VPN receipt parser must reject the retired transaction instruction array");
 
     final Map<String, Object> receiptObject = vpnJsonObject(receipt);
     expectRuntimeException(
@@ -2629,7 +3036,6 @@ public final class HttpClientTransportTests {
     assert quote.openLeaseInstruction() != null : "VPN quote must include open lease instruction";
     assert "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow"
         .equals(quote.openLeaseInstruction().wireId()) : "Open lease wire id mismatch";
-    assert quote.txInstructions().size() == 1 : "VPN quote should have one native instruction";
 
     final TransportRequest request = executor.lastRequest();
     assert "POST".equals(request.method()) : "VPN quote must use POST";
@@ -3382,7 +3788,7 @@ public final class HttpClientTransportTests {
 
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     final String signingMessageB64 = Base64.getEncoder().encodeToString(new byte[32]);
     final StubResponseExecutor executor =
         new StubResponseExecutor(
@@ -3917,7 +4323,7 @@ public final class HttpClientTransportTests {
       transport.prepareContractCall(
           "alice",
           feePayment(5000L),
-          "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           "router::universal",
           "contribute",
           null);
@@ -3960,7 +4366,7 @@ public final class HttpClientTransportTests {
 
   private static void governanceContractRequestParsesResponse() {
     final String contractAddress =
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
@@ -6187,15 +6593,26 @@ public final class HttpClientTransportTests {
         + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
         + "\"mtu_bytes\":1280,"
         + "\"display_billing_label\":\"standard XOR\","
-        + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"settlement_grace_secs\":120,"
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
+        + "\"relay_id_hex\":\""
+        + VALID_ED25519_PUBLIC_KEY_HEX
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
         + "\"relay_tls_spki_sha256_hex\":\""
         + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
         + "\""
         + "}";
   }
@@ -6216,8 +6633,8 @@ public final class HttpClientTransportTests {
         + "\"lease_secs\":600,"
         + "\"quote_expires_at_ms\":1700000600000,"
         + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"route_pushes\":[\"0.0.0.0/0\"],"
         + "\"excluded_routes\":[],"
@@ -6227,16 +6644,26 @@ public final class HttpClientTransportTests {
         + "\"meter_family\":\"soranet.vpn.standard\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
+        + "\"relay_id_hex\":\""
+        + meteringKey
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
         + "\"relay_tls_spki_sha256_hex\":\""
         + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
         + "\",\"metering_public_key_hex\":\""
         + meteringKey
         + "\",\"open_lease_instruction\":{"
         + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
-        + "\"payload_hex\":\"cafe\"},"
-        + "\"tx_instructions\":[{"
-        + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
-        + "\"payload_hex\":\"cafe\"}]"
+        + "\"payload_hex\":\"cafe\"}"
         + "}";
   }
 
@@ -6258,13 +6685,26 @@ public final class HttpClientTransportTests {
         + "\",\"payment_tx_hash\":\""
         + paymentTxHash
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
+        + "\"relay_id_hex\":\""
+        + VALID_ED25519_PUBLIC_KEY_HEX
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
         + "\"relay_tls_spki_sha256_hex\":\""
         + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
         + "\",\"route_pushes\":[\"0.0.0.0/0\"],"
         + "\"excluded_routes\":[],"
         + "\"dns_servers\":[\"1.1.1.1\"],"
@@ -6289,11 +6729,8 @@ public final class HttpClientTransportTests {
         settled
             ? ",\"settle_lease_instruction\":{"
                 + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
-                + "\"payload_hex\":\"f00d\"},"
-                + "\"tx_instructions\":[{"
-                + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
-                + "\"payload_hex\":\"f00d\"}]"
-            : ",\"settle_lease_instruction\":null,\"tx_instructions\":[]";
+                + "\"payload_hex\":\"f00d\"}"
+            : ",\"settle_lease_instruction\":null";
     return "{"
         + "\"session_id\":\""
         + sessionId
@@ -6315,8 +6752,8 @@ public final class HttpClientTransportTests {
         + "\",\"payment_tx_hash\":\""
         + paymentTxHash
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"earned_fee\":\""
         + earned
@@ -6537,6 +6974,23 @@ public final class HttpClientTransportTests {
 
     TransportRequest lastRequest() {
       return lastRequest;
+    }
+  }
+
+  private static final class OneResponseExecutor implements HttpTransportExecutor {
+    private final TransportResponse response;
+    private TransportRequest lastRequest;
+    private int requestCount;
+
+    private OneResponseExecutor(final TransportResponse response) {
+      this.response = Objects.requireNonNull(response, "response");
+    }
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      lastRequest = Objects.requireNonNull(request, "request");
+      requestCount++;
+      return CompletableFuture.completedFuture(response);
     }
   }
 

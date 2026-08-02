@@ -49,12 +49,18 @@ async fn multiple_blocks_created() -> Result<()> {
     let create_domain = domain_setup_instruction(&domain_id, &submit_client.account)?;
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new(account_id.clone()));
-    let asset_definition_id: AssetDefinitionId =
-        AssetDefinitionId::new(DomainId::try_new("domain", "universal")?, "xor".parse()?);
+    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("domain", "universal")?,
+        "xor".parse()?,
+    );
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::numeric(
+            __asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     });
 
     {

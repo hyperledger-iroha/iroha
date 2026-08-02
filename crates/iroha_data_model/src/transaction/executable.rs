@@ -891,7 +891,7 @@ mod tests {
         );
         assert!(
             Executable::ContractCall(ContractInvocation {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                     .parse()
                     .expect("contract address"),
                 expected_code_hash: iroha_crypto::Hash::new(b"ping-contract-code"),
@@ -911,7 +911,7 @@ mod tests {
 
         let mixed_batch = Executable::Batch(
             vec![ExecutableBatchItem::ContractCall(ContractInvocation {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                     .parse()
                     .expect("contract address"),
                 expected_code_hash: iroha_crypto::Hash::new(b"batch-contract-code"),
@@ -928,7 +928,7 @@ mod tests {
         let first: InstructionBox = crate::isi::Log::new(crate::Level::INFO, "first".into()).into();
         let last: InstructionBox = crate::isi::Log::new(crate::Level::INFO, "last".into()).into();
         let invocation = ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: iroha_crypto::Hash::new(b"ordered-batch-contract"),
@@ -1013,7 +1013,7 @@ mod tests {
     fn containing_contract_invocation_uses_fallible_bounded_decode() {
         let record_bytes = [1_u8, 2, 3, 4];
         let invocation = ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: iroha_crypto::Hash::new(b"call-contract-code"),
@@ -1144,7 +1144,7 @@ mod tests {
         assert_eq!(ivm_executable, deserialized);
 
         let contract_call_executable = Executable::ContractCall(ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: iroha_crypto::Hash::new(b"contribute-contract-code"),
@@ -1188,7 +1188,7 @@ mod tests {
                 ),
                 ExecutableBatchItem::ContractCall(ContractInvocation {
                     contract_address:
-                        "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                        "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                             .parse()
                             .expect("contract address"),
                     expected_code_hash: iroha_crypto::Hash::new(b"json-batch-contract"),

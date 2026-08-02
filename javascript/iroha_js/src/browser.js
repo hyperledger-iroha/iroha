@@ -8,6 +8,14 @@ export {
 } from "./address.js";
 
 export {
+  AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
+  verifyAuthenticatedBlockProofsV1,
+} from "./authenticatedBlockProofs.browser.js";
+
+export {
   buildMintAssetInstruction,
   buildSetAssetTransferAvailabilityInstruction,
   buildTransferAssetInstruction,
@@ -107,6 +115,20 @@ export {
   ToriiBrowserClient as ToriiClient,
   ToriiBrowserHttpError as ToriiHttpError,
 } from "./toriiBrowserClient.js";
+
+export {
+  BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,
+  BOOTLE_LANTERN_ISSUANCE_ISSUE_PATH_V1,
+  BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1,
+  BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1,
+  BOOTLE_LANTERN_ISSUE_REQUEST_BYTES_V1,
+  BOOTLE_LANTERN_ISSUE_RESPONSE_BYTES_V1,
+  BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1,
+  BOOTLE_LANTERN_ISSUANCE_ERROR_RESPONSE_MAX_BYTES_V1,
+  BootleLanternIssuanceCredentialV1,
+  BootleLanternIssuanceClientErrorV1,
+  BootleLanternIssuanceClientV1,
+} from "./bootleLanternIssuance.js";
 
 export {
   KAGEMUSHA_CASH_HANDOFF_CAPABILITY,

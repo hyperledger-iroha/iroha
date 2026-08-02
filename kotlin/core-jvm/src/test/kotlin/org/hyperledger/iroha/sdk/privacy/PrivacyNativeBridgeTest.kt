@@ -15,6 +15,34 @@ class PrivacyNativeBridgeTest {
     private val typedEnvelopeRows = matrix.filter { it.first() == "typed-envelope" }
     private val retired = matrix.filter { it.first() == "retired" }.map { it[1] }
     private val expected = protocolRows.map { it[2] }
+    private val expectedProofSystems = listOf(
+        PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+        PrivacyProofSystemIdV1.ANONYMOUS_PGC_P256,
+        PrivacyProofSystemIdV1.IROHA_VERANGE_P256,
+        PrivacyProofSystemIdV1.ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255_SHA3_512,
+        PrivacyProofSystemIdV1.VEGA_NEUTRON_NOVA_SPARTAN_HYRAX_T256,
+        PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+        PrivacyProofSystemIdV1.JINDO_POLYNOMIAL_COMMITMENT,
+        PrivacyProofSystemIdV1.LANTERN_LNP22_MODULE_LINEAR_NORM,
+        PrivacyProofSystemIdV1.HALO2_IPA_PASTA,
+        PrivacyProofSystemIdV1.FCMP_PLUS_PLUS_CURVE_TREE_BULLETPROOFS,
+        PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+        PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+    )
+    private val expectedEngines = listOf(
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+        PrivacyEngineIdV1.NATIVE_ANONYMOUS_PGC_P256,
+        PrivacyEngineIdV1.NATIVE_VERANGE_P256,
+        PrivacyEngineIdV1.NATIVE_ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255,
+        PrivacyEngineIdV1.NATIVE_VEGA,
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+        PrivacyEngineIdV1.NATIVE_JINDO,
+        PrivacyEngineIdV1.NATIVE_LANTERN_LNP22,
+        PrivacyEngineIdV1.NATIVE_HALO2_ORCHARD,
+        PrivacyEngineIdV1.NATIVE_FCMP_PLUS_PLUS,
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+    )
 
     @Test
     fun exactClosedRegistryIsStable() {
@@ -22,10 +50,13 @@ class PrivacyNativeBridgeTest {
         assertEquals(expected, PrivacyNativeBridge.protocolsV1().map { it.canonicalLabel })
         assertEquals(12, PrivacyNativeBridge.protocolsV1().size)
         expected.forEachIndexed { index, label ->
+            val protocol = PrivacyNativeBridge.protocolsV1()[index]
             assertEquals(
-                PrivacyNativeBridge.protocolsV1()[index],
-                PrivacyNativeBridge.ProtocolIdV1.fromCanonicalLabel(label),
+                protocol,
+                PrivacyProtocolIdV1.fromCanonicalLabel(label),
             )
+            assertEquals(expectedProofSystems[index], protocol.expectedProofSystem)
+            assertEquals(expectedEngines[index], protocol.expectedEngine)
         }
     }
 
@@ -76,7 +107,7 @@ class PrivacyNativeBridgeTest {
                 )
         ).forEach { rejected ->
             assertFailsWith<IllegalArgumentException> {
-                PrivacyNativeBridge.ProtocolIdV1.fromCanonicalLabel(rejected)
+                PrivacyProtocolIdV1.fromCanonicalLabel(rejected)
             }
         }
     }
@@ -176,6 +207,12 @@ class PrivacyNativeBridgeTest {
             PrivacyNativeBridge.validateCompiledProfileCatalogV1(canonical),
         )
         assertContentEquals(canonical, PrivacyNativeBridge.compiledProfileCatalogV1())
+        val typed = PrivacyNativeBridge.compiledProfileCatalogTypedV1()
+        assertEquals(12, typed.protocols.size)
+        assertContentEquals(
+            canonical,
+            PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(typed),
+        )
 
         listOf(
             canonical.copyOfRange(0, canonical.size - 1),

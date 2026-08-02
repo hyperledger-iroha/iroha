@@ -229,14 +229,12 @@ pub mod isi {
                 .world
                 .replace_asset_definition_owner_index(&object, &source, &destination);
 
-            state_transaction
-                .world
-                .emit_events(Some(AssetDefinitionEvent::OwnerChanged(
-                    AssetDefinitionOwnerChanged {
-                        asset_definition: object,
-                        new_owner: destination,
-                    },
-                )));
+            state_transaction.world.emit_asset_definition_event(
+                AssetDefinitionEvent::OwnerChanged(AssetDefinitionOwnerChanged {
+                    asset_definition: object,
+                    new_owner: destination,
+                }),
+            );
 
             Ok(())
         }
@@ -793,6 +791,17 @@ pub mod isi {
             let account_id = self.destination().clone();
             let permission = self.object().clone();
 
+            if !crate::alias::asset_definition_alias_permission_targets_active_binding(
+                &state_transaction.world,
+                &permission,
+                state_transaction.block_unix_timestamp_ms(),
+            ) {
+                return Err(Error::InvariantViolation(
+                    "exact asset-definition alias permission does not target its current live binding"
+                        .into(),
+                ));
+            }
+
             if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                 state_transaction,
                 &permission,
@@ -1015,12 +1024,17 @@ pub mod isi {
         fn cannot_forbid_minting_on_asset_mintable_infinitely() -> Result<(), ParseError> {
             let (authority, _authority_keypair) = gen_account_in("wonderland");
             let mut definition = {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("hello", "universal")?,
-                    "test".parse()?,
-                );
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                let __asset_definition_id =
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("hello", "universal")?,
+                        "test".parse()?,
+                    );
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "test".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(&authority);
             assert!(super::forbid_minting(&mut definition).is_err());
@@ -2362,14 +2376,19 @@ pub mod query {
                 .unwrap();
 
             // Register asset definition and mint zero to acc1, one to acc2
-            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "test_coin".parse().unwrap(),
-            );
+            let ad: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "test_coin".parse().unwrap(),
+                );
             Register::asset_definition({
                 let __asset_definition_id = ad.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "test_coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -2420,11 +2439,18 @@ pub mod query {
                 .add_account_permission(&account_id, Permission::from(CanManagePeers));
 
             let asset_definition_id =
-                iroha_data_model::asset::AssetDefinitionId::new(domain_id, "rose".parse().unwrap());
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    domain_id,
+                    "rose".parse().unwrap(),
+                );
             Register::asset_definition({
                 let __asset_definition_id = asset_definition_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -3233,14 +3259,19 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "test_coin".parse().unwrap(),
-            );
+            let ad: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "test_coin".parse().unwrap(),
+                );
             Register::asset_definition({
                 let __asset_definition_id = ad.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "test_coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -3296,19 +3327,27 @@ pub mod query {
                     .unwrap();
             }
 
-            let definition_id = AssetDefinitionId::new(domain_id, "test_coin".parse().unwrap());
+            let definition_id =
+                AssetDefinitionId::derive_from_components(domain_id, "test_coin".parse().unwrap());
             Register::asset_definition({
                 let definition_id = definition_id.clone();
-                AssetDefinition::numeric(definition_id.clone())
-                    .with_name(definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    definition_id.clone(),
+                    "test_coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
             let zero_asset_id = AssetId::new(definition_id.clone(), zero_holder);
-            stx.world
-                .deposit_numeric_asset(&zero_asset_id, &Quantity::zero())
-                .expect("zero placeholder inserted");
+            crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                &mut stx.world,
+                &zero_asset_id,
+                &Quantity::zero(),
+            )
+            .expect("zero placeholder inserted");
             Mint::asset_quantity(
                 1u32,
                 AssetId::new(definition_id.clone(), nonzero_holder.clone()),
@@ -3365,14 +3404,19 @@ pub mod query {
                 &alias_in_domain("merchant", &oasis_id),
             );
 
-            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                wonderland_id.clone(),
-                "test_coin".parse().unwrap(),
-            );
+            let ad: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    wonderland_id.clone(),
+                    "test_coin".parse().unwrap(),
+                );
             Register::asset_definition({
                 let __asset_definition_id = ad.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "test_coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -3423,14 +3467,19 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "test_coin".parse().unwrap(),
-            );
+            let ad: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "test_coin".parse().unwrap(),
+                );
             Register::asset_definition({
                 let __asset_definition_id = ad.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "test_coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -3483,14 +3532,19 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "test_coin".parse().unwrap(),
-            );
+            let ad: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "test_coin".parse().unwrap(),
+                );
             Register::asset_definition({
                 let __asset_definition_id = ad.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "test_coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -3540,14 +3594,19 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "test_coin".parse().unwrap(),
-            );
+            let ad: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "test_coin".parse().unwrap(),
+                );
             Register::asset_definition({
                 let __asset_definition_id = ad.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "test_coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -3911,14 +3970,18 @@ pub mod query {
                 .unwrap();
 
             let asset_definition: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 );
             Register::asset_definition({
                 let __asset_definition_id = asset_definition.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "bond".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -3978,14 +4041,18 @@ pub mod query {
                 .unwrap();
 
             let asset_definition: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 );
             Register::asset_definition({
                 let __asset_definition_id = asset_definition.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "bond".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();

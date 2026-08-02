@@ -188,7 +188,13 @@ Decode helpers return structured errors instead of panicking in common malformed
 - `InvalidUtf8`, `InvalidTag`, `InvalidNonZero` — malformed value encodings
 - `DecodePanic` — when `strict-safe` is enabled, panics inside `try_deserialize` are caught and mapped to this error
 
-Top-level helpers (`decode_from_bytes`, `decode_from_reader`) validate the header and checksum and scope decode flags before reconstructing the value.
+Top-level helpers validate the header and checksum and scope decode flags before
+reconstructing the value. `decode_from_bytes` also installs a resource budget
+derived from the complete frame length. Use `decode_from_bytes_with_limits` for
+narrower schema limits or a larger finite budget for trusted high-compression
+data. Untrusted streaming readers must use `decode_from_reader_with_limits`
+because a generic reader does not expose the complete encoded frame length from
+which to derive the byte-slice default.
 
 ## CRC64-XZ (ECMA-182)
 

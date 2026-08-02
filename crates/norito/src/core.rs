@@ -8889,8 +8889,18 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
     })
 }
 
-/// Convenience: decode a value of `T` directly from bytes via archive view.
+/// Decode a value of `T` directly from bytes via an archive view under a
+/// payload-derived resource budget.
 pub fn decode_from_bytes<'a, T>(bytes: &'a [u8]) -> Result<T, Error>
+where
+    T: crate::NoritoDeserialize<'a> + DecodeFromSlice<'a> + 'a,
+{
+    with_decode_limits(crate::canonical_decode_limits(bytes.len()), || {
+        decode_from_bytes_inner(bytes)
+    })
+}
+
+fn decode_from_bytes_inner<'a, T>(bytes: &'a [u8]) -> Result<T, Error>
 where
     T: crate::NoritoDeserialize<'a> + DecodeFromSlice<'a> + 'a,
 {
@@ -8935,6 +8945,8 @@ where
 
 /// Strict-safe slice decode with an explicit resource budget.
 ///
+/// This enters the private decoder directly, allowing a caller to select a
+/// larger, still-finite budget without inheriting the payload-derived default.
 /// Nested calls cannot relax a limit already active in the calling decode
 /// scope.
 ///
@@ -8948,7 +8960,7 @@ pub fn decode_from_bytes_with_limits<'a, T>(
 where
     T: crate::NoritoDeserialize<'a> + DecodeFromSlice<'a> + 'a,
 {
-    with_decode_limits(limits, || decode_from_bytes(bytes))
+    with_decode_limits(limits, || decode_from_bytes_inner(bytes))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

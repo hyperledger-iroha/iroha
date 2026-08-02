@@ -26,6 +26,13 @@ import urllib.parse
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
+try:
+    from scripts import taira_constants
+except ModuleNotFoundError as error:
+    if error.name != "scripts":
+        raise
+    import taira_constants
+
 
 EVIDENCE_SCHEMA = "sccp-release-evidence-v1"
 BUNDLE_SCHEMA = "sccp-release-bundle-v1"
@@ -149,7 +156,7 @@ PROFILE_ORDER = (
     "tron-mainnet",
 )
 
-HUB_CHAIN_IDS = {"sora-taira": "fc56984b-2be7-431d-840e-21514d1883f0"}
+HUB_CHAIN_IDS = {"sora-taira": taira_constants.CHAIN_ID}
 SORA_TAIRA_HISTORICAL_SUMERAGI_PROTOCOL_VERSION = 3
 SORA_TAIRA_CURRENT_SUMERAGI_PROTOCOL_VERSION = 4
 # Preserve the signed revision-3 release fixtures that import this name.

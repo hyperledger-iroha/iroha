@@ -4,8 +4,6 @@ use core::num::NonZeroUsize;
 
 use super::*;
 #[cfg(feature = "goldilocks_backend")]
-use crate::backend::IpaGroup;
-#[cfg(feature = "goldilocks_backend")]
 use crate::backend::goldilocks::{self as gold, GoldilocksBackend};
 use crate::{
     PolyOpenTranscriptMetadata,
@@ -157,12 +155,7 @@ fn params_power_of_two() {
 #[test]
 fn polynomial_transcript_binds_the_complete_parameter_set() {
     let canonical = pallas::Params::new(8).expect("canonical parameters");
-    let mut custom_g = canonical.g().to_vec();
-    let mut custom_h = canonical.h().to_vec();
-    custom_g.rotate_left(1);
-    custom_h.rotate_right(1);
-    let custom = pallas::Params::from_generators(8, custom_g, custom_h, canonical.u())
-        .expect("valid points");
+    let custom = canonical.with_rotated_generators_for_test();
     let z = pallas::Scalar::from(3_u64);
     let t = pallas::Scalar::from(5_u64);
     let commitment = canonical.g()[0];
@@ -418,9 +411,6 @@ fn standalone_norito_decoders_are_bounded_exact_and_alignment_safe() {
         version: 1,
         curve_id: ZkCurveId::Pallas.as_u16(),
         n: 1,
-        g: vec![[1; 32]],
-        h: vec![[2; 32]],
-        u: [3; 32],
     };
     assert_checked_bare_decoder(&params.encode_bytes(), IpaParams::decode_bytes);
 
@@ -445,8 +435,29 @@ fn standalone_norito_decoders_are_bounded_exact_and_alignment_safe() {
 }
 
 #[test]
-fn standalone_params_decoder_rejects_forged_generator_count_before_allocation() {
-    let params = IpaParams {
+fn standalone_params_wire_never_carries_generator_material() {
+    #[derive(norito::derive::NoritoSerialize)]
+    struct RetiredInlineParams {
+        version: u16,
+        curve_id: u16,
+        n: u32,
+        g: Vec<[u8; 32]>,
+        h: Vec<[u8; 32]>,
+        u: [u8; 32],
+    }
+
+    let small = IpaParams {
+        version: 1,
+        curve_id: ZkCurveId::Pallas.as_u16(),
+        n: 1,
+    };
+    let large = IpaParams {
+        n: 1 << OpenVerifyLimits::DEFAULT_MAX_K,
+        ..small
+    };
+    assert_eq!(small.encode_bytes().len(), large.encode_bytes().len());
+
+    let retired = RetiredInlineParams {
         version: 1,
         curve_id: ZkCurveId::Pallas.as_u16(),
         n: 1,
@@ -454,30 +465,11 @@ fn standalone_params_decoder_rejects_forged_generator_count_before_allocation() 
         h: vec![[2; 32]],
         u: [3; 32],
     };
-    let mut bytes = params.encode_bytes();
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let mut offset = 0;
-    for _ in 0..3 {
-        let (field_len, header_len) =
-            norito::core::read_len_dyn_slice(&bytes[offset..]).expect("fixed field frame");
-        offset += header_len + field_len;
-    }
-    let (g_len, g_header_len) =
-        norito::core::read_len_dyn_slice(&bytes[offset..]).expect("generator vector frame");
-    let g_start = offset + g_header_len;
-    assert!(g_len >= core::mem::size_of::<u64>());
-    bytes[g_start..g_start + core::mem::size_of::<u64>()].copy_from_slice(&u64::MAX.to_le_bytes());
-    drop(_flags);
-
-    let error = IpaParams::decode_bytes(&bytes)
-        .expect_err("forged generator count must be rejected before allocation");
-
-    assert!(matches!(
-        error,
-        norito::Error::SequenceLengthExceeded { .. }
-            | norito::Error::TotalElementsExceeded { .. }
-            | norito::Error::TotalAllocationExceeded { .. }
-    ));
+    let mut retired_bytes = Vec::new();
+    norito::core::serialize_to_buffer(&retired, &mut retired_bytes)
+        .expect("retired inline parameter fixture must encode");
+    IpaParams::decode_bytes(&retired_bytes)
+        .expect_err("the canonical selector wire must reject inline generators");
 }
 
 #[cfg(feature = "goldilocks_backend")]
@@ -513,85 +505,21 @@ fn norito_roundtrip_params_and_proof_goldilocks() {
 }
 
 #[test]
-fn params_from_wire_rejects_tampered_pallas_generators() {
-    let params = pallas::Params::new(8).unwrap();
-    let mut wire = nh::params_to_wire(&params);
-    wire.g[0] = pallas::Group::identity().to_bytes();
-    let err = nh::params_from_wire::<PallasBackend>(&wire).unwrap_err();
-    assert!(matches!(err, Error::InvalidGenerator { kind: "G", .. }));
-}
-
-#[test]
-fn params_from_wire_rejects_structurally_valid_noncanonical_generators() {
-    let params = pallas::Params::new(8).unwrap();
-    let mut wire = nh::params_to_wire(&params);
-    wire.g.rotate_left(1);
-    wire.h.rotate_right(1);
-
-    let err = nh::params_from_wire::<PallasBackend>(&wire).unwrap_err();
-    assert!(matches!(err, Error::UnknownParams));
-}
-
-#[test]
-fn params_from_wire_rejects_bad_generator_lengths_before_curve_decoding() {
-    let params = pallas::Params::new(8).unwrap();
-    let mut wire = nh::params_to_wire(&params);
-    wire.g.pop();
-    let err = nh::params_from_wire::<PallasBackend>(&wire).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::DimensionMismatch {
-            expected: 8,
-            actual: 7
-        }
-    ));
-}
-
-#[test]
-fn params_registry_rejects_noncanonical_sets_without_cache_pollution() {
-    let _guard = PARAMS_REGISTRY_TEST_LOCK.lock().unwrap();
-    crate::params::clear_params_registry_for_tests();
-
-    let base = pallas::Params::new(8).unwrap();
-    let canonical = nh::params_to_wire(&base);
-    nh::params_from_wire::<PallasBackend>(&canonical).unwrap();
-    assert_eq!(crate::params::params_registry_len_for_tests(), 1);
-
-    let mut noncanonical = canonical;
-    noncanonical.g.rotate_left(1);
-    noncanonical.h.rotate_right(1);
-    assert!(matches!(
-        nh::params_from_wire::<PallasBackend>(&noncanonical),
-        Err(Error::UnknownParams)
-    ));
-    assert_eq!(
-        crate::params::params_registry_len_for_tests(),
-        1,
-        "rejected generator sets must not enter the cache"
-    );
-
-    crate::params::clear_params_registry_for_tests();
-}
-
-#[test]
 fn params_registry_keys_include_backend_curve() {
     let _guard = PARAMS_REGISTRY_TEST_LOCK.lock().unwrap();
     crate::params::clear_params_registry_for_tests();
 
     let pallas_wire = nh::params_to_wire(&pallas::Params::new(8).unwrap());
     let bn254_wire = nh::params_to_wire(&bn254::Params::new(8).unwrap());
-    let pallas_fp = pallas_wire.fingerprint();
-    let bn254_fp = bn254_wire.fingerprint();
-
     nh::params_from_wire::<PallasBackend>(&pallas_wire).unwrap();
     nh::params_from_wire::<Bn254Backend>(&bn254_wire).unwrap();
 
     assert!(crate::params::params_registry_contains_for_tests::<
         PallasBackend,
-    >(&pallas_fp));
+    >(8));
     assert!(crate::params::params_registry_contains_for_tests::<
         Bn254Backend,
-    >(&bn254_fp));
+    >(8));
 
     crate::params::clear_params_registry_for_tests();
 }
@@ -604,59 +532,16 @@ fn params_registry_reuses_canonical_wire_params() {
     let wire = nh::params_to_wire(&pallas::Params::new(8).unwrap());
     let registered = nh::params_from_wire::<PallasBackend>(&wire).unwrap();
     let decoded = nh::params_from_wire::<PallasBackend>(&wire).unwrap();
+    let other_wire = nh::params_to_wire(&pallas::Params::new(16).unwrap());
+    let other = nh::params_from_wire::<PallasBackend>(&other_wire).unwrap();
 
     assert!(std::sync::Arc::ptr_eq(&registered, &decoded));
+    assert!(!std::sync::Arc::ptr_eq(&registered, &other));
+    assert!(crate::params::params_registry_contains_for_tests::<
+        PallasBackend,
+    >(16));
 
     crate::params::clear_params_registry_for_tests();
-}
-
-#[test]
-fn params_from_wire_rejects_duplicate_generators() {
-    let params = pallas::Params::new(8).unwrap();
-
-    let mut wire = nh::params_to_wire(&params);
-    wire.g[1] = wire.g[0];
-    let err = nh::params_from_wire::<PallasBackend>(&wire).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::InvalidGenerator {
-            kind: "G",
-            index: 1,
-            ..
-        }
-    ));
-
-    let mut wire = nh::params_to_wire(&params);
-    wire.h[1] = wire.h[0];
-    let err = nh::params_from_wire::<PallasBackend>(&wire).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::InvalidGenerator {
-            kind: "H",
-            index: 1,
-            ..
-        }
-    ));
-}
-
-#[test]
-fn params_from_wire_rejects_tampered_bn254_generators() {
-    let params = bn254::Params::new(8).unwrap();
-    let mut wire = nh::params_to_wire(&params);
-    wire.h[0] = bn254::GroupElem::identity().to_bytes();
-    let err = nh::params_from_wire::<Bn254Backend>(&wire).unwrap_err();
-    assert!(matches!(err, Error::InvalidGenerator { kind: "H", .. }));
-}
-
-#[cfg(feature = "goldilocks_backend")]
-#[test]
-fn params_from_wire_rejects_tampered_goldilocks_generators() {
-    let params = gold::Params::new(8).unwrap();
-    let mut wire = nh::params_to_wire(&params);
-    let identity = <gold::Group as IpaGroup>::identity();
-    wire.h[0] = identity.to_bytes();
-    let err = nh::params_from_wire::<GoldilocksBackend>(&wire).unwrap_err();
-    assert!(matches!(err, Error::InvalidGenerator { kind: "H", .. }));
 }
 
 #[cfg(feature = "goldilocks_backend")]
@@ -974,30 +859,8 @@ fn decode_envelope_accepts_large_max_k_limit() {
 }
 
 #[test]
-fn decode_envelope_limits_reject_oversized_vectors_before_dispatch() {
+fn decode_envelope_limits_reject_oversized_proof_vectors_before_dispatch() {
     let limits = OpenVerifyLimits::new(2, usize::MAX);
-
-    let mut oversized_g = sample_pallas_envelope(4, "limit-oversized-g");
-    oversized_g.params.g.push(oversized_g.params.g[0]);
-    assert!(matches!(
-        nh::decode_envelope_with_limits(&oversized_g, limits),
-        Err(Error::EnvelopeLimitExceeded {
-            limit: "params_g_len",
-            max: 4,
-            actual: 5
-        })
-    ));
-
-    let mut oversized_h = sample_pallas_envelope(4, "limit-oversized-h");
-    oversized_h.params.h.push(oversized_h.params.h[0]);
-    assert!(matches!(
-        nh::decode_envelope_with_limits(&oversized_h, limits),
-        Err(Error::EnvelopeLimitExceeded {
-            limit: "params_h_len",
-            max: 4,
-            actual: 5
-        })
-    ));
 
     let mut oversized_l = sample_pallas_envelope(4, "limit-oversized-l");
     oversized_l.proof.l.push(oversized_l.proof.l[0]);

@@ -158,7 +158,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       new ProofAttachmentListAdapter();
   private static final TypeAdapter<Optional<List<ProofAttachment>>> ATTACHMENTS_OPTION_ADAPTER =
       NoritoAdapters.option(PROOF_ATTACHMENT_LIST_ADAPTER);
-  private static final String INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1";
+  private static final String INSTRUCTION_BOX_SCHEMA =
+      "(alloc::string::String, alloc::vec::Vec<u8>)";
   private static final String MULTISIG_PROPOSE_DTO_SCHEMA =
       "iroha_torii::routing::MultisigProposeDto";
   private final int chainDiscriminant;

@@ -80,10 +80,11 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
             .unwrap();
     let alice = test_account(alice_domain, alice_pk);
     let bob = test_account(bob_domain, bob_pk);
-    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let rose: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());

@@ -87,7 +87,7 @@ fn governance_escrow_account_literal() -> String {
 }
 
 fn governance_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
         "xor".parse().expect("governance asset name must parse"),
     )
@@ -102,7 +102,7 @@ fn governance_contract_address(contract_id: &str) -> ContractAddress {
         other => panic!("unexpected governance smoke contract id `{other}`"),
     };
     ContractAddress::derive(
-        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         deploy_nonce,
         iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -1049,7 +1049,6 @@ fn governance_builder_for_hostile_takeover() -> NetworkBuilder {
         .with_peers(4)
         .with_config_layer(move |layer| {
             layer
-                .write(["default_account_domain_label"], "wonderland")
                 .write(["nexus", "governance", "default_module"], "parliament")
                 .write(
                     [
@@ -1188,10 +1187,12 @@ async fn setup_hostile_fixture(
         .wrap_err("wait for governance domain registration in hostile fixture")?;
     alice
         .submit_blocking(
-            Register::asset_definition(
-                AssetDefinition::numeric(asset_def_id.clone())
-                    .with_name(asset_def_id.name().to_string()),
-            ),
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register governance asset definition for hostile fixture")?;
@@ -1503,10 +1504,12 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err("wait for governance domain registration")?;
     alice
         .submit_blocking(
-            Register::asset_definition(
-                AssetDefinition::numeric(asset_def_id.clone())
-                    .with_name(asset_def_id.name().to_string()),
-            ),
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register governance numeric asset definition")?;

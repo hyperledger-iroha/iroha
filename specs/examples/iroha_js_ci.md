@@ -12,18 +12,19 @@ run.
 
 ## Recommended Steps
 
-1. Use a Node LTS release (18 or 20) via `actions/setup-node` or your CI
-   equivalent.
+1. Test the declared minimum Node 18 runtime plus the maintained even-numbered
+   Node release lines via `actions/setup-node` or your CI equivalent.
 2. Install the Rust toolchain listed in `rust-toolchain.toml`. We recommend
    `dtolnay/rust-toolchain@v1` in GitHub Actions.
 3. Cache the cargo registry/git indexes and the `target/` directory to avoid
    rebuilding the native addon in every job.
-4. Run `npm install`, then `npm run lint:test`. The combined script enforces
-   ESLint with zero warnings, builds the native addon, and runs the Node test
-   suite so CI matches the release gating workflow.
-5. Optionally run `node --test` as a fast smoke step once `npm run build:native`
-   has produced the addon (for example, presubmit quick-check lanes that reuse
-   cached artifacts).
+4. Run `npm ci --ignore-scripts`, then `npm run lint:test`. The combined script
+   enforces ESLint with zero warnings, builds the native addon, and runs the
+   Node test suite so CI matches the release gating workflow.
+5. Optionally run `node ./scripts/run-tests.mjs` as a fast smoke step once
+   `npm run build:native` has produced the addon (for example, presubmit
+   quick-check lanes that reuse cached artifacts). The package runner selects
+   only `*.test.js` and `*.test.mjs` modules.
 6. Layer any additional linting or formatting checks from your consumer
    project on top of `npm run lint:test` when stricter policies are required.
 7. When sharing configuration across services, load `iroha_config` and pass the
@@ -47,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18, 20]
+        node-version: [18, 20, 22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -71,7 +72,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - run: npm install
+      - run: npm ci --ignore-scripts
       - run: npm run lint:test
 ```
 
@@ -93,14 +94,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build:native
-      - run: node --test
+      - run: node ./scripts/run-tests.mjs
 ```
 
 This job completes quickly while still verifying that the native addon compiles
 and that the Node test suite passes.
 
-> **Reference implementation:** the repository includes
-> `.github/workflows/javascript-sdk.yml`, which wires the steps above into a
-> Node 18/20 matrix with cargo caching.
+> **Reference implementation:** `.github/workflows/kotodama_perf.yml` installs
+> with `npm ci --ignore-scripts` and runs the complete package suite on Node 22;
+> focused SDK workflows also exercise Node 20 and Node 24.

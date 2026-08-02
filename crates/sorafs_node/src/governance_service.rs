@@ -2693,6 +2693,26 @@ fn optional_json_string(
     }
 }
 
+fn required_optional_json_string(
+    map: &JsonMap,
+    field: &str,
+) -> Result<Option<String>, GovernanceDagServiceError> {
+    match map.get(field) {
+        Some(JsonValue::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|value| Some(value.to_owned()))
+            .ok_or_else(|| {
+                GovernanceDagServiceError::Source(format!(
+                    "runtime index `{field}` is not a string or null"
+                ))
+            }),
+        None => Err(GovernanceDagServiceError::Source(format!(
+            "runtime index is missing `{field}`"
+        ))),
+    }
+}
+
 fn canonical_hex_vec(
     value: &str,
     expected_bytes: usize,
@@ -2977,6 +2997,26 @@ fn load_source_snapshot(
         if required_json_string(entry, "payload_kind")? != kind {
             return Err(GovernanceDagServiceError::Source(format!(
                 "runtime index block {position} payload kind is invalid"
+            )));
+        }
+        let indexed_submission_account_digest =
+            required_optional_json_string(entry, "submission_publisher_account_digest_hex")?;
+        let indexed_submission_origin = required_optional_json_string(entry, "submission_origin")?;
+        let signed_submission_account_digest = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| hex::encode(provenance.publisher_account_digest));
+        let signed_submission_origin = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| provenance.origin.label().to_owned());
+        if indexed_submission_account_digest != signed_submission_account_digest
+            || indexed_submission_origin != signed_submission_origin
+        {
+            return Err(GovernanceDagServiceError::Source(format!(
+                "runtime index block {position} submission provenance does not match its signed governance node"
             )));
         }
         let digest = blake3_array(&bytes);
@@ -4923,7 +4963,26 @@ fn mirror_index_value(
     let mut by_node_cid = JsonMap::new();
     let mut by_digest = JsonMap::new();
     let mut by_kind_positions = BTreeMap::<String, Vec<JsonValue>>::new();
+    let source_by_sequence = source
+        .blocks
+        .iter()
+        .map(|source_block| (source_block.block.sequence, source_block))
+        .collect::<BTreeMap<_, _>>();
     for (position, block) in blocks.iter().enumerate() {
+        let source_block = source_by_sequence.get(&block.sequence).ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "published mirror block has no signed source block".to_owned(),
+            )
+        })?;
+        if source_block.block.block_cid != block.governance_block_cid
+            || source_block.block.node.node_cid != block.governance_node_cid
+            || source_block.encoded_blake3 != block.encoded_blake3
+            || source_block.payload_kind != block.payload_kind
+        {
+            return Err(GovernanceDagServiceError::State(
+                "published mirror block does not match its signed source block".to_owned(),
+            ));
+        }
         let block_cid_hex = hex::encode(&block.governance_block_cid);
         let node_cid_hex = hex::encode(&block.governance_node_cid);
         let digest_hex = hex::encode(block.encoded_blake3);
@@ -4947,6 +5006,26 @@ fn mirror_index_value(
         value.insert("blake3".into(), JsonValue::from(digest_hex));
         value.insert("encoded_len".into(), JsonValue::from(block.encoded_len));
         value.insert("ipfs_cid".into(), JsonValue::from(block.ipfs_cid.clone()));
+        value.insert(
+            "submission_publisher_account_digest_hex".into(),
+            source_block
+                .block
+                .node
+                .submission_provenance
+                .as_ref()
+                .map(|provenance| JsonValue::from(hex::encode(provenance.publisher_account_digest)))
+                .unwrap_or(JsonValue::Null),
+        );
+        value.insert(
+            "submission_origin".into(),
+            source_block
+                .block
+                .node
+                .submission_provenance
+                .as_ref()
+                .map(|provenance| JsonValue::from(provenance.origin.label()))
+                .unwrap_or(JsonValue::Null),
+        );
         block_values.push(JsonValue::Object(value));
     }
     let by_kind = by_kind_positions
@@ -5497,14 +5576,18 @@ mod tests {
         routing::{any, post},
     };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature as IrohaSignature};
+    use norito::codec::Encode as _;
     use sorafs_manifest::{
         GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_LOG_VERSION_V1,
-        GovernanceLogNodeV1, GovernanceLogSignatureV1,
+        GovernanceDagSubmissionOriginV1, GovernanceDagSubmissionProvenanceV1, GovernanceLogNodeV1,
+        GovernanceLogSignatureV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
         deal::{
             DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
             DealSettlementStatusV1, DealSettlementV1, XorQuantity,
         },
-        governance_dag_block_cid_v1,
+        governance_dag_block_cid_v1, governance_dag_submission_account_digest_v1,
     };
     use std::{
         collections::{HashMap, VecDeque},
@@ -6759,6 +6842,7 @@ mod tests {
                 prev_cid: previous_node_cid.clone(),
                 timestamp,
                 publisher_peer_id: peer_id.clone(),
+                submission_provenance: None,
                 payload: GovernanceLogPayloadV1::DealSettlement(Box::new(settlement(
                     sequence, timestamp,
                 ))),
@@ -6835,6 +6919,110 @@ mod tests {
             head_bytes,
             blocks: source_blocks,
         }
+    }
+
+    fn appeal_finance_report(timestamp: u64) -> SoraFsAppealFinanceReportV1 {
+        SoraFsAppealFinanceReportV1 {
+            version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+            report_id: [0x42; 16],
+            case_id: "case-42".to_owned(),
+            round_id: Some("round-1".to_owned()),
+            generated_at_unix_ms: timestamp.saturating_mul(1_000),
+            appeal_finance_config_version: "baseline-v1".to_owned(),
+            evidence_bundle_digest: Some([0xA7; 32]),
+            outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
+            deposit_xor: xor("420"),
+            refund: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "refund-account".to_owned(),
+                amount_xor: xor("420"),
+            },
+            treasury: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "treasury-account".to_owned(),
+                amount_xor: xor("50"),
+            },
+            held: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "escrow-account".to_owned(),
+                amount_xor: XorQuantity::zero(),
+            },
+            panel_size: 3,
+            panel_reward_total_xor: xor("85"),
+            rewards_paid_total_xor: xor("60"),
+            rewards_forfeited_treasury_xor: xor("25"),
+            juror_payouts: vec![
+                SoraFsAppealFinanceJurorPayoutV1 {
+                    juror_id: "juror-a".to_owned(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
+                },
+                SoraFsAppealFinanceJurorPayoutV1 {
+                    juror_id: "juror-b".to_owned(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
+                },
+            ],
+            no_show_juror_ids: vec!["juror-c".to_owned()],
+        }
+    }
+
+    fn signed_finance_source(seed: u8, timestamp: u64) -> SourceSnapshot {
+        let signer = TestSigner::new(seed);
+        let account_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive canonical submission account");
+        let account = iroha_data_model::account::AccountId::new(account_key.public_key().clone());
+        let mut source = signed_source(1, seed, timestamp);
+        let source_block = source.blocks.first_mut().expect("single source block");
+        source_block.block.node.payload =
+            GovernanceLogPayloadV1::AppealFinanceReport(appeal_finance_report(timestamp));
+        source_block.block.node.submission_provenance = Some(GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: governance_dag_submission_account_digest_v1(
+                &account.encode(),
+            ),
+            origin: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        });
+        source_block.block.node.node_cid = source_block
+            .block
+            .node
+            .recompute_node_cid()
+            .expect("derive attributed node CID");
+        source_block.block.node.publisher_signature = signer.sign(
+            &source_block
+                .block
+                .node
+                .signature_payload_bytes()
+                .expect("encode attributed node signing payload"),
+        );
+        source_block.block.block_cid = source_block
+            .block
+            .recompute_block_cid()
+            .expect("derive attributed block CID");
+        source_block.block.block_signature = signer.sign(
+            &source_block
+                .block
+                .signature_payload_bytes()
+                .expect("encode attributed block signing payload"),
+        );
+        source_block
+            .block
+            .validate()
+            .expect("attributed source block validates");
+        source_block.bytes =
+            norito::to_bytes(&source_block.block).expect("encode attributed source block");
+        source_block.encoded_blake3 = blake3_array(&source_block.bytes);
+        source_block.payload_kind = "appeal_finance_report".to_owned();
+
+        source.head.head_block_cid = source_block.block.block_cid.clone();
+        source.head.head_signature = signer.sign(
+            &source
+                .head
+                .signature_payload_bytes()
+                .expect("encode attributed head signing payload"),
+        );
+        validate_governance_dag_head_against_chain_v1(&source.head, &[source_block.block.clone()])
+            .expect("attributed source head validates");
+        source.head_bytes = norito::to_bytes(&source.head).expect("encode attributed source head");
+        source
     }
 
     fn test_runtime_config(source: &SourceSnapshot, root: &Path) -> RuntimeConfig {
@@ -7822,9 +8010,35 @@ listen_addr = "127.0.0.1:0"
         );
 
         let index_path = config.source_dir.join("runtime-dag-index.json");
-        let mut index: JsonValue =
-            json::from_slice(&fs::read(&index_path).expect("read publisher runtime index"))
-                .expect("decode publisher runtime index");
+        let original_index_bytes = fs::read(&index_path).expect("read publisher runtime index");
+        let mut provenance_tampered_index: JsonValue = json::from_slice(&original_index_bytes)
+            .expect("decode publisher runtime index for provenance tamper");
+        provenance_tampered_index
+            .get_mut("blocks")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|blocks| blocks.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("first publisher runtime index entry")
+            .insert(
+                "submission_publisher_account_digest_hex".into(),
+                JsonValue::from(hex::encode([0xA5; 32])),
+            );
+        let provenance_tampered_bytes = json::to_json_pretty(&provenance_tampered_index)
+            .expect("encode provenance-tampered runtime index")
+            .into_bytes();
+        write_test_sidecar_file(&index_path, &provenance_tampered_bytes);
+        let provenance_error = load_source_snapshot(&config)
+            .expect_err("unsigned runtime-index provenance must not override the signed node");
+        assert!(
+            provenance_error
+                .to_string()
+                .contains("submission provenance does not match its signed governance node"),
+            "unexpected provenance substitution error: {provenance_error}"
+        );
+        write_test_sidecar_file(&index_path, &original_index_bytes);
+
+        let mut index: JsonValue = json::from_slice(&original_index_bytes)
+            .expect("decode publisher runtime index for source substitution");
         let first_entry = index
             .get_mut("blocks")
             .and_then(JsonValue::as_array_mut)
@@ -11018,6 +11232,67 @@ enabled = false
             );
             task.abort();
         }
+    }
+
+    #[test]
+    fn mirror_index_exposes_only_signed_submission_provenance() {
+        let source = signed_finance_source(0x39, 1_800_000_000);
+        let checkpoint = checkpoint_from_source(&source);
+        let mirror = mirror_index_value(
+            &source,
+            &checkpoint.mirror_blocks,
+            checkpoint.generation,
+            &checkpoint.head_ipfs_cid,
+            &checkpoint.public_head_token,
+            checkpoint.published_at_unix,
+        )
+        .expect("build attributed mirror index");
+        let entry = mirror
+            .get("blocks")
+            .and_then(JsonValue::as_array)
+            .and_then(|blocks| blocks.first())
+            .expect("attributed mirror block");
+        let signed = source.blocks[0]
+            .block
+            .node
+            .submission_provenance
+            .as_ref()
+            .expect("signed submission provenance");
+        assert_eq!(
+            entry
+                .get("submission_publisher_account_digest_hex")
+                .and_then(JsonValue::as_str),
+            Some(hex::encode(signed.publisher_account_digest).as_str())
+        );
+        assert_eq!(
+            entry.get("submission_origin").and_then(JsonValue::as_str),
+            Some(signed.origin.label())
+        );
+
+        let internal_source = signed_source(1, 0x38, 1_800_000_000);
+        let internal_checkpoint = checkpoint_from_source(&internal_source);
+        let internal_mirror = mirror_index_value(
+            &internal_source,
+            &internal_checkpoint.mirror_blocks,
+            internal_checkpoint.generation,
+            &internal_checkpoint.head_ipfs_cid,
+            &internal_checkpoint.public_head_token,
+            internal_checkpoint.published_at_unix,
+        )
+        .expect("build internal-producer mirror index");
+        let internal_entry = internal_mirror
+            .get("blocks")
+            .and_then(JsonValue::as_array)
+            .and_then(|blocks| blocks.first())
+            .expect("internal mirror block");
+        assert_eq!(
+            internal_entry.get("submission_publisher_account_digest_hex"),
+            Some(&JsonValue::Null)
+        );
+        assert_eq!(
+            internal_entry.get("submission_origin"),
+            Some(&JsonValue::Null)
+        );
     }
 
     #[test]

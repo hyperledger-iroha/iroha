@@ -129,6 +129,8 @@ const defaultContext = {
       '--offline',
       '-p',
       'xtask',
+      '--features',
+      'dev-tools',
       '--bin',
       'xtask',
       '--',

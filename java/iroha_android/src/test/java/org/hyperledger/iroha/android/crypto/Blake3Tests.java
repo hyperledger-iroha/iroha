@@ -17,6 +17,7 @@ public final class Blake3Tests {
     twoChunkInputProducesKnownHash();
     hashIsDeterministic();
     inputExceedingHelperLimitThrows();
+    unboundedHashSupportsLargeVerificationLocks();
     System.out.println("[IrohaAndroid] Blake3 tests passed.");
   }
 
@@ -64,6 +65,14 @@ public final class Blake3Tests {
       threw = ex.getMessage().contains("Input too large");
     }
     assert threw : "expected input above Solana AccountLtHash preimage size to throw";
+  }
+
+  private static void unboundedHashSupportsLargeVerificationLocks() {
+    final byte[] hash = Blake3.hashUnbounded(new byte[100_000]);
+    final byte[] expected = hexToBytes(
+        "b1fc3c3bf473596bc8ac1f5c86f77c2fc0e0186a872b88adf841716fe9140a50");
+    assert Arrays.equals(expected, hash)
+        : "large Musubi payload must match the BLAKE3 reference vector";
   }
 
   private static byte[] hexToBytes(final String hex) {

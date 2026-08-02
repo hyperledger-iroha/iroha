@@ -40,6 +40,14 @@ pub const CLOSE_INTERNAL_ERROR: u16 = 1011;
 /// RFC 6455 close code asking the client to retry later.
 pub const CLOSE_TRY_AGAIN_LATER: u16 = 1013;
 
+fn decode_subscription_request<M>(bytes: &[u8]) -> Result<M, norito::Error>
+where
+    M: NoritoSerialize,
+    for<'de> M: NoritoDeserialize<'de>,
+{
+    norito::decode_canonical(bytes)
+}
+
 /// Wrapper to send/receive Norito encoded messages
 #[derive(Debug)]
 pub struct WebSocketNorito {
@@ -90,9 +98,10 @@ impl WebSocketNorito {
         .map_err(extract_ws_closed)
     }
 
-    /// Recv message and try to decode it
+    /// Receive and decode one canonical, uncompressed Norito request.
     pub async fn recv<M>(&mut self) -> Result<M, Error>
     where
+        M: NoritoSerialize,
         for<'a> M: NoritoDeserialize<'a>,
         M: Send,
     {
@@ -107,8 +116,8 @@ impl WebSocketNorito {
 
             match message {
                 Message::Binary(binary) => {
-                    // Decode using Norito framing (header + checksum).
-                    return norito::decode_from_bytes::<M>(binary.as_ref()).map_err(Error::Decode);
+                    return decode_subscription_request::<M>(binary.as_ref())
+                        .map_err(Error::Decode);
                 }
                 Message::Text(_) => {
                     return Err(Error::UnexpectedFrame {
@@ -127,9 +136,12 @@ impl WebSocketNorito {
         }
     }
 
-    /// Recv with a custom timeout duration, returning Err(ReadTimeout) on expiry.
+    /// Receive one canonical request with a custom timeout.
+    ///
+    /// Returns [`Error::ReadTimeout`] when `dur` expires.
     pub async fn recv_with_timeout<M>(&mut self, dur: Duration) -> Result<M, Error>
     where
+        M: NoritoSerialize,
         for<'a> M: NoritoDeserialize<'a>,
         M: Send,
     {
@@ -141,7 +153,8 @@ impl WebSocketNorito {
                 .map_err(extract_ws_closed)?;
             match message {
                 Message::Binary(binary) => {
-                    return norito::decode_from_bytes::<M>(binary.as_ref()).map_err(Error::Decode);
+                    return decode_subscription_request::<M>(binary.as_ref())
+                        .map_err(Error::Decode);
                 }
                 Message::Text(_) => {
                     return Err(Error::UnexpectedFrame {
@@ -226,6 +239,76 @@ impl WebSocketNorito {
             Err(Error::Closed) | Ok(()) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod subscription_decode_tests {
+    use std::num::NonZeroU64;
+
+    use iroha_data_model::{
+        block::stream::BlockSubscriptionRequest, events::stream::EventSubscriptionRequest,
+    };
+
+    use super::*;
+
+    fn assert_common_noncanonical_frames_rejected<T>(value: &T)
+    where
+        T: NoritoSerialize,
+        for<'de> T: NoritoDeserialize<'de>,
+    {
+        let canonical = norito::encode_canonical(value).expect("encode canonical subscription");
+        decode_subscription_request::<T>(&canonical).expect("canonical subscription must decode");
+
+        let compressed =
+            norito::to_compressed_bytes(value, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed subscription");
+        assert!(matches!(
+            decode_subscription_request::<T>(&compressed),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
+
+        let mut trailing = canonical.clone();
+        trailing.push(0);
+        assert!(decode_subscription_request::<T>(&trailing).is_err());
+
+        let length_offset = norito::core::Header::SIZE
+            - 2 * core::mem::size_of::<u64>()
+            - core::mem::size_of::<u8>();
+        let mut oversized = canonical;
+        oversized[length_offset..length_offset + core::mem::size_of::<u64>()]
+            .copy_from_slice(&(1024_u64 * 1024).to_le_bytes());
+        assert!(decode_subscription_request::<T>(&oversized).is_err());
+    }
+
+    #[test]
+    fn event_subscription_requires_one_exact_canonical_frame() {
+        let request = EventSubscriptionRequest::new(Vec::new());
+        assert_common_noncanonical_frames_rejected(&request);
+
+        let canonical = norito::encode_canonical(&request).expect("encode canonical event request");
+        let alternate_flags =
+            norito::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _flags = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::core::to_bytes(&request).expect("encode alternate-layout event request")
+        };
+        assert_ne!(
+            alternate, canonical,
+            "fixture must exercise alternate flags"
+        );
+        assert!(matches!(
+            decode_subscription_request::<EventSubscriptionRequest>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
+    }
+
+    #[test]
+    fn block_subscription_requires_one_exact_canonical_frame() {
+        let request = BlockSubscriptionRequest(
+            NonZeroU64::new(1).expect("subscription height must be non-zero"),
+        );
+        assert_common_noncanonical_frames_rejected(&request);
     }
 }
 

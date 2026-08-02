@@ -43,7 +43,6 @@ use iroha_data_model::{
         },
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorSetCheckpoint},
-    da::commitment::DaCommitmentBundle,
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,
@@ -6483,26 +6482,16 @@ fn lane_block_sessions_slot() -> &'static Mutex<Vec<SumeragiLaneBlockSessionStat
 type LaneRelayKey = (
     iroha_data_model::nexus::LaneId,
     iroha_data_model::nexus::DataSpaceId,
+    Hash,
     u64,
-    HashOf<BlockHeader>,
-    Option<HashOf<DaCommitmentBundle>>,
-    Option<Hash>,
-    HashOf<LaneBlockCommitment>,
-    u64,
-    Option<[u8; 32]>,
 );
 
 fn lane_relay_key(envelope: &LaneRelayEnvelope) -> LaneRelayKey {
     (
         envelope.lane_id,
         envelope.dataspace_id,
+        envelope.lane_incarnation,
         envelope.block_height,
-        envelope.block_header.hash(),
-        envelope.da_commitment_hash,
-        envelope.lane_block_descriptor_hash,
-        envelope.settlement_hash,
-        envelope.rbc_bytes_total,
-        envelope.manifest_root,
     )
 }
 
@@ -6543,6 +6532,21 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
         .iter()
         .position(|candidate| lane_relay_key(candidate) == key)
     {
+        if !storage[existing].same_finality_effect(&envelope) {
+            let err = LaneRelayError::ConflictingRelay {
+                lane: envelope.lane_id,
+                height: envelope.block_height,
+            };
+            record_relay_error(&err);
+            iroha_logger::warn!(
+                lane_id = %envelope.lane_id,
+                dataspace_id = %envelope.dataspace_id,
+                block_height = envelope.block_height,
+                error_kind = err.as_label(),
+                "dropping conflicting lane relay envelope for finalized coordinates"
+            );
+            return;
+        }
         if storage[existing].has_merge_admission_material()
             && !envelope.has_merge_admission_material()
         {

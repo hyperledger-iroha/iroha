@@ -37,12 +37,13 @@ class SealedCandidateBuildTests(unittest.TestCase):
         self.reviewed_source_closure_sha256 = "c" * 64
         self.reviewed_source_closure_value = {
             "schema": builder.source_seal.REVIEWED_SOURCE_CLOSURE_SCHEMA,
+            "source_repo_dirty": False,
             "fixture": True,
         }
         self.identity = builder.source_seal.SourceIdentity(
             source_commit="a" * 40,
             source_tree_sha256="b" * 64,
-            source_repo_dirty=True,
+            source_repo_dirty=False,
             reviewed_source_closure=self.reviewed_source_closure_value,
             reviewed_source_closure_descriptor_sha256=(
                 self.reviewed_source_closure_sha256
@@ -166,6 +167,7 @@ class SealedCandidateBuildTests(unittest.TestCase):
         self.assertEqual(features, set(builder.CANDIDATE_BUILD_FEATURES))
         self.assertIn("iroha_core/dev-tools", features)
         self.assertIn(f"iroha_core/{builder.SEALED_FEATURE}", features)
+        self.assertIn(f"iroha_core/{builder.CANDIDATE_EVIDENCE_FEATURE}", features)
         self.assertIn("--message-format=json-render-diagnostics", command)
         self.assertNotIn("CARGO_BUILD_TARGET", environment)
         self.assertNotIn("CARGO_BUILD_RUSTC", environment)
@@ -193,7 +195,7 @@ class SealedCandidateBuildTests(unittest.TestCase):
         self.assertEqual(report["build_profile"], "release")
         self.assertEqual(report["target_dir"], str(self.target_dir))
         self.assertEqual(report["source_commit"], self.identity.source_commit)
-        self.assertIs(report["source_repo_dirty"], True)
+        self.assertIs(report["source_repo_dirty"], False)
         self.assertEqual(
             report["reviewed_source_closure"],
             self.reviewed_source_closure_value,
@@ -217,7 +219,7 @@ class SealedCandidateBuildTests(unittest.TestCase):
         changed = builder.source_seal.SourceIdentity(
             source_commit="c" * 40,
             source_tree_sha256="d" * 64,
-            source_repo_dirty=True,
+            source_repo_dirty=False,
             reviewed_source_closure=self.reviewed_source_closure_value,
             reviewed_source_closure_descriptor_sha256=(
                 self.reviewed_source_closure_sha256
@@ -231,6 +233,28 @@ class SealedCandidateBuildTests(unittest.TestCase):
                 str(self.cargo),
                 identity_reader=lambda _root, _path, _sha256: next(identities),
                 command_runner=lambda command, **_kwargs: self.cargo_result(command),
+            )
+
+    def test_dirty_source_identity_is_rejected_before_cargo(self) -> None:
+        dirty_closure = dict(self.reviewed_source_closure_value)
+        dirty_closure["source_repo_dirty"] = True
+        dirty = builder.source_seal.SourceIdentity(
+            source_commit=self.identity.source_commit,
+            source_tree_sha256=self.identity.source_tree_sha256,
+            source_repo_dirty=True,
+            reviewed_source_closure=dirty_closure,
+            reviewed_source_closure_descriptor_sha256=(
+                self.reviewed_source_closure_sha256
+            ),
+        )
+        with self.assertRaisesRegex(builder.CandidateBuildError, "clean signed"):
+            self.build_candidate_bundle(
+                self.root,
+                str(self.cargo),
+                identity_reader=lambda _root, _path, _sha256: dirty,
+                command_runner=lambda _command, **_kwargs: self.fail(
+                    "Cargo must not run for a dirty source identity"
+                ),
             )
 
     def test_exact_release_artifact_symlink_is_rejected_before_resolution(self) -> None:

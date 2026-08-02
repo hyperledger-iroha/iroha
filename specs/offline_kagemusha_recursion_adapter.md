@@ -237,8 +237,8 @@ Both registry records use backend `halo2/ipa`. They must be selected atomically,
 remain independently keyed, and agree with one authenticated release's
 activation window and proof-pair limit.
 
-`KagemushaRecursiveSpendStateBoundaryV2` still crosses the field boundary as a
-compact V5 layout version followed by all 138 explicit little-endian `u32`
+`KagemushaRecursiveSpendStateBoundaryV5` crosses the field boundary as the
+canonical V5 layout version followed by all 138 explicit little-endian `u32`
 result-state limbs, including the statement's append-only
 `next_zero_leaf_index`. ABI 21 and manifest V4 remain the only lifecycle, but
 keys, bootstrap witnesses, proofs, manifests, and schema hashes from the former
@@ -351,13 +351,37 @@ measured proof bounds, physical-device evidence, independent review, signed
 release attestation, and canonical top-up-finality roster. A generation label
 is not a trust anchor.
 
+Runtime qualification keeps its decoded working set beneath the non-raiseable
+256 MiB catalog budget. It never materializes a processed proving key: each
+multi-gigabyte PK is authenticated with fixed 64 KiB scratch, checked against
+the exact processed-key geometry, and its bounded embedded-VK prefix is hashed
+and matched to the separately parsed VK. Full `ProvingKey` parsing remains
+confined to generation and proving paths that actually consume the polynomial
+vectors. The receipt verifier then parses the other six bounded roles once and
+terminally decides both stored Eq/Ep pairs with that verifier set.
+
 The supported two-stage packager is:
 
 ```text
+mkdir -m 700 <private-release-input-parent>
+cargo run --locked --target-dir <external-cargo-target> \
+  -p iroha_kagami --bin kagami -- \
+  kagemusha prepare-release-circuit-params-v4 \
+  --output-dir <private-release-input-parent>/circuit-params-v4
+
 cd <clean-checkout>
 SOURCE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
-git verify-commit "$SOURCE_COMMIT"
-python3 -I scripts/build_kagemusha_v4_candidate_bundle.py --root "$PWD"
+# Configure the reviewer's global gpg.ssh.allowedSignersFile to one absolute,
+# owner-controlled, single-key policy. Optionally configure the corresponding
+# gpg.ssh.revocationFile. Repository-local signature settings are ignored.
+python3 -I scripts/kagemusha_source_tree_seal.py descriptor \
+  --root "$PWD" > <private-reviewed-source-closure.json>
+python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
+  --root "$PWD" \
+  --target-dir <new-external-cargo-target> \
+  --reviewed-source-closure <private-reviewed-source-closure.json> \
+  --reviewed-source-closure-sha256 <reviewed-descriptor-sha256> \
+  > <sealed-build-report.json>
 # Require source_commit in the build report to equal $SOURCE_COMMIT.
 
 python3 scripts/run_kagemusha_v4_generation.py \
@@ -369,8 +393,8 @@ python3 scripts/run_kagemusha_v4_generation.py \
   --generation <id> --parameter-generation <id> \
   --source-commit <40-lower-hex> --source-tree-sha256 <64-lower-hex> \
   --activation-height <u64> --withdrawal-height <u64> \
-  --step-eq-circuit-params <canonical-norito-file> \
-  --step-ep-circuit-params <canonical-norito-file> \
+  --step-eq-circuit-params <private-release-input-parent>/circuit-params-v4/step-eq-circuit-params.norito \
+  --step-ep-circuit-params <private-release-input-parent>/circuit-params-v4/step-ep-circuit-params.norito \
   --topup-finality-roster <canonical-norito-file>
 
 <binary_path-from-sealed-build-report> \
@@ -383,9 +407,34 @@ python3 scripts/run_kagemusha_v4_generation.py \
   --cryptographic-review <canonical-signed-norito-file>
 ```
 
-Direct unsupervised `generate-candidate` execution is rejected. The launcher
+`prepare-release-circuit-params-v4` is the only supported constructor for the
+reviewed first-release Eq/Ep parameter inputs. It validates the centralized
+profile, canonical-Norito round-trips it, writes separate owner-private Eq and
+Ep files into one private staging directory, syncs both files and that
+directory, and makes the complete pair visible with one no-replace directory
+rename. The command refuses an existing output directory and reports both the
+raw file SHA-256 and domain-separated circuit-parameter SHA-256. A failed
+parent-directory sync after visibility is reported as `commit-uncertain` with
+exit status 75, never as a safely retryable failure.
+
+The source seal is a first-release clean-only contract. Descriptor emission,
+sealed build, generation, validation, and finalization all reject a nonempty
+tracked diff, any untracked file, an absent or nonempty tracked-gitlink
+directory, a mismatched ignored root `Cargo.lock`, or a commit whose signature
+cannot be verified locally. `source_repo_dirty` remains in the closure only as
+an explicit invariant and must be `false`; the tracked-diff and untracked
+manifest digests must both identify empty byte strings.
+
+The source-sealed binary always starts its own fail-closed footprint monitor;
+the launcher adds the host-global lifecycle, publication, and evidence boundary.
+After pinning the executable (and creating the private execution copy on
+Darwin), the launcher invokes its read-only `memory-capacity-v1` operation
+through the same supervisor-death lifeline. That versioned record is the single
+authority for the effective host/container capacity, absolute maximum,
+enforcement profile, and half-cap policy. The launcher may only lower the
+returned ceiling and passes the exact byte result back to generation. It also
 holds the per-user heavy-job lock shared with the strict TLAPS runner and applies
-a bounded polling ceiling at the lower of 64 GiB or half of physical RAM. On
+a bounded polling ceiling at that Rust-derived limit. On
 macOS, the 250 ms runtime loop enumerates only the owned group with
 `proc_listpgrppids`, validates stable BSD identity and ownership around
 `proc_pid_rusage`, and enforces the greater of RSS or physical-footprint high
@@ -394,6 +443,12 @@ failure are terminal. A threshold crossing stops the group before one final
 scoped measurement, then kills and reaps only that group. The direct child's
 kernel `wait4` peak RSS remains an independent final gate. This portable
 userspace polling is not an operating-system hard allocation limit.
+The query, generation, and publisher execute under one exact child-environment
+allowlist: fixed `HOME`, `LANG`, `LC_ALL`, and system-only `PATH`, plus `TMPDIR`
+derived from the admitted output parent for generation/publication. Ambient
+`LD_*`/`DYLD_*` loader hooks, tool-resolution paths, allocator/runtime knobs,
+SDK discovery, and Python/Rust override variables are not forwarded into the
+source-sealed executable.
 Generation also requires at least 16 GiB free on the pinned
 disk-backed output filesystem before it creates the two raw proving-key spools
 and each framed artifact copy.
@@ -403,17 +458,17 @@ The runtime loop never invokes global `ps`, so memory or APFS pressure cannot
 block enforcement. A conflict terminates only the owned generation group with
 status 74, and the final exclusion check prevents a late direct job from
 producing valid evidence.
-The launcher writes owner-private JSONL and summary evidence. A lower
-`--max-memory-gib` is accepted; the ceiling cannot be raised. Its one-shot
-inherited launch capability prevents stale environment markers from bypassing
-the wrapper, but is not a security boundary against a malicious same-UID
-process. The launcher injects an unguessable per-run staging id; after every
+The launcher writes owner-private JSONL and summary evidence, including the
+exact Rust memory-capacity record. A lower `--max-memory-gib` is accepted; the
+ceiling cannot be raised. Executable bytes and path identity are revalidated
+before and after the query and every later bundle operation. The launcher
+injects an unguessable per-run staging id; after every
 normal, failed, signalled, or memory-limited return it securely removes only
 owner-private residue carrying that exact id. Build the binary first: the
 launcher accepts only the prebuilt bundle
 executable followed by `generate-candidate`, so Cargo and rustc are never
-included in the guarded process group. Finalization and candidate validation do
-not require this generation guard. Commit-signature verification is the
+included in the guarded process group. Finalization and candidate validation
+start the same mandatory in-process monitor directly. Commit-signature verification is the
 separate Git step above, and the returned `source_commit` must equal that
 verified commit. The sealed build helper requires the same clean exact source
 identity before, during, and after the locked release build, sanitizes ambient
@@ -523,6 +578,23 @@ immutable directory. Runtime and proof-envelope validation consume the
 canonical Norito bytes; JSON remains an operator view and is never re-encoded
 into a trust anchor. A partial candidate or finalization failure cannot expose
 an active generation.
+
+Production generation, candidate validation, and finalization intentionally
+have no fault-injection option. Such an option would add a test backdoor to the
+exact release command surface and could contaminate source-sealed evidence.
+Negative qualification remains the candidate-preserving `validate-candidate` gate over a
+deliberately substituted copy, together with the existing role/header/key
+substitution and pre-/post-rename atomic-publication regressions. Those tests
+remain the failure-path authority; operators must not simulate them by adding
+a production flag.
+
+Kagami publishes both promotion records and prepared activation instruction
+files through the same descriptor-relative, no-replace durable-file primitive.
+It syncs the private file before rename and the pinned parent afterward. A
+failure after the rename is reported as the exact
+`iroha.kagami.kagemusha.durable_file_publication.v1` `commit-uncertain` record
+with exit status 75; it is never collapsed into ordinary success or a safely
+retryable pre-commit error.
 
 The bridge's bounded V4 ingestion authenticates headers, descriptors, framed
 and payload hashes, inline circuit-parameter identities, and the exact

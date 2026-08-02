@@ -19,6 +19,8 @@ WORKSPACE=""
 OUTPUT_DIR=""
 VALIDATOR_RELEASE_REF=""
 VALIDATOR_LOCK_SHA256=""
+CONTROLLER_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+WORKSPACE_MANIFEST_TOOL="$CONTROLLER_ROOT/scripts/compute_workspace_source_manifest.py"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -60,6 +62,10 @@ if [[ ! "$VALIDATOR_LOCK_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 if [[ -z "$WORKSPACE" || "$WORKSPACE" != /* || ! -d "$WORKSPACE" || -L "$WORKSPACE" ]]; then
   echo "workspace must be an absolute non-symlink directory" >&2
+  exit 1
+fi
+if [[ ! -f "$WORKSPACE_MANIFEST_TOOL" || -L "$WORKSPACE_MANIFEST_TOOL" ]]; then
+  echo "sealed workspace source-manifest controller is missing" >&2
   exit 1
 fi
 if [[ "$(cd "$WORKSPACE" && pwd -P)" != "$WORKSPACE" ]]; then
@@ -142,7 +148,7 @@ python3 "$release_dir/iroha_source_bundle.py" verify \
   --bundle-dir "$bundle_dir"
 
 workspace_manifest="$(
-  python3 -I -S "$WORKSPACE/scripts/compute_workspace_source_manifest.py" \
+  python3 -I -S "$WORKSPACE_MANIFEST_TOOL" \
     --root "$WORKSPACE"
 )"
 [[ "$workspace_manifest" =~ ^[0-9a-f]{64}$ ]]
@@ -186,6 +192,7 @@ for field in required:
 
 output = Path(os.environ["OUTPUT_DIR"])
 build_provenance = {
+    "dpn_validator_release_commit": os.environ["VALIDATOR_RELEASE_REF"],
     "iroha_git_head": os.environ["GIT_HEAD"],
     "iroha_source_attested": True,
     "iroha_source_bundle_provenance_sha256": hashlib.sha256(
@@ -196,12 +203,13 @@ build_provenance = {
     "iroha_worktree_clean": os.environ["IROHA_WORKTREE_CLEAN"] == "True",
     "schema_version": 1,
     "validator_lock_sha256": os.environ["VALIDATOR_LOCK_SHA256"],
+    "workspace_source_manifest_sha256": os.environ["WORKSPACE_MANIFEST"],
 }
 identity = {
-    "dpn_validator_release_commit": os.environ["VALIDATOR_RELEASE_REF"],
     "source": {
         "cargo_lock_sha256": os.environ["VALIDATOR_LOCK_SHA256"],
         "commit": os.environ["GIT_HEAD"],
+        "dpn_validator_release_commit": os.environ["VALIDATOR_RELEASE_REF"],
         "workspace_source_manifest_sha256": os.environ["WORKSPACE_MANIFEST"],
     },
     "source_date_epoch": int(os.environ["SOURCE_DATE_EPOCH"]),
@@ -220,7 +228,7 @@ for name, payload in (
 PY
 
 test "$(
-  python3 -I -S "$WORKSPACE/scripts/compute_workspace_source_manifest.py" \
+  python3 -I -S "$WORKSPACE_MANIFEST_TOOL" \
     --root "$WORKSPACE"
 )" = "$workspace_manifest"
 echo "Taira release source reconstructed: $OUTPUT_DIR/taira-source-identity-v1.json"

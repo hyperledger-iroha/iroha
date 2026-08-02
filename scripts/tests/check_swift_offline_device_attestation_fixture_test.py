@@ -28,7 +28,7 @@ def generator_output() -> bytes:
         b"0011\n"
         + (b"22" * 32)
         + b"\n"
-        + "sorau\u30ed1fixture".encode()
+        + "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".encode()
         + b"\n"
         + (b"33" * 32)
         + b"\n"
@@ -44,7 +44,7 @@ def test_render_fixture_maps_the_strict_five_line_contract() -> None:
         "generated_by": "kotlin-fixture-gen offline-device-attestation",
         "registration_hex": "abcd",
         "challenge_hash_hex": "22" * 32,
-        "account_id": "sorau\u30ed1fixture",
+        "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         "registration_id_hex": "33" * 32,
     }
     assert rendered.endswith(b"\n")
@@ -84,6 +84,10 @@ def test_generator_command_selects_direct_binary_or_locked_cargo() -> None:
         "--quiet",
         "--locked",
         "-p",
+        "kotlin-fixture-gen",
+        "--features",
+        "dev-tools",
+        "--bin",
         "kotlin-fixture-gen",
         "--",
         "offline-device-attestation",

@@ -64,8 +64,12 @@ mod model {
         Peer(peer::PeerEvent),
         /// Domain event
         Domain(domain::DomainEvent),
-        /// Asset-definition event whose origin does not map to a domain event.
-        AssetDefinitionStandalone(asset::StandaloneAssetDefinitionEvent),
+        /// Account event without fabricated domain routing context.
+        Account(account::AccountEvent),
+        /// Asset event without domain routing context.
+        Asset(asset::AssetEvent),
+        /// Asset-definition event without domain routing context.
+        AssetDefinition(asset::AssetDefinitionEvent),
         /// Trigger event
         Trigger(trigger::TriggerEvent),
         /// Role event
@@ -88,6 +92,8 @@ mod model {
         Soradns(super::soradns::SoradnsDirectoryEvent),
         /// `SoraFS` gateway compliance events
         Sorafs(super::sorafs::SorafsGatewayEvent),
+        /// Musubi package-registry and archive lifecycle events
+        Musubi(super::musubi::MusubiEvent),
         /// Space Directory manifest lifecycle events
         SpaceDirectory(super::space_directory::SpaceDirectoryEvent),
         /// Native asset escrow lifecycle events
@@ -582,17 +588,6 @@ mod asset {
             /// Account that performed the mint.
             pub authority: AccountId,
         }
-
-        /// Wrapper for asset-definition events that cannot be grouped under a domain event.
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
-        #[repr(transparent)]
-        pub struct StandaloneAssetDefinitionEvent {
-            /// Asset-definition event payload.
-            pub event: AssetDefinitionEvent,
-        }
     }
 }
 
@@ -920,9 +915,6 @@ mod account {
             Created(AccountCreated),
             /// Account was deleted.
             Deleted(AccountId),
-            #[has_origin(asset_event => &asset_event.origin().account)]
-            /// Nested asset event scoped to this account.
-            Asset(AssetEvent),
             #[has_origin(controller_replaced => &controller_replaced.account)]
             /// Account controller was replaced while preserving linked state.
             ControllerReplaced(AccountControllerReplaced),
@@ -982,12 +974,11 @@ mod account {
     mod model {
         use super::*;
 
-        /// Account creation payload with explicit domain context.
+        /// Account creation payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountCreated {
             pub account: Account,
-            pub domain: DomainId,
         }
 
         /// Depending on the wrapping event, [`AccountPermissionChanged`] role represents the added or removed account role
@@ -1125,56 +1116,10 @@ mod account {
     }
 
     impl AccountCreated {
-        /// Construct a new account-created payload with explicit domain context.
+        /// Construct a new account-created payload.
         #[must_use]
-        pub fn new(account: Account, domain: DomainId) -> Self {
-            Self { account, domain }
-        }
-    }
-
-    impl AccountEvent {
-        /// Return the explicit domain context carried by this event when wrapped as a [`DomainEvent`].
-        #[must_use]
-        pub fn origin_domain(&self) -> &DomainId {
-            match self {
-                Self::Created(created) => &created.domain,
-                Self::Asset(asset_event) => asset_event
-                    .origin()
-                    .definition
-                    .try_domain()
-                    .expect("domain event requires a domain-scoped asset definition id"),
-                other => {
-                    panic!("domain context is not embedded in account event variant {other:?}")
-                }
-            }
-        }
-    }
-
-    impl AssetDefinitionEvent {
-        /// Return the domain context when the asset-definition origin is still domain-scoped.
-        #[must_use]
-        pub fn try_origin_domain(&self) -> Option<&DomainId> {
-            match self {
-                Self::Created(asset_definition) => asset_definition.id().try_domain(),
-                Self::Deleted(asset_definition_id)
-                | Self::MintabilityChanged(asset_definition_id) => asset_definition_id.try_domain(),
-                Self::MetadataInserted(metadata_changed)
-                | Self::MetadataRemoved(metadata_changed) => metadata_changed.target.try_domain(),
-                Self::MintabilityChangedDetailed(mintability_changed) => {
-                    mintability_changed.asset_definition.try_domain()
-                }
-                Self::TotalQuantityChanged(total_quantity_changed) => {
-                    total_quantity_changed.asset_definition.try_domain()
-                }
-                Self::OwnerChanged(owner_changed) => owner_changed.asset_definition.try_domain(),
-            }
-        }
-
-        /// Return the domain context required by [`DomainEvent::AssetDefinition`].
-        #[must_use]
-        pub fn origin_domain(&self) -> &DomainId {
-            self.try_origin_domain()
-                .expect("domain event requires a domain-scoped asset definition id")
+        pub fn new(account: Account) -> Self {
+            Self { account }
         }
     }
 }
@@ -1392,18 +1337,21 @@ mod domain {
             Created(Domain),
             /// Domain was deleted.
             Deleted(DomainId),
-            #[has_origin(asset_definition_event => asset_definition_event.origin_domain())]
+            #[has_origin(scoped => &scoped.domain)]
             /// Asset-definition event occurred in the domain scope.
-            AssetDefinition(AssetDefinitionEvent),
+            AssetDefinition(ScopedAssetDefinition),
+            #[has_origin(scoped => &scoped.domain)]
+            /// Asset event occurred in the domain scope.
+            Asset(ScopedAsset),
             #[has_origin(nft_event => &nft_event.origin().domain)]
             /// NFT event occurred in the domain scope.
             Nft(NftEvent),
             #[has_origin(rwa_event => &rwa_event.origin().domain)]
             /// RWA event occurred in the domain scope.
             Rwa(RwaEvent),
-            #[has_origin(account_event => account_event.origin_domain())]
+            #[has_origin(scoped => &scoped.domain)]
             /// Account event occurred in the domain scope.
-            Account(AccountEvent),
+            Account(ScopedAccount),
             #[has_origin(link_changed => &link_changed.domain)]
             /// Account subject was linked to the domain.
             AccountLinked(AccountDomainLinkChanged),
@@ -1465,6 +1413,36 @@ mod domain {
         pub struct DomainOwnerChanged {
             pub domain: DomainId,
             pub new_owner: AccountId,
+        }
+
+        /// Account event paired with an explicit, authoritative routing domain.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct ScopedAccount {
+            /// Authoritative domain routing context.
+            pub domain: DomainId,
+            /// Account event payload.
+            pub event: AccountEvent,
+        }
+
+        /// Asset event paired with an explicit, authoritative routing domain.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct ScopedAsset {
+            /// Authoritative asset-definition domain context.
+            pub domain: DomainId,
+            /// Asset event payload.
+            pub event: AssetEvent,
+        }
+
+        /// Asset-definition event paired with an explicit, authoritative routing domain.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct ScopedAssetDefinition {
+            /// Authoritative asset-definition domain context.
+            pub domain: DomainId,
+            /// Asset-definition event payload.
+            pub event: AssetDefinitionEvent,
         }
 
         /// Account-domain link payload emitted when membership links change.
@@ -2566,28 +2544,6 @@ pub trait HasOrigin {
     fn origin(&self) -> &<Self::Origin as Identifiable>::Id;
 }
 
-impl From<AccountEvent> for DataEvent {
-    fn from(value: AccountEvent) -> Self {
-        DomainEvent::Account(value).into()
-    }
-}
-
-impl From<AssetDefinitionEvent> for DataEvent {
-    fn from(value: AssetDefinitionEvent) -> Self {
-        if value.try_origin_domain().is_some() {
-            DomainEvent::AssetDefinition(value).into()
-        } else {
-            Self::AssetDefinitionStandalone(asset::StandaloneAssetDefinitionEvent { event: value })
-        }
-    }
-}
-
-impl From<AssetEvent> for DataEvent {
-    fn from(value: AssetEvent) -> Self {
-        AccountEvent::Asset(value).into()
-    }
-}
-
 impl From<NftEvent> for DataEvent {
     fn from(value: NftEvent) -> Self {
         DomainEvent::Nft(value).into()
@@ -2601,11 +2557,40 @@ impl From<RwaEvent> for DataEvent {
 }
 
 impl DataEvent {
+    /// Route an account event under a real domain context carried by the emitting operation.
+    #[must_use]
+    pub fn account_in_domain(event: AccountEvent, domain: DomainId) -> Self {
+        Self::Domain(DomainEvent::Account(domain::ScopedAccount {
+            domain,
+            event,
+        }))
+    }
+
+    /// Route an asset event using its authoritative persisted definition domain.
+    #[must_use]
+    pub fn asset(event: AssetEvent, domain: Option<DomainId>) -> Self {
+        match domain {
+            Some(domain) => Self::Domain(DomainEvent::Asset(domain::ScopedAsset { domain, event })),
+            None => event.into(),
+        }
+    }
+
+    /// Route an asset-definition event using its authoritative persisted domain.
+    #[must_use]
+    pub fn asset_definition(event: AssetDefinitionEvent, domain: Option<DomainId>) -> Self {
+        match domain {
+            Some(domain) => Self::Domain(DomainEvent::AssetDefinition(
+                domain::ScopedAssetDefinition { domain, event },
+            )),
+            None => event.into(),
+        }
+    }
+
     /// Return the domain id of [`DataEvent`]
     pub fn domain(&self) -> Option<&DomainId> {
         match self {
             Self::Domain(event) => Some(event.origin()),
-            Self::AssetDefinitionStandalone(event) => event.event.try_origin_domain(),
+            Self::Account(_) | Self::Asset(_) | Self::AssetDefinition(_) => None,
             #[cfg(feature = "governance")]
             Self::Governance(_) => None,
             _ => None,
@@ -2617,37 +2602,111 @@ impl DataEvent {
 mod event_routing_tests {
     use super::{
         DataEvent,
-        asset::{AssetDefinitionEvent, StandaloneAssetDefinitionEvent},
+        asset::{AssetChanged, AssetDefinitionEvent, AssetEvent},
         confidential::ConfidentialUnshielded,
-        domain::DomainEvent,
+        domain::{DomainEvent, ScopedAsset, ScopedAssetDefinition},
     };
-    use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId};
+    use crate::{
+        PublicKey,
+        account::AccountId,
+        asset::{AssetDefinitionId, AssetId},
+        domain::DomainId,
+    };
 
     #[test]
     fn opaque_asset_definition_events_route_without_domain_wrapper() {
         let domain_id: DomainId = DomainId::try_new("reward", "universal").expect("domain");
-        let scoped_definition =
-            AssetDefinitionId::new(domain_id.clone(), "fee".parse().expect("asset name"));
+        let scoped_definition = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "fee".parse().expect("asset name"),
+        );
         let opaque_definition: AssetDefinitionId = scoped_definition
             .to_string()
             .parse()
             .expect("opaque canonical asset definition id");
 
         let opaque_event = AssetDefinitionEvent::Deleted(opaque_definition.clone());
-        assert!(opaque_event.try_origin_domain().is_none());
         assert!(matches!(
             DataEvent::from(opaque_event.clone()),
-            DataEvent::AssetDefinitionStandalone(StandaloneAssetDefinitionEvent {
-                event: AssetDefinitionEvent::Deleted(id),
-            }) if id == opaque_definition
+            DataEvent::AssetDefinition(AssetDefinitionEvent::Deleted(id))
+                if id == opaque_definition
         ));
         assert!(DataEvent::from(opaque_event).domain().is_none());
 
         let scoped_event = AssetDefinitionEvent::Deleted(scoped_definition);
         assert!(matches!(
-            DataEvent::from(scoped_event),
-            DataEvent::Domain(DomainEvent::AssetDefinition(_))
+            DataEvent::asset_definition(scoped_event, Some(domain_id.clone())),
+            DataEvent::Domain(DomainEvent::AssetDefinition(ScopedAssetDefinition {
+                domain,
+                ..
+            })) if domain == domain_id
         ));
+    }
+
+    #[test]
+    fn opaque_asset_events_route_without_domain_wrapper() {
+        let domain_id: DomainId = DomainId::try_new("reward", "universal").expect("domain");
+        let scoped_definition = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "fee".parse().expect("asset name"),
+        );
+        let opaque_definition: AssetDefinitionId = scoped_definition
+            .to_string()
+            .parse()
+            .expect("opaque canonical asset definition id");
+        let public_key: PublicKey =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key");
+        let account_id = AccountId::new(public_key);
+        let asset_id = AssetId::of(opaque_definition, account_id);
+        let opaque_event = AssetEvent::Added(AssetChanged {
+            asset: asset_id.clone(),
+            amount: 1_u32.into(),
+        });
+
+        assert!(matches!(
+            DataEvent::from(opaque_event.clone()),
+            DataEvent::Asset(AssetEvent::Added(change)) if change.asset == asset_id
+        ));
+        assert!(DataEvent::from(opaque_event).domain().is_none());
+
+        let scoped = DataEvent::asset(
+            AssetEvent::Added(AssetChanged {
+                asset: asset_id,
+                amount: 1_u32.into(),
+            }),
+            Some(domain_id.clone()),
+        );
+        assert!(matches!(
+            &scoped,
+            DataEvent::Domain(DomainEvent::Asset(ScopedAsset { domain, .. }))
+                if domain == &domain_id
+        ));
+
+        let encoded = norito::codec::Encode::encode(&scoped);
+        let decoded = <DataEvent as norito::codec::Decode>::decode(&mut encoded.as_slice())
+            .expect("decode explicitly scoped opaque asset event");
+        assert_eq!(decoded, scoped);
+        assert_eq!(decoded.domain(), Some(&domain_id));
+    }
+
+    #[test]
+    fn domainless_account_event_roundtrips_without_domain_wrapper() {
+        let public_key: PublicKey =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key");
+        let account_id = AccountId::new(public_key);
+        let event = DataEvent::from(super::account::AccountEvent::Deleted(account_id));
+        assert!(matches!(event, DataEvent::Account(_)));
+        assert!(event.domain().is_none());
+
+        let encoded = norito::codec::Encode::encode(&event);
+        let decoded = <DataEvent as norito::codec::Decode>::decode(&mut encoded.as_slice())
+            .expect("decode domainless account event");
+        assert_eq!(decoded, event);
+        assert!(decoded.domain().is_none());
     }
 
     #[test]
@@ -2656,7 +2715,7 @@ mod event_routing_tests {
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
         let domain = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let event = ConfidentialUnshielded {
-            asset_definition: AssetDefinitionId::new(
+            asset_definition: AssetDefinitionId::derive_from_components(
                 domain,
                 "rose".parse().expect("valid asset name"),
             ),
@@ -2728,7 +2787,8 @@ pub mod prelude {
         domain::{
             AccountDomainLinkChanged, DomainEvent, DomainEventSet, DomainOwnerChanged,
             KaigiRelayHealthSummary, KaigiRelayManifestSummary, KaigiRelayRegistrationSummary,
-            KaigiRosterSummary, KaigiUsageSummary, StreamingPrivacyRelay, StreamingPrivacyRoute,
+            KaigiRosterSummary, KaigiUsageSummary, ScopedAccount, ScopedAsset,
+            ScopedAssetDefinition, StreamingPrivacyRelay, StreamingPrivacyRoute,
             StreamingRouteBinding, StreamingSoranetAccessKind, StreamingSoranetRoute,
             StreamingSoranetStreamTag, StreamingTicketCapabilities, StreamingTicketPolicy,
             StreamingTicketReady, StreamingTicketRecord, StreamingTicketRevoked,

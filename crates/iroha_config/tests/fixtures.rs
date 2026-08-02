@@ -28,7 +28,7 @@ use iroha_config::parameters::{
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
 };
 use iroha_config_base::{env::MockEnv, read::ConfigReader};
-use iroha_crypto::{Algorithm, PublicKey};
+use iroha_crypto::{Algorithm, Hash, PublicKey};
 use iroha_data_model::{account::AccountId, name::Name};
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
@@ -87,7 +87,6 @@ fn strip_ansi_codes(input: &str) -> String {
 }
 
 struct AddressRuntimeGuard {
-    default_domain_label: std::sync::Arc<str>,
     chain_discriminant: u16,
     _lock: MutexGuard<'static, ()>,
 }
@@ -99,7 +98,6 @@ impl AddressRuntimeGuard {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self {
-            default_domain_label: iroha_data_model::account::address::default_domain_name(),
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             _lock: lock,
         }
@@ -108,9 +106,6 @@ impl AddressRuntimeGuard {
 
 impl Drop for AddressRuntimeGuard {
     fn drop(&mut self) {
-        let _ = iroha_data_model::account::address::set_default_domain_name(
-            self.default_domain_label.to_string(),
-        );
         iroha_data_model::account::address::set_chain_discriminant(self.chain_discriminant);
     }
 }
@@ -312,12 +307,6 @@ fn minimal_config_snapshot() {
                         path: "tests/fixtures/base_trusted_peers.toml",
                     },
                 },
-                default_account_domain_label: WithOrigin {
-                    value: "default.universal",
-                    origin: Default {
-                        id: ParameterId(default_account_domain_label),
-                    },
-                },
                 chain_discriminant: WithOrigin {
                     value: 753,
                     origin: Default {
@@ -415,7 +404,9 @@ fn minimal_config_snapshot() {
                     dns_servers: [
                         "1.1.1.1",
                     ],
-                    relay_tls_spki_sha256_hex: None,
+                    relay_id: None,
+                    guard_directory_path: None,
+                    guard_directory_digest: None,
                 },
                 lane_profile: Core,
                 require_sm_handshake_match: true,
@@ -540,7 +531,7 @@ fn minimal_config_snapshot() {
                 ),
                 file: None,
                 manifest_json: None,
-                expected_hash: None,
+                expected_hash: { iroha_crypto::hash::HashOf<iroha_data_model::block::BlockHeader> 0000000000000000000000000000000000000000000000000000000000000001 },
             },
             torii: Torii {
                 address: WithOrigin {
@@ -618,7 +609,12 @@ fn minimal_config_snapshot() {
                     ),
                     allow_cidrs: [],
                 },
-                api_allow_cidrs: [],
+                privacy_bootle_lantern_issuer: None,
+                api_rate_limit_bypass_cidrs: [],
+                internal_api_trusted_cidrs: [
+                    "127.0.0.1/32",
+                    "::1/128",
+                ],
                 peer_telemetry_urls: [],
                 peer_geo: ToriiPeerGeo {
                     enabled: false,
@@ -673,6 +669,7 @@ fn minimal_config_snapshot() {
                 preauth_temp_ban: Some(
                     60s,
                 ),
+                preauth_ban_capacity: 4096,
                 preauth_allow_cidrs: [],
                 preauth_scheme_limits: [],
                 api_high_load_tx_threshold: None,
@@ -1143,7 +1140,6 @@ fn minimal_config_snapshot() {
                         ),
                         max_sites: 1024,
                     },
-                    cdn_policy_path: None,
                     rate_limit: SorafsGatewayRateLimit {
                         max_requests: Some(
                             300,
@@ -2541,9 +2537,6 @@ fn minimal_config_snapshot() {
                 },
             },
             ivm: Ivm {
-                memory_budget_profile: Name(
-                    "cpu-small",
-                ),
                 banner: Banner {
                     show: true,
                     beep: true,
@@ -2631,10 +2624,7 @@ fn minimal_config_snapshot() {
                     max_bn254_pairing_checks_per_transaction: 1,
                     max_bn254_pairing_checks_per_block: 4,
                 },
-                root_history_cap: 2048,
                 ballot_history_cap: 1024,
-                empty_root_on_empty: false,
-                merkle_depth: 0,
                 preverify_max_bytes: 1048576,
                 preverify_budget_bytes: 0,
                 proof_history_cap: 4096,
@@ -3035,8 +3025,6 @@ fn minimal_config_snapshot() {
                 scheduler_stack_bytes: 33554432,
                 prover_stack_bytes: 33554432,
                 sumeragi_stack_bytes: 67108864,
-                guest_stack_bytes: 4194304,
-                gas_to_stack_multiplier: 4,
             },
             confidential: Confidential {
                 enabled: false,
@@ -3192,7 +3180,11 @@ fn torii_ram_lfe_parses() {
     let program = &runtime.programs[0];
     let expected_program_id = "phone_retail".parse().expect("program id");
     assert_eq!(program.program_id, expected_program_id);
-    assert_eq!(program.secret, vec![0x01, 0x02, 0x03, 0x04]);
+    assert_eq!(program.secret.as_bytes(), &[0x01, 0x02, 0x03, 0x04]);
+    let debug = format!("{runtime:?}");
+    assert!(debug.contains("REDACTED RAM-LFE secret"));
+    assert!(!debug.contains("01020304"));
+    assert!(!debug.contains("4e525430"));
     assert_eq!(
         program.receipt_ttl,
         Some(Duration::from_millis(30_000)),
@@ -3233,26 +3225,6 @@ fn ivm_banner_override_applies() {
     assert!(
         !config.ivm.banner.beep,
         "override should disable beep rendering"
-    );
-}
-
-#[test]
-fn ivm_memory_budget_profile_defaults_to_compute_profile() {
-    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
-        .expect("config should be valid");
-    assert_eq!(
-        config.ivm.memory_budget_profile,
-        config.compute.default_resource_profile
-    );
-}
-
-#[test]
-fn ivm_memory_budget_profile_override_applies() {
-    let config = load_config_from_fixtures("ivm_memory_budget_profile_override.toml")
-        .expect("config should be valid");
-    assert_eq!(
-        config.ivm.memory_budget_profile,
-        Name::from_str("cpu-balanced").expect("valid profile name")
     );
 }
 
@@ -3677,14 +3649,27 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .expect("workspace root")
         .join("defaults/nexus/config.toml");
 
+    let source = fs::read_to_string(&config_path).expect("read Nexus signing profile");
+    let mut table: toml::Table = toml::from_str(&source).expect("parse Nexus signing profile");
+    let expected_hash = table
+        .get_mut("genesis")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|genesis| genesis.get_mut("expected_hash"))
+        .expect("Nexus signing profile expected-hash placeholder");
+    assert_eq!(
+        expected_hash.as_str(),
+        Some("REPLACE_WITH_GENESIS_EXPECTED_HASH")
+    );
+    // Substitute only inside this inspection test; the checked-in profile must fail runtime
+    // normalization until an operator provisions the signed genesis hash.
+    *expected_hash = TomlValue::String(
+        Hash::new(b"iroha-config non-runtime Nexus profile inspection").to_string(),
+    );
+
     let config = ConfigReader::new()
-        .read_toml_with_extends(&config_path)
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(table))
+        .read_and_complete::<UserConfig>()
         .change_context(FixtureConfigLoadError)
-        .and_then(|reader| {
-            reader
-                .read_and_complete::<UserConfig>()
-                .change_context(FixtureConfigLoadError)
-        })
         .and_then(|user| user.parse().change_context(FixtureConfigLoadError))
         .expect("Nexus profile config should parse");
 
@@ -4363,20 +4348,14 @@ fn config_with_genesis() {
 }
 
 #[test]
-fn parse_applies_default_account_domain_override_during_config_parse() {
+fn parse_does_not_apply_chain_discriminant_runtime_setting() {
     let _runtime_guard = AddressRuntimeGuard::capture();
 
-    iroha_data_model::account::address::set_default_domain_name("sora")
-        .expect("set baseline default domain");
     iroha_data_model::account::address::set_chain_discriminant(0x02F1);
 
-    let config = load_config_from_fixtures("minimal_default_account_domain.toml")
-        .expect("config with domain override should parse");
+    let config = load_config_from_fixtures("minimal_chain_discriminant.toml")
+        .expect("config with chain discriminant should parse");
 
-    assert_eq!(
-        config.common.default_account_domain_label.value(),
-        "wonderland"
-    );
     assert_eq!(*config.common.chain_discriminant.value(), 777);
     assert_eq!(
         config.gov.bond_escrow_account,
@@ -4389,10 +4368,6 @@ fn parse_applies_default_account_domain_override_during_config_parse() {
     assert_eq!(
         config.gov.slash_receiver_account,
         defaults::governance::slash_receiver_account_id()
-    );
-    assert_eq!(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "sora"
     );
     assert_eq!(
         iroha_data_model::account::address::chain_discriminant(),
@@ -4438,15 +4413,6 @@ fn extra_fields() {
     assert_contains!(msg, "Found unrecognised parameters");
     assert_contains!(msg, "unknown parameter: `bar`");
     assert_contains!(msg, "unknown parameter: `foo`");
-}
-
-#[test]
-fn ivm_memory_budget_profile_must_exist() {
-    let error = load_config_from_fixtures("bad.ivm_memory_budget_profile.toml")
-        .expect_err("should fail with unknown memory budget profile");
-    let msg = strip_ansi_codes(&format!("{error:?}"));
-    assert_contains!(msg, "ivm.memory_budget_profile");
-    assert_contains!(msg, "compute.resource_profiles");
 }
 
 #[test]
@@ -5199,6 +5165,26 @@ fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
         cfg.torii.transport.trusted_proxy_cidrs.is_empty(),
         "trusted proxy CIDRs should default to empty until operators opt in"
     );
+}
+
+#[test]
+fn torii_internal_api_trust_defaults_to_exact_loopback_hosts() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+
+    assert_eq!(
+        cfg.torii.internal_api_trusted_cidrs,
+        ["127.0.0.1/32", "::1/128"],
+    );
+    assert!(cfg.torii.api_rate_limit_bypass_cidrs.is_empty());
 }
 
 #[test]

@@ -1094,20 +1094,17 @@ fn preflight_singular_source_materialization(
         SingularQueryBox::FindDataspaceNameOwnerById(_) => {
             return Err(reject_unbounded("FindDataspaceNameOwnerById"));
         }
-        SingularQueryBox::FindMusubiReleaseByRef(_) => {
-            return Err(reject_unbounded("FindMusubiReleaseByRef"));
-        }
-        SingularQueryBox::FindMusubiPackageVersions(_) => {
-            return Err(reject_unbounded("FindMusubiPackageVersions"));
-        }
-        SingularQueryBox::FindMusubiPackageReleases(_) => {
-            return Err(reject_unbounded("FindMusubiPackageReleases"));
-        }
-        SingularQueryBox::SearchMusubiPackages(_) => {
-            return Err(reject_unbounded("SearchMusubiPackages"));
-        }
-        SingularQueryBox::FindMusubiShortAliasByName(_) => {
-            return Err(reject_unbounded("FindMusubiShortAliasByName"));
+        SingularQueryBox::FindMusubiExactPackageV1(_)
+        | SingularQueryBox::FindMusubiExactReleaseV1(_)
+        | SingularQueryBox::FindMusubiResolverIndexV1(_)
+        | SingularQueryBox::FindMusubiVersionsV1(_)
+        | SingularQueryBox::FindMusubiMaintainersV1(_)
+        | SingularQueryBox::FindMusubiArchiveLocationsV1(_)
+        | SingularQueryBox::FindMusubiArchiveRetentionV1(_)
+        | SingularQueryBox::FindMusubiAliasV1(_)
+        | SingularQueryBox::FindMusubiAliasHistoryV1(_)
+        | SingularQueryBox::FindMusubiOrderedPrefixV1(_) => {
+            return Err(reject_unbounded("Musubi V1 query"));
         }
         SingularQueryBox::FindNftById(query) => {
             if let Ok(nft) = world.nft(query.nft_id()) {
@@ -1370,19 +1367,34 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindDataspaceNameOwnerById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindMusubiReleaseByRef(q) => {
+            SingularQueryBox::FindMusubiExactPackageV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindMusubiPackageVersions(q) => {
+            SingularQueryBox::FindMusubiExactReleaseV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindMusubiPackageReleases(q) => {
+            SingularQueryBox::FindMusubiResolverIndexV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::SearchMusubiPackages(q) => {
+            SingularQueryBox::FindMusubiVersionsV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindMusubiShortAliasByName(q) => {
+            SingularQueryBox::FindMusubiMaintainersV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiArchiveLocationsV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiArchiveRetentionV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiAliasV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiAliasHistoryV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiOrderedPrefixV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindDomainById(q) => {
@@ -3521,6 +3533,7 @@ app_api_max_fetch_size = {max_fetch_size}
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -3556,6 +3569,7 @@ query_max_fetch_size = {max_fetch_size}
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -6495,6 +6509,26 @@ mod tests {
             .expect("query algorithm-specific fixture key generation should succeed")
     }
 
+    fn grant_global_reader(world: &mut World, authority: &AccountId) {
+        let permission: Permission =
+            iroha_executor_data_model::permission::query::CanReadAllLedgerData.into();
+        let mut permissions = world
+            .account_permissions
+            .view()
+            .get(authority)
+            .cloned()
+            .unwrap_or_default();
+        permissions.insert(permission);
+        world
+            .account_permissions
+            .insert(authority.clone(), permissions);
+    }
+
+    fn with_global_reader(mut world: World, authority: &AccountId) -> World {
+        grant_global_reader(&mut world, authority);
+        world
+    }
+
     fn find_transactions_request_with_filter(
         params: QueryParams,
         filter: CompoundPredicate<CommittedTransaction>,
@@ -6618,7 +6652,7 @@ mod tests {
         );
 
         let other_parameterized_payload = norito::codec::Encode::encode(&FindAccountsWithAsset {
-            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("valid domain"),
                 "rose".parse().expect("valid asset name"),
             ),
@@ -6668,7 +6702,7 @@ mod tests {
         });
         trailing_parameterized.push(0x5A);
         let cross_variant = norito::codec::Encode::encode(&FindAccountsWithAsset {
-            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("valid domain"),
                 "rose".parse().expect("valid asset name"),
             ),
@@ -6704,7 +6738,7 @@ mod tests {
         }
 
         let cross_variant = norito::codec::Encode::encode(&FindAccountsWithAsset {
-            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("valid domain"),
                 "rose".parse().expect("valid asset name"),
             ),
@@ -6789,7 +6823,7 @@ mod tests {
     #[tokio::test]
     async fn validate_for_client_world_parts_matches_state_view_path() {
         let state = State::new_for_testing(
-            World::new(),
+            World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -6813,6 +6847,32 @@ mod tests {
             limits,
         )
         .expect("world validation should pass");
+    }
+
+    #[test]
+    fn fresh_client_facade_rejects_bare_continue_before_store_lookup() {
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+        let world_view = world.view();
+        let cursor = iroha_data_model::query::parameters::ForwardCursor {
+            query: "unresolved-cursor".to_owned(),
+            cursor: nonzero!(1_u64),
+            gas_budget: None,
+        };
+
+        let error = validate_fresh_query_for_client_world_parts(
+            QueryRequest::Continue(cursor),
+            &ALICE_ID,
+            &world_view,
+            None,
+            QueryLimits::default(),
+        )
+        .expect_err("a bare continuation must never enter reusable raw validation");
+
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("store-aware snapshot corridor")),
+            "unexpected bare-continuation rejection: {error:?}"
+        );
     }
 
     #[tokio::test]
@@ -8281,12 +8341,22 @@ mod tests {
         let domain_id = DomainId::try_new("wonderland", "universal").expect("Valid");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let asset_definition = AssetDefinition::numeric(asset_definition_id).build(&ALICE_ID);
-        World::with([domain], [account], [asset_definition])
+        let asset_definition_id =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id,
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
+        with_global_reader(
+            World::with([domain], [account], [asset_definition]),
+            &ALICE_ID,
+        )
     }
 
     #[cfg(feature = "bls")]
@@ -8563,7 +8633,9 @@ mod tests {
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::domain::prelude::FindDomains,
+            ),
             item: iroha_data_model::query::QueryItemKind::Domain,
             predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
@@ -8610,12 +8682,18 @@ mod tests {
                     .build(&ALICE_ID);
             let account =
                 iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("w", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let ad = iroha_data_model::asset::definition::AssetDefinition::numeric(ad_id.clone())
-                .build(&ALICE_ID);
+            let ad_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("w", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let ad = iroha_data_model::asset::definition::AssetDefinition::numeric(
+                ad_id.clone(),
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&ALICE_ID);
             let asset_id = AssetId::new(ad_id.clone(), ALICE_ID.clone());
             let asset = iroha_data_model::asset::value::Asset::new(asset_id.clone(), 10_u32);
 
@@ -8676,7 +8754,9 @@ mod tests {
         let predicate = CompoundPredicate::<iroha_data_model::asset::value::Asset>::PASS;
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::asset::prelude::FindAssets,
+            ),
             item: iroha_data_model::query::QueryItemKind::Asset,
             predicate_bytes: norito::codec::Encode::encode(&predicate),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<
@@ -8780,7 +8860,9 @@ mod tests {
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::nft::prelude::FindNfts,
+            ),
             item: iroha_data_model::query::QueryItemKind::Nft,
             predicate_bytes: norito::codec::Encode::encode(
                 &CompoundPredicate::<iroha_data_model::nft::Nft>::PASS,
@@ -8883,7 +8965,9 @@ mod tests {
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::account::prelude::FindAccounts,
+            ),
             item: iroha_data_model::query::QueryItemKind::Account,
             predicate_bytes: norito::codec::Encode::encode(
                 &CompoundPredicate::<iroha_data_model::account::Account>::PASS,
@@ -8970,7 +9054,9 @@ mod tests {
         // fast_dsl path
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::block::prelude::FindBlockHeaders,
+            ),
             item: iroha_data_model::query::QueryItemKind::BlockHeader,
             predicate_bytes: norito::codec::Encode::encode(
                 &CompoundPredicate::<iroha_data_model::block::BlockHeader>::PASS,
@@ -9191,7 +9277,8 @@ mod tests {
             let mut tx = block.transaction();
             let exec = [Log::new(iroha_logger::Level::INFO, "x".into())];
             let filter = TimeEventFilter::new(ExecutionTime::PreCommit);
-            let action = Action::new(exec, Repeats::Indefinitely, ALICE_ID.clone(), filter);
+            let action = Action::new(exec, Repeats::Indefinitely, ALICE_ID.clone(), filter)
+                .expect("trigger action fixture satisfies validation invariants");
             let t1 = Trigger::new("t1".parse().unwrap(), action.clone())
                 .try_into()
                 .unwrap();
@@ -9415,19 +9502,25 @@ mod tests {
         let acc1 = Account::new(acc1_id.clone()).build(&ALICE_ID);
         let acc2 = Account::new(acc2_id.clone()).build(&ALICE_ID);
         let ad1 = AssetDefinition::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("w", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
+            "rose".to_owned(),
             NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(&ALICE_ID);
         let ad2 = AssetDefinition::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("w", "universal").unwrap(),
                 "tulip".parse().unwrap(),
             ),
+            "tulip".to_owned(),
             NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(&ALICE_ID);
         let world = World::with(
@@ -9666,10 +9759,15 @@ mod tests {
         use iroha_primitives::json::Json;
 
         let make = |name: &str| {
-            AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("w", "universal").unwrap(),
-                name.parse().unwrap(),
-            ))
+            AssetDefinition::numeric(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("w", "universal").unwrap(),
+                    name.parse().unwrap(),
+                ),
+                name.to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .with_metadata({
                 let mut metadata = Metadata::default();
                 metadata.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
@@ -9723,20 +9821,35 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap(),
-        ))
+        let ad3 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "peony".parse().unwrap(),
+            ),
+            "peony".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID); // no rank
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
@@ -9827,7 +9940,8 @@ mod tests {
             let mut tx = block.transaction();
             let exec = [Log::new(iroha_logger::Level::INFO, "x".into())];
             let filter = TimeEventFilter::new(ExecutionTime::PreCommit);
-            let action = Action::new(exec, Repeats::Indefinitely, ALICE_ID.clone(), filter);
+            let action = Action::new(exec, Repeats::Indefinitely, ALICE_ID.clone(), filter)
+                .expect("trigger action fixture satisfies validation invariants");
             let t1 = Trigger::new("t1".parse().unwrap(), action.clone())
                 .try_into()
                 .unwrap();
@@ -10111,7 +10225,9 @@ mod tests {
         };
         let iter_query = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::domain::prelude::FindDomains,
+            ),
             item: iroha_data_model::query::QueryItemKind::Domain,
             predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
@@ -10141,10 +10257,11 @@ mod tests {
 
         // World with a domain, ALICE account, one asset definition, and a minted asset
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let ad_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::new(ad_id.clone(), ALICE_ID.clone());
 
         let world = World::default();
@@ -10167,9 +10284,12 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
-        Register::asset_definition(
-            AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            ad_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
         Mint::asset_quantity(13_u32, asset_id.clone())
@@ -10239,10 +10359,11 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let (acc1_id, _) = iroha_test_samples::gen_account_in("wonderland");
         let (acc2_id, _) = iroha_test_samples::gen_account_in("wonderland");
-        let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let ad_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::new(ad_id.clone(), acc1_id.clone());
 
         let kura = Kura::blank_kura_for_testing();
@@ -10266,9 +10387,12 @@ mod tests {
         Register::account(Account::new(acc2_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account2");
-        Register::asset_definition(
-            AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            ad_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
         Mint::asset_quantity(1_u32, asset_id.clone())
@@ -10340,10 +10464,11 @@ mod tests {
             AssetDefinitionId,
         ) {
             let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-            let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
+            let ad_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
 
             let kura = Kura::blank_kura_for_testing();
             let store = std::sync::Arc::new(LiveQueryStore::from_config(
@@ -10368,9 +10493,12 @@ mod tests {
             Register::account(Account::new(BOB_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register BOB");
-            Register::asset_definition(
-                AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
-            )
+            Register::asset_definition(AssetDefinition::numeric(
+                ad_id.clone(),
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
             Mint::asset_quantity(5_u32, AssetId::new(ad_id.clone(), ALICE_ID.clone()))
@@ -11711,7 +11839,9 @@ mod tests {
 
         let qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::domain::prelude::FindDomains,
+            ),
             item: QueryItemKind::Domain,
             predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::ids_only()),
@@ -11798,15 +11928,25 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
+        let ad1 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        ))
+        let ad2 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
         let world = World::with([domain], [account], [ad1.clone(), ad2.clone()]);
 
@@ -11999,7 +12139,8 @@ mod tests {
                 Repeats::Indefinitely,
                 ALICE_ID.clone(),
                 TimeEventFilter::new(ExecutionTime::PreCommit),
-            );
+            )
+            .expect("trigger action fixture satisfies validation invariants");
             let t1 = Trigger::new("t1".parse().unwrap(), action.clone())
                 .try_into()
                 .unwrap();
@@ -12065,20 +12206,35 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap(),
-        ))
+        let ad3 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "peony".parse().unwrap(),
+            ),
+            "peony".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID); // no rank
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
@@ -12330,20 +12486,35 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap(),
-        ))
+        let ad3 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "peony".parse().unwrap(),
+            ),
+            "peony".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID); // no rank
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
@@ -12430,20 +12601,35 @@ mod tests {
         // Build three asset definitions with rank metadata: 0,1,2
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad0 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "a0".parse().unwrap(),
-        ))
+        let mut ad0 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "a0".parse().unwrap(),
+            ),
+            "a0".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "a1".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "a1".parse().unwrap(),
+            ),
+            "a1".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "a2".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "a2".parse().unwrap(),
+            ),
+            "a2".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
         ad0.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
@@ -12532,20 +12718,35 @@ mod tests {
         // Build three asset definitions with rank metadata: 0,1,2
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad0 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "a0".parse().unwrap(),
-        ))
+        let mut ad0 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "a0".parse().unwrap(),
+            ),
+            "a0".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "a1".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "a1".parse().unwrap(),
+            ),
+            "a1".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "a2".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "a2".parse().unwrap(),
+            ),
+            "a2".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
         ad0.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(0)));

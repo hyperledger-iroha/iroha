@@ -2554,7 +2554,7 @@ fn make_network_builder(
                 ]),
             )
             .write(
-                ["torii", "api_allow_cidrs"],
+                ["torii", "api_rate_limit_bypass_cidrs"],
                 TomlValue::Array(vec![
                     TomlValue::String("127.0.0.0/8".into()),
                     TomlValue::String("::1/128".into()),
@@ -9221,7 +9221,7 @@ mod tests {
             uaid: None,
         };
         let asset = AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::parse_fully_qualified("chaosnet.universal").expect("domain id"),
                 "chaos_coin".parse().expect("asset name"),
             ),

@@ -22002,7 +22002,7 @@ mod tests {
     }
 
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "lease".parse().expect("name"),
         )

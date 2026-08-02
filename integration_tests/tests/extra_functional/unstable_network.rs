@@ -1057,7 +1057,7 @@ impl UnstableNetwork {
         }
 
         let account_id = ALICE_ID.clone();
-        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("Valid"),
             "unstable".parse().expect("Valid"),
         );
@@ -1242,8 +1242,12 @@ impl UnstableNetwork {
         }
         let isi = Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "unstable".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         });
         let submit_res = spawn_blocking(move || {
             client.submit_blocking(

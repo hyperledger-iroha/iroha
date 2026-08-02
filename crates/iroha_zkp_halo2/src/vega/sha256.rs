@@ -92,6 +92,10 @@ impl ByteVar {
     pub(super) fn lc(self) -> LinearCombination {
         bits_to_lc(&self.bits_le)
     }
+
+    pub(super) fn bits_le(self) -> [Bit; 8] {
+        self.bits_le
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -104,6 +108,10 @@ impl WordVar {
         bits_to_lc(&self.bits_le)
     }
 
+    pub(super) fn bits_le(self) -> [Bit; 32] {
+        self.bits_le
+    }
+
     pub(super) fn to_be_bytes(self) -> [ByteVar; 4] {
         core::array::from_fn(|byte| {
             let source = 3 - byte;
@@ -112,6 +120,11 @@ impl WordVar {
             }
         })
     }
+}
+
+#[derive(Clone)]
+pub(super) struct Sha256Trace {
+    pub(super) states_after_blocks: Vec<[WordVar; 8]>,
 }
 
 pub(super) fn allocate_bytes(
@@ -167,6 +180,13 @@ pub(super) fn sha256(
     builder: &mut CircuitBuilder,
     message: &[ByteVar],
 ) -> Result<[WordVar; 8], CircuitError> {
+    sha256_with_trace(builder, message).map(|(digest, _)| digest)
+}
+
+pub(super) fn sha256_with_trace(
+    builder: &mut CircuitBuilder,
+    message: &[ByteVar],
+) -> Result<([WordVar; 8], Sha256Trace), CircuitError> {
     let bit_length = u64::try_from(message.len())
         .map_err(|_| CircuitError::InvalidDimension)?
         .checked_mul(8)
@@ -194,6 +214,7 @@ pub(super) fn sha256(
         .into_iter()
         .map(|word| allocate_constant_word(builder, word))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut states_after_blocks = Vec::with_capacity(padded_len / 64);
     for block in padded.chunks_exact(64) {
         let mut schedule = Vec::with_capacity(64);
         for word_bytes in block.chunks_exact(4) {
@@ -259,8 +280,22 @@ pub(super) fn sha256(
             .zip(original)
             .map(|(working, initial)| add_mod_32(builder, &[working.lc(), initial.lc()], 1))
             .collect::<Result<Vec<_>, _>>()?;
+        states_after_blocks.push(
+            state
+                .clone()
+                .try_into()
+                .map_err(|_| CircuitError::InvalidDimension)?,
+        );
     }
-    state.try_into().map_err(|_| CircuitError::InvalidDimension)
+    let digest = state
+        .try_into()
+        .map_err(|_| CircuitError::InvalidDimension)?;
+    Ok((
+        digest,
+        Sha256Trace {
+            states_after_blocks,
+        },
+    ))
 }
 
 fn allocate_word(builder: &mut CircuitBuilder, word: u32) -> Result<WordVar, CircuitError> {

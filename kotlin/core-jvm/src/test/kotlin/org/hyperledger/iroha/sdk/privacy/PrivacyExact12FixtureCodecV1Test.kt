@@ -29,7 +29,7 @@ class PrivacyExact12FixtureCodecV1Test {
         assertEquals(PrivacyExact12FixtureCodecV1.VERSION, bundle.version)
         assertEquals(PrivacyExact12FixtureCodecV1.ROW_COUNT, bundle.rows.size)
         assertEquals(
-            PrivacyNativeBridge.ProtocolIdV1.values().toList(),
+            PrivacyProtocolIdV1.values().toList(),
             bundle.rows.map(PrivacyExact12TypedFixtureRowV1::protocolId),
         )
         bundle.rows.forEach { row ->
@@ -219,7 +219,7 @@ class PrivacyExact12FixtureCodecV1Test {
     }
 
     @Test
-    fun reorderAndSameShapeSubstitutionAreRejected() {
+    fun reorderAndEveryNestedCrossRowSubstitutionAreRejected() {
         val fixture = loadFixture()
         val bundle = PrivacyExact12FixtureCodecV1.decodeCanonical(fixture.archive)
 
@@ -239,15 +239,27 @@ class PrivacyExact12FixtureCodecV1Test {
         }
 
         val source = bundle.rows[0]
-        val substituted = copyRow(source, statementNorito = bundle.rows[1].statementNorito)
-        val substitutedRows = bundle.rows.toMutableList().also { it[0] = substituted }
-        val candidate = PrivacyExact12FixtureCodecV1.encodeCanonical(
-            PrivacyExact12FixtureBundleV1(PrivacyExact12FixtureCodecV1.VERSION, substitutedRows),
+        val donor = bundle.rows[1]
+        val substitutions = listOf(
+            copyRow(source, statementNorito = donor.statementNorito),
+            copyRow(source, envelopeNorito = donor.envelopeNorito),
+            copyRow(source, submitProofInstructionNorito = donor.submitProofInstructionNorito),
+            copyRow(source, transactionIntentProjectionNorito = donor.transactionIntentProjectionNorito),
+            copyRow(source, transactionIntentDigest = donor.transactionIntentDigest),
+            copyRow(source, unsignedTransactionPayloadNorito = donor.unsignedTransactionPayloadNorito),
+            copyRow(source, signedTransactionVersionedNorito = donor.signedTransactionVersionedNorito),
+            copyRow(source, signedTransactionHash = donor.signedTransactionHash),
         )
-        assertFalse(candidate.contentEquals(fixture.archive))
-        PrivacyExact12FixtureCodecV1.decodeCanonical(candidate)
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyExact12FixtureCodecV1.requireCanonicalArchive(candidate, fixture.archive)
+        substitutions.forEach { substituted ->
+            val substitutedRows = bundle.rows.toMutableList().also { it[0] = substituted }
+            assertFailsWith<IllegalArgumentException> {
+                PrivacyExact12FixtureCodecV1.encodeCanonical(
+                    PrivacyExact12FixtureBundleV1(
+                        PrivacyExact12FixtureCodecV1.VERSION,
+                        substitutedRows,
+                    ),
+                )
+            }
         }
     }
 
@@ -255,11 +267,11 @@ class PrivacyExact12FixtureCodecV1Test {
     fun modelEnforcesPerFieldAndAggregateBounds() {
         assertFailsWith<IllegalArgumentException> {
             syntheticRow(
-                PrivacyNativeBridge.ProtocolIdV1.values().first(),
+                PrivacyProtocolIdV1.values().first(),
                 statement = ByteArray(PrivacyExact12FixtureCodecV1.MAX_STATEMENT_BYTES + 1),
             )
         }
-        val aggregateRows = PrivacyNativeBridge.ProtocolIdV1.values().map { protocol ->
+        val aggregateRows = PrivacyProtocolIdV1.values().map { protocol ->
             syntheticRow(protocol, signed = ByteArray(180_000) { 0x5a })
         }
         assertFailsWith<IllegalArgumentException> {
@@ -398,21 +410,28 @@ class PrivacyExact12FixtureCodecV1Test {
     private fun copyRow(
         row: PrivacyExact12TypedFixtureRowV1,
         statementNorito: ByteArray = row.statementNorito,
+        envelopeNorito: ByteArray = row.envelopeNorito,
+        submitProofInstructionNorito: ByteArray = row.submitProofInstructionNorito,
+        transactionIntentProjectionNorito: ByteArray = row.transactionIntentProjectionNorito,
+        transactionIntentDigest: ByteArray = row.transactionIntentDigest,
+        unsignedTransactionPayloadNorito: ByteArray = row.unsignedTransactionPayloadNorito,
+        signedTransactionVersionedNorito: ByteArray = row.signedTransactionVersionedNorito,
+        signedTransactionHash: ByteArray = row.signedTransactionHash,
     ): PrivacyExact12TypedFixtureRowV1 = PrivacyExact12TypedFixtureRowV1(
         row.protocolId,
         statementNorito,
-        row.envelopeNorito,
+        envelopeNorito,
         row.submitProofWireId,
-        row.submitProofInstructionNorito,
-        row.transactionIntentProjectionNorito,
-        row.transactionIntentDigest,
-        row.unsignedTransactionPayloadNorito,
-        row.signedTransactionVersionedNorito,
-        row.signedTransactionHash,
+        submitProofInstructionNorito,
+        transactionIntentProjectionNorito,
+        transactionIntentDigest,
+        unsignedTransactionPayloadNorito,
+        signedTransactionVersionedNorito,
+        signedTransactionHash,
     )
 
     private fun syntheticRow(
-        protocol: PrivacyNativeBridge.ProtocolIdV1,
+        protocol: PrivacyProtocolIdV1,
         statement: ByteArray = byteArrayOf(1),
         signed: ByteArray = byteArrayOf(1),
     ): PrivacyExact12TypedFixtureRowV1 = PrivacyExact12TypedFixtureRowV1(

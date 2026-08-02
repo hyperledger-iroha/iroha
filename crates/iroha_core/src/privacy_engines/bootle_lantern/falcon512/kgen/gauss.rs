@@ -81,3 +81,49 @@ pub(crate) fn sample_f_bounded<T: PRNG>(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct EvenParityPrng {
+        u16_calls: u32,
+    }
+
+    impl PRNG for EvenParityPrng {
+        fn new(_seed: &[u8]) -> Self {
+            Self { u16_calls: 0 }
+        }
+
+        fn next_u8(&mut self) -> u8 {
+            0
+        }
+
+        fn next_u16(&mut self) -> u16 {
+            self.u16_calls += 1;
+            0
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+
+        fn zeroize(&mut self) {
+            self.u16_calls = 0;
+        }
+    }
+
+    #[test]
+    fn parity_sampler_stops_at_exact_public_attempt_cap() {
+        const ATTEMPTS: u32 = 3;
+        let mut rng = EvenParityPrng::new(&[]);
+        let mut polynomial = [0_i8; 512];
+        assert!(!sample_f_bounded(9, &mut rng, &mut polynomial, ATTEMPTS));
+        assert_eq!(rng.u16_calls, ATTEMPTS * 512);
+        assert!(polynomial.iter().all(|coefficient| *coefficient == -17));
+
+        let calls_before_zero_budget = rng.u16_calls;
+        assert!(!sample_f_bounded(9, &mut rng, &mut polynomial, 0));
+        assert_eq!(rng.u16_calls, calls_before_zero_budget);
+    }
+}

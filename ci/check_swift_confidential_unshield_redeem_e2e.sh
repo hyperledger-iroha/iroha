@@ -56,7 +56,7 @@ env \
   CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" \
   MACOSX_DEPLOYMENT_TARGET=12.0 \
   NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo build -p connect_norito_bridge --lib --release \
+  cargo build --locked --offline -p connect_norito_bridge --lib --release \
     --target "${RUST_HOST_TARGET}" \
     --features privacy-production-enabled
 xcodebuild -create-xcframework \
@@ -65,7 +65,7 @@ xcodebuild -create-xcframework \
   -output "${BRIDGE_PATH}"
 touch "${BRIDGE_PATH}/.privacy-production-enabled"
 
-env CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" cargo run -q --release \
+env CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" cargo run --locked --offline -q --release \
   --target "${RUST_HOST_TARGET}" \
   -p iroha_core --example confidential_v2_vk_json -- unshield-v3 1 \
   >"${TMP_DIR}/verifier-record.json"
@@ -95,7 +95,7 @@ export IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT="${TMP_DIR}/redeem-attachment.norito"
 
 test -s "${IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT}"
 export IROHA_SWIFT_UNSHIELD_ATTACHMENT_PATH="${IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT}"
-env CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" cargo test --release \
+env CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" cargo test --locked --offline --release \
   --target "${RUST_HOST_TARGET}" \
   -p iroha_core --test swift_confidential_unshield_redeem \
   swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies \

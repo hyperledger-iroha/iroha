@@ -45,6 +45,34 @@ const TRANSACTION_INITIALIZER_PREFIX = ".iroha-js-host-init-txn-v1-";
 const CLEANUP_MARKER_PATTERN =
   /^\.iroha-js-host-cleanup-v1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.owner\.json$/u;
 
+function nativeProbeFixtureSource({
+  omit = [],
+  abiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  catalogBody = "return Buffer.from([0x4e, 0x52, 0x54, 0x30]);",
+  validatorBody =
+    "return Buffer.isBuffer(archive) && archive.equals(Buffer.from([0x4e, 0x52, 0x54, 0x30])) ? 0 : 8;",
+} = {}) {
+  const omitted = new Set(omit);
+  const methods = REQUIRED_NATIVE_EXPORTS.filter((name) => !omitted.has(name)).map(
+    (name) => {
+      if (name === "connectNoritoBridgeAbiVersion") {
+        return `${name}() { return ${JSON.stringify(abiVersion)}; }`;
+      }
+      if (name === "privacyCompiledProfileCatalogV1") {
+        return `${name}() { ${catalogBody} }`;
+      }
+      if (name === "privacyValidateCompiledProfileCatalogV1") {
+        return `${name}(archive) { ${validatorBody} }`;
+      }
+      const result = REQUIRED_NATIVE_EXPORT_RESULTS[name];
+      return `${name}() {${
+        result === undefined ? "" : ` return ${JSON.stringify(result)};`
+      } }`;
+    },
+  );
+  return `module.exports = { ${methods.join(", ")} };\n`;
+}
+
 function fixtureBuildProvenance(
   source,
   cargoProfile = "debug",
@@ -1522,25 +1550,15 @@ test("required-export probe accepts a complete module and rejects missing symbol
   const complete = path.join(root, "complete.cjs");
   const incomplete = path.join(root, "incomplete.cjs");
   const wrongAbi = path.join(root, "wrong-abi.cjs");
-  const completeSource =
-    `module.exports = { ${REQUIRED_NATIVE_EXPORTS.map((name) => {
-      const result = REQUIRED_NATIVE_EXPORT_RESULTS[name];
-      return `${name}() {${
-        result === undefined ? "" : ` return ${JSON.stringify(result)};`
-      }}`;
-    }).join(", ")} };\n`;
-  writeFileSync(
-    complete,
-    completeSource,
-  );
+  const completeSource = nativeProbeFixtureSource();
+  writeFileSync(complete, completeSource);
   writeFileSync(incomplete, "module.exports = { noritoEncodeInstruction() {} };\n");
-  writeFileSync(
-    wrongAbi,
-    completeSource.replace(
-      "securePrivateFileAbiVersion() { return 1;}",
-      "securePrivateFileAbiVersion() { return 2;}",
-    ),
-  );
+  writeFileSync(wrongAbi, nativeProbeFixtureSource({
+    validatorBody: "return 0;",
+  }).replace(
+    "securePrivateFileAbiVersion() { return 1; }",
+    "securePrivateFileAbiVersion() { return 2; }",
+  ));
 
   assert.equal(
     probeNativeBindingExports(complete),
@@ -1567,6 +1585,83 @@ test("required-export probe accepts a complete module and rejects missing symbol
       ),
     /ABI mismatch.*expected 19.*found 21/u,
   );
+});
+
+test("required-export probe rejects missing privacy and authenticated-finality symbols", (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-symbol-gate-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  for (const missing of [
+    "privacyCompiledProfileCatalogV1",
+    "privacyValidateCompiledProfileCatalogV1",
+    "blockProofsVerifyAuthenticatedV1",
+  ]) {
+    const fixture = path.join(root, `${missing}.cjs`);
+    writeFileSync(fixture, nativeProbeFixtureSource({ omit: [missing] }));
+    assert.throws(
+      () => probeNativeBindingExports(fixture),
+      new RegExp(`missing required native exports: ${missing}`, "u"),
+      missing,
+    );
+  }
+});
+
+test("required-export probe fail-closes on adversarial compiled-profile catalogs", (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-catalog-gate-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const hostileFixtures = [
+    {
+      name: "text",
+      catalogBody: 'return "NRT0";',
+      expected: /must return 1\.\.262144 non-shared Buffer bytes/u,
+    },
+    {
+      name: "typed-array-alias",
+      catalogBody: "return Uint8Array.from([0x4e]);",
+      expected: /must return 1\.\.262144 non-shared Buffer bytes/u,
+    },
+    {
+      name: "shared-memory",
+      catalogBody: "return Buffer.from(new SharedArrayBuffer(1));",
+      expected: /must return 1\.\.262144 non-shared Buffer bytes/u,
+    },
+    {
+      name: "empty",
+      catalogBody: "return Buffer.alloc(0);",
+      expected: /must return 1\.\.262144 non-shared Buffer bytes/u,
+    },
+    {
+      name: "oversized",
+      catalogBody: "return Buffer.alloc(256 * 1024 + 1);",
+      expected: /must return 1\.\.262144 non-shared Buffer bytes/u,
+    },
+    {
+      name: "validator-rejection",
+      validatorBody: "return 8;",
+      expected: /must accept the published catalog with status 0, found 8/u,
+    },
+    {
+      name: "boolean-validator-result",
+      validatorBody: "return false;",
+      expected: /must accept the published catalog with status 0, found false/u,
+    },
+    {
+      name: "catalog-exception",
+      catalogBody: 'throw new Error("hostile detail");',
+      expected: /invalid native privacy compiled-profile catalog contract: hostile detail/u,
+    },
+    {
+      name: "validator-exception",
+      validatorBody: 'throw new Error("hostile detail");',
+      expected: /invalid native privacy compiled-profile catalog contract: hostile detail/u,
+    },
+  ];
+
+  for (const { name, expected, ...options } of hostileFixtures) {
+    const fixture = path.join(root, `${name}.cjs`);
+    writeFileSync(fixture, nativeProbeFixtureSource(options));
+    assert.throws(() => probeNativeBindingExports(fixture), expected, name);
+  }
 });
 
 test("native publication rejects dirty or stale source provenance", async (t) => {

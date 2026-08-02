@@ -1737,6 +1737,7 @@ impl ComposerTemplate {
             ComposerTemplate::RegisterAssetDefinitionLily => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAssetDefinition;
                 app.composer_asset_definition_id = "4jAY5UbAxnGPt31CkijmAsqXP4o4".to_owned();
+                app.composer_asset_definition_name = "lily".to_owned();
                 app.composer_asset_definition_mintable = Mintable::Infinitely;
                 app.composer_mintability_tokens = 1;
                 app.last_info = Some("Loaded asset definition registration template.".to_owned());
@@ -2395,6 +2396,7 @@ struct MochiApp {
     composer_destination_account: String,
     composer_account_id: String,
     composer_asset_definition_id: String,
+    composer_asset_definition_name: String,
     composer_asset_definition_mintable: Mintable,
     composer_mintability_tokens: u32,
     composer_role_id: String,
@@ -2656,6 +2658,7 @@ impl MochiApp {
             composer_destination_account: String::new(),
             composer_account_id: String::new(),
             composer_asset_definition_id: String::new(),
+            composer_asset_definition_name: String::new(),
             composer_asset_definition_mintable: Mintable::Infinitely,
             composer_mintability_tokens: 1,
             composer_role_id: String::new(),
@@ -10716,6 +10719,10 @@ impl MochiApp {
                 ui.text_edit_singleline(&mut self.composer_asset_definition_id);
             });
             ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut self.composer_asset_definition_name);
+            });
+            ui.horizontal(|ui| {
                 ui.label("Mintable");
                 ComboBox::from_id_salt("mochi_composer_mintable_selector")
                     .selected_text(Self::mintable_label(
@@ -11391,8 +11398,15 @@ impl MochiApp {
                         Some("Asset definition identifier is required.".to_owned());
                     return;
                 }
+                let name = self.composer_asset_definition_name.trim().to_owned();
+                self.composer_asset_definition_name = name.clone();
+                if name.is_empty() {
+                    self.composer_error = Some("Asset definition name is required.".to_owned());
+                    return;
+                }
                 InstructionDraft::register_asset_definition_from_input(
                     &definition,
+                    &name,
                     self.composer_asset_definition_mintable,
                 )
             }

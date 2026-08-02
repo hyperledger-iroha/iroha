@@ -390,7 +390,7 @@ class TransactionFixtureParityTest {
         payloadObject(descriptor)["executable"] = mapOf(
             "ContractCall" to mapOf(
                 "contract_address" to
-                    "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+                    "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
                 "expected_code_hash" to
                     "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
                 "entrypoint" to "run",

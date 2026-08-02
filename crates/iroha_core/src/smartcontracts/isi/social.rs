@@ -18,7 +18,13 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
-use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
+use super::{
+    Error, Execute,
+    asset::isi::{
+        assert_numeric_spec_with, execute_social_escrow_transfer, execute_social_reward_transfer,
+        execute_social_send_transfer,
+    },
+};
 use crate::state::{StateTransaction, WorldTransaction};
 
 const DAY_MS: u64 = 86_400_000;
@@ -119,12 +125,13 @@ impl Execute for ClaimTwitterFollowReward {
             consume_campaign_budget(state_transaction, &cfg, campaign_budget, total.clone())?;
         let campaign_cap = cfg.campaign_cap.clone();
 
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&reward_asset_id, &cfg.follow_reward_amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&recipient_asset, &cfg.follow_reward_amount)?;
+        execute_social_reward_transfer(
+            state_transaction,
+            binding_digest,
+            reward_asset_id,
+            recipient_asset,
+            cfg.follow_reward_amount.clone(),
+        )?;
 
         let mut payout_ctx = ViralPayoutContext {
             stx: state_transaction,
@@ -204,12 +211,14 @@ impl Execute for SendToTwitter {
                     reward_account.clone(),
                 );
 
-                state_transaction
-                    .world
-                    .withdraw_numeric_asset(&sender_asset, &amount)?;
-                state_transaction
-                    .world
-                    .deposit_numeric_asset(&recipient_asset, &amount)?;
+                execute_social_send_transfer(
+                    state_transaction,
+                    authority,
+                    binding_digest,
+                    sender_asset,
+                    recipient_asset,
+                    amount.clone(),
+                )?;
 
                 let mut budget = refresh_budget(state_transaction, day);
                 let mut campaign_budget = refresh_campaign_budget(state_transaction);
@@ -254,12 +263,14 @@ impl Execute for SendToTwitter {
             return Err(validation_err("escrow already exists for binding"));
         }
 
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&sender_asset, &amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&escrow_asset, &amount)?;
+        execute_social_send_transfer(
+            state_transaction,
+            authority,
+            binding_digest,
+            sender_asset,
+            escrow_asset,
+            amount.clone(),
+        )?;
 
         let record = ViralEscrowRecord {
             binding_hash: binding_hash.clone(),
@@ -293,7 +304,12 @@ impl Execute for CancelTwitterEscrow {
         }
 
         let binding_digest = self.binding_hash.digest;
-        let Some(record) = state_transaction.world.viral_escrows.remove(binding_digest) else {
+        let Some(record) = state_transaction
+            .world
+            .viral_escrows
+            .get(&binding_digest)
+            .cloned()
+        else {
             record_social_rejection(state_transaction, REJECT_ESCROW_MISSING);
             return Err(validation_err("no escrow found for binding hash"));
         };
@@ -309,12 +325,14 @@ impl Execute for CancelTwitterEscrow {
         );
         let sender_asset = AssetId::new(cfg.reward_asset_definition_id.clone(), authority.clone());
 
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&escrow_asset, &record.amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&sender_asset, &record.amount)?;
+        execute_social_escrow_transfer(
+            state_transaction,
+            binding_digest,
+            escrow_asset,
+            sender_asset,
+            record.amount.clone(),
+        )?;
+        state_transaction.world.viral_escrows.remove(binding_digest);
 
         state_transaction
             .world
@@ -530,8 +548,13 @@ fn maybe_pay_bonus(
     *ctx.budget = consume_budget(ctx.stx, ctx.cfg, ctx.budget.clone(), bonus.clone())?;
     *ctx.campaign = consume_campaign_budget(ctx.stx, ctx.cfg, ctx.campaign.clone(), bonus.clone())?;
 
-    ctx.stx.world.withdraw_numeric_asset(&pool_asset, &bonus)?;
-    ctx.stx.world.deposit_numeric_asset(&sender_asset, &bonus)?;
+    execute_social_reward_transfer(
+        ctx.stx,
+        ctx.binding_hash.digest,
+        pool_asset,
+        sender_asset,
+        bonus.clone(),
+    )?;
 
     ctx.stx
         .world
@@ -581,7 +604,13 @@ fn release_escrow_if_present(
     uaid: UniversalAccountId,
     account: &AccountId,
 ) -> Result<(), Error> {
-    let Some(escrow) = ctx.stx.world.viral_escrows.remove(ctx.binding_hash.digest) else {
+    let Some(escrow) = ctx
+        .stx
+        .world
+        .viral_escrows
+        .get(&ctx.binding_hash.digest)
+        .cloned()
+    else {
         return Ok(());
     };
 
@@ -590,12 +619,14 @@ fn release_escrow_if_present(
         ctx.cfg.escrow_account.clone(),
     );
     let recipient_asset = AssetId::new(ctx.cfg.reward_asset_definition_id.clone(), account.clone());
-    ctx.stx
-        .world
-        .withdraw_numeric_asset(&escrow_asset, &escrow.amount)?;
-    ctx.stx
-        .world
-        .deposit_numeric_asset(&recipient_asset, &escrow.amount)?;
+    execute_social_escrow_transfer(
+        ctx.stx,
+        ctx.binding_hash.digest,
+        escrow_asset,
+        recipient_asset,
+        escrow.amount.clone(),
+    )?;
+    ctx.stx.world.viral_escrows.remove(ctx.binding_hash.digest);
 
     let bonus_paid = maybe_pay_bonus(ctx, &escrow.sender, uaid)?;
 

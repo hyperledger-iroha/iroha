@@ -20,6 +20,18 @@ pub const ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND: &str = "stark/fri/sha256-goldilock
 /// Canonical backend family identifier for native STARK/FRI verification.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
 
+/// Canonical empty root of the first-release depth-16 Pasta Poseidon
+/// confidential commitment tree.
+///
+/// This is the little-endian Pasta field representation produced by the
+/// `cfleaf03`/`cfnode03` Axiom Poseidon construction. Hosts and SDK test doubles
+/// use the fixed value so an empty registered tree is never represented by an
+/// all-zero sentinel or an omitted root.
+pub const CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT: [u8; 32] = [
+    0xce, 0x40, 0x66, 0xb2, 0x30, 0xf3, 0x48, 0x19, 0x01, 0x83, 0xf9, 0x0d, 0xd3, 0x58, 0x71, 0xc1,
+    0x38, 0x23, 0xa3, 0x58, 0xbb, 0x37, 0xc2, 0xce, 0x8b, 0x43, 0x52, 0x6a, 0xe7, 0x19, 0x7c, 0x3c,
+];
+
 /// Exact verifier-registry labels admitted by native Rust dispatch.
 ///
 /// This closed set is intentionally separate from [`BackendTag`]. A registry
@@ -752,7 +764,7 @@ mod tests {
     }
 
     fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             Name::from_str("xor").expect("asset name"),
         )

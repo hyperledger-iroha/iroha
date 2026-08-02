@@ -428,7 +428,7 @@ test("mixed executable batch builder forwards ordered copied entries", () => {
           {
             kind: "contractCall",
             contractAddress:
-              "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+              "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             expectedCodeHash,
             entrypoint: "run",
             arguments: argumentsBytes,
@@ -461,7 +461,7 @@ test("mixed executable batch draft and validation reject missing requirements", 
   const call = {
     kind: "contractCall",
     contractAddress:
-      "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+      "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
     expectedCodeHash: Buffer.alloc(32, 0x41),
     entrypoint: "run",
   };
@@ -509,8 +509,8 @@ test("mixed executable batch draft and validation reject missing requirements", 
         "abc",
         call.contractAddress.toUpperCase(),
         `${call.contractAddress.slice(0, -1)}p`,
-        "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
-        "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
+        "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+        "irohac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhk43nl",
       ]) {
         assert.throws(
           () =>
@@ -1227,7 +1227,7 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       return {
         ok: true,
         dataspace: "universal",
-        contract_address: "tairac1routerfixture",
+        contract_address: "irohac1routerfixture",
         code_hash_hex: simulationCodeHash,
         abi_hash_hex: "22".repeat(32),
         entrypoint: "route_swap",
@@ -1377,7 +1377,7 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
         /exactly one of contractAlias, contract_alias/,
       ],
       [
-        { ...trusted, contractAddress: "tairac1attacker" },
+        { ...trusted, contractAddress: "irohac1attacker" },
         /exactly one of contractAddress or contractAlias/,
       ],
       [
@@ -1498,7 +1498,7 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
         input: {
           ...trusted,
           contractAlias: undefined,
-          contractAddress: "tairac1trustedfixture",
+          contractAddress: "irohac1trustedfixture",
         },
         expected: /different contract address than requested/,
       },
@@ -1752,7 +1752,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
     return {
       ok: true,
       dataspace: "universal",
-      contract_address: "tairac1routerfixture",
+      contract_address: "irohac1routerfixture",
       code_hash_hex: ZK_IVM_CODE_HASH_HEX,
       abi_hash_hex: "22".repeat(32),
       entrypoint: "route_swap",
@@ -1902,7 +1902,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
   assert.equal(captures.proveRequest.bytecode, proved.bytecode);
   assert.deepEqual(captures.deriveRequest.metadata, {
     request_id: "swap-7",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     contract_entrypoint: "route_swap",
     contract_alias: "dlmm_router::dlmm.universal",
     contract_payload: { amount: "7" },
@@ -1948,7 +1948,7 @@ test("submitIvmProvedContractCall keeps a 4 MiB proof request below Torii's defa
   client.simulateContractCall = async () => ({
     ok: true,
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: hashes.codeHashHex,
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -2018,7 +2018,7 @@ test("submitIvmProvedContractCall preserves generic non-policy overlay assertion
     return {
       ok: true,
       dataspace: "universal",
-      contract_address: "tairac1routerfixture",
+      contract_address: "irohac1routerfixture",
       code_hash_hex: ZK_IVM_CODE_HASH_HEX,
       abi_hash_hex: "22".repeat(32),
       entrypoint: "generic_route",
@@ -2080,7 +2080,7 @@ test("submitIvmProvedContractCall rejects caller validation-fee metadata", async
   client.simulateContractCall = async () => ({
     ok: true,
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: ZK_IVM_CODE_HASH_HEX,
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -2127,7 +2127,7 @@ test("submitIvmProvedContractCall rejects conventional non-ZK deployed bytecode"
   client.simulateContractCall = async () => ({
     ok: true,
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: ZK_IVM_CODE_HASH_HEX,
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -2183,7 +2183,7 @@ test("submitIvmProvedContractCall rejects a prover payload that differs from der
   client.simulateContractCall = async () => ({
     ok: true,
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: ZK_IVM_CODE_HASH_HEX,
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -2902,7 +2902,7 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
         feePayment: AUTHORITY_FEE_PAYMENT,
         proposal: {
           contractAddress:
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           codeHash: "aa".repeat(32),
           abiHash: "bb".repeat(32),
           window: { lower: 1, upper: 2 },
@@ -2914,7 +2914,7 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
   const propose = captures[0].instructions[0].ProposeDeployContract;
   assert.equal(
     propose.contract_address,
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   );
 });
 

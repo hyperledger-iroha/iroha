@@ -182,6 +182,13 @@ Operator access (Torii)
 - Read a recovery sidecar via: `GET /v1/pipeline/recovery/:height`
   - 200 application/json with the persisted sidecar, or 404 if not found
   - Helpful for tooling and dashboards to inspect access sets and DAG fingerprints
+- Read full FASTPQ recovery artifacts via:
+  `GET /v1/pipeline/recovery/:height/fastpq-proofs?offset=0&limit=16`.
+  This is an operator-only route that requires Iroha's canonical,
+  replay-resistant operator request signature. Pages are explicitly bounded
+  (maximum 64 proofs), run under the heavy-query concurrency budget, and fail
+  closed when proof, reconstructed-batch, aggregate-artifact, or
+  encoded-response byte limits would be exceeded.
 
 ## Transaction & Witness Events
 

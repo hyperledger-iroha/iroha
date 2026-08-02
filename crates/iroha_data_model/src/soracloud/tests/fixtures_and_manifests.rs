@@ -943,44 +943,6 @@
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
     }
 
-    fn sample_fhe_full_bootstrap_material_proof() -> SoracloudFheFullBootstrapMaterialProofV1 {
-        let vk_hash = [0x62; 32];
-        let statement_hash = sample_hash(19);
-        let open_proof = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-            envelope_bytes: vec![0xC5; 32],
-        };
-        let envelope = OpenVerifyEnvelope::new(
-            BackendTag::Stark,
-            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-            vk_hash,
-            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::encode_canonical(&open_proof)
-                .expect("encode canonical FHE full-bootstrap material STARK wrapper"),
-        );
-        let proof = crate::proof::ProofBox::new(
-            "stark/fri/sha256-goldilocks".into(),
-            norito::encode_canonical(&envelope)
-                .expect("encode canonical FHE full-bootstrap material OpenVerifyEnvelope"),
-        );
-        let mut attachment = ProofAttachment::new_ref(
-            "stark/fri/sha256-goldilocks".into(),
-            proof,
-            crate::proof::VerifyingKeyId::new(
-                "stark/fri/sha256-goldilocks",
-                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-            ),
-        );
-        attachment.vk_commitment = Some(vk_hash);
-        attachment.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&attachment.proof.bytes)));
-        SoracloudFheFullBootstrapMaterialProofV1 {
-            schema_version: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-            statement_hash,
-            proof: attachment,
-        }
-    }
-
     fn sample_fhe_full_bootstrap_execution_proof() -> SoracloudFheFullBootstrapExecutionProofV1 {
         sample_fhe_full_bootstrap_execution_proof_with_statement(sample_hash(20))
     }
@@ -1169,15 +1131,6 @@
         }
     }
 
-    fn replace_fhe_full_bootstrap_material_open_verify_envelope(
-        proof: &mut SoracloudFheFullBootstrapMaterialProofV1,
-        envelope: &OpenVerifyEnvelope,
-    ) {
-        proof.proof.proof.bytes = norito::encode_canonical(envelope)
-            .expect("encode canonical FHE full-bootstrap material OpenVerifyEnvelope");
-        proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
-    }
-
     fn replace_fhe_full_bootstrap_execution_open_verify_envelope(
         proof: &mut SoracloudFheFullBootstrapExecutionProofV1,
         envelope: &OpenVerifyEnvelope,
@@ -1278,12 +1231,6 @@
             |proof: &mut SoracloudFheBootstrapKeyProofV1| &mut proof.proof,
             SoracloudFheBootstrapKeyProofV1::validate,
             "bootstrap key",
-        );
-        assert_alternate_open_verify_layouts_rejected(
-            sample_fhe_full_bootstrap_material_proof(),
-            |proof: &mut SoracloudFheFullBootstrapMaterialProofV1| &mut proof.proof,
-            SoracloudFheFullBootstrapMaterialProofV1::validate,
-            "full-bootstrap material",
         );
         assert_alternate_open_verify_layouts_rejected(
             sample_fhe_full_bootstrap_execution_proof(),
@@ -1504,81 +1451,6 @@
             Some(expected),
             "{context} schema field `{field}` drifted"
         );
-    }
-
-    #[cfg(feature = "json")]
-    fn assert_soracloud_material_schema_sections(schema_value: &Value, context: &str) {
-        let proof_input_material_digest_domain = std::str::from_utf8(
-            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
-        )
-        .expect("material proof input digest domain is valid UTF-8");
-
-        let material_proof_input = assert_schema_object(
-            schema_value,
-            "/material_proof_input",
-            "material proof input",
-        );
-        assert_schema_u64_field(
-            material_proof_input,
-            "proof_input_material_version",
-            u64::from(
-                iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_VERSION_V1,
-            ),
-            context,
-        );
-        assert_schema_u64_field(
-            material_proof_input,
-            "proof_input_material_field_count",
-            u64::from(
-                iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1,
-            ),
-            context,
-        );
-        assert_schema_string_field(
-            material_proof_input,
-            "proof_input_material_digest_domain",
-            proof_input_material_digest_domain,
-            context,
-        );
-        for field in [
-            "hashes_proof_input_material",
-            "requires_full_bootstrap_material",
-            "binds_public_key",
-            "binds_governed_evaluation_keys",
-            "binds_concrete_artifact_bundle",
-            "binds_statement_hash",
-        ] {
-            assert_schema_bool_field(material_proof_input, field, true, context);
-        }
-
-        let native_air_envelope = assert_schema_object(
-            schema_value,
-            "/native_air_envelope",
-            "material native AIR envelope",
-        );
-        for field in [
-            "validates_stark_parameter_profile",
-            "binds_domain_tag_to_statement_hash_and_material_digest",
-            "validates_circuit_id",
-            "validates_trace_width",
-            "validates_query_opening_count",
-            "rejects_auxiliary_composition_value_commitments",
-            "binds_public_digest_to_statement_hash",
-            "validates_merkle_path_shape",
-            "validates_merkle_path_roots",
-            "validates_fri_query_chain",
-            "binds_first_fri_values_to_opened_air_values",
-            "binds_fri_queries_to_air_commitment_roots",
-            "binds_trace_root_to_governed_material",
-            "binds_composition_root_to_governed_material",
-            "binds_opened_rows_to_governed_material",
-            "binds_opened_composition_values_to_governed_material",
-            "requires_canonical_material_transcript_label",
-            "rejects_blank_native_envelope_bytes",
-            "rejects_placeholder_native_envelope_text",
-        ] {
-            assert_schema_bool_field(native_air_envelope, field, true, context);
-        }
     }
 
     #[cfg(feature = "json")]

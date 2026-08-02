@@ -1409,7 +1409,7 @@ mod tests {
             program: Some("cbdc.transfer".to_owned()),
             method: Some("transfer".to_owned()),
             asset: Some(
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
                         .expect("domain"),
                     "cbdc".parse().expect("name"),

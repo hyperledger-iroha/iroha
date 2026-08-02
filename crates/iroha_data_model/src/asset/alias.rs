@@ -1,13 +1,21 @@
-//! Asset definition alias literal.
+//! Asset definition alias literals and catalog-pinned permission targets.
 
+use core::fmt;
 use std::{format, str::FromStr, string::String};
 
 use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
+use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
-use crate::{error::ParseError, name::Name};
+use crate::{
+    asset::id::AssetDefinitionId,
+    domain::DomainId,
+    error::ParseError,
+    name::Name,
+    nexus::{DataSpaceCatalog, DataSpaceId},
+};
 
 #[model]
 mod model {
@@ -175,6 +183,92 @@ impl AsRef<str> for AssetDefinitionAlias {
     }
 }
 
+/// Canonical asset-definition alias paired with its expected numeric dataspace and definition IDs.
+///
+/// Exact permission scopes use this resolved form so neither a textual dataspace remap nor an
+/// alias rebind can silently transfer an old capability to a different asset definition.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(decode_from_slice)]
+pub struct ResolvedAssetDefinitionAliasV1 {
+    /// Canonical asset-definition alias text.
+    pub canonical_name: AssetDefinitionAlias,
+    /// Numeric parent dataspace ID that the text must resolve to at execution.
+    pub dataspace_id: DataSpaceId,
+    /// Canonical asset definition to which this exact capability is bound.
+    pub asset_definition_id: AssetDefinitionId,
+}
+
+impl ResolvedAssetDefinitionAliasV1 {
+    /// Construct a resolved asset-definition alias pair.
+    #[must_use]
+    pub const fn new(
+        canonical_name: AssetDefinitionAlias,
+        dataspace_id: DataSpaceId,
+        asset_definition_id: AssetDefinitionId,
+    ) -> Self {
+        Self {
+            canonical_name,
+            dataspace_id,
+            asset_definition_id,
+        }
+    }
+
+    /// Resolve an asset-definition alias using a static catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if the alias is malformed or its dataspace is unknown.
+    pub fn resolve_catalog(
+        input: &str,
+        catalog: &DataSpaceCatalog,
+        asset_definition_id: AssetDefinitionId,
+    ) -> Result<Self, ParseError> {
+        let canonical_name = input.parse::<AssetDefinitionAlias>()?;
+        let dataspace_id = catalog
+            .by_alias(canonical_name.dataspace_segment())
+            .map(|entry| entry.id)
+            .ok_or_else(|| ParseError::new("unknown dataspace alias in asset-definition alias"))?;
+        Ok(Self::new(canonical_name, dataspace_id, asset_definition_id))
+    }
+
+    /// Return whether the textual parent still maps to the pinned numeric ID.
+    #[must_use]
+    pub fn matches_catalog(&self, catalog: &DataSpaceCatalog) -> bool {
+        catalog
+            .by_alias(self.canonical_name.dataspace_segment())
+            .is_some_and(|entry| entry.id == self.dataspace_id)
+    }
+
+    /// Return the canonical textual form.
+    #[must_use]
+    pub fn canonical_text(&self) -> String {
+        self.canonical_name.to_string()
+    }
+
+    /// Return the optional dataspace-qualified domain containing this alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when a domain-qualified alias does not form a canonical
+    /// [`DomainId`].
+    pub fn parent_domain(&self) -> Result<Option<DomainId>, ParseError> {
+        self.canonical_name
+            .domain_segment()
+            .map(|domain| DomainId::try_new(domain, self.canonical_name.dataspace_segment()))
+            .transpose()
+    }
+}
+
+impl fmt::Display for ResolvedAssetDefinitionAliasV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.canonical_name.fmt(f)
+    }
+}
+
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AssetDefinitionAlias {
     fn write_json(&self, out: &mut String) {
@@ -197,6 +291,24 @@ impl norito::json::JsonDeserialize for AssetDefinitionAlias {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nexus::DataSpaceMetadata;
+
+    fn catalog() -> DataSpaceCatalog {
+        DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "paynet".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("valid catalog")
+    }
+
+    fn definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("banka", "paynet").expect("domain"),
+            "usd".parse().expect("asset name"),
+        )
+    }
 
     #[test]
     fn asset_alias_parses_valid_literal() {
@@ -255,5 +367,34 @@ mod tests {
     fn asset_alias_rejects_dotted_domain_and_dataspace_segments() {
         assert!(AssetDefinitionAlias::from_components("usd", Some("issuer.sub"), "main").is_err());
         assert!(AssetDefinitionAlias::from_components("usd", Some("issuer"), "main.ops").is_err());
+    }
+
+    #[test]
+    fn resolved_asset_alias_pins_catalog_identity_and_parent_domain() {
+        let definition_id = definition_id();
+        let resolved = ResolvedAssetDefinitionAliasV1::resolve_catalog(
+            "usd#banka.paynet",
+            &catalog(),
+            definition_id.clone(),
+        )
+        .expect("resolved alias");
+
+        assert_eq!(resolved.dataspace_id, DataSpaceId::new(7));
+        assert_eq!(resolved.asset_definition_id, definition_id);
+        assert!(resolved.matches_catalog(&catalog()));
+        assert_eq!(resolved.canonical_text(), "usd#banka.paynet");
+        assert_eq!(resolved.to_string(), "usd#banka.paynet");
+        assert_eq!(
+            resolved.parent_domain().expect("resolved parent domain"),
+            Some(DomainId::try_new("banka", "paynet").expect("domain"))
+        );
+        assert!(
+            !ResolvedAssetDefinitionAliasV1::new(
+                resolved.canonical_name,
+                DataSpaceId::new(8),
+                resolved.asset_definition_id,
+            )
+            .matches_catalog(&catalog())
+        );
     }
 }

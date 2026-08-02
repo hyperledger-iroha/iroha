@@ -15,19 +15,16 @@ use std::{
 };
 
 use iroha_core::zk::kagemusha_v2::{
-    KagemushaGeneratedParityArtifactsV4, claim_kagemusha_generation_supervisor_permit_v4,
-    generate_kagemusha_pasta_cycle_artifacts_v4, run_kagemusha_k17_shape_probe_v5,
+    KagemushaGeneratedParityArtifactsV4, generate_kagemusha_pasta_cycle_artifacts_v4,
+    run_kagemusha_k17_shape_probe_v5, start_kagemusha_generation_memory_guard_v4,
     validate_kagemusha_proof_pair_measurement_v4, validate_kagemusha_step_bootstrap_payload_v4,
 };
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
-    KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-    KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
-    KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
-    KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4, KagemushaPastaCycleParityV1,
-    KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4,
+    KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4, KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
+    KagemushaPastaCycleParityV1, KagemushaStepCircuitParamsV4,
 };
 
 const SUBCOMMAND: &str = "measure-compact-k17";
@@ -41,25 +38,12 @@ fn benchmark_error(message: impl Into<String>) -> io::Error {
 }
 
 fn compact_k17_params() -> Result<KagemushaStepCircuitParamsV4, io::Error> {
-    let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
-    let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
-        .map_err(|error| benchmark_error(format!("compact public layout is invalid: {error}")))?;
-    let params = KagemushaStepCircuitParamsV4 {
-        version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-        k,
-        num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
-        num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
-        num_fixed: 1,
-        lookup_bits: k - 1,
-        num_instance_columns: 1,
-        public_input_limbs: layout.instance_column_limbs,
-        minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-        max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
-    };
-    let validated_layout = params
-        .validate()
+    let params = KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
         .map_err(|error| benchmark_error(format!("compact circuit profile is invalid: {error}")))?;
-    if validated_layout != layout || layout.instance_column_limbs != 66 {
+    let layout = params
+        .validate_release_generation_profile()
+        .map_err(|error| benchmark_error(format!("compact circuit profile is invalid: {error}")))?;
+    if layout.instance_column_limbs != 66 {
         return Err(benchmark_error(
             "compact circuit profile does not select the fixed 66-limb public layout",
         ));
@@ -118,17 +102,17 @@ fn validate_parity(
 }
 
 fn run_measurement() -> Result<(), Box<dyn Error>> {
-    // Claim the one-shot inherited capability before allocating either Pasta
+    // Start the mandatory in-process monitor before allocating either Pasta
     // parameter set or opening even the anonymous proving-key sinks.
-    let supervisor_permit = claim_kagemusha_generation_supervisor_permit_v4()
-        .map_err(|error| benchmark_error(format!("resource guard is unavailable: {error}")))?;
+    let memory_guard = start_kagemusha_generation_memory_guard_v4(None)
+        .map_err(|error| benchmark_error(format!("memory monitor is unavailable: {error}")))?;
     let params = compact_k17_params()?;
     let mut step_eq_proving_key_sink = tempfile::tempfile()?;
     let mut step_ep_proving_key_sink = tempfile::tempfile()?;
     let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
         params.clone(),
         params,
-        supervisor_permit,
+        &memory_guard,
         &mut step_eq_proving_key_sink,
         &mut step_ep_proving_key_sink,
     )
@@ -227,16 +211,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         (Some(subcommand), None) if subcommand == OsStr::new(SUBCOMMAND) => run_measurement(),
         (Some(subcommand), None) if subcommand == OsStr::new(K17_SHAPE_PROBE_SUBCOMMAND) => {
             // The shape probe allocates full k17 ParamsIPA and populated
-            // protocol graphs, so direct invocation must fail without the
-            // benchmark runner's inherited one-shot capability.
-            let supervisor_permit = claim_kagemusha_generation_supervisor_permit_v4()
-                .map_err(|error| benchmark_error(format!("resource guard is unavailable: {error}")))?;
+            // protocol graphs, so it starts the same mandatory in-process
+            // physical-footprint monitor as release generation.
+            let memory_guard = start_kagemusha_generation_memory_guard_v4(None)
+                .map_err(|error| benchmark_error(format!("memory monitor is unavailable: {error}")))?;
             println!("benchmark=NON_SHIPPING_K17_SHAPE_PROBE");
             run_kagemusha_k17_shape_probe_v5(
                 KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4[0],
                 KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4[0],
                 6,
-                supervisor_permit,
+                &memory_guard,
             )
                 .map_err(benchmark_error)
                 .map_err(Into::into)

@@ -1372,7 +1372,7 @@ fn verify_v2_aggregate_signature(
     for signer in signers {
         let index = usize::try_from(*signer)
             .ok()
-            .filter(|index| *index < context.roster.len())
+            .filter(|index| *index < context.roster.len() && *index < proofs_of_possession.len())
             .ok_or(EvidenceValidationError::V2SignerMismatch)?;
         public_keys.push(context.roster[index].validator.public_key());
         proofs.push(proofs_of_possession[index].as_slice());
@@ -1929,7 +1929,6 @@ mod tests {
             view,
         );
         let mut state_block = state.block(header);
-        let nexus = state.nexus_snapshot();
         let effects = iroha_data_model::consensus::NposConsensusEffects {
             vrf_epoch_seals: Vec::new(),
             v2_evidence_admissions: admissions,
@@ -1939,14 +1938,10 @@ mod tests {
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
-            &nexus.dataspace_catalog,
-            &nexus.staking,
             height,
             view,
             now_ms,
             #[cfg(feature = "telemetry")]
-            None,
-            #[cfg(not(feature = "telemetry"))]
             None,
         )
         .expect("valid exact v2 admission applies");
@@ -2178,6 +2173,16 @@ mod tests {
             validate_v2_equivocation(&wrong_context),
             Err(EvidenceValidationError::V2ArtifactInvalid)
         );
+    }
+
+    #[test]
+    fn v2_aggregate_verification_rejects_missing_signer_pop_without_panicking() {
+        let fixture = V2EvidenceFixture::new();
+        let error =
+            verify_v2_aggregate_signature(&fixture.context, &fixture.proofs[..1], &[2], &[], &[])
+                .expect_err("a signer without a matching proof of possession must fail closed");
+
+        assert_eq!(error, EvidenceValidationError::V2SignerMismatch);
     }
 
     #[test]

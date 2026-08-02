@@ -190,7 +190,7 @@ fn validator_account_id_for_index(index: usize) -> AccountId {
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
@@ -295,12 +295,16 @@ fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
 }
 
 #[test]
-fn opaque_nexus_fee_asset_id_uses_explicit_fixture_name() {
+fn canonical_nexus_fee_asset_id_uses_explicit_fixture_name() {
     let fee_asset_id = nexus_fee_asset_definition_id();
-    assert!(fee_asset_id.is_opaque_canonical());
 
-    let _definition = AssetDefinition::new(fee_asset_id, NumericSpec::default())
-        .with_name(NEXUS_FEE_ASSET_NAME.to_owned());
+    let _definition = AssetDefinition::new(
+        fee_asset_id,
+        NEXUS_FEE_ASSET_NAME.to_owned(),
+        NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    );
 }
 
 fn profile_for_index(index: usize, profile: StakeActivationProfile) -> (u64, Option<&'static str>) {
@@ -333,13 +337,23 @@ fn stake_genesis_post_topology_transactions(
     let genesis_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
     let definition = {
-        AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-            .with_name(STAKE_ASSET_NAME.to_owned())
+        AssetDefinition::new(
+            stake_asset_id.clone(),
+            STAKE_ASSET_NAME.to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     }
     .with_metadata(Metadata::default());
     let fee_definition = {
-        AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
-            .with_name(NEXUS_FEE_ASSET_NAME.to_owned())
+        AssetDefinition::new(
+            fee_asset_id.clone(),
+            NEXUS_FEE_ASSET_NAME.to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     }
     .with_metadata(Metadata::default());
 

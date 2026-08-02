@@ -57,13 +57,14 @@ pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-    VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
-    ValidationFeeCurrentPolicyProofV1, ValidationFeePlainBallotDirectionV1,
-    ValidationFeePlainBallotDraftRequestV1, ValidationFeePlainBallotDraftResponseV1,
-    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
-    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
-    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListV1,
-    ValidationFeeProposalRecordV1, ValidationFeeVerifiedPolicyProjectionV1,
+    VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
+    ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
+    ValidationFeePlainBallotDirectionV1, ValidationFeePlainBallotDraftRequestV1,
+    ValidationFeePlainBallotDraftResponseV1, ValidationFeeProposalDetailV1,
+    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
+    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
+    ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
+    ValidationFeeVerifiedPolicyProjectionV1, decode_validation_fee_proposal_cursor_v1,
 };
 use iroha_torii_shared::{
     AccountReadResponse, ErrorEnvelope, FeeQuoteRequest, FeeQuoteResponse,
@@ -85,7 +86,7 @@ use norito::{
 };
 use sha2::{Digest as _, Sha256};
 use sorafs_manifest::{
-    alias_cache::{decode_alias_proof, unix_now_secs},
+    alias_cache::{decode_alias_proof_untrusted_signers, unix_now_secs},
     pdp::PdpCommitmentV1,
     repair::RepairTicketId,
 };
@@ -140,6 +141,7 @@ use crate::{
 // (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
+const MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -171,6 +173,118 @@ const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
+
+/// First-release public Musubi query endpoint selected without constructing a signer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicMusubiQueryPathV1 {
+    /// Fetch one exact structural package record.
+    ExactPackage,
+    /// Fetch one exact immutable release record.
+    ExactRelease,
+    /// Fetch one finalized resolver-index page.
+    ResolverIndex,
+    /// Fetch one finalized structured-version page.
+    Versions,
+    /// Fetch one finalized package-member page.
+    Maintainers,
+    /// Fetch one finalized archive-location page.
+    ArchiveLocations,
+    /// Fetch bounded exact finalized archive cache-retention decisions.
+    ArchiveRetention,
+    /// Fetch one exact permanent global alias.
+    Alias,
+    /// Fetch one finalized permanent-alias history page.
+    AliasHistory,
+    /// Fetch one finalized byte-ordered package-prefix page.
+    OrderedPrefix,
+    /// Search the finalized-event package metadata projection.
+    Search,
+}
+
+impl PublicMusubiQueryPathV1 {
+    const fn path(self) -> &'static str {
+        match self {
+            Self::ExactPackage => "/v1/musubi/queries/exact-package",
+            Self::ExactRelease => "/v1/musubi/queries/exact-release",
+            Self::ResolverIndex => "/v1/musubi/queries/resolver-index",
+            Self::Versions => "/v1/musubi/queries/versions",
+            Self::Maintainers => "/v1/musubi/queries/maintainers",
+            Self::ArchiveLocations => "/v1/musubi/queries/archive-locations",
+            Self::ArchiveRetention => "/v1/musubi/queries/archive-retention",
+            Self::Alias => "/v1/musubi/queries/alias",
+            Self::AliasHistory => "/v1/musubi/queries/alias-history",
+            Self::OrderedPrefix => "/v1/musubi/queries/ordered-prefix",
+            Self::Search => "/v1/musubi/queries/search",
+        }
+    }
+}
+
+/// Result of a signer-free public Musubi query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublicMusubiQueryResultV1<T> {
+    /// The exact record or finalized page was returned and decoded.
+    Found(T),
+    /// No exact record exists at the requested finalized state.
+    NotFound,
+    /// A supplied finalized cursor is stale and must not be silently restarted.
+    StaleCursor,
+}
+
+/// Execute one bounded public Musubi V1 query without loading an account or key pair.
+///
+/// This function deliberately accepts only the fixed typed-query route inventory. It
+/// never attaches configured headers, canonical account authentication, or signing
+/// material. Callers that need to mutate state must construct [`Client`] separately.
+///
+/// # Errors
+/// Returns an error when the base URL is unsuitable for a public request, request or
+/// response JSON is invalid, transport fails, or Torii returns any status other than
+/// success, not-found, or stale-cursor.
+pub fn post_public_musubi_query_v1<Q, R>(
+    torii_url: &Url,
+    path: PublicMusubiQueryPathV1,
+    query: &Q,
+    timeout: Duration,
+) -> Result<PublicMusubiQueryResultV1<R>>
+where
+    Q: norito::json::JsonSerialize + ?Sized,
+    R: norito::json::JsonDeserialize,
+{
+    if !matches!(torii_url.scheme(), "http" | "https")
+        || !torii_url.username().is_empty()
+        || torii_url.password().is_some()
+    {
+        return Err(eyre!("invalid public Musubi Torii URL"));
+    }
+    let url = torii_url
+        .join(path.path())
+        .wrap_err("failed to build public Musubi query URL")?;
+    let body = norito::json::to_vec(query).wrap_err("failed to encode public Musubi query")?;
+    let mut builder = DefaultRequestBuilder::new(HttpMethod::POST, url)
+        .header("Content-Type", APPLICATION_JSON)
+        .header("Accept", APPLICATION_JSON)
+        .max_response_bytes(MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES)
+        .body(body);
+    if timeout != Duration::ZERO {
+        builder = builder.timeout(timeout);
+    }
+    let response = builder
+        .build()
+        .wrap_err("failed to build public Musubi query")?
+        .send()
+        .wrap_err("public Musubi query transport failed")?;
+    match response.status() {
+        StatusCode::OK => norito::json::from_slice(response.body())
+            .map(PublicMusubiQueryResultV1::Found)
+            .wrap_err("public Musubi query response was invalid"),
+        StatusCode::NOT_FOUND => Ok(PublicMusubiQueryResultV1::NotFound),
+        StatusCode::GONE => Ok(PublicMusubiQueryResultV1::StaleCursor),
+        status => Err(eyre!(
+            "public Musubi query failed with HTTP status {}",
+            status.as_u16()
+        )),
+    }
+}
 
 #[derive(
     Clone,
@@ -8102,7 +8216,7 @@ mod offline_client_tests {
     }
 
     fn asset_definition_id(name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain id"),
             name.parse().expect("asset definition name"),
         )
@@ -8586,6 +8700,7 @@ mod status_tests {
         let got = decode_status_response(&resp).expect("json decode");
 
         assert_eq!(got.build.git_commit_sha, "");
+        assert_eq!(got.build.dpn_validator_release_commit, "");
         assert_eq!(got.peers, 2);
         assert_eq!(got.blocks, 3);
         assert_eq!(got.queue_size, 1);
@@ -13033,7 +13148,7 @@ impl Client {
         let proof_bytes = base64::engine::general_purpose::STANDARD
             .decode(proof_b64.as_bytes())
             .wrap_err("failed to decode Sora-Proof header as base64")?;
-        let bundle = decode_alias_proof(&proof_bytes)
+        let bundle = decode_alias_proof_untrusted_signers(&proof_bytes)
             .wrap_err("invalid alias proof bundle in Sora-Proof header")?;
 
         let evaluation = self.alias_cache_policy.evaluate(&bundle, unix_now_secs());
@@ -14561,12 +14676,13 @@ impl Client {
         for instr in &instructions {
             if let Some(RegisterBox::Role(register_role)) =
                 instr.as_any().downcast_ref::<RegisterBox>()
-                && register_role
-                    .object()
-                    .id()
-                    .name()
-                    .as_ref()
-                    .starts_with(MULTISIG_SIGNATORY)
+                && {
+                    let name = register_role.object().id().name().as_ref();
+                    name == MULTISIG_SIGNATORY
+                        || name
+                            .strip_prefix(MULTISIG_SIGNATORY)
+                            .is_some_and(|suffix| suffix.starts_with('/'))
+                }
             {
                 return Err(eyre!(
                     "reserved multisig role names may not be registered by clients"
@@ -17699,30 +17815,6 @@ impl Client {
             .send()
     }
 
-    /// Convenience: signed POST `/v1/sorafs/transparency/source-entries/{source_kind}`.
-    ///
-    /// # Errors
-    /// Returns an error if the source kind is blank, the payload is not JSON,
-    /// request construction fails, signing fails, or the HTTP call fails.
-    pub fn post_sorafs_transparency_source_entry_json(
-        &self,
-        source_kind: &str,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        let source_kind = require_non_empty_path_segment(source_kind, "source_kind")?;
-        let payload = Self::sorafs_json_request_body(payload, "transparency source entry")?;
-        let url = join_torii_url_with_path_segments(
-            &self.torii_url,
-            "v1/sorafs/transparency/source-entries",
-            &[source_kind],
-        );
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, payload)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
-
     /// Convenience: signed POST `/v1/sorafs/transparency/tokens/issuances`.
     ///
     /// # Errors
@@ -19058,14 +19150,34 @@ impl Client {
         ))
     }
 
-    /// List all typed validation-fee Parliament proposals.
+    /// Read one bounded page of typed validation-fee Parliament proposals.
     ///
     /// # Errors
     ///
-    /// Returns an error for transport/HTTP/JSON failure or a response whose
-    /// proposal id, kind, version, or voting mode is inconsistent.
-    pub fn list_validation_fee_proposals(&self) -> Result<ValidationFeeProposalListV1> {
-        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSALS);
+    /// Returns an error for an invalid cursor or limit, transport/HTTP/JSON
+    /// failure, or a response whose page boundary, proposal id, kind, version,
+    /// or voting mode is inconsistent.
+    pub fn list_validation_fee_proposals_page(
+        &self,
+        cursor: Option<&str>,
+        limit: u32,
+    ) -> Result<ValidationFeeProposalListV1> {
+        if limit == 0 || limit > VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1 {
+            return Err(eyre!(
+                "validation-fee proposal page limit must be between 1 and {}",
+                VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1
+            ));
+        }
+        let after = cursor
+            .map(decode_validation_fee_proposal_cursor_v1)
+            .transpose()
+            .map_err(|error| eyre!("invalid validation-fee proposal cursor: {error}"))?;
+        let mut url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSALS);
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        if let Some(cursor) = cursor {
+            url.query_pairs_mut().append_pair("cursor", cursor);
+        }
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON)
@@ -19085,6 +19197,12 @@ impl Client {
                 "validation-fee proposal list has an unsupported version"
             ));
         }
+        let limit_usize = usize::try_from(limit).expect("bounded u32 page limit fits usize");
+        if result.limit != limit || result.proposals.len() > limit_usize {
+            return Err(eyre!(
+                "validation-fee proposal page violates the requested limit"
+            ));
+        }
         let mut order_keys = Vec::with_capacity(result.proposals.len());
         for proposal in &result.proposals {
             let created_height = validate_validation_fee_proposal_record(proposal)?;
@@ -19094,6 +19212,40 @@ impl Client {
             return Err(eyre!(
                 "validation-fee proposal list is not canonically ordered"
             ));
+        }
+        if let (Some((after_height, after_id)), Some((first_height, first_id))) =
+            (after, order_keys.first().copied())
+        {
+            let after_id = hex::encode(after_id);
+            if (first_height, first_id) <= (after_height, after_id.as_str()) {
+                return Err(eyre!(
+                    "validation-fee proposal page did not advance beyond its cursor"
+                ));
+            }
+        }
+        if let Some(next_cursor) = result.next_cursor.as_deref() {
+            if result.proposals.len() != limit_usize {
+                return Err(eyre!(
+                    "a short validation-fee proposal page cannot advertise a next cursor"
+                ));
+            }
+            let next = decode_validation_fee_proposal_cursor_v1(next_cursor)
+                .map_err(|error| eyre!("invalid validation-fee next cursor: {error}"))?;
+            let Some((last_height, last_id)) = order_keys.last().copied() else {
+                return Err(eyre!(
+                    "empty validation-fee proposal page cannot advertise a next cursor"
+                ));
+            };
+            let last_id = hex::decode(last_id)
+                .wrap_err("validation-fee proposal id stopped being canonical")?;
+            let last_id: [u8; 32] = last_id
+                .try_into()
+                .map_err(|_| eyre!("validation-fee proposal id has the wrong width"))?;
+            if next != (last_height, last_id) {
+                return Err(eyre!(
+                    "validation-fee next cursor is not bound to the last returned proposal"
+                ));
+            }
         }
         Ok(result)
     }
@@ -22012,16 +22164,18 @@ mod subscription_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let (provider, provider_key) = gen_account_in("commerce");
         let (subscriber, subscriber_key) = gen_account_in("users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "fixed_plan".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "fixed_plan".parse().unwrap(),
+            );
         let subscription_id: NftId = "sub-1$subscriptions.universal".parse().unwrap();
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let unit_key: Name = "compute_ms".parse().unwrap();
         let provider_private = provider_key.private_key().clone();
         let subscriber_private = subscriber_key.private_key().clone();
@@ -24250,6 +24404,81 @@ mod tests {
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
+    #[test]
+    fn public_musubi_query_uses_fixed_route_without_account_headers() {
+        let response = json_response(StatusCode::OK, r#"{"result":"finalized"}"#);
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let query = norito::json!({"package": "apps.sora/demo"});
+        let result: PublicMusubiQueryResultV1<Value> =
+            with_mock_http(respond_with(&snapshots, response), || {
+                post_public_musubi_query_v1(
+                    &base_url(),
+                    PublicMusubiQueryPathV1::ExactPackage,
+                    &query,
+                    Duration::from_secs(1),
+                )
+            })
+            .expect("public Musubi query");
+        assert!(matches!(result, PublicMusubiQueryResultV1::Found(_)));
+
+        let snapshot = snapshots.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/musubi/queries/exact-package");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES
+        );
+        assert!(snapshot.headers.iter().all(|(name, _)| {
+            ![
+                HEADER_ACCOUNT,
+                HEADER_SIGNATURE,
+                HEADER_TIMESTAMP_MS,
+                HEADER_NONCE,
+                "authorization",
+            ]
+            .iter()
+            .any(|forbidden| name.eq_ignore_ascii_case(forbidden))
+        }));
+    }
+
+    #[test]
+    fn public_musubi_query_surfaces_missing_and_stale_cursor() {
+        let query = norito::json!({"limit": 1_u64});
+        let missing: PublicMusubiQueryResultV1<Value> = with_mock_http(
+            respond_with(
+                &Arc::new(Mutex::new(Vec::new())),
+                empty_response(StatusCode::NOT_FOUND),
+            ),
+            || {
+                post_public_musubi_query_v1(
+                    &base_url(),
+                    PublicMusubiQueryPathV1::Versions,
+                    &query,
+                    Duration::from_secs(1),
+                )
+            },
+        )
+        .expect("missing query result");
+        assert!(matches!(missing, PublicMusubiQueryResultV1::NotFound));
+
+        let stale: PublicMusubiQueryResultV1<Value> = with_mock_http(
+            respond_with(
+                &Arc::new(Mutex::new(Vec::new())),
+                empty_response(StatusCode::GONE),
+            ),
+            || {
+                post_public_musubi_query_v1(
+                    &base_url(),
+                    PublicMusubiQueryPathV1::OrderedPrefix,
+                    &query,
+                    Duration::from_secs(1),
+                )
+            },
+        )
+        .expect("stale query result");
+        assert!(matches!(stale, PublicMusubiQueryResultV1::StaleCursor));
+    }
+
     fn validation_fee_plain_ballot_draft_fixture() -> (
         String,
         ValidationFeePlainBallotDraftRequestV1,
@@ -24561,7 +24790,7 @@ mod tests {
                 .expect("alias literal"),
             DataSpaceId::new(7),
         );
-        let payment_asset = AssetDefinitionId::new(
+        let payment_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("assets", "paynet").expect("asset domain"),
             "xor".parse().expect("asset name"),
         );
@@ -24650,7 +24879,7 @@ mod tests {
         });
         let guard = AliasQuoteGuardV1 {
             expected_policy_version: 3,
-            expected_payment_asset: AssetDefinitionId::new(
+            expected_payment_asset: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("assets", "paynet").expect("asset domain"),
                 "xor".parse().expect("asset name"),
             ),
@@ -24715,7 +24944,7 @@ mod tests {
                 .expect("alias literal"),
             DataSpaceId::new(7),
         );
-        let payment_asset = AssetDefinitionId::new(
+        let payment_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("assets", "paynet").expect("asset domain"),
             "xor".parse().expect("asset name"),
         );
@@ -26166,7 +26395,7 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &client.chain,
             &client.account,
             0,
             DataSpaceId::UNIVERSAL,
@@ -26200,7 +26429,7 @@ mod tests {
             std::str::from_utf8(raw).expect("fixture JSON"),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &client.chain,
             &client.account,
             1,
             DataSpaceId::UNIVERSAL,
@@ -31761,64 +31990,6 @@ mod tests {
     }
 
     #[test]
-    fn sorafs_transparency_source_entry_sends_signed_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"source"}"#);
-        let payload = norito::json::to_vec(&norito::json!({
-            "event_id": "legal-hold-1",
-            "occurred_at_unix": 1_800_000_500_u64,
-            "subject": "case-401",
-            "payload_digest_hex": ("a1".repeat(32)),
-        }))
-        .expect("encode source entry payload");
-
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_transparency_source_entry_json("legal hold", &payload)
-                .expect("transparency source entry request");
-        });
-
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/transparency/source-entries/legal%20hold"
-        );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
-
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("event_id").and_then(JsonValue::as_str),
-            Some("legal-hold-1")
-        );
-        assert_eq!(
-            body.get("payload_digest_hex").and_then(JsonValue::as_str),
-            Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
-        );
-    }
-
-    #[test]
-    fn sorafs_transparency_source_entry_rejects_empty_json_payload() {
-        let client = client_with_base_url(base_url());
-        let err = client
-            .post_sorafs_transparency_source_entry_json("legal-hold-notice", &[])
-            .expect_err("empty payload must be rejected");
-        assert!(err.to_string().contains("payload"));
-    }
-
-    #[test]
     fn sorafs_transparency_token_issuance_sends_signed_json_request() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -35537,10 +35708,11 @@ mod tests {
             transaction::error::TransactionRejectionReason,
         };
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let reason = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             crate::data_model::isi::error::InstructionExecutionError::Query(
                 QueryExecutionFail::Find(FindError::AssetDefinition(asset_def)),

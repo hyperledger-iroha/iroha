@@ -2,7 +2,7 @@
 //!
 //! Ordinary builds retain the lightweight Git-commit marker used by RBC. The
 //! opt-in Kagemusha candidate-build feature additionally requires and verifies
-//! an independently pinned reviewed dirty source closure supplied by the
+//! an independently pinned reviewed clean signed source closure supplied by the
 //! dedicated build helper.
 
 use std::{env, path::Path, process::Command};

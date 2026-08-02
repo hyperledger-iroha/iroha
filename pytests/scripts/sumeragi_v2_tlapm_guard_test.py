@@ -128,6 +128,7 @@ def test_process_inspection_tolerates_legacy_two_second_overrun(
     ) -> subprocess.CompletedProcess[str]:
         timeout = options.get("timeout")
         assert isinstance(timeout, float)
+        assert options.get("env") == guard.PROCESS_INSPECTION_ENVIRONMENT
         observed_timeouts.append(timeout)
         if timeout <= 2.0:
             raise subprocess.TimeoutExpired(command, timeout)

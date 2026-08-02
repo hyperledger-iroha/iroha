@@ -58,6 +58,19 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
         self.wireName = wireName
         self.framedPayload = framedPayload
     }
+
+    /// Encode the dynamic `InstructionBox` pair under the V1 `COMPACT_LEN` layout.
+    func compactInstructionBoxPayload() -> Data {
+        var framedBytes = CompactNoritoWriter()
+        // `COMPACT_LEN` changes field prefixes, not the `Vec<u8>` element count.
+        framedBytes.writeUInt64LE(UInt64(framedPayload.count))
+        framedBytes.writeBytes(framedPayload)
+
+        var instruction = CompactNoritoWriter()
+        instruction.writeField(CompactNorito.encodeString(wireName))
+        instruction.writeField(framedBytes.data)
+        return instruction.data
+    }
 }
 
 /// Signature-bound invocation of one deployed contract revision.

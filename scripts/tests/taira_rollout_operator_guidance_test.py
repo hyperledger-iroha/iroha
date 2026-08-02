@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from scripts import finalize_taira_rollout_authority as authority_finalizer
 
 try:
     import tomllib
@@ -14,6 +15,7 @@ except ModuleNotFoundError:
 
 ROOT = Path(__file__).resolve().parents[2]
 TAIRA_DIR = ROOT / "configs" / "soranexus" / "taira"
+AUTHORITY_FINALIZER = ROOT / "scripts" / "finalize_taira_rollout_authority.py"
 
 
 def test_taira_release_freezes_fail_closed_network_time_policy() -> None:
@@ -56,8 +58,7 @@ def test_verify_soraswap_rollout_passes_expected_git_sha_to_mcp_check() -> None:
     assert "--offline-expected-identity" not in source
     assert (
         "public SoraSwap mutation/release paths cannot skip the "
-        "Taira build/finality/dataspace fleet gate"
-        in source
+        "Taira build/finality/dataspace fleet gate" in source
     )
 
 
@@ -68,8 +69,7 @@ def test_rollout_bundle_manifest_followup_pins_mcp_and_soraswap_checks() -> None
         "check_mcp_rollout.sh --public-root https://<public-torii-root> "
         "--validator-root <label>=<validator-url> (once per validator) "
         "--require-all-validators --write-config "
-        "/run/secrets/taira-canary-client.toml --expected-git-sha "
-        in source
+        "/run/secrets/taira-canary-client.toml --expected-git-sha " in source
     )
     assert (
         "verify_soraswap_rollout.sh --public-root https://<public-torii-root> "
@@ -82,9 +82,7 @@ def test_rollout_bundle_manifest_followup_pins_mcp_and_soraswap_checks() -> None
 
 
 def test_rollout_bundle_has_no_backend_offline_proof_prerequisite() -> None:
-    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
-        encoding="utf-8"
-    )
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
@@ -101,7 +99,7 @@ def test_rollout_bundle_has_no_backend_offline_proof_prerequisite() -> None:
         assert obsolete not in builder
         assert obsolete not in workflow
     assert "prepare_taira_offline_reset_bundle.py" not in workflow
-    assert "prepare_taira_empty_reset_bundle.py" in workflow
+    assert "prepare-reset" in workflow
     assert "TAIRA_MACOS_OFFLINE_GENESIS_PATH" not in workflow
     assert "TAIRA_MACOS_KAGEMUSHA_RELEASE_BUNDLE_PATH" not in workflow
 
@@ -139,7 +137,7 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
     assert 'case "$(uname -m)" in' in source
     assert "aarch64)" in source
     assert "x86_64|aarch64)" not in source
-    assert "Taira first-release authority requires native Linux aarch64" in source
+    assert "Taira first-release archive requires native Linux aarch64" in source
     assert "readelf --program-headers --wide" in source
     assert "must not contain a PT_INTERP segment" in source
     assert "readelf --dynamic --wide" in source
@@ -162,10 +160,8 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
     assert '"privacy_release":' not in source
 
     assert "build_taira_rollout_bundle.sh" in workflow
-    assert (
-        "--features embedded-soracloud-runtime,zk-stark" in workflow
-    )
-    assert "capture_taira_macos_four_peer_receipt.py" in workflow
+    assert "--features embedded-soracloud-runtime,zk-stark" in workflow
+    assert "capture-four-peer" in workflow
     assert "docker/build-push-action@" not in workflow
     assert 'test "${FEATURES}" = "embedded-soracloud-runtime,zk-stark"' in dockerfile
     assert "Taira irohad must not contain privacy-release-evidence" in dockerfile
@@ -246,7 +242,8 @@ def test_rollout_bundle_persists_typed_native_evidence_pairs_and_bundled_verific
     assert '"binary_identities": {' in source
     assert '"VALIDATOR_BINARY_SHA256"' in source
     assert '"PRIVACY_RUNNER_BINARY_SHA256"' in source
-    assert '"also_bound_by_typed_receipt": True' in source
+    assert '"validator_and_evidence_runner_bound_by_typed_receipt": True' in source
+    assert '"broker_public_export_bound_by_plan_and_release_manifest": (' in source
     assert '"${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}" verify' in source
     included_paths = source.partition('"included_paths": [')[2].partition(
         '"required_followup":'
@@ -261,6 +258,111 @@ def test_rollout_bundle_persists_typed_native_evidence_pairs_and_bundled_verific
         "--x509-resource-json "
         '"${bundle}/provenance/privacy-native/zk-x509-resource-v1.json"' in readme
     )
+
+
+def _assert_native_privacy_composer_bundle_contract(
+    builder: str, workflow: str
+) -> None:
+    assert (
+        'TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR="${TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR:-}"'
+        in builder
+    )
+    assert (
+        "PUBLIC_INPUT_DIR: ${{ vars.TAIRA_PRIVACY_RELEASE_INPUT_DIR }}"
+        in workflow
+    )
+    assert (
+        '"TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR=$privacy_input"'
+        in workflow
+    )
+    assert "Snapshot only the four public privacy inputs with the installed controller" in workflow
+    for name in (
+        "privacy_bootstrap_plan.json",
+        "config.toml",
+        "genesis.json",
+        "bootle_lantern_broker_public.json",
+    ):
+        assert name in builder
+    assert "privacy release input directory must contain exactly" in builder
+    assert builder.count("flags |= os.O_NOFOLLOW") == 2
+    assert "before.st_nlink != 1" in builder
+    assert "privacy release input changed while opening" in builder
+    assert "privacy release input changed while reading" in builder
+    assert "privacy release input directory changed during snapshot" in builder
+    assert (
+        'kagami_build_args=(build --locked -p iroha_kagami --bin "$KAGAMI_BIN")'
+        in builder
+    )
+    emit = builder.index('"$kagami_path" privacy-bootstrap emit-taira-v1')
+    compose = builder.index('"$kagami_path" privacy-bootstrap render-taira-release-v1')
+    compare = builder.index("compare_composed_privacy_input()")
+    bundle_copy = builder.index(
+        'cp "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC" \\\n    "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"'
+    )
+    assert emit < compose < compare < bundle_copy
+    for label in ("plan", "config", "genesis", "broker public export"):
+        assert f'compare_composed_privacy_input \\\n    "{label}"' in builder
+    assert builder.count('--broker-public "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC"') == 2
+    assert (
+        '--broker-public "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"'
+        in builder
+    )
+    assert '"privacy_bootstrap_release": privacy_bootstrap_release' in builder
+    assert '"bound_by_plan_sha256": True' in builder
+    assert '"native_recomposition_passed": True' in builder
+    assert '"bundled_release_validation_passed": True' in builder
+    assert 'os.environ["PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256"]' in builder
+
+
+def test_release_bundle_recomposes_and_binds_exact_reviewed_privacy_inputs() -> None:
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
+    workflow = (
+        ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
+    ).read_text(encoding="utf-8")
+    _assert_native_privacy_composer_bundle_contract(builder, workflow)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda source: source.replace(
+            "flags |= os.O_NOFOLLOW", "# no-follow removed", 1
+        ),
+        lambda source: source.replace("before.st_nlink != 1", "before.st_nlink < 0", 1),
+        lambda source: source.replace(
+            'compare_composed_privacy_input \\\n    "broker public export"',
+            "# broker comparison removed",
+            1,
+        ),
+        lambda source: source.replace(
+            '--broker-public "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC"',
+            "# broker validation removed",
+            1,
+        ),
+        lambda source: source.replace(
+            '"bound_by_plan_sha256": True',
+            '"bound_by_plan_sha256": False',
+            1,
+        ),
+    ),
+    ids=(
+        "symlink-following",
+        "hardlink-accepted",
+        "broker-byte-compare-removed",
+        "broker-validation-removed",
+        "plan-binding-removed",
+    ),
+)
+def test_privacy_composer_bundle_contract_rejects_adversarial_mutations(
+    mutation,
+) -> None:
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
+    workflow = (
+        ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
+    ).read_text(encoding="utf-8")
+    _assert_native_privacy_composer_bundle_contract(builder, workflow)
+    with pytest.raises(AssertionError):
+        _assert_native_privacy_composer_bundle_contract(mutation(builder), workflow)
 
 
 def test_native_evidence_source_manifest_is_rechecked_across_release_boundaries() -> (
@@ -295,13 +397,11 @@ def test_native_evidence_source_manifest_is_rechecked_across_release_boundaries(
     assert pre_archive < archive < post_archive
 
     assert 'workspace_source_manifest_before="$(python3 -I -S' in dockerfile
-    assert "TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" in workflow
+    assert "workspace_source_manifest_sha256" in workflow
     assert workflow.count("prepare_taira_release_source.sh") == 2
-    assert (
-        'cmp "$MACOS_SOURCE_IDENTITY" '
-        '"$linux_root/taira-source-identity-v1.json"' in workflow
-    )
-    assert "python3 -I -S scripts/compute_workspace_source_manifest.py" in workflow
+    assert workflow.count('cmp "$linux_stage/taira-source-identity-v1.json"') >= 1
+    assert "staged_root" in workflow
+    assert "inspect-handoff" in workflow
     assert "--extract-sealed-archive" in dockerfile
     assert dockerfile.count("--require-exact-closure") == 3
 
@@ -320,9 +420,11 @@ def test_taira_publish_workflow_has_no_competing_image_authority() -> None:
         "taira-latest",
     ):
         assert retired not in workflow.lower()
-    assert "Publish the exact generic OCI artifact" in workflow
-    assert "Pull by immutable digest, compare every byte" in workflow
-    assert "Create and verify the signed publication receipt" in workflow
+    assert "Publish through the sealed installed authority controller" in workflow
+    assert "publish-rollout --" in workflow
+    assert "sign-manifest" not in workflow
+    assert "oras push" not in workflow
+    assert "TAIRA_OCI_PASSWORD" not in workflow
 
 
 def _assert_docker_sealed_source_and_final_verify_contract(
@@ -482,6 +584,21 @@ def test_taira_archive_publication_contract_is_documented() -> None:
     assert "OCI image" in readme
     assert "pull by digest" in readme
     assert "signed publication receipt" in readme
+    assert "has no arbitrary checkout input" in readme
+    assert "persisted Git credentials disabled" in readme
+    assert "private reset bundle" in readme
+    assert "never enter Actions artifact storage or OCI" in readme
+    assert "first without `--apply`" in readme
+    assert "then with `--apply`" in readme
+    assert "never composed beneath `RUNNER_TEMP`" in readme
+    assert "TAIRA_MACOS_RESET_STAGING_ROOT" in readme
+    assert "TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256" in readme
+    assert "a path alone is not an authority" in readme
+    assert "exactly five files" in readme
+    assert "not an OCI layer" in readme
+    assert "exact four files" in readme
+    assert "step-scoped" in readme
+    assert "macos-arm64.deploy" not in readme
 
 
 def _assert_native_evidence_fail_closed_static_contract(source: str) -> None:
@@ -573,7 +690,7 @@ def test_release_bundle_rejects_skip_build_before_external_prerequisites() -> No
     release_guard = source.index(
         'if [[ "$PROFILE" == "release" && $SKIP_BUILD -eq 1 ]]'
     )
-    prerequisite_checks = source.index('python3 - "${SCRIPT_DIR}/config.toml"')
+    prerequisite_checks = source.index("release_inputs=(")
     assert release_guard < prerequisite_checks
 
 
@@ -605,22 +722,22 @@ def test_release_bundle_rejects_skipped_regressions_before_external_prerequisite
     release_guard = source.index(
         'if [[ "$PROFILE" == "release" && $SKIP_LOCAL_REGRESSIONS -eq 1 ]]'
     )
-    prerequisite_checks = source.index('python3 - "${SCRIPT_DIR}/config.toml"')
+    prerequisite_checks = source.index("release_inputs=(")
     assert release_guard < prerequisite_checks
 
 
 def _assert_portable_signed_taira_authority_contract(
     builder: str,
+    finalizer: str,
     workflow: str,
 ) -> None:
     for required in (
-        "scripts/taira_release_authority.py",
-        "scripts/release_artifact_contract.py",
-        "scripts/generate_release_manifest.py",
-        "scripts/release_manifest_signing.py",
-        "scripts/write_release_sha256sums.py",
+        "taira_release_authority",
+        "release_artifact_contract",
+        "generate_release_manifest",
+        "release_manifest_signing",
     ):
-        assert required in builder or required in workflow
+        assert required in finalizer
     for variable in (
         "TAIRA_RELEASE_EXTERNAL_SIGNER_PATH",
         "TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH",
@@ -628,116 +745,145 @@ def _assert_portable_signed_taira_authority_contract(
         "TAIRA_RELEASE_MANIFEST_VERIFIER_PATH",
         "TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256",
     ):
-        assert variable in builder
+        assert variable not in builder
         assert variable in workflow
 
     assert '"repo_root":' not in builder
-    assert "taira-exact12-release-authority-v1.json" in builder
-    assert "taira-exact12-release-authority-v1.json" in workflow
-    assert '"$RELEASE_MANIFEST_SIGNING_HELPER" sign' in builder
-    assert '"$RELEASE_MANIFEST_SIGNING_HELPER" verify' in builder
-    assert "scripts/release_manifest_signing.py sign" in workflow
-    assert "scripts/release_manifest_signing.py verify" in workflow
-    assert "--trusted-signing-fingerprint" in builder
+    assert '"repo_root":' not in finalizer
+    assert "taira-exact12-release-authority-v1.json" in finalizer
+    assert "sign_release_manifest(" in finalizer
+    assert finalizer.count("verify_release_manifest(") == 1
+    assert "build_authority(" in finalizer
+    assert finalizer.count("build_release_manifest(") == 2
+    assert "finalize-linux --" in workflow
+    assert "publish-rollout --" in workflow
+    assert "sign-manifest" not in workflow
+    assert (
+        'parser.add_argument("--trusted-signing-fingerprint", required=True)'
+        in finalizer
+    )
     assert "--trusted-signing-fingerprint" in workflow
-    assert "--trusted-release-manifest-verifier-sha256" in builder
+    assert "--trusted-release-manifest-verifier-sha256" in finalizer
     assert "--trusted-release-manifest-verifier-sha256" in workflow
-    assert "sorafs-validate" in builder
-    assert "sorafs-validate" in workflow
-    assert "release_manifest.json.sig" in builder
-    assert "release_manifest.json.pub" in builder
+    assert "sorafs-validate" in finalizer
+    # The authority host executes the sealed finalizer through the fixed
+    # controller.  Source-controlled workflow text must not select the
+    # validator implementation directly.
+    assert "sorafs-validate" not in workflow
+    assert 'output / "release_manifest.json.sig"' in finalizer
+    assert 'output / "release_manifest.json.pub"' in finalizer
     assert "release_manifest.json.sig" in workflow
     assert "release_manifest.json.pub" in workflow
-    assert "release_manifest.replay.json" in builder
-    assert "release_manifest.replay.json" in workflow
-    assert "os.path.realpath(sys.argv[1])" in builder
-    assert "os.path.realpath(sys.argv[1])" in workflow
-    assert '[[ "$canonical_path" != "$path" ]]' in builder
-    assert workflow.count('if [[ "$canonical_path" != "$path" ]]; then') == 2
-    assert '"$canonical_path" == "$canonical_repo_root/"*' in builder
-    assert '"$canonical_path" == "$canonical_workspace/"*' in workflow
+    assert "release manifest replay differs after signing" in finalizer
+    assert "CONTROLLER_MANIFEST_NAME" in finalizer
+    assert "authority-controller-v1.json" in workflow
+    assert "verify_controller_closure(" in finalizer
+    assert 'parser.add_argument("--checkout-root", required=True)' in finalizer
     assert (
-        'cmp "$release_authority_manifest" "$release_authority_manifest_replay"'
-        in builder
+        'parser.add_argument("--public-privacy-input-dir", required=True)'
+        in finalizer
     )
-    assert 'cmp "$manifest" "$authority_manifest_replay"' in workflow
-
-    linux_build = workflow.index(
-        "Build and sign the Linux aarch64 native privacy authority"
-    )
-    linux_upload = workflow.index(
-        "Upload the signed Linux aarch64 archive authority"
-    )
-    linux_download = workflow.index(
-        "Download and authenticate the Linux aarch64 authority transfer"
-    )
-    sign = workflow.index(
-        "Construct, sign, and admission-verify the final macOS archive"
-    )
-    upload = workflow.index("Upload the authenticated pre-publication bytes")
-    download = workflow.index(
-        "Download the pre-publication bytes into a fresh replay root"
-    )
-    reverify = workflow.index(
-        "Byte-compare and re-admit the uploaded archive before registry mutation"
-    )
-    push = workflow.index("Publish the exact generic OCI artifact")
+    assert 'parser.add_argument("--controller-manifest", required=True)' in finalizer
+    assert 'parser.add_argument("--controller-digest", required=True)' in finalizer
+    assert '--controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json"' in workflow
+    assert '--controller-digest "$EXPECTED_CONTROLLER_DIGEST"' in workflow
+    assert "comparison.resolve(strict=True)" in finalizer
+    assert "canonical != expected" in finalizer
+    assert finalizer.count("_external_authority_file(") == 4
+    assert "must be provisioned outside the checkout" in finalizer
+    assert "expected_archive = evidence_root.parent" in finalizer
+    assert "expected_output = evidence_root.parent" in finalizer
+    assert "authority output inventory is not exactly closed" in finalizer
+    assert "public_input_digests = _verify_public_privacy_inputs(" in finalizer
+    assert "unsigned archive substituted the trusted public privacy input" in finalizer
+    assert '--public-privacy-input-dir "$public_root/inputs"' in workflow
+    assert "--expected-kind public-privacy-input" in workflow
+    assert "import subprocess" not in finalizer
+    assert "os.system" not in finalizer
+    assert "subprocess." not in finalizer
+    assert "taira_privacy_release_runner" not in finalizer
+    assert "bin/irohad" not in finalizer
+    assert "target/release" not in finalizer
+    linux_snapshot = workflow.index("Snapshot only the four public privacy inputs")
+    linux_build = workflow.index("Reconstruct source and build the unsigned Linux archive")
+    linux_authenticate = workflow.index("Finalize and sign Linux bytes using only installed authority code")
+    qualification = workflow.index("macos-secret-free-qualification:")
+    sign = workflow.index("macos-candidate-authority:")
+    direct = workflow.index("macos-deploy:")
+    public = workflow.index("Require exact-four public advancement without signer or OCI credentials")
+    publish = workflow.index("Publish through the sealed installed authority controller")
     assert (
-        linux_build
-        < linux_upload
-        < linux_download
+        linux_snapshot
+        < linux_build
+        < linux_authenticate
+        < qualification
         < sign
-        < upload
-        < download
-        < reverify
-        < push
+        < direct
+        < public
+        < publish
     )
-    assert (
-        "uses: actions/download-artifact@"
-        "d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow[download:reverify]
-    )
-    replay_block = workflow[reverify:push]
-    assert "upload replay bytes differ" in replay_block
-    assert "scripts/taira_rollout_admission.py verify" in replay_block
+    assert workflow.count("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093") >= 9
+    assert "inspect-handoff" in workflow[linux_authenticate:]
+    assert "publish-rollout --" in workflow[publish:]
+    assert "admit -- verify" not in workflow[publish:]
+    linux_build_block = workflow[linux_build:linux_authenticate]
+    for protected in (
+        "TAIRA_RELEASE_EXTERNAL_SIGNER_PATH",
+        "TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH",
+        "TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT",
+        "TAIRA_RELEASE_MANIFEST_VERIFIER_PATH",
+        "TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256",
+        "TAIRA_PRIVACY_RELEASE_INPUT_DIR",
+    ):
+        assert protected not in linux_build_block
+    assert "env -i" in linux_build_block
+    authentication_block = workflow[
+        linux_authenticate : workflow.index("macos-native-build:")
+    ]
+    assert "finalize-linux" in authentication_block
+    assert "$TAIRA_CONTROLLER_COMMAND" in authentication_block
+    assert "cargo " not in authentication_block
+    assert "build_taira_rollout_bundle.sh" not in authentication_block
 
 
 def test_taira_release_requires_portable_signed_exact12_authority() -> None:
     builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
+    finalizer = AUTHORITY_FINALIZER.read_text(encoding="utf-8")
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
-    _assert_portable_signed_taira_authority_contract(builder, workflow)
+    _assert_portable_signed_taira_authority_contract(builder, finalizer, workflow)
 
 
 @pytest.mark.parametrize(
     "mutation",
     (
         lambda source: source.replace(
-            'python3 -S "$RELEASE_MANIFEST_SIGNING_HELPER" sign',
-            "# signature gate deleted",
+            "sign_release_manifest(",
+            "deleted_signature_gate(",
             1,
         ),
         lambda source: source.replace(
-            'cmp "$release_authority_manifest" "$release_authority_manifest_replay"',
-            "# aggregate replay comparison deleted",
+            "replay_manifest = canonical_json_bytes(build_release_manifest(manifest_args))",
+            "replay_manifest = manifest_payload  # replay deleted",
             1,
         ),
         lambda source: source.replace(
-            '--trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT"',
-            "# fingerprint pin deleted",
+            'parser.add_argument("--trusted-signing-fingerprint", required=True)',
+            'parser.add_argument("--trusted-signing-fingerprint")',
         ),
         lambda source: source.replace(
-            'if [[ "$canonical_path" != "$path" ]]; then',
-            "if false; then # canonical external-path guard deleted",
+            "if canonical != expected:",
+            "if False:  # canonical external-path guard deleted",
             1,
         ),
         lambda source: (
-            source.replace(
-                '    "repo_root": os.environ["REPO_ROOT"],',
-                '    "repo_root": os.environ["REPO_ROOT"],',
-                1,
-            )
-            + '\n# "repo_root": reintroduced absolute build host path\n'
+            source + '\n# "repo_root": reintroduced absolute build host path\n'
+        ),
+        lambda source: source.replace(
+            "public_input_digests = _verify_public_privacy_inputs(",
+            "public_input_digests = deleted_public_input_verification(",
+            1,
         ),
     ),
     ids=(
@@ -746,68 +892,66 @@ def test_taira_release_requires_portable_signed_exact12_authority() -> None:
         "fingerprint-unpinned",
         "canonical-external-path-guard-deleted",
         "absolute-host-path",
+        "trusted-public-input-verification-deleted",
     ),
 )
 def test_bundle_signed_authority_static_contract_rejects_mutations(
     mutation,
 ) -> None:
     builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
+    finalizer = AUTHORITY_FINALIZER.read_text(encoding="utf-8")
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
-    _assert_portable_signed_taira_authority_contract(builder, workflow)
+    _assert_portable_signed_taira_authority_contract(builder, finalizer, workflow)
     with pytest.raises(AssertionError):
         _assert_portable_signed_taira_authority_contract(
-            mutation(builder),
+            builder,
+            mutation(finalizer),
             workflow,
         )
 
 
-def test_release_bundle_rejects_parent_alias_into_checkout() -> None:
-    builder = TAIRA_DIR / "build_taira_rollout_bundle.sh"
+def test_authority_finalizer_rejects_parent_alias_into_checkout() -> None:
     aliased_repo_file = str(ROOT / ".." / ROOT.name / "Cargo.lock")
     assert ".." in aliased_repo_file
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "TAIRA_RELEASE_EXTERNAL_SIGNER_PATH": aliased_repo_file,
-            "TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH": aliased_repo_file,
-            "TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT": "0" * 64,
-            "TAIRA_RELEASE_MANIFEST_VERIFIER_PATH": aliased_repo_file,
-            "TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256": "0" * 64,
-        }
-    )
-    result = subprocess.run(
-        ["bash", str(builder), "--profile", "release"],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    with pytest.raises(
+        authority_finalizer.FinalizationError,
+        match="canonical physical path without symlink aliases",
+    ):
+        authority_finalizer._canonical_absolute(
+            Path(aliased_repo_file),
+            "external signer",
+        )
 
-    assert result.returncode == 1
-    assert (
-        "must use its canonical physical path without symlink or parent aliases"
-        in result.stderr
-    )
-    assert "Kagemusha release policy is mandatory" not in result.stderr
+
+def test_authority_finalizer_rejects_authority_file_inside_checkout() -> None:
+    with pytest.raises(
+        authority_finalizer.FinalizationError,
+        match="must be provisioned outside the checkout",
+    ):
+        authority_finalizer._external_authority_file(
+            ROOT / "Cargo.lock",
+            "external signer",
+            ROOT,
+        )
 
 
 def test_workflow_canonical_external_path_guard_rejects_mutation() -> None:
     builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
+    finalizer = AUTHORITY_FINALIZER.read_text(encoding="utf-8")
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
-    mutated = workflow.replace(
-        'if [[ "$canonical_path" != "$path" ]]; then',
-        "if false; then # canonical external-path guard deleted",
+    mutated = finalizer.replace(
+        "if canonical != expected:",
+        "if False:  # canonical external-path guard deleted",
         1,
     )
 
-    _assert_portable_signed_taira_authority_contract(builder, workflow)
+    _assert_portable_signed_taira_authority_contract(builder, finalizer, workflow)
     with pytest.raises(AssertionError):
-        _assert_portable_signed_taira_authority_contract(builder, mutated)
+        _assert_portable_signed_taira_authority_contract(builder, mutated, workflow)
 
 
 def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
@@ -818,16 +962,22 @@ def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
         "TAIRA_INPUT_VALIDATOR_RELEASE_REF: "
         "${{ inputs.validator_release_ref }}" in workflow
     )
-    assert "TAIRA_INPUT_ARTIFACT_SUFFIX: ${{ inputs.artifact_suffix }}" in workflow
+    assert "checkout_ref" not in workflow
+    assert "permissions:\n  contents: read" in workflow
+    assert workflow.count("ref: ${{ github.sha }}") == 2
+    assert workflow.count("persist-credentials: false") == 2
+    assert (
+        workflow.count('[[ "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]')
+        == 3
+    )
+    assert workflow.count('[[ "$TAIRA_WORKFLOW_COMMIT" =~ ^[0-9a-f]{40}$ ]]') == 3
+    assert "inputs.artifact_suffix" not in workflow
     assert "push_latest" not in workflow
     assert "release_ref='${{ inputs.validator_release_ref }}'" not in workflow
     assert 'raw_suffix="${{ inputs.artifact_suffix }}"' not in workflow
-    assert 'raw_suffix="$TAIRA_INPUT_ARTIFACT_SUFFIX"' in workflow
-    assert (
-        '[[ -n "$raw_suffix" && ! "$raw_suffix" =~ '
-        "^[a-z0-9][a-z0-9._-]{0,47}$ ]]" in workflow
-    )
-    assert 'tag="source-${TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256}"' in workflow
+    assert "TAIRA_OCI_TAG_SUFFIX: ${{ vars.TAIRA_OCI_TAG_SUFFIX }}" in workflow
+    assert '--suffix "$TAIRA_OCI_TAG_SUFFIX"' in workflow
+    assert "publish-rollout --" in workflow
     assert "source-${TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256:0:12}" not in workflow
 
 
@@ -839,8 +989,12 @@ def test_mcp_rollout_has_no_backend_offline_admission_gate() -> None:
     assert "--offline-expected-identity" not in source
     assert "OFFLINE_ASSET_DEFINITION_ID" not in source
     assert "OFFLINE_EXPECTED_IDENTITY_PATH" not in source
-    assert 'EXPECTED_IS_ROUTE_ALIAS="${EXPECTED_IS_ROUTE_ALIAS:-external-poc}"' in source
-    assert 'EXPECTED_IS2_ROUTE_ALIAS="${EXPECTED_IS2_ROUTE_ALIAS:-boi-mobile}"' in source
+    assert (
+        'EXPECTED_IS_ROUTE_ALIAS="${EXPECTED_IS_ROUTE_ALIAS:-external-poc}"' in source
+    )
+    assert (
+        'EXPECTED_IS2_ROUTE_ALIAS="${EXPECTED_IS2_ROUTE_ALIAS:-boi-mobile}"' in source
+    )
     assert '"$(normalize_root_url "$root")/health"' in source
     assert '"$(normalize_root_url "$root")/readyz"' in source
     assert '"$(normalize_root_url "$root")/v1/nexus/lifecycle"' in source

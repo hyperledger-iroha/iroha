@@ -11,6 +11,7 @@ pub(super) fn collect_configured_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    collect_bootle_lantern_issuance_binding(config, bindings)?;
     collect_storage_security_bindings(config, bindings)?;
     collect_appeal_finance_bindings(config, bindings)?;
     collect_native_transaction_signer_bindings(config, bindings)?;
@@ -20,6 +21,35 @@ pub(super) fn collect_configured_bindings(
     collect_provider_ingest_bindings(config, bindings)?;
     collect_soracloud_runtime_signer_binding(config, bindings)?;
     collect_soracloud_hf_credential_provider_binding(config, bindings)
+}
+
+fn collect_bootle_lantern_issuance_binding(
+    config: &Config,
+    bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let Some(binding) = config.torii.privacy_bootle_lantern_issuer.as_ref() else {
+        return Ok(());
+    };
+    let public_bindings =
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
+            binding.issuer_id,
+            binding.policy_id,
+            binding.authorization_lifetime_blocks,
+        )
+        .map_err(|_| {
+            IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry,
+            )
+        })?;
+    bindings.push(
+        IrohaRuntimeProviderBindingV1::try_new_bootle_lantern_issuance(
+            binding.runtime_provider_registry_handle.clone(),
+            binding.runtime_provider_registry_revision,
+            binding.runtime_provider_registry_policy_digest,
+            public_bindings,
+        )?,
+    );
+    Ok(())
 }
 
 fn collect_soracloud_runtime_signer_binding(

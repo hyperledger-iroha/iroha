@@ -38,13 +38,6 @@ def _fake_benchmark(tmp_path: Path, *, exercise_guard: bool = False) -> Path:
     body = ""
     if exercise_guard:
         body = """
-auth_fd=${IROHA_RESOURCE_GUARD_AUTH_FD-}
-case "$auth_fd" in
-    ''|*[!0-9]*) exit 91 ;;
-esac
-eval "IFS= read -r auth_record <&$auth_fd"
-expected_auth="IROHA_RESOURCE_GUARD_AUTH_V1:${IROHA_RESOURCE_GUARD_AUTH_TOKEN-}"
-[ "$auth_record" = "$expected_auth" ] || exit 91
 case "${TMPDIR-}" in
     */.kagemusha-v4-benchmark-scratch-*) ;;
     *) exit 92 ;;
@@ -280,10 +273,8 @@ def test_benchmark_source_cannot_frame_or_publish_a_candidate() -> None:
     candidate_runner_source = CANDIDATE_RUNNER_PATH.read_text(encoding="utf-8")
     core_manifest = CORE_MANIFEST_PATH.read_text(encoding="utf-8")
 
-    assert (
-        benchmark_source.count("claim_kagemusha_generation_supervisor_permit_v4")
-        == 3
-    )
+    assert benchmark_source.count("start_kagemusha_generation_memory_guard_v4") == 3
+    assert "claim_kagemusha_generation_" + "supervisor_permit_v4" not in benchmark_source
     assert "generate_kagemusha_pasta_cycle_artifacts_v4" in benchmark_source
     assert benchmark_source.count("tempfile::tempfile()") == 2
     assert "KagemushaRecursiveSpendCandidateV4" not in benchmark_source
@@ -292,7 +283,7 @@ def test_benchmark_source_cannot_frame_or_publish_a_candidate() -> None:
     assert "--out-dir" not in benchmark_source
     assert f'name = "{MODULE.BENCHMARK_EXECUTABLE}"' in core_manifest
     assert (
-        'required-features = ["zk-halo2-ipa", '
+        'required-features = ["dev-tools", "zk-halo2-ipa", '
         '"kagemusha-generation-memory-lab"]'
         in core_manifest
     )
@@ -302,3 +293,5 @@ def test_benchmark_source_cannot_frame_or_publish_a_candidate() -> None:
     assert "MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT" in benchmark_runner_source
     assert "MEMORY_ENFORCEMENT_PROCESS_TREE_RSS" in benchmark_runner_source
     assert "physical_footprint_interval_seconds" in benchmark_runner_source
+    assert "RESOURCE_GUARD_" + "AUTH" not in benchmark_runner_source
+    assert "RESOURCE_GUARD_" + "AUTH" not in candidate_runner_source

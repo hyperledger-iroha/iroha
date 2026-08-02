@@ -85,6 +85,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/cargo-target \
     set -e; \
     export CARGO_TARGET_DIR=/cargo-target; \
+    selected_binaries="${BINARIES}"; \
+    if [ "${CONFIG_PROFILE}" = "taira" ]; then \
+        case " ${selected_binaries} " in \
+            *" taira_bootle_lantern_broker "*) : ;; \
+            *) selected_binaries="${selected_binaries} taira_bootle_lantern_broker" ;; \
+        esac; \
+    fi; \
     mkdir -p /outbin /outprovenance; \
     locked_arg=""; \
     workspace_source_manifest_before=""; \
@@ -109,14 +116,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         locked_arg="--locked"; \
     fi; \
     if [ "${USE_PREBUILT}" = "1" ]; then \
-        for bin in ${BINARIES}; do \
+        for bin in ${selected_binaries}; do \
             cp "/app/dist/docker-bin/${bin}" "/outbin/${bin}"; \
             chmod 755 "/outbin/${bin}"; \
         done; \
     else \
         regular_bins=""; \
         build_kagami=0; \
-        for bin in ${BINARIES}; do \
+        for bin in ${selected_binaries}; do \
             if [ "${bin}" = "kagami" ]; then \
                 build_kagami=1; \
             else \
@@ -260,9 +267,6 @@ RUN <<EOT
     command -v curl >/dev/null
     command -v jq >/dev/null
     command -v bwrap >/dev/null
-    command -v cmp >/dev/null
-    command -v ln >/dev/null
-    command -v sync >/dev/null
     test -f /etc/ssl/certs/ca-certificates.crt
     if [ "$CONFIG_PROFILE" = "taira" ]; then
       command -v qemu-img >/dev/null
@@ -272,7 +276,7 @@ RUN <<EOT
     fi
   else
     apt-get update -y
-    apt-get install -y curl ca-certificates jq bubblewrap coreutils diffutils
+    apt-get install -y curl ca-certificates jq bubblewrap
     if [ "$CONFIG_PROFILE" = "taira" ]; then
       apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables
     fi

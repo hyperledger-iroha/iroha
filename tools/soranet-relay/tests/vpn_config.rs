@@ -14,6 +14,8 @@ fn vpn_defaults_apply_and_validate() {
         route_push: vec!["10.0.0.0/24 ".to_string()],
         dns_overrides: vec![" 1.1.1.1 ".to_string()],
         helper_ticket_secret_hex: Some("ab".repeat(32)),
+        helper_ticket_replay_store_capacity: 0,
+        helper_ticket_replay_store_path: Default::default(),
         backend_endpoint: None,
         backend_bootstrap_secret_hex: None,
         usage_voucher_debt_window_bytes: 0,
@@ -38,6 +40,8 @@ fn vpn_defaults_apply_and_validate() {
     assert_eq!(cfg.cover.heartbeat_ms, 500);
     assert_eq!(cfg.cover.max_cover_burst, 3);
     assert_eq!(cfg.cover.max_jitter_millis, 10);
+    assert_eq!(cfg.helper_ticket_replay_store_capacity, 8_192);
+    assert!(!cfg.helper_ticket_replay_store_path.as_os_str().is_empty());
 }
 
 #[test]
@@ -71,6 +75,9 @@ fn vpn_cover_jitter_guardrails() {
         route_push: vec![],
         dns_overrides: vec![],
         helper_ticket_secret_hex: Some("ab".repeat(32)),
+        helper_ticket_replay_store_capacity: 8_192,
+        helper_ticket_replay_store_path: "./storage/soranet/vpn_helper_ticket_replays.norito"
+            .into(),
         backend_endpoint: None,
         backend_bootstrap_secret_hex: None,
         usage_voucher_debt_window_bytes: 1_048_576,
@@ -120,6 +127,8 @@ fn vpn_config_json_roundtrip_preserves_fields() {
         route_push: vec!["10.0.0.0/24".into()],
         dns_overrides: vec!["8.8.8.8".into()],
         helper_ticket_secret_hex: Some("ab".repeat(32)),
+        helper_ticket_replay_store_capacity: 4_096,
+        helper_ticket_replay_store_path: "/var/lib/soranet/helper-replays.norito".into(),
         backend_endpoint: None,
         backend_bootstrap_secret_hex: None,
         usage_voucher_debt_window_bytes: 65_536,
@@ -139,6 +148,14 @@ fn vpn_config_json_roundtrip_preserves_fields() {
     assert_eq!(cfg.padding_budget_ms, decoded.padding_budget_ms);
     assert_eq!(cfg.route_push, decoded.route_push);
     assert_eq!(cfg.dns_overrides, decoded.dns_overrides);
+    assert_eq!(
+        cfg.helper_ticket_replay_store_capacity,
+        decoded.helper_ticket_replay_store_capacity
+    );
+    assert_eq!(
+        cfg.helper_ticket_replay_store_path,
+        decoded.helper_ticket_replay_store_path
+    );
     assert_eq!(
         cfg.usage_voucher_debt_window_bytes,
         decoded.usage_voucher_debt_window_bytes

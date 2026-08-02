@@ -75,7 +75,7 @@ pub struct IrohaZkX509StarkP256StatementV1 {
 
 /// Canonical little-endian element of the fixed Jindo coefficient field.
 ///
-/// The compiled modulus is `60272^16 + 1`. Fixed width at the type boundary
+/// The compiled modulus is `3611623616^8 + 1`. Fixed width at the type boundary
 /// eliminates ambiguous byte order, truncation, and alternate field regimes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -104,7 +104,7 @@ impl PrivacyJindoFieldElementV1 {
 
 /// Canonical public outer commitment in the fixed Jindo lattice profile.
 ///
-/// The byte string contains 13 × 256 signed little-endian `i32`
+/// The byte string contains 3 × 1024 signed little-endian `i32`
 /// coefficients. Native verification additionally enforces the compiled
 /// rounded-coefficient bound.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -1911,12 +1911,23 @@ fn validate_jindo(
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
     let polynomial_count = u32_len(statement.polynomial_commitments.len())?;
-    let polynomial_max = IROHA_JINDO_MAX_POLYNOMIALS_V1.min(limits.max_commitments_per_action);
-    if polynomial_count == 0 || polynomial_count > polynomial_max {
-        return Err(PrivacyStatementValidationError::InvalidBatchSize {
-            count: polynomial_count,
-            max: polynomial_max,
-        });
+    // The frozen revised-Jindo parameter search and proof shape are exact
+    // batch=4. Smaller batches are not padded and have no alternate transcript.
+    if polynomial_count != IROHA_JINDO_MAX_POLYNOMIALS_V1 {
+        return Err(
+            PrivacyStatementValidationError::InvalidJindoPolynomialCount {
+                count: polynomial_count,
+                expected: IROHA_JINDO_MAX_POLYNOMIALS_V1,
+            },
+        );
+    }
+    if limits.max_commitments_per_action < IROHA_JINDO_MAX_POLYNOMIALS_V1 {
+        return Err(
+            PrivacyStatementValidationError::InsufficientJindoCommitmentCapacity {
+                maximum: limits.max_commitments_per_action,
+                required: IROHA_JINDO_MAX_POLYNOMIALS_V1,
+            },
+        );
     }
     for (index, commitment) in statement.polynomial_commitments.iter().enumerate() {
         let bytes = u32_len(commitment.encoding.len())?;

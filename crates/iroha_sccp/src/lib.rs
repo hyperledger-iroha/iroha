@@ -186,8 +186,7 @@ pub const SCCP_DOMAIN_TRON: u32 = 5;
 /// Public TAIRA chain id bound into TAIRA-origin SCCP finality proofs.
 pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 /// Canonical I105 chain discriminant required for every SCCP Taira account literal.
-pub const SCCP_TAIRA_I105_DISCRIMINANT_V1: u16 =
-    iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_TAIRA;
+pub const SCCP_TAIRA_I105_DISCRIMINANT_V1: u16 = 369;
 /// TAIRA SCCP route id used for the initial XOR bridge to TRON Nile.
 pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
 /// TAIRA SCCP route id used for the exact XOR bridge to Ethereum.

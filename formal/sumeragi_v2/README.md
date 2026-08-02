@@ -1186,8 +1186,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 831 named tests
-across 39 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 826 named tests
+across 38 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1286,9 +1286,11 @@ adapter-capability, aggregate-rebase, and ineligible-driver regressions produce
 the 813-test checkpoint. Five admission/coalescing, Busy pre-runtime ownership,
 and reconstructed-chunk terminality regressions bring the 818-test checkpoint.
 Thirteen exact admission, retry, tombstone, and high-water regressions bring the
-current inventory to 831 tests across 39 modules.
+inventory to the 831-test checkpoint. Retiring five obsolete peer-genesis
+protocol regressions brings the
+current inventory to 826 tests across 38 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 82 legs. The
+corridor contains 81 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1361,7 +1363,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`b93aa49018bdca8a1da50dff6b982b17faf3a8d8e8921aa6616a0e758b028cbc`.
+`d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1398,10 +1400,10 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 82 legs, including separate exact
+the complete pre-network corridor now spans 81 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts, the two
-`iroha_config` geometry modules, three P2P geometry modules, the daemon genesis
-module, and source-sealed command-success legs. Its finality, offline compact-QC,
+`iroha_config` geometry modules, three P2P geometry modules, and source-sealed
+command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
@@ -1483,8 +1485,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and the exact
-831-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and the exact
+826-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

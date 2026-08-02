@@ -375,11 +375,6 @@ impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::asset_alias::SetAssetDefinitionBalancePolicy> for InstructionBox {
-    fn from(i: crate::isi::asset_alias::SetAssetDefinitionBalancePolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
 impl From<crate::isi::asset_transfer_control::SetAssetTransferAvailability> for InstructionBox {
     fn from(i: crate::isi::asset_transfer_control::SetAssetTransferAvailability) -> Self {
         InstructionBox(Box::new(i))
@@ -637,6 +632,24 @@ impl From<crate::isi::soracloud::DeleteSoracloudServiceSecret> for InstructionBo
 
 impl From<crate::isi::soracloud::MutateSoracloudState> for InstructionBox {
     fn from(i: crate::isi::soracloud::MutateSoracloudState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RegisterSoracloudFhePolicy> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RegisterSoracloudFhePolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RotateSoracloudFhePolicy> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RotateSoracloudFhePolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RevokeSoracloudFhePolicy> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RevokeSoracloudFhePolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1440,27 +1453,39 @@ impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-// Allow direct boxing of Musubi package registry instructions.
-impl From<crate::isi::musubi::PublishMusubiRelease> for InstructionBox {
-    fn from(i: crate::isi::musubi::PublishMusubiRelease) -> Self {
-        InstructionBox(Box::new(i))
-    }
+// Allow direct boxing of first-release Musubi registry instructions.
+macro_rules! impl_musubi_instruction_box {
+    ($($instruction:ident),+ $(,)?) => {
+        $(
+            impl From<crate::isi::musubi::$instruction> for InstructionBox {
+                fn from(i: crate::isi::musubi::$instruction) -> Self {
+                    InstructionBox(Box::new(i))
+                }
+            }
+        )+
+    };
 }
-impl From<crate::isi::musubi::YankMusubiRelease> for InstructionBox {
-    fn from(i: crate::isi::musubi::YankMusubiRelease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::musubi::SetMusubiShortAlias> for InstructionBox {
-    fn from(i: crate::isi::musubi::SetMusubiShortAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
-    fn from(i: crate::isi::musubi::AssertMusubiReleaseExists) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+
+impl_musubi_instruction_box!(
+    RegisterMusubiNamespaceBindingV1,
+    RegisterMusubiArchiveV1,
+    AddMusubiArchiveLocationV1,
+    RetireMusubiArchiveLocationV1,
+    PublishMusubiReleaseV1,
+    SetMusubiReleaseYankV1,
+    SetMusubiPackageMetadataV1,
+    InviteMusubiPackageMaintainerV1,
+    AcceptMusubiPackageMaintainerV1,
+    RevokeMusubiPackageMaintainerInvitationV1,
+    SetMusubiPackageMaintainerRoleV1,
+    RemoveMusubiPackageMaintainerV1,
+    RegisterMusubiAliasV1,
+    RecoverMusubiPackageV1,
+    RetargetMusubiAliasV1,
+    SetMusubiArtifactTakedownV1,
+    SetMusubiRegistryPolicyV1,
+    AssertMusubiReleaseDigestV1,
+);
 impl From<crate::isi::offline::TopUpKagemushaRecursiveV4> for InstructionBox {
     fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV4) -> Self {
         InstructionBox(Box::new(i))
@@ -5320,10 +5345,11 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
         let nft_id: NftId = "n0$wonderland".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();
@@ -5456,10 +5482,11 @@ mod tests {
                 .parse()
                 .expect("public key"),
         );
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("alice", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("alice", "universal").unwrap(),
+                "coin".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
         let role_id: RoleId = "auditor".parse().unwrap();
 
@@ -5507,10 +5534,11 @@ mod tests {
         };
         let account_a = fixture_account(0xAA);
         let account_b = fixture_account(0xBB);
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "coin".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def_id.clone(), account_a.clone());
         let nft_id: NftId = "n0$wonderland".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();

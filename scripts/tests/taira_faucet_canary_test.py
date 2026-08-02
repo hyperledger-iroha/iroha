@@ -19,6 +19,10 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+TAIRA_ALICE_ACCOUNT_ID = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+TAIRA_BOB_ACCOUNT_ID = "testuﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
+
+
 def test_leading_zero_bits_counts_prefix() -> None:
     assert MODULE.leading_zero_bits(bytes.fromhex("000f")) == 12
     assert MODULE.leading_zero_bits(bytes.fromhex("80")) == 0
@@ -26,12 +30,12 @@ def test_leading_zero_bits_counts_prefix() -> None:
 
 def test_build_challenge_matches_known_digest() -> None:
     challenge = MODULE.build_challenge(
-        account_id="sorauロ1example",
+        account_id=TAIRA_ALICE_ACCOUNT_ID,
         anchor_height=5,
         anchor_block_hash_hex="00" * 32,
         challenge_salt_hex=None,
     )
-    assert challenge.hex() == "fc7d21d12e97804f7266be24199d25f4b4c6260779540e43fd2c13eb5f8118e3"
+    assert challenge.hex() == "83cb5a1f745e13bdb4bf7e67dbf310275207cc3c0636db03a465ec1ec5046cab"
 
 
 def test_scrypt_digest_matches_rfc_vector() -> None:
@@ -83,13 +87,13 @@ def test_solve_puzzle_returns_expected_nonce_for_easy_case() -> None:
         "scrypt_r": 1,
         "scrypt_p": 1,
     }
-    body = MODULE.solve_puzzle("sorauロ1example", puzzle)
-    assert body["account_id"] == "sorauロ1example"
+    body = MODULE.solve_puzzle(TAIRA_ALICE_ACCOUNT_ID, puzzle)
+    assert body["account_id"] == TAIRA_ALICE_ACCOUNT_ID
     assert body["pow_anchor_height"] == 5
-    assert body["pow_nonce_hex"] == "000000000000021a"
+    assert body["pow_nonce_hex"] == "00000000000003e1"
 
 
-def faucet_receipt(account_id: str = "sorauロ1example") -> dict[str, str]:
+def faucet_receipt(account_id: str = TAIRA_ALICE_ACCOUNT_ID) -> dict[str, str]:
     """Build a current first-release faucet receipt fixture."""
 
     return {
@@ -116,7 +120,7 @@ def pipeline_status(kind: str, tx_hash_hex: str = "ab" * 32) -> dict[str, object
 
 def test_validate_faucet_receipt_accepts_current_contract() -> None:
     receipt = faucet_receipt()
-    assert MODULE.validate_faucet_receipt(receipt, "sorauロ1example") == "ab" * 32
+    assert MODULE.validate_faucet_receipt(receipt, TAIRA_ALICE_ACCOUNT_ID) == "ab" * 32
 
 
 @pytest.mark.parametrize(
@@ -126,7 +130,7 @@ def test_validate_faucet_receipt_accepts_current_contract() -> None:
         ({"tx_hash_hex": "ab"}, "must encode 32 bytes"),
         ({"tx_hash_hex": "not-hex"}, "is not hex"),
         ({"tx_hash_hex": "AB" * 32}, "must use canonical lowercase hex"),
-        ({"account_id": "sorauロ1wrong"}, "does not match request"),
+        ({"account_id": TAIRA_BOB_ACCOUNT_ID}, "does not match request"),
         ({"asset_id": ""}, "is missing asset_id"),
     ],
 )
@@ -136,7 +140,7 @@ def test_validate_faucet_receipt_rejects_stale_or_invalid_contract(
     receipt = faucet_receipt()
     receipt.update(mutation)
     with pytest.raises(RuntimeError, match=message):
-        MODULE.validate_faucet_receipt(receipt, "sorauロ1example")
+        MODULE.validate_faucet_receipt(receipt, TAIRA_ALICE_ACCOUNT_ID)
 
 
 def test_claim_faucet_requires_queued_receipt_and_canonical_finality(monkeypatch) -> None:
@@ -158,7 +162,7 @@ def test_claim_faucet_requires_queued_receipt_and_canonical_finality(monkeypatch
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
 
     result = MODULE.claim_faucet(
-        "sorauロ1example",
+        TAIRA_ALICE_ACCOUNT_ID,
         "https://taira.sora.org/",
         status_timeout_ms=1_000,
         poll_interval_ms=1,
@@ -170,7 +174,7 @@ def test_claim_faucet_requires_queued_receipt_and_canonical_finality(monkeypatch
     )
     assert calls == [
         ("GET", "https://taira.sora.org/v1/accounts/faucet/puzzle", None),
-        ("POST", "https://taira.sora.org/v1/accounts/faucet", {"account_id": "sorauロ1example"}),
+        ("POST", "https://taira.sora.org/v1/accounts/faucet", {"account_id": TAIRA_ALICE_ACCOUNT_ID}),
         ("GET", status_url, None),
         ("GET", status_url, None),
     ]
@@ -189,7 +193,7 @@ def test_claim_faucet_rejects_retired_synchronous_response(monkeypatch) -> None:
     monkeypatch.setattr(MODULE, "_http_json", lambda *_args, **_kwargs: next(responses))
 
     with pytest.raises(RuntimeError, match="faucet claim failed: status=200"):
-        MODULE.claim_faucet("sorauロ1example", "https://taira.sora.org")
+        MODULE.claim_faucet(TAIRA_ALICE_ACCOUNT_ID, "https://taira.sora.org")
 
 
 @pytest.mark.parametrize(
@@ -207,7 +211,7 @@ def test_claim_faucet_rejects_invalid_polling_before_network(
 
     monkeypatch.setattr(MODULE, "_http_json", unexpected_http)
     with pytest.raises(ValueError, match=message):
-        MODULE.claim_faucet("sorauロ1example", "https://taira.sora.org", **kwargs)
+        MODULE.claim_faucet(TAIRA_ALICE_ACCOUNT_ID, "https://taira.sora.org", **kwargs)
 
 
 def test_wait_for_faucet_finality_rejects_hash_mismatch(monkeypatch) -> None:
@@ -328,7 +332,7 @@ def test_main_threads_finality_configuration_to_claim(monkeypatch, capsys) -> No
         MODULE.main(
             [
                 "--account-id",
-                "sorauロ1example",
+                TAIRA_ALICE_ACCOUNT_ID,
                 "--torii-root",
                 "https://taira.sora.org",
                 "--status-timeout-ms",
@@ -340,7 +344,7 @@ def test_main_threads_finality_configuration_to_claim(monkeypatch, capsys) -> No
         == 0
     )
     assert captured == {
-        "account_id": "sorauロ1example",
+        "account_id": TAIRA_ALICE_ACCOUNT_ID,
         "torii_root": "https://taira.sora.org",
         "status_timeout_ms": 34567,
         "poll_interval_ms": 250,
@@ -367,7 +371,7 @@ def test_main_rejects_invalid_finality_configuration_before_claim(
         MODULE.main(
             [
                 "--account-id",
-                "sorauロ1example",
+                TAIRA_ALICE_ACCOUNT_ID,
                 "--torii-root",
                 "https://taira.sora.org",
                 flag,

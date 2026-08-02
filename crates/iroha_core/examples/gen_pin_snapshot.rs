@@ -35,7 +35,7 @@ use iroha_executor_data_model::permission::sorafs::{
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
 #[cfg(test)]
-use sorafs_manifest::pin_registry::verify_alias_proof_bundle;
+use sorafs_manifest::pin_registry::verify_alias_proof_bundle_untrusted_signers;
 use sorafs_manifest::{
     AliasBindingV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
@@ -125,11 +125,8 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     }
 
     let alice = alice();
-    let default_domain = DomainId::try_new(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "universal",
-    )
-    .expect("default account domain label");
+    let default_domain =
+        DomainId::try_new("default", "universal").expect("explicit fixture domain");
     if tx.world().domains().get(&default_domain).is_none() {
         Register::domain(Domain::new(default_domain.clone()))
             .execute(&alice, tx)
@@ -505,11 +502,8 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
-    let default_domain = DomainId::try_new(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "universal",
-    )
-    .expect("default account domain label");
+    let default_domain =
+        DomainId::try_new("default", "universal").expect("explicit fixture domain");
     let alice = alice();
     let bob = iroha_test_samples::BOB_ID.clone();
     let domain = Domain::new(default_domain.clone()).build(&alice);
@@ -554,10 +548,10 @@ fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV
 
 fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
-    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
-        && tx.world().domains().get(&domain_id).is_none()
-    {
-        Register::domain(Domain::new(domain_id))
+    let domain_id =
+        DomainId::try_new("universal", "universal").expect("SoraFS fee asset owning domain");
+    if tx.world().domains().get(&domain_id).is_none() {
+        Register::domain(Domain::new(domain_id.clone()))
             .execute(&alice(), tx)
             .expect("register SoraFS fee asset domain");
     }
@@ -568,10 +562,11 @@ fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '
             .expect("register SoraFS fee treasury account");
     }
     if tx.world().asset_definitions().get(&fee_asset_id).is_none() {
-        let definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(
-            fee_asset_id
-                .try_name()
-                .map_or_else(|| "xor".to_owned(), ToString::to_string),
+        let definition = AssetDefinition::numeric(
+            fee_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id),
         );
         Register::asset_definition(definition)
             .execute(&alice(), tx)
@@ -863,7 +858,8 @@ mod tests {
         let bundle: AliasProofBundleV1 =
             norito::decode_from_bytes(&binding.proof).expect("decode alias proof bundle");
 
-        verify_alias_proof_bundle(&bundle).expect("checked alias proof signature should verify");
+        verify_alias_proof_bundle_untrusted_signers(&bundle)
+            .expect("checked alias proof signature integrity should verify");
     }
 
     #[test]

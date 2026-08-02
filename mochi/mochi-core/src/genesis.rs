@@ -22,7 +22,7 @@ static SAMPLE_ROSE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(||
     let wonderland_id =
         DomainId::try_new("wonderland", "universal").expect("sample wonderland domain is valid");
     let rose = "rose".parse().expect("sample rose asset name is valid");
-    AssetDefinitionId::new(wonderland_id, rose)
+    AssetDefinitionId::derive_from_components(wonderland_id, rose)
 });
 
 static SAMPLE_CABBAGE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
@@ -31,7 +31,7 @@ static SAMPLE_CABBAGE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new
     let cabbage = "cabbage"
         .parse()
         .expect("sample cabbage asset name is valid");
-    AssetDefinitionId::new(garden_id, cabbage)
+    AssetDefinitionId::derive_from_components(garden_id, cabbage)
 });
 
 /// Canonical asset definition id for the bundled `rose` sample asset.

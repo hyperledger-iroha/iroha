@@ -25,16 +25,16 @@ const AUTHORITY = AccountAddress.fromAccount({
   publicKey: PUBLIC_KEY,
 }).toI105(753);
 const CONTRACT_ADDRESS =
-  "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62";
+  "irohac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gq9q6pxl";
 const INVALID_CONTRACT_ADDRESSES = Object.freeze([
   "abc",
   ` ${CONTRACT_ADDRESS}`,
   CONTRACT_ADDRESS.toUpperCase(),
   `${CONTRACT_ADDRESS.slice(0, -1)}p`,
-  "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
-  "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
-  "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkqaty5s",
-  "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8pkjeu85",
+  "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+  "irohac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhk43nl",
+  "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkk75nd5",
+  "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8p2lc7wy",
 ]);
 
 function readField(input, offset) {

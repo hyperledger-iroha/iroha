@@ -59,15 +59,19 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
 
     // Case 1: mintable once can be minted once, but not twice.
     {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("Valid"),
             "xor_once".parse().expect("Valid"),
         );
         let create_asset = Register::asset_definition(
             {
                 let __asset_definition_id = asset_definition_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id,
+                    "xor_once".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .mintable_once(),
         );
@@ -102,15 +106,19 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
 
     // Case 2: if registered with non-zero value, it cannot be minted again.
     {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("Valid"),
             "xor_seeded".parse().expect("Valid"),
         );
         let create_asset = Register::asset_definition(
             {
                 let __asset_definition_id = asset_definition_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id,
+                    "xor_seeded".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .mintable_once(),
         );

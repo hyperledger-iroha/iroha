@@ -20,6 +20,25 @@ macro_rules! impl_id_key_codec {
     };
 }
 
+macro_rules! impl_nested_json_key_codec {
+    ($($ty:path),+ $(,)?) => {
+        $(
+            impl JsonKeyCodec for $ty {
+                fn encode_json_key(&self, out: &mut String) {
+                    let mut encoded = String::new();
+                    norito::json::JsonSerialize::json_serialize(self, &mut encoded);
+                    json::write_json_string(&encoded, out);
+                }
+
+                fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+                    let mut parser = json::Parser::new(encoded);
+                    norito::json::JsonDeserialize::json_deserialize(&mut parser)
+                }
+            }
+        )+
+    };
+}
+
 impl_id_key_codec!(
     crate::asset::AssetDefinitionId,
     crate::asset::AssetId,
@@ -29,6 +48,25 @@ impl_id_key_codec!(
     crate::oracle::FeedId,
     crate::proof::ProofId,
     crate::isi::settlement::SettlementId,
+);
+
+// Musubi uses structural, versioned keys whose complete typed JSON form is
+// embedded into the surrounding storage object's string key. This avoids
+// delimiter ambiguity for nested package/account identities while keeping
+// snapshot ordering identical to the underlying Rust `Ord` implementation.
+impl_nested_json_key_codec!(
+    crate::musubi::MusubiNamespaceV1,
+    crate::musubi::MusubiPackageIdV1,
+    crate::musubi::MusubiPackageSelectorV1,
+    crate::musubi::MusubiPackageMemberKeyV1,
+    crate::musubi::MusubiMaintainerDirectoryKeyV1,
+    crate::musubi::MusubiInviteIdV1,
+    crate::musubi::MusubiReleaseIdV1,
+    crate::musubi::ArchiveId,
+    crate::musubi::MusubiArchiveLocationKeyV1,
+    crate::musubi::MusubiProviderLocationKeyV1,
+    crate::musubi::MusubiAliasNameV1,
+    crate::musubi::MusubiAliasHistoryKeyV1,
 );
 
 impl JsonKeyCodec for crate::domain::DomainId {
@@ -658,6 +696,13 @@ mod tests {
         SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1,
         SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
     };
+    use crate::{
+        musubi::{
+            MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
+            MusubiPackageScopeV1,
+        },
+        nexus::DataSpaceId,
+    };
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
@@ -673,6 +718,27 @@ mod tests {
         let raw_key = parser.parse_string().expect("parse encoded json key");
         let decoded = AccountId::decode_json_key(&raw_key).expect("decode json key");
         assert_eq!(decoded, account);
+    }
+
+    #[test]
+    fn musubi_maintainer_directory_key_json_codec_roundtrip() {
+        let keypair = checked_random_keypair();
+        let key = MusubiMaintainerDirectoryKeyV1::pending(
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(7),
+                MusubiPackageScopeV1::DataspaceRoot,
+                "codec".parse().expect("package name"),
+            ),
+            AccountId::new(keypair.public_key().clone()),
+            MusubiInviteIdV1::new([0x42; 32]),
+        );
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded JSON key");
+        let decoded = MusubiMaintainerDirectoryKeyV1::decode_json_key(&raw_key)
+            .expect("decode maintainer directory key");
+        assert_eq!(decoded, key);
     }
 
     #[test]

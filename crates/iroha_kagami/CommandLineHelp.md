@@ -54,7 +54,7 @@ Common tasks:
 * `wizard` — Guided node/bootstrap flow for configuring a peer against an existing network profile
 * `localnet-wizard` — Guided disposable local devnet flow for generating peers, configs, genesis, and scripts
 * `localnet` — Generate a bare-metal local network: genesis, per-peer configs, client config, and scripts
-* `docker` — Generate Docker Compose deployment manifests from an existing config/genesis directory
+* `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
 * `keys` — Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `genesis` — Commands related to genesis
 * `verify` — Verify a genesis manifest against a preset profile
@@ -169,23 +169,27 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 
 ## `kagami docker`
 
-Generate Docker Compose deployment manifests from an existing config/genesis directory
+Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
 
 **Usage:** `kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-file <FILE>`
 
 ###### **Options:**
 
 * `-p`, `--peers <COUNT>` — Number of peer services in the configuration. Must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31
-* `-s`, `--seed <SEED>` — UTF-8 seed for deterministic key-generation
+* `-s`, `--seed <SEED>` — Enable deterministic development mode with this UTF-8 validator seed.
+
+   When omitted, `--config-dir` must be an authoritative prepared bundle containing `peerN.toml`, signed genesis, verifier-key, and exact-hash files. Production workflows should omit this option so Compose cannot generate identities that diverge from genesis.
 * `-H`, `--healthcheck` — Includes a healthcheck for every service in the configuration.
 
    Healthchecks use predefined settings.
 
    For more details on healthcheck configuration in Docker Compose files, see: <https://docs.docker.com/compose/compose-file/compose-file-v3/#healthcheck>
-* `-c`, `--config-dir <DIR>` — Directory with Iroha configuration. It will be mapped to a volume for each container.
+* `-c`, `--config-dir <DIR>` — Authoritative prepared validator/genesis bundle, or development manifest directory.
 
-   The directory should contain `genesis.json`. If you plan to upgrade the executor at genesis, include the executor bytecode file and reference it from `genesis.json`.
+   Normal mode requires `genesis.json`, `peer0.toml` through `peerN.toml`, `genesis.signed.nrt`, `genesis.public_key`, and `genesis.expected_hash`. Kagami validates their signer, exact hash, validator roster, and PoPs together. With `--seed`, only `genesis.json` is read and runtime artifact paths are supplied explicitly through the generated manifest's `IROHA_GENESIS_*_FILE` variables.
 * `--peer-config <FILE>` — Optional TOML file describing peer names and port mappings.
+
+   Only available with deterministic development `--seed` mode.
 
    The file must contain an array named `peers`, for example:
 

@@ -9266,7 +9266,7 @@ mod tests {
     }
 
     fn sample_asset_definition_literal() -> String {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("test", "universal").expect("domain"),
             "usd".parse().expect("name"),
         )
@@ -13636,13 +13636,19 @@ mod tests {
     fn sample_world(asset_alias: Option<&str>) -> World {
         let (authority, _, _) = sample_account_bundle();
         let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain");
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("name"));
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "usd".parse().expect("name"),
+        );
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name("USD".to_owned())
-            .build(&authority);
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "USD".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let world = World::with([domain], [account], [asset_definition]);
         if let Some(alias_literal) = asset_alias {
             let alias: AssetDefinitionAlias = alias_literal.parse().expect("asset alias");
@@ -22445,7 +22451,7 @@ mod tests {
             } if field == "IntrBkSttlmAmt"
         ));
 
-        let other_asset = AssetDefinitionId::new(
+        let other_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("test", "universal").expect("domain"),
             "eur".parse().expect("name"),
         );
@@ -22687,7 +22693,7 @@ mod tests {
             } if field == "IntrBkSttlmAmt"
         ));
 
-        let other_asset = AssetDefinitionId::new(
+        let other_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("test", "universal").expect("domain"),
             "eur".parse().expect("name"),
         );

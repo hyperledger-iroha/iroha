@@ -170,7 +170,7 @@ fn emit_transfer_asset() {
     let account_id = parity_account_id();
     let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
     let name: Name = "rose".parse().unwrap();
-    let asset_def_id = AssetDefinitionId::new(domain, name);
+    let asset_def_id = AssetDefinitionId::derive_from_components(domain, name);
     let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
     let amount = Quantity::from(100_u64);
     let destination = account_id.clone();
@@ -194,7 +194,7 @@ fn emit_transfer_asset_scoped() {
     let account_id = parity_account_id();
     let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
     let name: Name = "rose".parse().unwrap();
-    let asset_def_id = AssetDefinitionId::new(domain, name);
+    let asset_def_id = AssetDefinitionId::derive_from_components(domain, name);
     let asset_id = AssetId::with_scope(
         asset_def_id.clone(),
         account_id.clone(),

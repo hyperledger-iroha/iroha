@@ -1744,6 +1744,7 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_name: bundle.service.service_name.clone(),
                     service_lease: None,
                     lease_volume_states: Vec::new(),
@@ -1758,7 +1759,7 @@ mod tests {
                     pool_id,
                     source_id,
                     storage_class: StorageClass::Warm,
-                    lease_asset_definition_id: AssetDefinitionId::new(
+                    lease_asset_definition_id: AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").expect("domain"),
                         "xor".parse().expect("asset"),
                     ),

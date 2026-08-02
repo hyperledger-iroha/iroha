@@ -109,9 +109,11 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     let bond_escrow = account(5);
     let parliament_signer = account(6);
     let domain_id = DomainId::try_new("validation_fee", "universal").expect("domain");
-    let voting_asset_id =
-        AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
-    let changed_live_voting_asset_id = AssetDefinitionId::new(
+    let voting_asset_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "xor".parse().expect("asset name"),
+    );
+    let changed_live_voting_asset_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "changed_live_xor".parse().expect("asset name"),
     );
@@ -127,7 +129,10 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     let domain = Domain::new(domain_id).build(&proposer);
     let asset_definition = AssetDefinition::new(
         voting_asset_id.clone(),
+        "xor".to_owned(),
         NumericSpec::fractional(u32::from(VALIDATION_FEE_DS_SCALE)),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(&proposer);
     let assets = accounts.iter().cloned().map(|owner| {

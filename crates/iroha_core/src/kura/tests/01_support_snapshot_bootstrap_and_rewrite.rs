@@ -493,7 +493,7 @@
     ) -> TransactionEntrypoint {
         let chain_id = ChainId::from("kura-offline-operation-index");
         let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             domain_id,
             "cash".parse().expect("fixture asset definition name"),
         );

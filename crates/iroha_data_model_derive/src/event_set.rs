@@ -40,7 +40,7 @@ impl FromVariant for EventSetVariant {
             discriminant: _,
         } = variant;
 
-        // a nested event is an event within an event (like `AccountEvent::Asset`, which bears an `AssetEvent`)
+        // A nested event is an event within an event (for example `DomainEvent::Nft`).
         // we detect those by checking whether the payload type (if any) ends with `Event`
         let is_nested = match fields {
             syn::Fields::Unnamed(fields) => {

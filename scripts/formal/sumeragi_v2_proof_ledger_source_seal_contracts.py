@@ -359,13 +359,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 831
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 826
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "b93aa49018bdca8a1da50dff6b982b17faf3a8d8e8921aa6616a0e758b028cbc"
+    "d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "b84d29e9434a25ff72125e8b4c5129e24a81e6c3df1faadf1e60d1185e32bf59"
+    "e0cbc059d724b0cf5172d864b563d094f3d3d975f2140cfcbfc4075c521175bd"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
@@ -541,11 +541,6 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ),
     ("production-irohad-network-relay", "network_relay_tests", 4),
     ("production-irohad-authenticated-via", "tests::relay_fairness", 7),
-    (
-        "production-irohad-genesis-reply-geometry",
-        "genesis_bootstrap::tests",
-        5,
-    ),
     (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
@@ -901,7 +896,6 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "network::tests::reply_wrapper_exposes_delivery_active_unwritable_no_ownership",
     "network::tests::accepted_draining_connection_delivers_reliable_progress_after_replacement",
     "network::tests::reply_route_tenure_retires_only_after_final_receiver_guard_drops",
-    "genesis_bootstrap::tests::unavailable_reply_writer_uses_requester_retransmission_without_parking_old_route",
     "consensus_message_control::tests::private_reader_treats_safe_atomic_replacement_as_retryable_identity_churn",
     "network_relay_tests::certified_merge_sidecar_close_is_limited_but_responder_controls_are_critical",
     "sumeragi::v2::tests::strict_same_round_tc_preserves_and_retags_timeout_vote_owners",

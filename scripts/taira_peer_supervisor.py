@@ -646,6 +646,17 @@ class BoundedStderrCapture:
         return bytes(self.buffer)
 
 
+def forward_restart_to_child(child: subprocess.Popen[bytes] | None) -> None:
+    """Forward a capture-authority restart request only to our live child."""
+
+    if child is None or child.poll() is not None:
+        return
+    try:
+        child.send_signal(signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
 def sha256_file(path: Path) -> str:
     """Return the SHA-256 digest of a regular file without following symlinks."""
 
@@ -926,6 +937,7 @@ def run(argv: list[str] | None = None) -> int:
     terminal_file = Path(args.terminal_unhealthy_file)
     terminal_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     stopping_signal: int | None = None
+    restart_requested = False
     child: subprocess.Popen[bytes] | None = None
 
     def request_stop(signum: int, _frame: FrameType | None) -> None:
@@ -937,9 +949,17 @@ def run(argv: list[str] | None = None) -> int:
             except ProcessLookupError:
                 pass
 
+    def request_restart(_signum: int, _frame: FrameType | None) -> None:
+        nonlocal restart_requested
+        if stopping_signal is not None:
+            return
+        restart_requested = True
+        forward_restart_to_child(child)
+
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGHUP, request_stop)
+    signal.signal(signal.SIGUSR1, request_restart)
 
     def hold_terminal_unhealthy(fingerprint: str | None) -> int:
         if fingerprint is None:
@@ -1015,6 +1035,8 @@ def run(argv: list[str] | None = None) -> int:
                 child.send_signal(stopping_signal)
             except ProcessLookupError:
                 pass
+        elif restart_requested:
+            forward_restart_to_child(child)
         try:
             atomic_write_pid(pid_file, child.pid)
         except OSError:
@@ -1038,6 +1060,16 @@ def run(argv: list[str] | None = None) -> int:
                 flush=True,
             )
             return 0
+
+        if restart_requested:
+            restart_requested = False
+            fatal_tracker.observe(None)
+            backoff = args.initial_backoff_seconds
+            print(
+                "taira validator restart requested by capture authority",
+                flush=True,
+            )
+            continue
 
         if uptime >= args.stable_uptime_seconds:
             backoff = args.initial_backoff_seconds

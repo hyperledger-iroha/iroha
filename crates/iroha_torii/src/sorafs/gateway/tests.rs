@@ -23,7 +23,6 @@ fn policy_allows_when_envelope_not_required() {
         require_manifest_envelope: false,
         enforce_admission: false,
         rate_limit: GatewayRateLimitConfig::disabled(),
-        ..GatewayPolicyConfig::default()
     };
 
     let rate_limiter = GatewayRateLimiter::new(config.rate_limit.clone());
@@ -57,7 +56,6 @@ fn policy_fails_closed_without_admission_registry() {
         require_manifest_envelope: false,
         enforce_admission: true,
         rate_limit: GatewayRateLimitConfig::disabled(),
-        ..Default::default()
     };
 
     let rate_limiter = GatewayRateLimiter::new(config.rate_limit.clone());

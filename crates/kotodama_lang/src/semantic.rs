@@ -3782,9 +3782,10 @@ fn lower_structured_data_filter(
                     None => DomainEventSet::all(),
                     Some("created") => DomainEventSet::Created,
                     Some("deleted") => DomainEventSet::Deleted,
-                    Some("asset_definition") => DomainEventSet::AnyAssetDefinition,
+                    Some("asset_definition") => DomainEventSet::AssetDefinition,
+                    Some("asset") => DomainEventSet::Asset,
                     Some("nft") => DomainEventSet::AnyNft,
-                    Some("account") => DomainEventSet::AnyAccount,
+                    Some("account") => DomainEventSet::Account,
                     Some("account_linked") => DomainEventSet::AccountLinked,
                     Some("account_unlinked") => DomainEventSet::AccountUnlinked,
                     Some("metadata_inserted") => DomainEventSet::MetadataInserted,
@@ -3842,7 +3843,6 @@ fn lower_structured_data_filter(
                     None => AccountEventSet::all(),
                     Some("created") => AccountEventSet::Created,
                     Some("deleted") => AccountEventSet::Deleted,
-                    Some("asset") => AccountEventSet::AnyAsset,
                     Some("permission_added") => AccountEventSet::PermissionAdded,
                     Some("permission_removed") => AccountEventSet::PermissionRemoved,
                     Some("role_granted") => AccountEventSet::RoleGranted,
@@ -8035,10 +8035,14 @@ fn analyze_surface_builtin_call(
                     ),
                 });
             }
-            if literal_int(&arg_typed[0]).is_some_and(|offset| offset.try_to_u64().is_none()) {
+            if literal_int(&arg_typed[0]).is_some_and(|offset| {
+                offset
+                    .try_to_i64()
+                    .is_none_or(|offset| offset.is_negative())
+            }) {
                 return Err(SemanticError {
                     code: "E_QUERY_OFFSET",
-                    message: "query page offset must be non-negative and fit u64".into(),
+                    message: "query page offset must be in 0..=i64::MAX".into(),
                 });
             }
             if literal_int(&arg_typed[1]).is_some_and(|limit| {
@@ -8049,6 +8053,16 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "E_QUERY_LIMIT",
                     message: "query page limit must be in 1..=64".into(),
+                });
+            }
+            if let (Some(offset), Some(limit)) = (
+                literal_int(&arg_typed[0]).and_then(|offset| offset.try_to_i64()),
+                literal_int(&arg_typed[1]).and_then(|limit| limit.try_to_i64()),
+            ) && offset.checked_add(limit).is_none()
+            {
+                return Err(SemanticError {
+                    code: "E_QUERY_OFFSET",
+                    message: "query page offset plus limit must fit i64".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8125,7 +8139,7 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::BuildUnshieldInline => {
-            let valid_without_outputs = arg_typed.len() == 7
+            let valid = arg_typed.len() == 7
                 && arg_typed[0].ty == Type::AssetDefinitionId
                 && arg_typed[1].ty == Type::AccountId
                 && arg_typed[2].ty == Type::Quantity
@@ -8133,19 +8147,10 @@ fn analyze_surface_builtin_call(
                 && arg_typed[4].ty == Type::String
                 && is_blob_like(&arg_typed[5].ty)
                 && is_blob_like(&arg_typed[6].ty);
-            let valid_with_outputs = arg_typed.len() == 8
-                && arg_typed[0].ty == Type::AssetDefinitionId
-                && arg_typed[1].ty == Type::AccountId
-                && arg_typed[2].ty == Type::Quantity
-                && is_blob_like(&arg_typed[3].ty)
-                && is_blob_like(&arg_typed[4].ty)
-                && arg_typed[5].ty == Type::String
-                && is_blob_like(&arg_typed[6].ty)
-                && is_blob_like(&arg_typed[7].ty);
-            if !(valid_without_outputs || valid_with_outputs) {
+            if !valid {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
+                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, string backend, bytes proof, bytes vk)".into(),
                 });
             }
             if let ExprKind::DecimalLiteral { value: amount, .. } = arg_typed[2].kind() {
@@ -19874,7 +19879,7 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn trigger_decl_supports_structured_asset_data_filter() {
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -19919,7 +19924,7 @@ seiyaku UnshieldAmount {{
         let destination = AccountId::parse_encoded(destination_literal.as_str())
             .map(ParsedAccountId::into_account_id)
             .expect("destination account");
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -19983,7 +19988,7 @@ seiyaku UnshieldAmount {{
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -20285,7 +20290,7 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn trigger_decl_rejects_duplicate_data_matchers() {
-        let asset_definition_literal = AssetDefinitionId::new(
+        let asset_definition_literal = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         )
@@ -20495,6 +20500,10 @@ seiyaku UnshieldAmount {{
                 "E_QUERY_OFFSET",
             ),
             (
+                "fn f() { let _page = ledger::query::accounts(offset: 0, limit: -1); }",
+                "E_QUERY_LIMIT",
+            ),
+            (
                 "fn f() { let _page = ledger::query::accounts(offset: 0, limit: 0); }",
                 "E_QUERY_LIMIT",
             ),
@@ -20507,6 +20516,14 @@ seiyaku UnshieldAmount {{
                 "E_QUERY_OFFSET",
             ),
             (
+                "fn f() { let _page = ledger::query::accounts(offset: 9223372036854775808, limit: 1); }",
+                "E_QUERY_OFFSET",
+            ),
+            (
+                "fn f() { let _page = ledger::query::accounts(offset: 9223372036854775807, limit: 1); }",
+                "E_QUERY_OFFSET",
+            ),
+            (
                 "fn f() { let _page = ledger::query::accounts(offset: 0, limit: 18446744073709551616); }",
                 "E_QUERY_LIMIT",
             ),
@@ -20515,6 +20532,14 @@ seiyaku UnshieldAmount {{
                 .expect_err("invalid literal page bounds must fail during compilation");
             assert_eq!(error.code, code, "{source}: {}", error.message);
         }
+
+        analyze(
+            &parse(
+                "fn f() { let _page = ledger::query::accounts(offset: 9223372036854775806, limit: 1); }",
+            )
+            .expect("parse maximum valid page window"),
+        )
+        .expect("an offset-plus-limit window ending at i64::MAX is valid");
     }
 
     #[test]

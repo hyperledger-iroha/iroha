@@ -4055,8 +4055,10 @@ export function buildRegisterAccountInstruction({
  *   mintable?: string,
  *   mintOnce?: boolean,
  *   metadata?: object | null,
- *   balanceScopePolicy?: string,
+ *   balanceScopePolicy: string,
  *   balance_scope_policy?: string,
+ *   owningDomain?: string | null,
+ *   owning_domain?: string | null,
  *   confidentialPolicy?: object,
  *   confidential_policy?: object
  * }} options
@@ -4064,6 +4066,24 @@ export function buildRegisterAccountInstruction({
  */
 export function buildRegisterAssetDefinitionInstruction(options = {}) {
   const source = assertPlainObject(options, "registerAssetDefinition");
+  const hasOwningDomain = Object.prototype.hasOwnProperty.call(source, "owningDomain");
+  const hasSnakeOwningDomain = Object.prototype.hasOwnProperty.call(source, "owning_domain");
+  if (!hasOwningDomain && !hasSnakeOwningDomain) {
+    throw new TypeError(
+      "registerAssetDefinition.owningDomain is required; use null for an intentionally unowned global definition",
+    );
+  }
+  if (
+    hasOwningDomain &&
+    hasSnakeOwningDomain &&
+    source.owningDomain !== source.owning_domain
+  ) {
+    throw new TypeError("registerAssetDefinition ownership aliases disagree");
+  }
+  const rawOwningDomain = hasOwningDomain ? source.owningDomain : source.owning_domain;
+  const owningDomain = rawOwningDomain === null
+    ? null
+    : assertString(rawOwningDomain, "registerAssetDefinition.owningDomain");
   const scale = source.scale === undefined || source.scale === null
     ? null
     : asU128JsonNumber(source.scale, "registerAssetDefinition.scale");
@@ -4076,6 +4096,38 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
   const logo = source.logo === undefined || source.logo === null
     ? null
     : assertString(source.logo, "registerAssetDefinition.logo");
+  const hasBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    source,
+    "balanceScopePolicy",
+  );
+  const hasSnakeBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    source,
+    "balance_scope_policy",
+  );
+  if (!hasBalanceScopePolicy && !hasSnakeBalanceScopePolicy) {
+    throw new TypeError("registerAssetDefinition.balanceScopePolicy is required");
+  }
+  if (
+    hasBalanceScopePolicy &&
+    hasSnakeBalanceScopePolicy &&
+    source.balanceScopePolicy !== source.balance_scope_policy
+  ) {
+    throw new TypeError("registerAssetDefinition balance-scope policy aliases disagree");
+  }
+  const balanceScopePolicy = assertString(
+    hasBalanceScopePolicy ? source.balanceScopePolicy : source.balance_scope_policy,
+    "registerAssetDefinition.balanceScopePolicy",
+  );
+  if (balanceScopePolicy !== "Global" && balanceScopePolicy !== "DataspaceRestricted") {
+    throw new TypeError(
+      "registerAssetDefinition.balanceScopePolicy must be Global or DataspaceRestricted",
+    );
+  }
+  if (balanceScopePolicy === "DataspaceRestricted" && owningDomain === null) {
+    throw new TypeError(
+      "registerAssetDefinition.owningDomain is required for DataspaceRestricted balances",
+    );
+  }
   return {
     Register: {
       AssetDefinition: {
@@ -4092,10 +4144,8 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
           : assertString(source.mintable ?? "Infinitely", "registerAssetDefinition.mintable"),
         logo,
         metadata: normalizeMetadata(source.metadata),
-        balance_scope_policy: assertString(
-          source.balanceScopePolicy ?? source.balance_scope_policy ?? "Global",
-          "registerAssetDefinition.balanceScopePolicy",
-        ),
+        balance_scope_policy: balanceScopePolicy,
+        owning_domain: owningDomain,
         confidential_policy: source.confidentialPolicy ?? source.confidential_policy ?? {
           mode: "TransparentOnly",
           vk_set_hash: null,
@@ -5723,18 +5773,33 @@ export function buildZkTransferInstruction(options) {
 
 /**
  * Build a `zk::Unshield` instruction payload.
+ * Private outputs come from the verified statement; caller-supplied output
+ * commitments are not part of the first-release instruction.
  * @param {object} options
  * @returns {{zk: {Unshield: object}}}
  */
 export function buildUnshieldInstruction(options) {
   const source = assertPlainObject(options, "unshield");
+  assertAllowedFields(
+    source,
+    new Set([
+      "assetDefinitionId",
+      "asset_definition_id",
+      "asset",
+      "toAccountId",
+      "to",
+      "destinationAccountId",
+      "publicAmount",
+      "public_amount",
+      "inputs",
+      "proof",
+      "rootHint",
+      "root_hint",
+    ]),
+    "unshield",
+  );
   const inputs = Array.isArray(source.inputs)
     ? source.inputs.map((entry, index) => normalizeFixedBytes(entry, `unshield.inputs[${index}]`, 32))
-    : [];
-  const outputs = Array.isArray(source.outputs)
-    ? source.outputs.map((entry, index) =>
-        normalizeFixedBytes(entry, `unshield.outputs[${index}]`, 32),
-      )
     : [];
   if (inputs.length === 0) {
     fail(
@@ -5753,7 +5818,6 @@ export function buildUnshieldInstruction(options) {
       "unshield.publicAmount",
     ),
     inputs,
-    outputs,
     proof: normalizeProofAttachment(source.proof, "unshield.proof"),
     root_hint: normalizeOptionalFixedBytes(source.rootHint ?? source.root_hint, "unshield.rootHint"),
   };

@@ -6,7 +6,7 @@
 //! P1363 `s` scalar from the inverse witness and enforce the canonical low-s
 //! representative inside the proof relation.
 
-use core::fmt;
+use core::{fmt, ops::Range};
 
 use thiserror::Error;
 
@@ -17,7 +17,7 @@ use super::{
 };
 use super::{
     VegaT256ScalarV1 as Scalar,
-    circuit::{CircuitAssignment, CircuitBuilder, CircuitError},
+    circuit::{Bit, CircuitAssignment, CircuitBuilder, CircuitError, Variable},
     date::{
         enforce_completed_age, enforce_not_before, enforce_rfc3339_not_before,
         enforce_strictly_after, parse_full_date, parse_rfc3339_seconds, public_age_threshold,
@@ -25,11 +25,25 @@ use super::{
     },
     figure9_layout::FIGURE9_LAYOUT,
     p256::{private_point_from_be_bytes, public_point, verify_es256_low_s_from_inverse},
-    sha256::{ByteVar, allocate_bytes, enforce_byte_constant, public_word, sha256},
+    sha256::{
+        ByteVar, Sha256Trace, WordVar, allocate_bytes, enforce_byte_constant, public_word,
+        sha256_with_trace,
+    },
 };
 
 /// Exact number of public T256 scalars in the released Figure 9 relation.
 pub const VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1: usize = 14;
+pub(super) const VEGA_MDL_FIGURE9_SHA256_STEPS_V1: usize = 8;
+
+#[derive(Clone)]
+pub(super) struct Figure9McMaterial {
+    pub(super) assignment: CircuitAssignment,
+    pub(super) issuer_byte_bits_le: Vec<[usize; 8]>,
+    pub(super) birth_byte_bits_le: Vec<[usize; 8]>,
+    pub(super) issuer_states_after_blocks_le: Vec<[[usize; 32]; 8]>,
+    pub(super) birth_states_after_blocks_le: Vec<[[usize; 32]; 8]>,
+    pub(super) excluded_sha256_rows: [Range<usize>; 2],
+}
 
 const ISSUER_X_INDEX: usize = 0;
 const ISSUER_Y_INDEX: usize = 1;
@@ -190,6 +204,13 @@ pub(super) fn synthesize_figure9(
     public_inputs: &[Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
     witness: &VegaMdlFigure9WitnessV1<'_>,
 ) -> Result<CircuitAssignment, CircuitError> {
+    synthesize_figure9_mc_material(public_inputs, witness).map(|material| material.assignment)
+}
+
+pub(super) fn synthesize_figure9_mc_material(
+    public_inputs: &[Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
+    witness: &VegaMdlFigure9WitnessV1<'_>,
+) -> Result<Figure9McMaterial, CircuitError> {
     let layout = &*FIGURE9_LAYOUT;
     if witness.issuer_authentication_sig_structure.len() != layout.issuer_template.len()
         || witness.birth_date_issuer_signed_item.len() != layout.birth_template.len()
@@ -213,7 +234,9 @@ pub(super) fn synthesize_figure9(
 
     // The disclosed birth item is bound to the exact digest entry in the
     // issuer-authenticated MSO bytes.
-    let birth_digest = sha256(&mut builder, &birth)?;
+    let birth_sha_start = builder.constraint_count();
+    let (birth_digest, birth_trace) = sha256_with_trace(&mut builder, &birth)?;
+    let birth_sha_rows = birth_sha_start..builder.constraint_count();
     bind_digest_to_bytes(
         &mut builder,
         birth_digest,
@@ -254,7 +277,9 @@ pub(super) fn synthesize_figure9(
     enforce_strictly_after(&mut builder, &valid_until.date, &presentation)?;
     enforce_completed_age(&mut builder, &birth_date, &presentation, threshold)?;
 
-    let issuer_digest = sha256(&mut builder, &issuer)?;
+    let issuer_sha_start = builder.constraint_count();
+    let (issuer_digest, issuer_trace) = sha256_with_trace(&mut builder, &issuer)?;
+    let issuer_sha_rows = issuer_sha_start..builder.constraint_count();
     let issuer_key = public_point(&mut builder, ISSUER_X_INDEX, ISSUER_Y_INDEX)?;
     verify_es256_low_s_from_inverse(
         &mut builder,
@@ -277,7 +302,57 @@ pub(super) fn synthesize_figure9(
         *witness.device_s_inverse,
     )?;
 
-    builder.finalize()
+    let issuer_byte_bits_le = byte_indices(&issuer)?;
+    let birth_byte_bits_le = byte_indices(&birth)?;
+    let issuer_states_after_blocks_le = state_indices(&issuer_trace)?;
+    let birth_states_after_blocks_le = state_indices(&birth_trace)?;
+    if issuer_states_after_blocks_le.len() != 6 || birth_states_after_blocks_le.len() != 2 {
+        return Err(CircuitError::InvalidDimension);
+    }
+    Ok(Figure9McMaterial {
+        assignment: builder.finalize()?,
+        issuer_byte_bits_le,
+        birth_byte_bits_le,
+        issuer_states_after_blocks_le,
+        birth_states_after_blocks_le,
+        excluded_sha256_rows: [birth_sha_rows, issuer_sha_rows],
+    })
+}
+
+fn byte_indices(bytes: &[ByteVar]) -> Result<Vec<[usize; 8]>, CircuitError> {
+    bytes
+        .iter()
+        .copied()
+        .map(|byte| bit_indices(byte.bits_le()))
+        .collect()
+}
+
+fn state_indices(trace: &Sha256Trace) -> Result<Vec<[[usize; 32]; 8]>, CircuitError> {
+    trace
+        .states_after_blocks
+        .iter()
+        .map(|state| {
+            state
+                .iter()
+                .copied()
+                .map(WordVar::bits_le)
+                .map(bit_indices)
+                .collect::<Result<Vec<_>, _>>()?
+                .try_into()
+                .map_err(|_| CircuitError::InvalidDimension)
+        })
+        .collect()
+}
+
+fn bit_indices<const N: usize>(bits: [Bit; N]) -> Result<[usize; N], CircuitError> {
+    bits.map(|bit| match bit.variable() {
+        Variable::Private(index) => Ok(index),
+        Variable::Public(_) | Variable::One => Err(CircuitError::InvalidDimension),
+    })
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?
+    .try_into()
+    .map_err(|_| CircuitError::InvalidDimension)
 }
 
 fn allocate_profile_bytes(

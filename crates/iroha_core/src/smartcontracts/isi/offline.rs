@@ -64,6 +64,80 @@ const CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION: &str =
     "CanManageOfflineDeviceAttestationPolicy";
 const CAN_ACTIVATE_KAGEMUSHA_RECURSIVE_RELEASE_V4_PERMISSION: &str =
     "CanActivateKagemushaRecursiveReleaseV4";
+
+/// One-shot proof that an offline top-up debit passed the exact signed-request checks.
+pub(in crate::smartcontracts::isi) struct VerifiedKagemushaTopUpDebit {
+    source_authority: AccountId,
+    operation_id: [u8; 32],
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedKagemushaTopUpDebit {
+    fn new(
+        source_authority: AccountId,
+        operation_id: [u8; 32],
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            source_authority,
+            operation_id,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (AccountId, [u8; 32], AssetId, AssetId, Quantity) {
+        (
+            self.source_authority,
+            self.operation_id,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
+
+/// One-shot proof that an offline redemption passed recursive-proof and retained-anchor checks.
+pub(in crate::smartcontracts::isi) struct VerifiedKagemushaRedemptionDebit {
+    operation_id: [u8; 32],
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedKagemushaRedemptionDebit {
+    fn new(
+        operation_id: [u8; 32],
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            operation_id,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> ([u8; 32], AssetId, AssetId, Quantity) {
+        (
+            self.operation_id,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
 static OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY: LazyLock<StatePath> = LazyLock::new(|| {
     "offline_device_attestation_policy"
         .parse()
@@ -1113,6 +1187,8 @@ fn kagemusha_escrow_asset_id(source_asset: &AssetId, escrow_account: AccountId) 
 
 fn reserve_kagemusha_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
+    source_authority: &AccountId,
+    operation_id: [u8; 32],
     asset: &AssetId,
     amount: &Quantity,
 ) -> Result<(), Error> {
@@ -1128,11 +1204,16 @@ fn reserve_kagemusha_escrow(
     )?;
     let source_asset = canonical_kagemusha_asset_id(state_transaction, asset)?;
     let escrow_asset = kagemusha_escrow_asset_id(&source_asset, escrow_account);
-    crate::smartcontracts::isi::asset::isi::apply_resolved_numeric_asset_transfer_delta(
+    let authorization = VerifiedKagemushaTopUpDebit::new(
+        source_authority.clone(),
+        operation_id,
+        source_asset,
+        escrow_asset,
+        amount.clone(),
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_offline_top_up_transfer(
         state_transaction,
-        &source_asset,
-        &escrow_asset,
-        amount,
+        authorization,
     )?;
     Ok(())
 }
@@ -4278,8 +4359,28 @@ pub mod isi {
         anchor
             .validate_public_binding()
             .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
-        let key = kagemusha_v4_topup_anchor_state_key(anchor.topup_operation_id)?;
-        let drawdown_key = kagemusha_v4_topup_drawdown_state_key(anchor.topup_operation_id)?;
+        let archive = norito::encode_canonical(anchor).map_err(|err| {
+            labeled_invariant(
+                "topup_anchor_invalid",
+                format!("failed to encode Kagemusha V4 top-up anchor: {err}"),
+            )
+        })?;
+        persist_kagemusha_v4_topup_anchor_archive(
+            anchor.topup_operation_id,
+            anchor.anchor_digest,
+            archive,
+            state_transaction,
+        )
+    }
+
+    fn persist_kagemusha_v4_topup_anchor_archive(
+        operation_id: [u8; 32],
+        anchor_digest: [u8; 32],
+        archive: Vec<u8>,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let key = kagemusha_v4_topup_anchor_state_key(operation_id)?;
+        let drawdown_key = kagemusha_v4_topup_drawdown_state_key(operation_id)?;
         let existing = state_transaction.world.smart_contract_state.get(&key);
         let existing_drawdown = state_transaction
             .world
@@ -4292,28 +4393,13 @@ pub mod isi {
             )
             .into());
         }
-        crate::sumeragi::witness::record_read_kagemusha_v4_topup_anchor(
-            anchor.topup_operation_id,
-            None,
-        );
-        let archive = norito::encode_canonical(anchor).map_err(|err| {
-            labeled_invariant(
-                "topup_anchor_invalid",
-                format!("failed to encode Kagemusha V4 top-up anchor: {err}"),
-            )
-        })?;
+        crate::sumeragi::witness::record_read_kagemusha_v4_topup_anchor(operation_id, None);
         crate::sumeragi::witness::record_write_kagemusha_v4_topup_anchor(
-            anchor.topup_operation_id,
-            &anchor.anchor_digest,
+            operation_id,
+            &anchor_digest,
         );
-        crate::sumeragi::witness::record_read_kagemusha_v4_topup_drawdown(
-            anchor.topup_operation_id,
-            None,
-        );
-        crate::sumeragi::witness::record_write_kagemusha_v4_topup_drawdown(
-            anchor.topup_operation_id,
-            0,
-        );
+        crate::sumeragi::witness::record_read_kagemusha_v4_topup_drawdown(operation_id, None);
+        crate::sumeragi::witness::record_write_kagemusha_v4_topup_drawdown(operation_id, 0);
         state_transaction
             .world
             .smart_contract_state
@@ -4449,14 +4535,33 @@ pub mod isi {
         for anchor_ref in anchor_refs {
             let anchor =
                 load_kagemusha_v4_topup_anchor(anchor_ref.topup_operation_id, state_transaction)?;
-            let redeemed_atomic_units =
-                load_kagemusha_v4_topup_drawdown(anchor_ref.topup_operation_id, state_transaction)?;
-            balances.push(KagemushaV4AnchorDrawdownBalance {
-                operation_id: anchor_ref.topup_operation_id,
-                capacity_atomic_units: anchor.amount.atomic_units,
-                redeemed_atomic_units,
-            });
+            balances.push((anchor_ref.topup_operation_id, anchor.amount.atomic_units));
         }
+        plan_kagemusha_v4_anchor_drawdown_capacities(
+            balances.as_slice(),
+            redemption_atomic_units,
+            state_transaction,
+        )
+    }
+
+    fn plan_kagemusha_v4_anchor_drawdown_capacities(
+        capacities: &[([u8; 32], u128)],
+        redemption_atomic_units: u128,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Vec<KagemushaV4AnchorDrawdownUpdate>, Error> {
+        let balances = capacities
+            .iter()
+            .map(|(operation_id, capacity_atomic_units)| {
+                Ok(KagemushaV4AnchorDrawdownBalance {
+                    operation_id: *operation_id,
+                    capacity_atomic_units: *capacity_atomic_units,
+                    redeemed_atomic_units: load_kagemusha_v4_topup_drawdown(
+                        *operation_id,
+                        state_transaction,
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         let updates = allocate_kagemusha_v4_anchor_drawdown(
             balances.as_slice(),
             redemption_atomic_units,
@@ -4477,6 +4582,22 @@ pub mod isi {
                 })
             })
             .collect()
+    }
+
+    fn commit_kagemusha_v4_anchor_drawdown(
+        updates: Vec<KagemushaV4AnchorDrawdownUpdate>,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        for update in updates {
+            crate::sumeragi::witness::record_write_kagemusha_v4_topup_drawdown(
+                update.operation_id,
+                update.redeemed_atomic_units,
+            );
+            state_transaction.world.smart_contract_state.insert(
+                update.state_key,
+                update.redeemed_atomic_units.to_le_bytes().to_vec(),
+            );
+        }
     }
 
     fn validate_kagemusha_v4_finalized_topup_anchors(
@@ -4572,6 +4693,7 @@ pub mod isi {
 
     #[derive(Debug)]
     struct KagemushaV2EscrowCreditPlan {
+        operation_id: [u8; 32],
         escrow_asset: AssetId,
         recipient_asset: AssetId,
         amount: Quantity,
@@ -4579,17 +4701,22 @@ pub mod isi {
 
     impl KagemushaV2EscrowCreditPlan {
         fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
-            crate::smartcontracts::isi::asset::isi::apply_resolved_numeric_asset_transfer_delta(
+            let authorization = VerifiedKagemushaRedemptionDebit::new(
+                self.operation_id,
+                self.escrow_asset,
+                self.recipient_asset,
+                self.amount,
+            );
+            crate::smartcontracts::isi::asset::isi::execute_verified_offline_redemption_transfer(
                 state_transaction,
-                &self.escrow_asset,
-                &self.recipient_asset,
-                &self.amount,
+                authorization,
             )?;
             Ok(())
         }
     }
 
     fn plan_kagemusha_v2_escrow_credit(
+        operation_id: [u8; 32],
         source_asset: &AssetId,
         recipient: &AccountId,
         amount: &Quantity,
@@ -4621,6 +4748,7 @@ pub mod isi {
             .precheck_numeric_asset_transfer_delta_exact(&escrow_asset, &recipient_asset, amount)?;
 
         Ok(KagemushaV2EscrowCreditPlan {
+            operation_id,
             escrow_asset,
             recipient_asset,
             amount: amount.clone(),
@@ -6944,16 +7072,7 @@ pub mod isi {
                 .world
                 .zk_assets
                 .insert(self.definition_id, self.zk_asset_state);
-            for update in self.anchor_drawdown {
-                crate::sumeragi::witness::record_write_kagemusha_v4_topup_drawdown(
-                    update.operation_id,
-                    update.redeemed_atomic_units,
-                );
-                state_transaction.world.smart_contract_state.insert(
-                    update.state_key,
-                    update.redeemed_atomic_units.to_le_bytes().to_vec(),
-                );
-            }
+            commit_kagemusha_v4_anchor_drawdown(self.anchor_drawdown, state_transaction);
             self.branch_commit.commit(state_transaction);
             state_transaction
                 .world
@@ -7067,18 +7186,26 @@ pub mod isi {
             unreachable!("the V4 nullifier was checked before insertion into the cloned state");
         }
         if let Some(change) = input.change_output {
-            crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
+            crate::smartcontracts::isi::world::isi::push_confidential_commitment_for_asset(
                 &mut zk_asset_state,
                 change.note_commitment,
-                state_transaction.zk.root_history_cap,
+                state_transaction,
             )?;
-            let _frontier_update = zk_asset_state.record_frontier_checkpoint(
-                state_transaction.block_height(),
-                state_transaction.zk.tree_frontier_checkpoint_interval,
-                state_transaction.zk.reorg_depth_bound,
-            );
+            let _frontier_update = zk_asset_state
+                .record_frontier_checkpoint(
+                    state_transaction.block_height(),
+                    state_transaction.zk.tree_frontier_checkpoint_interval,
+                    state_transaction.zk.reorg_depth_bound,
+                )
+                .map_err(|err| {
+                    labeled_invariant(
+                        "confidential_tree",
+                        format!("failed to checkpoint canonical confidential tree: {err}"),
+                    )
+                })?;
         }
         let escrow_credit = plan_kagemusha_v2_escrow_credit(
+            input.operation_id,
             input.source_asset,
             input.recipient,
             &input.amount,
@@ -7602,20 +7729,12 @@ pub mod isi {
                 )
                 .into());
             }
-            let authoritative_initial_root =
-                crate::zk::confidential_v2::compute_confidential_root_v2(&zk_state.commitments)
-                    .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
-            if zk_state
-                .root_history
-                .last()
-                .is_some_and(|root| *root != authoritative_initial_root)
-            {
-                return Err(labeled_invariant(
-                    "topup_anchor_invalid",
-                    "Kagemusha confidential root history disagrees with the commitment tree",
-                )
-                .into());
-            }
+            zk_state
+                .validate_tree_integrity()
+                .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
+            let authoritative_initial_root = zk_state
+                .current_root()
+                .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
             let authoritative_leaf_index =
                 u32::try_from(zk_state.commitments.len()).map_err(|_| {
                     labeled_invariant(
@@ -7623,9 +7742,7 @@ pub mod isi {
                         "Kagemusha confidential tree position does not fit the protocol index",
                     )
                 })?;
-            if authoritative_leaf_index
-                >= iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
-            {
+            if zk_state.commitments.len() >= zk_state.tree_profile.capacity() {
                 return Err(labeled_invariant(
                     "topup_tree_full",
                     "Kagemusha confidential tree has no remaining top-up leaves",
@@ -7639,9 +7756,10 @@ pub mod isi {
             )?;
             let mut commitments_after = zk_state.commitments.clone();
             commitments_after.push(request.current_note.note_commitment);
-            let authoritative_finalized_root =
-                crate::zk::confidential_v2::compute_confidential_root_v2(&commitments_after)
-                    .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
+            let authoritative_finalized_root = zk_state
+                .tree_profile
+                .compute_root(&commitments_after)
+                .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
             let (shield_vk, _shield_record) = resolve_kagemusha_topup_shield_verifier(
                 request.asset.definition(),
                 &request.shield_evidence.proof,
@@ -7686,12 +7804,18 @@ pub mod isi {
                 .into());
             }
 
-            reserve_kagemusha_escrow(state_transaction, &request.asset, &amount)?;
+            reserve_kagemusha_escrow(
+                state_transaction,
+                &request.authorization.authority,
+                request.operation_id,
+                &request.asset,
+                &amount,
+            )?;
             let finalized_root =
-                crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
+                crate::smartcontracts::isi::world::isi::push_confidential_commitment_for_asset(
                     &mut zk_state,
                     request.current_note.note_commitment,
-                    state_transaction.zk.root_history_cap,
+                    state_transaction,
                 )?;
             if finalized_root != authoritative_finalized_root {
                 return Err(labeled_invariant(
@@ -7700,11 +7824,18 @@ pub mod isi {
                 )
                 .into());
             }
-            let _frontier_update = zk_state.record_frontier_checkpoint(
-                state_transaction.block_height(),
-                state_transaction.zk.tree_frontier_checkpoint_interval,
-                state_transaction.zk.reorg_depth_bound,
-            );
+            let _frontier_update = zk_state
+                .record_frontier_checkpoint(
+                    state_transaction.block_height(),
+                    state_transaction.zk.tree_frontier_checkpoint_interval,
+                    state_transaction.zk.reorg_depth_bound,
+                )
+                .map_err(|err| {
+                    labeled_invariant(
+                        "confidential_tree",
+                        format!("failed to checkpoint canonical confidential tree: {err}"),
+                    )
+                })?;
             state_transaction
                 .world
                 .zk_assets
@@ -8063,6 +8194,173 @@ pub mod isi {
         }
 
         #[test]
+        fn anchor_drawdown_state_is_paired_sequential_and_rollback_safe() {
+            let operation_id = [0x45; 32];
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let mut transaction = block.transaction();
+            let anchor_archive = b"validated-anchor-archive".to_vec();
+            persist_kagemusha_v4_topup_anchor_archive(
+                operation_id,
+                [0x46; 32],
+                anchor_archive.clone(),
+                &mut transaction,
+            )
+            .expect("paired anchor/drawdown initialization");
+
+            let anchor_key =
+                kagemusha_v4_topup_anchor_state_key(operation_id).expect("anchor state key");
+            let drawdown_key =
+                kagemusha_v4_topup_drawdown_state_key(operation_id).expect("drawdown state key");
+            assert_eq!(
+                transaction.world.smart_contract_state.get(&anchor_key),
+                Some(&anchor_archive),
+            );
+            assert_eq!(
+                transaction.world.smart_contract_state.get(&drawdown_key),
+                Some(&0_u128.to_le_bytes().to_vec()),
+                "paired initialization must persist an exact zero u128",
+            );
+
+            let first = plan_kagemusha_v4_anchor_drawdown_capacities(
+                &[(operation_id, 100)],
+                40,
+                &transaction,
+            )
+            .expect("first drawdown plan");
+            commit_kagemusha_v4_anchor_drawdown(first, &mut transaction);
+            assert_eq!(
+                load_kagemusha_v4_topup_drawdown(operation_id, &transaction)
+                    .expect("first persisted drawdown"),
+                40,
+            );
+
+            let second = plan_kagemusha_v4_anchor_drawdown_capacities(
+                &[(operation_id, 100)],
+                60,
+                &transaction,
+            )
+            .expect("second drawdown plan");
+            commit_kagemusha_v4_anchor_drawdown(second, &mut transaction);
+            assert_eq!(
+                load_kagemusha_v4_topup_drawdown(operation_id, &transaction)
+                    .expect("cumulative persisted drawdown"),
+                100,
+            );
+
+            let assets_before = offline_asset_entries(&transaction);
+            let confidential_before = transaction
+                .world
+                .zk_assets
+                .iter()
+                .map(|(id, state)| {
+                    (
+                        id.clone(),
+                        state.tree_profile,
+                        state.commitments.clone(),
+                        state.root_history.clone(),
+                        state.nullifiers.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let branch_and_replay_before = transaction
+                .world
+                .kagemusha_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<Vec<_>>();
+            let receipt_key =
+                kagemusha_v4_redemption_receipt_state_key([0x47; 32]).expect("receipt key");
+            let receipt_before = transaction
+                .world
+                .smart_contract_state
+                .get(&receipt_key)
+                .cloned();
+            let events_before = transaction.world.internal_event_buf.len();
+
+            let overdraw = plan_kagemusha_v4_anchor_drawdown_capacities(
+                &[(operation_id, 100)],
+                1,
+                &transaction,
+            )
+            .expect_err("one unit beyond cumulative capacity must fail");
+            assert!(overdraw.to_string().contains("topup_drawdown_exhausted"));
+            assert_eq!(offline_asset_entries(&transaction), assets_before);
+            assert_eq!(
+                transaction
+                    .world
+                    .zk_assets
+                    .iter()
+                    .map(|(id, state)| {
+                        (
+                            id.clone(),
+                            state.tree_profile,
+                            state.commitments.clone(),
+                            state.root_history.clone(),
+                            state.nullifiers.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                confidential_before,
+                "rejected drawdown must not change a nullifier or tree",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .iter()
+                    .map(|(key, ())| *key)
+                    .collect::<Vec<_>>(),
+                branch_and_replay_before,
+                "rejected drawdown must not consume branch/replay markers",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .smart_contract_state
+                    .get(&receipt_key)
+                    .cloned(),
+                receipt_before,
+                "rejected drawdown must not create a receipt",
+            );
+            assert_eq!(
+                load_kagemusha_v4_topup_drawdown(operation_id, &transaction)
+                    .expect("unchanged exhausted drawdown"),
+                100,
+            );
+            assert_eq!(transaction.world.internal_event_buf.len(), events_before);
+
+            transaction
+                .world
+                .smart_contract_state
+                .remove(drawdown_key.clone());
+            assert!(
+                plan_kagemusha_v4_anchor_drawdown_capacities(
+                    &[(operation_id, 100)],
+                    1,
+                    &transaction,
+                )
+                .expect_err("orphan anchor must fail closed")
+                .to_string()
+                .contains("topup_drawdown_missing"),
+            );
+            transaction
+                .world
+                .smart_contract_state
+                .insert(drawdown_key, vec![0; 15]);
+            assert!(
+                plan_kagemusha_v4_anchor_drawdown_capacities(
+                    &[(operation_id, 100)],
+                    1,
+                    &transaction,
+                )
+                .expect_err("malformed drawdown must fail closed")
+                .to_string()
+                .contains("topup_drawdown_invalid"),
+            );
+        }
+
+        #[test]
         fn offline_proof_boundary_rejects_alternate_norito_layout() {
             let envelope = OpenVerifyEnvelope {
                 backend: BackendTag::Halo2IpaPasta,
@@ -8238,11 +8536,17 @@ pub mod isi {
             escrow_balance: Option<u32>,
         ) -> (State, AssetDefinitionId, AssetId, AccountId) {
             let domain_id = DomainId::try_new("offline", "universal").expect("offline test domain");
-            let definition_id =
-                AssetDefinitionId::new(domain_id.clone(), "cash".parse().expect("asset name"));
-            let definition = AssetDefinition::numeric(definition_id.clone())
-                .with_name("Offline Cash".to_owned())
-                .build(&ALICE_ID);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "cash".parse().expect("asset name"),
+            );
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "Offline Cash".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&ALICE_ID);
             let source_asset = AssetId::new(definition_id.clone(), ALICE_ID.clone());
             let chain_id = ChainId::from("offline-holding-limit-test");
             let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
@@ -8324,11 +8628,17 @@ pub mod isi {
             let chain_id = ChainId::from("universal-offline-test");
             let domain_id =
                 DomainId::try_new("ordinary", "universal").expect("ordinary test domain");
-            let definition_id =
-                AssetDefinitionId::new(domain_id.clone(), "unit".parse().expect("asset name"));
-            let definition = AssetDefinition::numeric(definition_id.clone())
-                .with_name("Ordinary Unit".to_owned())
-                .build(&ALICE_ID);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "unit".parse().expect("asset name"),
+            );
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "Ordinary Unit".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&ALICE_ID);
             let source_asset = AssetId::new(definition_id.clone(), ALICE_ID.clone());
             let world = World::with_assets(
                 [Domain::new(domain_id).build(&ALICE_ID)],
@@ -8355,6 +8665,8 @@ pub mod isi {
 
             reserve_kagemusha_escrow(
                 &mut state_transaction,
+                source_asset.account(),
+                [0x80; 32],
                 &source_asset,
                 &Quantity::from(3_u32),
             )
@@ -8396,6 +8708,8 @@ pub mod isi {
 
             let error = reserve_kagemusha_escrow(
                 &mut state_transaction,
+                source_asset.account(),
+                [0x81; 32],
                 &source_asset,
                 &Quantity::from(1_u32),
             )
@@ -8421,6 +8735,7 @@ pub mod isi {
             let events_before = state_transaction.world.internal_event_buf.len();
 
             let error = plan_kagemusha_v2_escrow_credit(
+                [0x82; 32],
                 &source_asset,
                 &BOB_ID,
                 &Quantity::from(1_u32),
@@ -8445,6 +8760,7 @@ pub mod isi {
             let mut state_transaction = block.transaction();
             set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 1);
             let plan = plan_kagemusha_v2_escrow_credit(
+                [0x83; 32],
                 &source_asset,
                 &BOB_ID,
                 &Quantity::from(1_u32),
@@ -8727,7 +9043,7 @@ pub mod isi {
         }
 
         fn offline_test_asset(account: &AccountId) -> AssetId {
-            let definition = AssetDefinitionId::new(
+            let definition = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("offline", "universal").expect("valid test domain"),
                 "cash".parse().expect("valid test asset name"),
             );
@@ -8934,7 +9250,13 @@ pub mod isi {
             let asset = offline_test_asset(&ALICE_ID).definition().clone();
             state_transaction.world.asset_definitions.insert(
                 asset.clone(),
-                AssetDefinition::numeric(asset.clone()).build(&ALICE_ID),
+                AssetDefinition::numeric(
+                    asset.clone(),
+                    "cash".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&ALICE_ID),
             );
             let assertion_key = online_assertion_signing_key(0x61);
             let registration = android_online_registration(
@@ -9158,7 +9480,7 @@ pub mod isi {
             let mut cross_device = authorization.clone();
             cross_device.device_id = "substituted-device".to_owned();
             let mut cross_asset = authorization.clone();
-            cross_asset.asset_definition_id = AssetDefinitionId::new(
+            cross_asset.asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("offline", "universal").expect("test domain"),
                 "other_cash".parse().expect("test asset name"),
             );
@@ -9188,7 +9510,7 @@ pub mod isi {
                 (wrong_signature, asset.clone()),
                 (
                     authorization.clone(),
-                    AssetDefinitionId::new(
+                    AssetDefinitionId::derive_from_components(
                         DomainId::try_new("offline", "universal").expect("test domain"),
                         "substituted_cash".parse().expect("test asset name"),
                     ),

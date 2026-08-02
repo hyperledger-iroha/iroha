@@ -40,6 +40,7 @@ public final class OkHttpClientIntegrationTests {
   @Test
   public void okhttpExecutorSupportsRestAndRpcClients() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(TransactionCompatibilityTestSupport.compatibleCapabilitiesResponse());
       server.enqueue(
           new MockResponse()
               .setResponseCode(202)
@@ -69,6 +70,8 @@ public final class OkHttpClientIntegrationTests {
       final ClientResponse submitResponse = transport.submitTransaction(transaction).get(2, TimeUnit.SECONDS);
       assertEquals(202, submitResponse.statusCode());
       assertEquals(SignedTransactionHasher.hashHex(transaction), submitResponse.hashHex().orElse(null));
+      final RecordedRequest capabilities = server.takeRequest();
+      TransactionCompatibilityTestSupport.assertCompatibleCapabilitiesRequest(capabilities);
       final RecordedRequest submit = server.takeRequest();
       assertEquals("/v1/pipeline/transactions", submit.getPath());
       assertEquals("POST", submit.getMethod());
@@ -94,10 +97,12 @@ public final class OkHttpClientIntegrationTests {
       assertEquals("application/x-norito", rpcRequest.getHeader("Content-Type"));
       assertArrayEquals(payload, rpcRequest.getBody().readByteArray());
 
-      assertEquals(2, telemetry.requests.size());
-      assertEquals(2, telemetry.responses.size());
-      assertEquals(1, observer.requestCount);
-      assertEquals(1, observer.responseCount);
+      assertEquals(3, telemetry.requests.size());
+      assertEquals(3, telemetry.responses.size());
+      assertEquals(0, telemetry.failures.size());
+      assertEquals(2, observer.requestCount);
+      assertEquals(2, observer.responseCount);
+      assertEquals(0, observer.failureCount);
     }
   }
 

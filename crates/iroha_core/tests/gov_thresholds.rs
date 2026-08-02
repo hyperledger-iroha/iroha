@@ -46,7 +46,7 @@ fn checked_random_governance_threshold_keypair() -> KeyPair {
 
 fn threshold_contract_address(nonce: u64) -> ContractAddress {
     ContractAddress::derive(
-        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         nonce,
         DataSpaceId::UNIVERSAL,

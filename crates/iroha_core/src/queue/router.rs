@@ -14,15 +14,21 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
-    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
+    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
     domain::DomainId,
     isi::{
         BurnBox, CustomInstruction, GrantBox, Instruction, InstructionBox, MintBox, RegisterBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
-        asset_alias::SetAssetDefinitionBalancePolicy,
         contract_alias::SetContractAlias,
         musubi::{
-            AssertMusubiReleaseExists, PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease,
+            AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1,
+            AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
+            RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
+            RegisterMusubiNamespaceBindingV1, RemoveMusubiPackageMaintainerV1,
+            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+            RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
+            SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
+            SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
         },
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         settlement::{
@@ -44,7 +50,7 @@ use iroha_data_model::{
         },
     },
     metadata::Metadata,
-    musubi::{MusubiNamespace, MusubiPackageId},
+    musubi::MusubiPackageIdV1,
     name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
@@ -64,10 +70,13 @@ use iroha_executor_data_model::permission::{
         CanResolveAccountAlias,
     },
     asset::{
-        CanBurnAssetWithDefinition, CanMintAssetWithDefinition,
+        CanBurnAssetWithDefinition, CanMintAssetToAccount, CanMintAssetWithDefinition,
         CanModifyAssetMetadataWithDefinition, CanTransferAssetWithDefinition,
     },
-    asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
+    asset_definition::{
+        AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+    },
     nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
@@ -2957,7 +2966,7 @@ fn instruction_transaction_dataspace_target(
             }
             RegisterBox::AssetDefinition(register) => asset_definition_dataspace_target(
                 &register.object.id,
-                register.object.alias.as_ref(),
+                register.object.owning_domain.as_ref(),
                 Some(register.object.balance_scope_policy),
                 dataspace_catalog,
                 state_view,
@@ -3109,16 +3118,6 @@ fn instruction_transaction_dataspace_target(
         };
     }
 
-    if let Some(set_policy) = any.downcast_ref::<SetAssetDefinitionBalancePolicy>() {
-        return asset_definition_dataspace_target(
-            &set_policy.asset_definition_id,
-            None,
-            None,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_balance_definition_dataspace_target(
             &register_zk_asset.asset,
@@ -3177,36 +3176,8 @@ fn instruction_transaction_dataspace_target(
         );
     }
 
-    if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
-        return musubi_package_dataspace_target_with_state(
-            &publish.release.package.package,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(yank) = any.downcast_ref::<YankMusubiRelease>() {
-        return musubi_package_dataspace_target_with_state(
-            &yank.package.package,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(set_alias) = any.downcast_ref::<SetMusubiShortAlias>() {
-        return musubi_package_dataspace_target_with_state(
-            &set_alias.alias.target,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(assert_release) = any.downcast_ref::<AssertMusubiReleaseExists>() {
-        return musubi_package_dataspace_target_with_state(
-            &assert_release.package,
-            dataspace_catalog,
-            state_view,
-        );
+    if let Some(target) = musubi_instruction_dataspace_target(any) {
+        return Some(target);
     }
 
     if let Some(publish) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
@@ -3372,7 +3343,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             }
             RegisterBox::AssetDefinition(register) => asset_definition_dataspace_target_with_world(
                 &register.object.id,
-                register.object.alias.as_ref(),
+                register.object.owning_domain.as_ref(),
                 Some(register.object.balance_scope_policy),
                 dataspace_catalog,
                 world,
@@ -3537,17 +3508,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         };
     }
 
-    if let Some(set_policy) = any.downcast_ref::<SetAssetDefinitionBalancePolicy>() {
-        return asset_definition_dataspace_target_with_world(
-            &set_policy.asset_definition_id,
-            None,
-            None,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_balance_definition_dataspace_target_with_world(
             &register_zk_asset.asset,
@@ -3612,40 +3572,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         );
     }
 
-    if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
-        return musubi_package_dataspace_target_with_world(
-            &publish.release.package.package,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(yank) = any.downcast_ref::<YankMusubiRelease>() {
-        return musubi_package_dataspace_target_with_world(
-            &yank.package.package,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(set_alias) = any.downcast_ref::<SetMusubiShortAlias>() {
-        return musubi_package_dataspace_target_with_world(
-            &set_alias.alias.target,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(assert_release) = any.downcast_ref::<AssertMusubiReleaseExists>() {
-        return musubi_package_dataspace_target_with_world(
-            &assert_release.package,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
+    if let Some(target) = musubi_instruction_dataspace_target(any) {
+        return Some(target);
     }
 
     if let Some(publish) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
@@ -4394,6 +4322,10 @@ fn instruction_transaction_target_requires_universal_coordinator(
 ) -> bool {
     let any = instruction.as_any();
 
+    if musubi_instruction_requires_universal_coordinator(any) {
+        return true;
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
@@ -4543,6 +4475,10 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     ledger_time_ms: Option<u64>,
 ) -> bool {
     let any = instruction.as_any();
+
+    if musubi_instruction_requires_universal_coordinator(any) {
+        return true;
+    }
 
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match multisig {
@@ -4814,26 +4750,77 @@ fn contract_address_dataspace_target(contract_address: &ContractAddress) -> Opti
     contract_address.dataspace_id().ok()
 }
 
-fn musubi_namespace_dataspace_target_with_state(
-    namespace: &MusubiNamespace,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    state_view: Option<&StateView<'_>>,
-) -> Option<DataSpaceId> {
-    dataspace_alias_target_with_state(namespace.dataspace_segment(), dataspace_catalog, state_view)
+fn musubi_package_dataspace_target(package: &MusubiPackageIdV1) -> DataSpaceId {
+    package.home_dataspace
 }
 
-fn musubi_namespace_dataspace_target_with_world<W: WorldReadOnly>(
-    namespace: &MusubiNamespace,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    world: &W,
-    ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
-    dataspace_alias_target_with_world(
-        namespace.dataspace_segment(),
-        dataspace_catalog,
-        world,
-        ledger_time_ms,
-    )
+fn musubi_instruction_dataspace_target(any: &dyn core::any::Any) -> Option<DataSpaceId> {
+    if let Some(register) = any.downcast_ref::<RegisterMusubiNamespaceBindingV1>() {
+        return Some(register.binding.home_dataspace);
+    }
+    if any.downcast_ref::<RegisterMusubiArchiveV1>().is_some()
+        || any.downcast_ref::<AddMusubiArchiveLocationV1>().is_some()
+        || any
+            .downcast_ref::<RetireMusubiArchiveLocationV1>()
+            .is_some()
+        || any.downcast_ref::<SetMusubiRegistryPolicyV1>().is_some()
+    {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    if let Some(publish) = any.downcast_ref::<PublishMusubiReleaseV1>() {
+        return Some(musubi_package_dataspace_target(
+            &publish.publication.manifest.release.package,
+        ));
+    }
+    if let Some(yank) = any.downcast_ref::<SetMusubiReleaseYankV1>() {
+        return Some(musubi_package_dataspace_target(&yank.release.package));
+    }
+    if let Some(metadata) = any.downcast_ref::<SetMusubiPackageMetadataV1>() {
+        return Some(musubi_package_dataspace_target(&metadata.package));
+    }
+    if let Some(invite) = any.downcast_ref::<InviteMusubiPackageMaintainerV1>() {
+        return Some(musubi_package_dataspace_target(&invite.package));
+    }
+    if let Some(accept) = any.downcast_ref::<AcceptMusubiPackageMaintainerV1>() {
+        return Some(musubi_package_dataspace_target(&accept.package));
+    }
+    if let Some(revoke) = any.downcast_ref::<RevokeMusubiPackageMaintainerInvitationV1>() {
+        return Some(musubi_package_dataspace_target(&revoke.package));
+    }
+    if let Some(set_role) = any.downcast_ref::<SetMusubiPackageMaintainerRoleV1>() {
+        return Some(musubi_package_dataspace_target(&set_role.package));
+    }
+    if let Some(remove) = any.downcast_ref::<RemoveMusubiPackageMaintainerV1>() {
+        return Some(musubi_package_dataspace_target(&remove.package));
+    }
+    if let Some(register) = any.downcast_ref::<RegisterMusubiAliasV1>() {
+        return Some(musubi_package_dataspace_target(&register.target));
+    }
+    if let Some(recover) = any.downcast_ref::<RecoverMusubiPackageV1>() {
+        return Some(musubi_package_dataspace_target(&recover.package));
+    }
+    if let Some(retarget) = any.downcast_ref::<RetargetMusubiAliasV1>() {
+        return Some(musubi_package_dataspace_target(&retarget.target));
+    }
+    if let Some(takedown) = any.downcast_ref::<SetMusubiArtifactTakedownV1>() {
+        return Some(musubi_package_dataspace_target(&takedown.release.package));
+    }
+    if let Some(assert) = any.downcast_ref::<AssertMusubiReleaseDigestV1>() {
+        return Some(musubi_package_dataspace_target(&assert.release.package));
+    }
+    None
+}
+
+fn musubi_instruction_requires_universal_coordinator(any: &dyn core::any::Any) -> bool {
+    any.downcast_ref::<RegisterMusubiNamespaceBindingV1>()
+        .is_some()
+        || any.downcast_ref::<PublishMusubiReleaseV1>().is_some()
+        || any.downcast_ref::<SetMusubiReleaseYankV1>().is_some()
+        || any.downcast_ref::<SetMusubiPackageMetadataV1>().is_some()
+        || any.downcast_ref::<RegisterMusubiAliasV1>().is_some()
+        || any.downcast_ref::<RecoverMusubiPackageV1>().is_some()
+        || any.downcast_ref::<RetargetMusubiAliasV1>().is_some()
+        || any.downcast_ref::<SetMusubiArtifactTakedownV1>().is_some()
 }
 
 fn dataspace_alias_target(
@@ -4888,42 +4875,21 @@ fn state_view_ledger_time_ms(state_view: &StateView<'_>) -> u64 {
         .unwrap_or(0)
 }
 
-fn musubi_package_dataspace_target_with_state(
-    package: &MusubiPackageId,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    state_view: Option<&StateView<'_>>,
-) -> Option<DataSpaceId> {
-    musubi_namespace_dataspace_target_with_state(&package.namespace, dataspace_catalog, state_view)
-}
-
-fn musubi_package_dataspace_target_with_world<W: WorldReadOnly>(
-    package: &MusubiPackageId,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    world: &W,
-    ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
-    musubi_namespace_dataspace_target_with_world(
-        &package.namespace,
-        dataspace_catalog,
-        world,
-        ledger_time_ms,
-    )
-}
-
 fn asset_definition_target_from_parts_with_state(
     asset_definition_id: &AssetDefinitionId,
-    alias: Option<&AssetDefinitionAlias>,
+    owning_domain: Option<&DomainId>,
     balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
-    let dataspace_alias = alias
-        .map(|alias| alias.dataspace_segment().to_owned())
-        .or_else(|| {
-            asset_definition_id
-                .try_domain()
+    let dataspace_alias = state_view
+        .and_then(|view| {
+            view.world
+                .asset_definition_domains()
+                .get(asset_definition_id)
                 .map(|domain| domain.dataspace().as_ref().to_owned())
-        });
+        })
+        .or_else(|| owning_domain.map(|domain| domain.dataspace().as_ref().to_owned()));
     let Some(dataspace_alias) = dataspace_alias else {
         return balance_scope_policy
             .is_some_and(|policy| policy == AssetBalancePolicy::Global)
@@ -4934,19 +4900,17 @@ fn asset_definition_target_from_parts_with_state(
 
 fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
-    alias: Option<&AssetDefinitionAlias>,
+    owning_domain: Option<&DomainId>,
     balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
-    let dataspace_alias = alias
-        .map(|alias| alias.dataspace_segment().to_owned())
-        .or_else(|| {
-            asset_definition_id
-                .try_domain()
-                .map(|domain| domain.dataspace().as_ref().to_owned())
-        });
+    let dataspace_alias = world
+        .asset_definition_domains()
+        .get(asset_definition_id)
+        .map(|domain| domain.dataspace().as_ref().to_owned())
+        .or_else(|| owning_domain.map(|domain| domain.dataspace().as_ref().to_owned()));
     let Some(dataspace_alias) = dataspace_alias else {
         return balance_scope_policy
             .is_some_and(|policy| policy == AssetBalancePolicy::Global)
@@ -5031,48 +4995,17 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         };
     }
 
-    if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
-        return dvp
-            .delivery_leg()
-            .asset_definition_id()
-            .is_opaque_canonical()
-            || dvp
-                .payment_leg()
-                .asset_definition_id()
-                .is_opaque_canonical();
+    if any.downcast_ref::<DvpIsi>().is_some() {
+        return true;
     }
 
-    if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
-        return pvp
-            .primary_leg()
-            .asset_definition_id()
-            .is_opaque_canonical()
-            || pvp
-                .counter_leg()
-                .asset_definition_id()
-                .is_opaque_canonical();
+    if any.downcast_ref::<PvpIsi>().is_some() {
+        return true;
     }
 
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return match settlement {
-            SettlementInstructionBox::Dvp(dvp) => {
-                dvp.delivery_leg()
-                    .asset_definition_id()
-                    .is_opaque_canonical()
-                    || dvp
-                        .payment_leg()
-                        .asset_definition_id()
-                        .is_opaque_canonical()
-            }
-            SettlementInstructionBox::Pvp(pvp) => {
-                pvp.primary_leg()
-                    .asset_definition_id()
-                    .is_opaque_canonical()
-                    || pvp
-                        .counter_leg()
-                        .asset_definition_id()
-                        .is_opaque_canonical()
-            }
+            SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => true,
             SettlementInstructionBox::SetFxCorridorPolicy(_) => false,
             SettlementInstructionBox::SettleFxCorridor(_) => true,
         };
@@ -5107,13 +5040,6 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return matches!(burn, BurnBox::Asset(_));
     }
 
-    if any
-        .downcast_ref::<SetAssetDefinitionBalancePolicy>()
-        .is_some()
-    {
-        return true;
-    }
-
     if any.downcast_ref::<RegisterZkAsset>().is_some()
         || any
             .downcast_ref::<ScheduleConfidentialPolicyTransition>()
@@ -5128,8 +5054,8 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return true;
     }
 
-    if let Some(asset_definition_id) = confidential_asset_definition_target(any) {
-        return asset_definition_id.is_opaque_canonical();
+    if confidential_asset_definition_target(any).is_some() {
+        return true;
     }
 
     false
@@ -5218,7 +5144,7 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
 
 fn asset_definition_dataspace_target(
     asset_definition_id: &AssetDefinitionId,
-    alias: Option<&AssetDefinitionAlias>,
+    owning_domain: Option<&DomainId>,
     balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
@@ -5227,23 +5153,27 @@ fn asset_definition_dataspace_target(
         .and_then(|view| asset_definition_for_routing(&view.world, asset_definition_id))
         .map(|definition| {
             let balance_scope_policy = definition.balance_scope_policy();
-            (definition.id, balance_scope_policy, definition.alias)
+            (
+                definition.id,
+                balance_scope_policy,
+                definition.owning_domain,
+            )
         });
     let effective_id = resolved
         .as_ref()
         .map(|(resolved_id, _, _)| resolved_id)
         .unwrap_or(asset_definition_id);
-    let effective_alias = resolved
+    let effective_owning_domain = resolved
         .as_ref()
-        .and_then(|(_, _, resolved_alias)| resolved_alias.as_ref())
-        .or(alias);
+        .and_then(|(_, _, resolved_domain)| resolved_domain.as_ref())
+        .or(owning_domain);
     let effective_policy = resolved
         .as_ref()
         .map(|(_, policy, _)| *policy)
         .or(balance_scope_policy);
     asset_definition_target_from_parts_with_state(
         effective_id,
-        effective_alias,
+        effective_owning_domain,
         effective_policy,
         dataspace_catalog,
         state_view,
@@ -5252,7 +5182,7 @@ fn asset_definition_dataspace_target(
 
 fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
-    alias: Option<&AssetDefinitionAlias>,
+    owning_domain: Option<&DomainId>,
     balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
@@ -5260,23 +5190,27 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
 ) -> Option<DataSpaceId> {
     let resolved = asset_definition_for_routing(world, asset_definition_id).map(|definition| {
         let balance_scope_policy = definition.balance_scope_policy();
-        (definition.id, balance_scope_policy, definition.alias)
+        (
+            definition.id,
+            balance_scope_policy,
+            definition.owning_domain,
+        )
     });
     let effective_id = resolved
         .as_ref()
         .map(|(resolved_id, _, _)| resolved_id)
         .unwrap_or(asset_definition_id);
-    let effective_alias = resolved
+    let effective_owning_domain = resolved
         .as_ref()
-        .and_then(|(_, _, resolved_alias)| resolved_alias.as_ref())
-        .or(alias);
+        .and_then(|(_, _, resolved_domain)| resolved_domain.as_ref())
+        .or(owning_domain);
     let effective_policy = resolved
         .as_ref()
         .map(|(_, policy, _)| *policy)
         .or(balance_scope_policy);
     asset_definition_target_from_parts_with_world(
         effective_id,
-        effective_alias,
+        effective_owning_domain,
         effective_policy,
         dataspace_catalog,
         world,
@@ -5293,27 +5227,27 @@ fn asset_balance_definition_route_target(
         .and_then(|view| asset_definition_for_balance_routing(&view.world, asset_definition_id))
         .map(|definition| {
             let balance_scope_policy = definition.balance_scope_policy();
-            (definition.id, balance_scope_policy, definition.alias)
+            (
+                definition.id,
+                balance_scope_policy,
+                definition.owning_domain,
+            )
         });
     let effective_id = resolved
         .as_ref()
         .map(|(resolved_id, _, _)| resolved_id)
         .unwrap_or(asset_definition_id);
-    let effective_alias = resolved
+    let effective_owning_domain = resolved
         .as_ref()
-        .and_then(|(_, _, resolved_alias)| resolved_alias.as_ref());
+        .and_then(|(_, _, resolved_domain)| resolved_domain.as_ref());
     let effective_policy = resolved.as_ref().map(|(_, policy, _)| *policy);
-    let dataspace_id = if effective_policy == Some(AssetBalancePolicy::Global) {
-        Some(DataSpaceId::UNIVERSAL)
-    } else {
-        asset_definition_target_from_parts_with_state(
-            effective_id,
-            effective_alias,
-            effective_policy,
-            dataspace_catalog,
-            state_view,
-        )
-    };
+    let dataspace_id = asset_definition_target_from_parts_with_state(
+        effective_id,
+        effective_owning_domain,
+        effective_policy,
+        dataspace_catalog,
+        state_view,
+    );
     AssetBalanceDefinitionRouteTarget {
         dataspace_id,
         balance_scope_policy: effective_policy,
@@ -5338,28 +5272,28 @@ fn asset_balance_definition_route_target_with_world<W: WorldReadOnly>(
     let resolved =
         asset_definition_for_balance_routing(world, asset_definition_id).map(|definition| {
             let balance_scope_policy = definition.balance_scope_policy();
-            (definition.id, balance_scope_policy, definition.alias)
+            (
+                definition.id,
+                balance_scope_policy,
+                definition.owning_domain,
+            )
         });
     let effective_id = resolved
         .as_ref()
         .map(|(resolved_id, _, _)| resolved_id)
         .unwrap_or(asset_definition_id);
-    let effective_alias = resolved
+    let effective_owning_domain = resolved
         .as_ref()
-        .and_then(|(_, _, resolved_alias)| resolved_alias.as_ref());
+        .and_then(|(_, _, resolved_domain)| resolved_domain.as_ref());
     let effective_policy = resolved.as_ref().map(|(_, policy, _)| *policy);
-    let dataspace_id = if effective_policy == Some(AssetBalancePolicy::Global) {
-        Some(DataSpaceId::UNIVERSAL)
-    } else {
-        asset_definition_target_from_parts_with_world(
-            effective_id,
-            effective_alias,
-            effective_policy,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        )
-    };
+    let dataspace_id = asset_definition_target_from_parts_with_world(
+        effective_id,
+        effective_owning_domain,
+        effective_policy,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    );
     AssetBalanceDefinitionRouteTarget {
         dataspace_id,
         balance_scope_policy: effective_policy,
@@ -5385,33 +5319,14 @@ fn asset_definition_for_routing<W: WorldReadOnly>(
     world: &W,
     asset_definition_id: &AssetDefinitionId,
 ) -> Option<AssetDefinition> {
-    world
-        .asset_definition(asset_definition_id)
-        .ok()
-        .or_else(|| {
-            world
-                .asset_definitions_iter()
-                .find(|definition| definition.id == *asset_definition_id)
-                .cloned()
-                .map(|mut definition| {
-                    definition.alias = world
-                        .asset_definition_alias_bindings()
-                        .get(&definition.id)
-                        .map(|binding| binding.alias.clone());
-                    definition
-                })
-        })
+    world.asset_definition(asset_definition_id).ok()
 }
 
 fn asset_definition_for_balance_routing<W: WorldReadOnly>(
     world: &W,
     asset_definition_id: &AssetDefinitionId,
 ) -> Option<AssetDefinition> {
-    let mut definition = world
-        .asset_definitions_iter()
-        .find(|definition| definition.id == *asset_definition_id)
-        .cloned()
-        .or_else(|| world.asset_definition(asset_definition_id).ok())?;
+    let mut definition = world.asset_definition(asset_definition_id).ok()?;
 
     if definition.balance_scope_policy() == AssetBalancePolicy::Global {
         definition.alias = None;
@@ -5454,8 +5369,42 @@ fn account_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
     }
 }
 
+fn asset_definition_alias_permission_scope_dataspace_target_with_state(
+    scope: &AssetDefinitionAliasPermissionScope,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    match scope {
+        AssetDefinitionAliasPermissionScope::Domain(domain_id) => {
+            domain_dataspace_target_with_state(domain_id, dataspace_catalog, state_view)
+        }
+        AssetDefinitionAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
+        AssetDefinitionAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
+    }
+}
+
+fn asset_definition_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
+    scope: &AssetDefinitionAliasPermissionScope,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Option<DataSpaceId> {
+    match scope {
+        AssetDefinitionAliasPermissionScope::Domain(domain_id) => {
+            domain_dataspace_target_with_world(domain_id, dataspace_catalog, world, ledger_time_ms)
+        }
+        AssetDefinitionAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
+        AssetDefinitionAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
+    }
+}
+
 fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bool {
     match permission.name() {
+        "CanMintAssetToAccount" => permission
+            .payload()
+            .try_into_any_norito::<CanMintAssetToAccount>()
+            .ok()
+            .is_some(),
         "CanMintAssetWithDefinition" => permission
             .payload()
             .try_into_any_norito::<CanMintAssetWithDefinition>()
@@ -5484,6 +5433,11 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
         "CanModifyAssetDefinitionMetadata" => permission
             .payload()
             .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+            .ok()
+            .is_some(),
+        "CanManageAssetDefinitionAlias" => permission
+            .payload()
+            .try_into_any_norito::<CanManageAssetDefinitionAlias>()
             .ok()
             .is_some(),
         "CanManageFeeSponsorProgram" => permission
@@ -5515,6 +5469,19 @@ fn dataspace_scoped_permission_target(
         && permission.name() != "CanPublishSpaceDirectoryManifestForAccountDomain"
     {
         return match permission.name() {
+            "CanMintAssetToAccount" => permission
+                .payload()
+                .try_into_any_norito::<CanMintAssetToAccount>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
             "CanMintAssetWithDefinition" => permission
                 .payload()
                 .try_into_any_norito::<CanMintAssetWithDefinition>()
@@ -5599,6 +5566,17 @@ fn dataspace_scoped_permission_target(
                 .ok()
                 .and_then(|token| {
                     account_alias_permission_scope_dataspace_target_with_state(
+                        &token.scope,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
+            "CanManageAssetDefinitionAlias" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAssetDefinitionAlias>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_alias_permission_scope_dataspace_target_with_state(
                         &token.scope,
                         dataspace_catalog,
                         state_view,
@@ -5694,6 +5672,20 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
         && permission.name() != "CanPublishSpaceDirectoryManifestForAccountDomain"
     {
         return match permission.name() {
+            "CanMintAssetToAccount" => permission
+                .payload()
+                .try_into_any_norito::<CanMintAssetToAccount>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
             "CanMintAssetWithDefinition" => permission
                 .payload()
                 .try_into_any_norito::<CanMintAssetWithDefinition>()
@@ -5784,6 +5776,18 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .ok()
                 .and_then(|token| {
                     account_alias_permission_scope_dataspace_target_with_world(
+                        &token.scope,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
+            "CanManageAssetDefinitionAlias" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAssetDefinitionAlias>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_alias_permission_scope_dataspace_target_with_world(
                         &token.scope,
                         dataspace_catalog,
                         world,
@@ -6951,16 +6955,12 @@ fn asset_definition_scope_matches(
     asset_definition_id: &AssetDefinitionId,
     state_view: Option<&StateView<'_>>,
 ) -> bool {
-    asset_definition_id
-        .try_domain()
-        .cloned()
-        .or_else(|| {
-            state_view.and_then(|view| {
-                view.world
-                    .asset_definition(asset_definition_id)
-                    .ok()
-                    .and_then(|definition| definition.id.try_domain().cloned())
-            })
+    state_view
+        .and_then(|view| {
+            view.world
+                .asset_definition_domains()
+                .get(asset_definition_id)
+                .cloned()
         })
         .is_some_and(|domain_id| domain_scope_matches(scope, &domain_id))
 }
@@ -6970,15 +6970,10 @@ fn asset_definition_scope_matches_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
     world: &W,
 ) -> bool {
-    asset_definition_id
-        .try_domain()
+    world
+        .asset_definition_domains()
+        .get(asset_definition_id)
         .cloned()
-        .or_else(|| {
-            world
-                .asset_definition(asset_definition_id)
-                .ok()
-                .and_then(|definition| definition.id.try_domain().cloned())
-        })
         .is_some_and(|domain_id| domain_scope_matches(scope, &domain_id))
 }
 
@@ -7837,6 +7832,7 @@ mod tests {
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
             CanResolveAccountAlias,
         },
+        asset_definition::{AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias},
         nexus::{
             CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
             CanPublishSpaceDirectoryManifestForUaid,
@@ -7986,8 +7982,13 @@ mod tests {
         nonce: u64,
     ) -> iroha_data_model::transaction::executable::ContractInvocation {
         iroha_data_model::transaction::executable::ContractInvocation {
-            contract_address: ContractAddress::derive(0, authority, nonce, dataspace)
-                .expect("contract address"),
+            contract_address: ContractAddress::derive(
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                authority,
+                nonce,
+                dataspace,
+            )
+            .expect("contract address"),
             expected_code_hash: Hash::new(format!("router-contract-{nonce}").as_bytes()),
             entrypoint: "transfer".to_owned(),
             arguments: None,
@@ -8006,7 +8007,8 @@ mod tests {
             authority.clone(),
             iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone()),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         InstructionBox::from(Register::trigger(Trigger::new(trigger_id, action)))
     }
 
@@ -8472,16 +8474,19 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1), LaneId::new(2)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_definition: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_definition.clone(), alice_id.clone());
         let mint = Mint::asset_quantity(1u32, asset_id);
-        let register = Register::asset_definition(
-            AssetDefinition::numeric(asset_definition.clone())
-                .with_name(asset_definition.name().to_string()),
-        );
+        let register = Register::asset_definition(AssetDefinition::numeric(
+            asset_definition.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ));
 
         let tx = sample_transaction(
             &alice_id,
@@ -10224,11 +10229,11 @@ mod tests {
                 (LaneId::new(1), DataSpaceId::new(7)),
             ]),
         );
-        let delivery_definition = AssetDefinitionId::new(
+        let delivery_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "universal").expect("domain id"),
             "bond".parse().expect("asset definition name"),
         );
-        let payment_definition = AssetDefinitionId::new(
+        let payment_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "universal").expect("domain id"),
             "cash".parse().expect("asset definition name"),
         );
@@ -10281,11 +10286,11 @@ mod tests {
                 (LaneId::new(2), DataSpaceId::new(9)),
             ]),
         );
-        let delivery_definition = AssetDefinitionId::new(
+        let delivery_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "delivery").expect("domain id"),
             "bond".parse().expect("asset definition name"),
         );
-        let payment_definition = AssetDefinitionId::new(
+        let payment_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "payment").expect("domain id"),
             "cash".parse().expect("asset definition name"),
         );
@@ -10338,11 +10343,11 @@ mod tests {
                 (LaneId::new(2), DataSpaceId::new(9)),
             ]),
         );
-        let primary_definition = AssetDefinitionId::new(
+        let primary_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "primary").expect("domain id"),
             "usd".parse().expect("asset definition name"),
         );
-        let counter_definition = AssetDefinitionId::new(
+        let counter_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "counter").expect("domain id"),
             "eur".parse().expect("asset definition name"),
         );
@@ -10956,7 +10961,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let lane_id = LaneId::new(2);
         let dataspace_id = DataSpaceId::new(10);
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "is").expect("asset definition domain"),
             "unit".parse().expect("asset definition name"),
         );
@@ -11047,7 +11052,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let lane_id = LaneId::new(2);
         let dataspace_id = DataSpaceId::new(10);
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "is").expect("asset definition domain"),
             "unit".parse().expect("asset definition name"),
         );
@@ -11141,7 +11146,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &alice_id,
             0,
             dataspace_id,
@@ -11345,7 +11350,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -11359,10 +11364,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -11415,7 +11423,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -11431,10 +11439,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -11487,7 +11498,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -11506,10 +11517,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -11554,11 +11568,11 @@ mod tests {
                 (lane_id, dataspace_id),
             ]),
         );
-        let delivery_definition = AssetDefinitionId::new(
+        let delivery_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "paynet").expect("domain id"),
             "bond".parse().expect("asset definition name"),
         );
-        let payment_definition = AssetDefinitionId::new(
+        let payment_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "paynet").expect("domain id"),
             "cash".parse().expect("asset definition name"),
         );
@@ -11609,11 +11623,11 @@ mod tests {
                 (LaneId::new(3), cbuae),
             ]),
         );
-        let primary_definition = AssetDefinitionId::new(
+        let primary_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "paynet").expect("domain id"),
             "usd".parse().expect("asset definition name"),
         );
-        let counter_definition = AssetDefinitionId::new(
+        let counter_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "cbuae").expect("domain id"),
             "aed".parse().expect("asset definition name"),
         );
@@ -11665,11 +11679,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let delivery_definition = AssetDefinitionId::new(
+        let delivery_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "universal").expect("domain id"),
             "bond".parse().expect("asset definition name"),
         );
-        let payment_definition = AssetDefinitionId::new(
+        let payment_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "universal").expect("domain id"),
             "cash".parse().expect("asset definition name"),
         );
@@ -11694,14 +11708,20 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(delivery_definition.clone())
-                    .with_name("bond".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
-                AssetDefinition::numeric(payment_definition.clone())
-                    .with_name("cash".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    delivery_definition.clone(),
+                    "bond".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
+                AssetDefinition::numeric(
+                    payment_definition.clone(),
+                    "cash".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -11815,7 +11835,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &alice_id,
             0,
             dataspace_id,
@@ -11857,7 +11877,7 @@ mod tests {
             ]),
         );
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &alice_id,
             0,
             dataspace_id,
@@ -11913,7 +11933,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &alice_id,
             0,
             contract_dataspace,
@@ -11987,7 +12007,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &alice_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -12030,7 +12050,7 @@ mod tests {
     }
 
     #[test]
-    fn musubi_package_alias_routes_to_package_namespace_dataspace_without_explicit_rule() {
+    fn musubi_alias_registration_uses_universal_amx_with_home_dataspace_participant() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
@@ -12046,20 +12066,135 @@ mod tests {
                 (lane_id, dataspace_id),
             ]),
         );
-        let target = iroha_data_model::musubi::MusubiPackageId::from_parts("mibank.paynet", "fx")
-            .expect("package id");
-        let alias =
-            iroha_data_model::musubi::MusubiShortAlias::new("fx".parse().expect("alias"), target);
-        let instruction = iroha_data_model::isi::musubi::SetMusubiShortAlias::new(alias);
+        let target = iroha_data_model::musubi::MusubiPackageIdV1::new(
+            dataspace_id,
+            iroha_data_model::musubi::MusubiPackageScopeV1::Domain(
+                "mibank".parse().expect("domain scope"),
+            ),
+            "fx".parse().expect("package name"),
+        );
+        let instruction = iroha_data_model::isi::musubi::RegisterMusubiAliasV1::new(
+            "fx".parse().expect("alias"),
+            target,
+            1,
+        );
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
 
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("Musubi alias route must resolve");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("Musubi alias registration must use Native AMX");
+        };
         assert_eq!(
-            router.try_route(&tx).expect("musubi route must resolve"),
-            RoutingDecision::new(lane_id, dataspace_id)
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![RouteLeg::new(
+                RoutingDecision::new(lane_id, dataspace_id),
+                RouteLegRole::Participant,
+            )]
+        );
+    }
+
+    #[test]
+    fn musubi_release_publication_uses_universal_amx_with_home_dataspace_participant() {
+        use iroha_data_model::{
+            isi::musubi::PublishMusubiReleaseV1,
+            musubi::{
+                ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiContentDigestV1,
+                MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
+                MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
+                MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiResolutionProofV1,
+                MusubiVerificationLockV1,
+            },
+        };
+
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let package = MusubiPackageIdV1::new(
+            dataspace_id,
+            MusubiPackageScopeV1::Domain("mibank".parse().expect("domain scope")),
+            "fx".parse().expect("package name"),
+        );
+        let release =
+            MusubiReleaseIdV1::new(package, "1.0.0".parse().expect("publication version"));
+        let lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: release.clone(),
+            root_dependencies: Vec::new(),
+            nodes: Vec::new(),
+        };
+        let publication = MusubiPublicationV1 {
+            manifest: MusubiReleaseManifestV1 {
+                release,
+                edition: MusubiKotodamaEditionV1::V1,
+                abi: MusubiAbiBindingV1::new([0x41; 32]).expect("ABI binding"),
+                dependencies: Vec::new(),
+                exports: Vec::new(),
+                interface_digest: MusubiContentDigestV1::new([0x42; 32]),
+                metadata: MusubiReleaseMetadataV1::default(),
+                archive_id: ArchiveId::new([0x43; 32]),
+                verification_lock_digest: lock.digest(),
+            },
+            resolution: MusubiResolutionProofV1 {
+                snapshot: MusubiRegistrySnapshotV1 {
+                    finalized_height: 7,
+                    finalized_block_hash: [0x44; 32],
+                    index_revision: 3,
+                },
+                lock,
+            },
+        };
+        let instruction = PublishMusubiReleaseV1::new(
+            "mibank.paynet".parse().expect("publication namespace"),
+            publication,
+            None,
+            1,
+            None,
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(instruction)],
+        );
+
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("Musubi publication route must resolve");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("Musubi publication must use Native AMX");
+        };
+        assert_eq!(
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![RouteLeg::new(
+                RoutingDecision::new(lane_id, dataspace_id),
+                RouteLegRole::Participant,
+            )]
         );
     }
 
@@ -12267,10 +12402,11 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("uae", "universal").unwrap(),
-            "aed".parse().unwrap(),
-        );
+        let asset_definition: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("uae", "universal").unwrap(),
+                "aed".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_definition, sender_id.clone());
         let transfer = Transfer::asset_quantity(asset_id, 1_u32, receiver_id.clone());
         let tx = sample_transaction(
@@ -12381,8 +12517,9 @@ mod tests {
                 (LaneId::new(2), dataspace_id),
             ]),
         );
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let transfer = Transfer::asset_quantity(
@@ -12423,8 +12560,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let opaque_asset_definition =
@@ -12442,10 +12580,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -12467,7 +12608,7 @@ mod tests {
     }
 
     #[test]
-    fn opaque_asset_transfer_uses_stored_asset_alias_dataspace() {
+    fn canonical_asset_transfer_uses_stored_owning_domain_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -12485,10 +12626,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "universal").expect("asset definition domain"),
+                "pkr".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -12505,12 +12647,16 @@ mod tests {
         );
         let alias: iroha_data_model::asset::AssetDefinitionAlias =
             "pkr#paynet".parse().expect("asset alias");
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("owning domain");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -12557,10 +12703,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "universal").expect("asset definition domain"),
+                "pkr".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -12577,10 +12724,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(DomainId::try_new("cash", "sbp").expect("owning domain")),
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog.clone(),
             lane_catalog,
@@ -12637,7 +12787,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        let transparent_asset_definition = AssetDefinitionId::new(
+        let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -12656,6 +12806,9 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: Some(
+                DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            ),
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
@@ -12688,7 +12841,7 @@ mod tests {
                 (LaneId::new(2), dataspace_id),
             ]),
         );
-        let transparent_asset_definition = AssetDefinitionId::new(
+        let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -12706,6 +12859,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
@@ -12738,7 +12892,7 @@ mod tests {
                 (LaneId::new(2), dataspace_id),
             ]),
         );
-        let transparent_asset_definition = AssetDefinitionId::new(
+        let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "paynet").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -12756,6 +12910,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
@@ -12790,7 +12945,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = AssetDefinitionId::new(
+        let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -12808,6 +12963,9 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::DataspaceRestricted,
+            owning_domain: Some(
+                DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            ),
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
@@ -12845,7 +13003,7 @@ mod tests {
             catalog_with_lane_dataspaces(&[(LaneId::new(4), DataSpaceId::UNIVERSAL)]),
         );
         let definition = NewAssetDefinition {
-            id: AssetDefinitionId::new(
+            id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
                 "pkr".parse().expect("asset definition name"),
             ),
@@ -12857,6 +13015,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
@@ -12894,7 +13053,7 @@ mod tests {
             ]),
         );
         let pkr_id = AssetDefinitionId::parse_address_literal(
-            &AssetDefinitionId::new(
+            &AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
                 "pkr".parse().expect("asset definition name"),
             )
@@ -12902,7 +13061,7 @@ mod tests {
         )
         .expect("opaque pkr definition id");
         let aed_id = AssetDefinitionId::parse_address_literal(
-            &AssetDefinitionId::new(
+            &AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
                 "aed".parse().expect("asset definition name"),
             )
@@ -12919,6 +13078,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let aed = NewAssetDefinition {
@@ -12931,6 +13091,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
@@ -12972,8 +13133,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let transfer = Transfer::asset_quantity(
@@ -12989,10 +13151,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13046,7 +13211,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -13063,10 +13228,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13118,7 +13286,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -13135,10 +13303,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13172,77 +13343,6 @@ mod tests {
     }
 
     #[test]
-    fn set_asset_definition_balance_policy_uses_stored_alias_dataspace() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(SetAssetDefinitionBalancePolicy::new(
-                asset_definition.clone(),
-                AssetBalancePolicy::DataspaceRestricted,
-                Some(dataspace_id),
-            ))],
-        );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
-        );
-
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("balance-policy alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias balance-policy route must resolve with state"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-
-    #[test]
     fn asset_home_coverage_mint_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -13261,7 +13361,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -13276,10 +13376,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13331,7 +13434,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -13346,10 +13449,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13402,7 +13508,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -13416,10 +13522,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13460,8 +13569,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let tx = sample_transaction(
@@ -13474,10 +13584,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    Some(owning_domain),
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13511,8 +13624,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let tx = sample_transaction(
@@ -13525,10 +13639,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    Some(owning_domain),
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13563,8 +13680,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let tx = sample_transaction(
@@ -13578,10 +13696,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    Some(owning_domain),
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13615,8 +13736,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let scoped_asset_id = AssetId::with_scope(
@@ -13634,10 +13756,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13677,8 +13802,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let scoped_asset_id = AssetId::with_scope(
@@ -13697,10 +13823,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13739,8 +13868,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let scoped_asset_id = AssetId::with_scope(
@@ -13758,10 +13888,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13800,7 +13933,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -13819,10 +13952,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13856,7 +13992,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -13876,10 +14012,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13912,7 +14051,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "paynet").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -13930,10 +14069,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -13981,16 +14123,19 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "paynet").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    Some(owning_domain),
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -14061,7 +14206,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(2), dataspace_id),
         ]);
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -14079,10 +14224,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    Some(owning_domain),
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -14110,8 +14258,9 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(2), dataspace_id),
         ]);
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let tx = sample_transaction(
@@ -14128,10 +14277,13 @@ mod tests {
         );
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -14158,11 +14310,11 @@ mod tests {
         recipient: AccountId,
         settlement_id: &str,
     ) -> (FxCorridorPolicy, InstructionBox) {
-        let source_asset_definition_id = AssetDefinitionId::new(
+        let source_asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cbuae", "universal").expect("source asset domain"),
             "aed".parse().expect("source asset name"),
         );
-        let destination_asset_definition_id = AssetDefinitionId::new(
+        let destination_asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("sbp", "universal").expect("destination asset domain"),
             "pkr".parse().expect("destination asset name"),
         );
@@ -14691,7 +14843,7 @@ mod tests {
         );
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             contract_dataspace,
@@ -14871,11 +15023,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let source_asset_definition_id = AssetDefinitionId::new(
+        let source_asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cbuae", "universal").expect("source asset domain"),
             "aed".parse().expect("source asset name"),
         );
-        let destination_asset_definition_id = AssetDefinitionId::new(
+        let destination_asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("sbp", "universal").expect("destination asset domain"),
             "pkr".parse().expect("destination asset name"),
         );
@@ -14911,7 +15063,7 @@ mod tests {
         let bilateral_settlement = InstructionBox::from(DvpIsi::new(
             "mobile_dvp_1".parse().expect("DVP settlement id"),
             SettlementLeg::new(
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("cash", "cbuae").expect("source DVP asset domain"),
                     "aed".parse().expect("source DVP asset name"),
                 ),
@@ -14920,7 +15072,7 @@ mod tests {
                 source_sink.clone(),
             ),
             SettlementLeg::new(
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("securities", "sepa").expect("auxiliary DVP asset domain"),
                     "bond".parse().expect("auxiliary DVP asset name"),
                 ),
@@ -15061,7 +15213,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -15076,10 +15228,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15132,7 +15287,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -15149,10 +15304,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15205,7 +15363,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -15222,10 +15380,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15259,7 +15420,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_home_extra_coverage_mint_permission_uses_stored_alias_dataspace() {
+    fn asset_home_extra_coverage_mint_permissions_use_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -15278,27 +15439,20 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
         );
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15308,7 +15462,7 @@ mod tests {
             .asset_definition_aliases
             .insert(alias.clone(), asset_definition.clone());
         state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
+            asset_definition.clone(),
             crate::state::AssetDefinitionAliasBindingRecord {
                 alias,
                 lease_expiry_ms: None,
@@ -15317,18 +15471,37 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("mint permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias mint permission route must resolve with state"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
+        let permissions = [
+            Permission::from(CanMintAssetWithDefinition {
+                asset_definition: asset_definition.clone(),
+            }),
+            Permission::from(CanMintAssetToAccount {
+                asset_definition,
+                account: bob_id.clone(),
+            }),
+        ];
+        for permission in permissions {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![InstructionBox::from(Grant::account_permission(
+                    permission,
+                    bob_id.clone(),
+                ))],
+            );
+            assert_eq!(
+                router
+                    .try_route_without_state(&tx)
+                    .expect("mint permission alias lookup should defer to state"),
+                None
+            );
+            assert_eq!(
+                router
+                    .try_route_with_view(&tx, &state.view())
+                    .expect("stored alias mint permission route must resolve with state"),
+                RoutingDecision::new(lane_id, dataspace_id)
+            );
+        }
     }
 
     #[test]
@@ -15351,7 +15524,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -15368,10 +15541,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15425,7 +15601,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -15442,10 +15618,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15498,7 +15677,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -15515,10 +15694,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15571,10 +15753,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "xor".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "xor".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -15593,10 +15776,13 @@ mod tests {
         scope_entry.ensure_dataspace(dataspace_id);
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition)
-                    .with_name("xor".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition,
+                    "xor".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15633,10 +15819,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "xor".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "xor".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -15653,10 +15840,13 @@ mod tests {
         scope_entry.ensure_dataspace(dataspace_id);
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition)
-                    .with_name("xor".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition,
+                    "xor".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15693,10 +15883,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "xor".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "xor".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -15712,10 +15903,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "xor#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition.clone())
-                    .with_name("xor".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition.clone(),
+                    "xor".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15775,10 +15969,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "xor".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "xor".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -15795,10 +15990,13 @@ mod tests {
         scope_entry.ensure_dataspace(dataspace_id);
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition)
-                    .with_name("xor".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition,
+                    "xor".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15857,10 +16055,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "xor".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "xor".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -15878,10 +16077,13 @@ mod tests {
         scope_entry.ensure_dataspace(dataspace_id);
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition)
-                    .with_name("xor".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition,
+                    "xor".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -15939,10 +16141,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "xor".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "xor".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -15959,10 +16162,13 @@ mod tests {
         scope_entry.ensure_dataspace(dataspace_id);
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition)
-                    .with_name("xor".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition,
+                    "xor".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -16010,10 +16216,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "universal").expect("asset definition domain"),
+                "pkr".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -16030,12 +16237,16 @@ mod tests {
         );
         let alias: iroha_data_model::asset::AssetDefinitionAlias =
             "pkr#paynet".parse().expect("asset alias");
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("owning domain");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&sender_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
@@ -16082,10 +16293,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "pkr".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -16144,10 +16356,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "pkr".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -16222,10 +16435,11 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
+        let transparent_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+                "pkr".parse().expect("asset definition name"),
+            );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &transparent_asset_definition.canonical_address(),
         )
@@ -17015,10 +17229,11 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1), LaneId::new(2)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("uae", "universal").unwrap(),
-            "aed".parse().unwrap(),
-        );
+        let asset_definition: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("uae", "universal").unwrap(),
+                "aed".parse().unwrap(),
+            );
         let uae_transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition.clone(), uae_sender_id.clone()),
             1_u32,
@@ -17743,7 +17958,7 @@ mod tests {
         ])
         .expect("dataspace catalog");
         let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("nexus", "universal").unwrap(),
             "ds1".parse().unwrap(),
         );
@@ -17762,9 +17977,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("ds1".to_owned())
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "ds1".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
@@ -17837,7 +18056,7 @@ mod tests {
         ])
         .expect("dataspace catalog");
         let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("nexus", "universal").unwrap(),
             "ds1".parse().unwrap(),
         );
@@ -17856,9 +18075,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("ds1".to_owned())
-                    .build(&alice_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "ds1".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
             ],
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
@@ -17931,7 +18154,7 @@ mod tests {
         ])
         .expect("dataspace catalog");
         let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("vault", "bob").unwrap(),
             "voucher".parse().unwrap(),
         );
@@ -17950,9 +18173,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("voucher".to_owned())
-                    .build(&bob_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "voucher".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&bob_id),
             ],
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
@@ -18073,6 +18300,45 @@ mod tests {
             router
                 .try_route_without_state(&tx)
                 .expect("dataspace alias permission should route without world state"),
+            Some(RoutingDecision::new(lane_id, dataspace_id))
+        );
+    }
+
+    #[test]
+    fn asset_definition_alias_dataspace_permission_grant_routes_by_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog,
+            lane_catalog,
+        );
+        let permission = Permission::from(CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Dataspace(dataspace_id),
+        });
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                permission, holder_id,
+            ))],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("asset alias permission should route without world state"),
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
     }
@@ -19630,7 +19896,7 @@ mod tests {
             catalog.clone(),
             lane_catalog,
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("vault", "restricted").expect("domain id"),
             "voucher".parse().expect("asset definition name"),
         );
@@ -19646,9 +19912,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("voucher".to_owned())
-                    .build(&submitter_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "voucher".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&submitter_id),
             ],
             catalog,
             router.lane_catalog.as_ref().clone(),
@@ -19687,7 +19957,7 @@ mod tests {
             catalog.clone(),
             lane_catalog,
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("vault", "restricted").expect("domain id"),
             "voucher".parse().expect("asset definition name"),
         );
@@ -19705,9 +19975,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("voucher".to_owned())
-                    .build(&submitter_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "voucher".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&submitter_id),
             ],
             catalog,
             router.lane_catalog.as_ref().clone(),
@@ -19746,7 +20020,7 @@ mod tests {
             catalog.clone(),
             lane_catalog,
         );
-        let transparent_asset_definition = AssetDefinitionId::new(
+        let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("domain id"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -19766,10 +20040,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&submitter_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&submitter_id),
             ],
             catalog,
             router.lane_catalog.as_ref().clone(),
@@ -19821,7 +20098,7 @@ mod tests {
             catalog.clone(),
             lane_catalog,
         );
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("vault", "restricted").expect("domain id"),
             "voucher".parse().expect("asset definition name"),
         );
@@ -19838,9 +20115,13 @@ mod tests {
         );
         let state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(asset_definition)
-                    .with_name("voucher".to_owned())
-                    .build(&submitter_id),
+                AssetDefinition::numeric(
+                    asset_definition,
+                    "voucher".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&submitter_id),
             ],
             catalog,
             router.lane_catalog.as_ref().clone(),
@@ -19879,7 +20160,7 @@ mod tests {
             catalog.clone(),
             lane_catalog,
         );
-        let transparent_asset_definition = AssetDefinitionId::new(
+        let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("domain id"),
             "pkr".parse().expect("asset definition name"),
         );
@@ -19897,10 +20178,13 @@ mod tests {
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
-                AssetDefinition::numeric(opaque_asset_definition.clone())
-                    .with_name("pkr".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&submitter_id),
+                AssetDefinition::numeric(
+                    opaque_asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&submitter_id),
             ],
             catalog,
             router.lane_catalog.as_ref().clone(),

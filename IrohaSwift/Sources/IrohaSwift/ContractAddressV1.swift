@@ -19,6 +19,7 @@ public enum ContractAddressV1Error: Error, LocalizedError, Equatable {
 
 /// Parser for the canonical V1 contract-address wire literal.
 public enum ContractAddressV1 {
+    private static let canonicalHrp = Array("irohac".utf8)
     private static let subjectHashToPointTagV1 =
         Data("iroha:contract-subject:hash-to-point:v1:".utf8)
     private static let bech32mConstant: UInt32 = 0x2bc8_30a3
@@ -45,6 +46,9 @@ public enum ContractAddressV1 {
         }
 
         let hrp = Array(bytes[..<separator])
+        guard hrp == canonicalHrp else {
+            return false
+        }
         var values = [UInt8]()
         values.reserveCapacity(bytes.distance(from: bytes.index(after: separator), to: bytes.endIndex))
         for character in bytes[bytes.index(after: separator)...] {

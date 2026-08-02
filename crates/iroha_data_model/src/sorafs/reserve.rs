@@ -1710,7 +1710,7 @@ mod tests {
             revision: 1,
             predecessor_policy_digest: None,
             economics: ReservePolicyV1::default(),
-            asset_definition: AssetDefinitionId::new(
+            asset_definition: AssetDefinitionId::derive_from_components(
                 crate::domain::DomainId::try_new("reserve", "universal").expect("reserve domain"),
                 "xor".parse().expect("reserve asset name"),
             ),

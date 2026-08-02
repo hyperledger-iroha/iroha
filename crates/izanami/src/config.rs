@@ -16,6 +16,7 @@ use iroha_config::{
         Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
+use iroha_crypto::Hash;
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
@@ -784,6 +785,21 @@ impl NexusProfile {
             );
             raw_table.insert("torii".to_string(), Value::Table(torii));
         }
+        let expected_hash = raw_table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .and_then(|genesis| genesis.get_mut("expected_hash"))
+            .ok_or_else(|| eyre!("embedded Nexus signing profile lacks genesis.expected_hash"))?;
+        if expected_hash.as_str() != Some("REPLACE_WITH_GENESIS_EXPECTED_HASH") {
+            return Err(eyre!(
+                "embedded Nexus signing profile must retain its explicit genesis hash placeholder"
+            ));
+        }
+        // Izanami parses the complete profile only to project Nexus and Sumeragi fields below;
+        // genesis is never copied into `config_layer`. Keep the checked-in profile unrunnable and
+        // use a deterministic in-memory value solely to satisfy complete-config normalization.
+        *expected_hash =
+            Value::String(Hash::new(b"Izanami Nexus-profile policy projection only").to_string());
         let reader = ConfigReader::new().with_toml_source(TomlSource::inline(raw_table.clone()));
         let actual = iroha_config::parameters::user::Root::read_and_complete(reader)
             .map_err(|err| eyre!("failed to load embedded nexus config: {err:?}"))?

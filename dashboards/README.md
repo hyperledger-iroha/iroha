@@ -30,6 +30,9 @@ parity/CI dashboards that feed the roadmap and `status.md`.
 - `grafana/sorafs_gateway_compliance.json` — Grafana board for bounded SoraFS
   gateway-compliance control outcomes, serving decisions, catalog
   sequence/expiry, and fail-closed readiness.
+- `grafana/musubi_registry.json` — Grafana board for the Musubi V1 publication
+  phases, replica quorum, integrity/cache/cursor/governance failures, and
+  archive/cache storage pressure.
 - `alerts/fastpq_acceleration_rules.yml` + `alerts/tests/fastpq_acceleration_rules.test.yml`
   — Alerting pack and promtool coverage for Metal downgrades/fallback bursts.
 - `alerts/sorafs_provider_admission_rules.yml` +
@@ -48,6 +51,11 @@ parity/CI dashboards that feed the roadmap and `status.md`.
 - `alerts/sorafs_gateway_rules.yml` +
   `alerts/tests/sorafs_gateway_rules.test.yml` — Alerting pack and promtool
   coverage for gateway availability, TTFB P95, and proof-failure spikes.
+- `alerts/musubi_registry_rules.yml` +
+  `alerts/tests/musubi_registry_rules.test.yml` — Alerting pack and promtool
+  coverage for stalled publication, replication shortfall, ingest
+  deadletters, integrity/cache/cursor/governance failures, and storage
+  pressure.
 
 The JSON structure for these dashboards is documented in
 `specs/references/ios_metrics.md`. Exporters should populate real feeds in

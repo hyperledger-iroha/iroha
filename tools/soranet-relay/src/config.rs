@@ -59,6 +59,7 @@ const DEFAULT_VPN_EXIT_CLASS: &str = "standard";
 const DEFAULT_VPN_LEASE_SECS: u32 = 10 * 60;
 const DEFAULT_VPN_DNS_PUSH_INTERVAL_SECS: u32 = 90;
 const DEFAULT_VPN_USAGE_VOUCHER_DEBT_WINDOW_BYTES: u64 = 1_048_576;
+const DEFAULT_VPN_HELPER_TICKET_REPLAY_STORE_CAPACITY: usize = 8_192;
 const DEFAULT_VPN_METER_HASH_HEX: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -126,12 +127,14 @@ impl json::JsonDeserialize for RelayMode {
 /// TLS configuration for the QUIC endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, Default)]
 pub struct TlsConfig {
-    /// Path to the PEM-encoded certificate chain served by the relay. When
-    /// omitted the relay generates a self-signed leaf certificate at startup.
+    /// Path to the PEM-encoded certificate chain served by the relay.
+    ///
+    /// Omission enables a development-only self-signed leaf. VPN exits reject
+    /// that mode and require this path plus `private_key_path`.
     pub certificate_path: Option<PathBuf>,
     /// Path to the PEM-encoded private key that matches `certificate_path`.
     pub private_key_path: Option<PathBuf>,
-    /// Subject to use when the relay generates a self-signed certificate.
+    /// Subject used only by the development self-signed certificate path.
     pub self_signed_subject: Option<String>,
 }
 
@@ -326,6 +329,14 @@ fn default_vpn_usage_voucher_debt_window_bytes() -> u64 {
     DEFAULT_VPN_USAGE_VOUCHER_DEBT_WINDOW_BYTES
 }
 
+fn default_vpn_helper_ticket_replay_store_capacity() -> usize {
+    DEFAULT_VPN_HELPER_TICKET_REPLAY_STORE_CAPACITY
+}
+
+fn default_vpn_helper_ticket_replay_store_path() -> PathBuf {
+    PathBuf::from("./storage/soranet/vpn_helper_ticket_replays.norito")
+}
+
 fn default_vpn_cover_to_data_per_mille() -> u16 {
     DEFAULT_VPN_COVER_TO_DATA_PER_MILLE
 }
@@ -509,6 +520,12 @@ pub struct VpnConfig {
     /// Optional 32-byte shared secret (hex) used to verify helper-authenticated VPN tickets.
     #[norito(default)]
     pub helper_ticket_secret_hex: Option<String>,
+    /// Maximum number of active helper-ticket consumptions retained durably.
+    #[norito(default = "default_vpn_helper_ticket_replay_store_capacity")]
+    pub helper_ticket_replay_store_capacity: usize,
+    /// On-disk path for the mandatory consumed helper-ticket replay ledger.
+    #[norito(default = "default_vpn_helper_ticket_replay_store_path")]
+    pub helper_ticket_replay_store_path: PathBuf,
     /// Local backend endpoint used to bridge helper-authenticated VPN traffic.
     ///
     /// Supported forms are `unix:/absolute/path` and `tcp://host:port`.
@@ -545,6 +562,8 @@ impl Default for VpnConfig {
             route_push: Vec::new(),
             dns_overrides: Vec::new(),
             helper_ticket_secret_hex: None,
+            helper_ticket_replay_store_capacity: default_vpn_helper_ticket_replay_store_capacity(),
+            helper_ticket_replay_store_path: default_vpn_helper_ticket_replay_store_path(),
             backend_endpoint: None,
             backend_bootstrap_secret_hex: None,
             receipt_spool_dir: None,
@@ -574,6 +593,13 @@ impl VpnConfig {
         }
         if self.usage_voucher_debt_window_bytes == 0 {
             self.usage_voucher_debt_window_bytes = default_vpn_usage_voucher_debt_window_bytes();
+        }
+        if self.helper_ticket_replay_store_capacity == 0 {
+            self.helper_ticket_replay_store_capacity =
+                default_vpn_helper_ticket_replay_store_capacity();
+        }
+        if self.helper_ticket_replay_store_path.as_os_str().is_empty() {
+            self.helper_ticket_replay_store_path = default_vpn_helper_ticket_replay_store_path();
         }
         self.cover.apply_defaults();
         self.billing.apply_defaults();
@@ -619,6 +645,16 @@ impl VpnConfig {
         if helper_ticket_secret_hex.is_none() {
             return Err(ConfigError::Vpn(
                 "vpn.helper_ticket_secret_hex must be set when vpn.enabled is true".to_string(),
+            ));
+        }
+        if self.helper_ticket_replay_store_capacity == 0 {
+            return Err(ConfigError::Vpn(
+                "vpn.helper_ticket_replay_store_capacity must be greater than zero".to_string(),
+            ));
+        }
+        if self.helper_ticket_replay_store_path.as_os_str().is_empty() {
+            return Err(ConfigError::Vpn(
+                "vpn.helper_ticket_replay_store_path must not be empty".to_string(),
             ));
         }
         let backend_endpoint = self.parse_backend_endpoint()?;
@@ -1763,9 +1799,16 @@ pub struct GuardDirectoryConfig {
 
 impl GuardDirectoryConfig {
     pub fn apply_defaults(&mut self) -> Result<(), ConfigError> {
-        if self.expected_snapshot_digest_hex.len() != 64 {
+        if self.expected_snapshot_digest_hex.len() != 64
+            || !self
+                .expected_snapshot_digest_hex
+                .as_bytes()
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        {
             return Err(ConfigError::GuardDirectory(
-                "expected_snapshot_digest_hex must be 64 hex characters".to_string(),
+                "expected_snapshot_digest_hex must be exactly 64 lowercase hexadecimal characters"
+                    .to_string(),
             ));
         }
         self.expected_snapshot_digest()?;
@@ -1795,6 +1838,11 @@ impl GuardDirectoryConfig {
         }
         let mut bytes = [0u8; 32];
         bytes.copy_from_slice(&raw);
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(ConfigError::GuardDirectory(
+                "expected_snapshot_digest_hex must not be all zero".to_string(),
+            ));
+        }
         Ok(bytes)
     }
 
@@ -3021,6 +3069,50 @@ impl RelayConfig {
             vpn.validate()?;
         }
 
+        if self.vpn.as_ref().is_some_and(|vpn| vpn.enabled) {
+            if self.mode != RelayMode::Exit {
+                return Err(ConfigError::Vpn(
+                    "vpn.enabled requires relay mode Exit".to_owned(),
+                ));
+            }
+            let tls = self
+                .tls
+                .as_ref()
+                .expect("TLS defaults applied before VPN validation");
+            if tls.certificate_path.is_none() || tls.private_key_path.is_none() {
+                return Err(ConfigError::Vpn(
+                    "vpn.enabled requires persistent tls.certificate_path and tls.private_key_path"
+                        .to_owned(),
+                ));
+            }
+            let policy = self
+                .handshake
+                .as_ref()
+                .expect("handshake defaults applied before VPN validation");
+            if policy.certificate.is_none() {
+                return Err(ConfigError::Vpn(
+                    "vpn.enabled requires a verified handshake.certificate bundle".to_owned(),
+                ));
+            }
+            if policy.identity_private_key_hex.is_none()
+                && policy.descriptor_manifest_path.is_none()
+            {
+                return Err(ConfigError::Vpn(
+                    "vpn.enabled requires a persistent relay identity key".to_owned(),
+                ));
+            }
+            let guard = self.guard_directory.as_ref().ok_or_else(|| {
+                ConfigError::Vpn(
+                    "vpn.enabled requires an authenticated guard_directory snapshot".to_owned(),
+                )
+            })?;
+            if guard.allow_missing_entry {
+                return Err(ConfigError::Vpn(
+                    "vpn.enabled forbids guard_directory.allow_missing_entry".to_owned(),
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -3360,6 +3452,140 @@ mod tests {
         assert!(cfg.compliance_config().pipeline_spool_dir().is_none());
         assert!(!cfg.incentive_log_config().enable);
         assert!(cfg.incentive_log_config().spool_dir.is_none());
+    }
+
+    fn assert_vpn_config_error(config_json: &str, expected: &str) {
+        let path = write_config(config_json);
+        let error = RelayConfig::load(path).expect_err("incomplete VPN trust must fail closed");
+        assert!(
+            matches!(error, ConfigError::Vpn(ref message) if message.contains(expected)),
+            "expected VPN error containing {expected:?}, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn vpn_requires_exit_role_and_persistent_transport_trust() {
+        let helper_secret = "aa".repeat(32);
+        let entry = format!(
+            r#"{{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "vpn": {{
+                    "enabled": true,
+                    "helper_ticket_secret_hex": "{helper_secret}"
+                }}
+            }}"#
+        );
+        assert_vpn_config_error(&entry, "relay mode Exit");
+
+        let missing_tls = format!(
+            r#"{{
+                "mode": "Exit",
+                "listen": "127.0.0.1:0",
+                "vpn": {{
+                    "enabled": true,
+                    "helper_ticket_secret_hex": "{helper_secret}"
+                }}
+            }}"#
+        );
+        assert_vpn_config_error(&missing_tls, "persistent tls.certificate_path");
+
+        let missing_certificate = format!(
+            r#"{{
+                "mode": "Exit",
+                "listen": "127.0.0.1:0",
+                "tls": {{
+                    "certificate_path": "/run/secrets/relay-cert.pem",
+                    "private_key_path": "/run/secrets/relay-key.pem"
+                }},
+                "vpn": {{
+                    "enabled": true,
+                    "helper_ticket_secret_hex": "{helper_secret}"
+                }}
+            }}"#
+        );
+        assert_vpn_config_error(&missing_certificate, "verified handshake.certificate");
+    }
+
+    #[test]
+    fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
+        let helper_secret = "aa".repeat(32);
+        let issuer_mldsa = "bb".repeat(MlDsaSuite::MlDsa65.public_key_len());
+        let certificate = format!(
+            r#"{{
+                "bundle_path": "/run/secrets/relay-certificate.cbor",
+                "issuer_ed25519_hex": "{}",
+                "issuer_mldsa_hex": "{issuer_mldsa}"
+            }}"#,
+            "cc".repeat(32),
+        );
+        let missing_identity = format!(
+            r#"{{
+                "mode": "Exit",
+                "listen": "127.0.0.1:0",
+                "tls": {{
+                    "certificate_path": "/run/secrets/relay-cert.pem",
+                    "private_key_path": "/run/secrets/relay-key.pem"
+                }},
+                "handshake": {{ "certificate": {certificate} }},
+                "vpn": {{
+                    "enabled": true,
+                    "helper_ticket_secret_hex": "{helper_secret}"
+                }}
+            }}"#
+        );
+        assert_vpn_config_error(&missing_identity, "persistent relay identity key");
+
+        let missing_directory = format!(
+            r#"{{
+                "mode": "Exit",
+                "listen": "127.0.0.1:0",
+                "tls": {{
+                    "certificate_path": "/run/secrets/relay-cert.pem",
+                    "private_key_path": "/run/secrets/relay-key.pem"
+                }},
+                "handshake": {{
+                    "identity_private_key_hex": "{}",
+                    "certificate": {certificate}
+                }},
+                "vpn": {{
+                    "enabled": true,
+                    "helper_ticket_secret_hex": "{helper_secret}"
+                }}
+            }}"#,
+            "dd".repeat(32),
+        );
+        assert_vpn_config_error(&missing_directory, "authenticated guard_directory");
+
+        let permissive_directory = format!(
+            r#"{{
+                "mode": "Exit",
+                "listen": "127.0.0.1:0",
+                "tls": {{
+                    "certificate_path": "/run/secrets/relay-cert.pem",
+                    "private_key_path": "/run/secrets/relay-key.pem"
+                }},
+                "handshake": {{
+                    "identity_private_key_hex": "{}",
+                    "certificate": {certificate}
+                }},
+                "guard_directory": {{
+                    "snapshot_path": "/run/secrets/guard-directory.norito",
+                    "expected_snapshot_digest_hex": "{}",
+                    "allow_missing_entry": true
+                }},
+                "vpn": {{
+                    "enabled": true,
+                    "helper_ticket_secret_hex": "{helper_secret}"
+                }}
+            }}"#,
+            "dd".repeat(32),
+            "ee".repeat(32),
+        );
+        assert_vpn_config_error(
+            &permissive_directory,
+            "forbids guard_directory.allow_missing_entry",
+        );
     }
 
     #[test]
@@ -4595,6 +4821,47 @@ mod tests {
         cfg.validate().expect("vpn config should validate");
         assert_eq!(cfg.helper_ticket_secret_hex, Some("ab".repeat(32)));
         assert_eq!(cfg.helper_ticket_secret_bytes(), Some([0xAB; 32]));
+    }
+
+    #[test]
+    fn vpn_helper_ticket_replay_store_defaults_are_mandatory() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_replay_store_capacity: 0,
+            helper_ticket_replay_store_path: PathBuf::new(),
+            ..VpnConfig::default()
+        };
+
+        cfg.validate().expect("VPN replay-store defaults validate");
+        assert_eq!(
+            cfg.helper_ticket_replay_store_capacity,
+            DEFAULT_VPN_HELPER_TICKET_REPLAY_STORE_CAPACITY
+        );
+        assert_eq!(
+            cfg.helper_ticket_replay_store_path,
+            PathBuf::from("./storage/soranet/vpn_helper_ticket_replays.norito")
+        );
+    }
+
+    #[test]
+    fn vpn_helper_ticket_replay_store_preserves_operator_settings() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_replay_store_capacity: 32_768,
+            helper_ticket_replay_store_path: PathBuf::from(
+                "/var/lib/soranet/vpn-helper-replays.norito",
+            ),
+            ..VpnConfig::default()
+        };
+
+        cfg.validate().expect("custom VPN replay store validates");
+        assert_eq!(cfg.helper_ticket_replay_store_capacity, 32_768);
+        assert_eq!(
+            cfg.helper_ticket_replay_store_path,
+            PathBuf::from("/var/lib/soranet/vpn-helper-replays.norito")
+        );
     }
 
     #[test]

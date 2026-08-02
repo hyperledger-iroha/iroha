@@ -27,6 +27,7 @@ pub mod confidential;
 pub mod envelope;
 mod errors;
 mod field;
+pub mod generalized_bulletproof;
 mod group;
 mod hash;
 mod ipa;
@@ -133,15 +134,12 @@ pub mod norito_helpers {
         errors::Error,
     };
 
-    /// Encode backend parameters into the Norito wire representation.
+    /// Encode the selector for a backend's canonical parameters.
     pub fn params_to_wire<B: IpaBackend>(params: &crate::params::Params<B>) -> IpaParams {
         IpaParams {
             version: 1,
             curve_id: B::CURVE_ID.as_u16(),
             n: params.n() as u32,
-            g: params.g().iter().map(|g| g.to_bytes()).collect(),
-            h: params.h().iter().map(|h| h.to_bytes()).collect(),
-            u: params.u().to_bytes(),
         }
     }
 
@@ -278,18 +276,6 @@ pub mod norito_helpers {
                 max: max_n,
                 actual,
             });
-        }
-        for (limit, actual) in [
-            ("params_g_len", env.params.g.len()),
-            ("params_h_len", env.params.h.len()),
-        ] {
-            if actual > max_n {
-                return Err(Error::EnvelopeLimitExceeded {
-                    limit,
-                    max: max_n,
-                    actual,
-                });
-            }
         }
         let max_rounds = if limits.max_k >= usize::BITS {
             usize::MAX

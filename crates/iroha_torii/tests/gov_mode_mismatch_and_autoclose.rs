@@ -78,7 +78,7 @@ fn block_header(height: u64) -> BlockHeader {
 }
 
 fn contract_address() -> iroha_data_model::smart_contract::ContractAddress {
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         .parse()
         .expect("contract address")
 }

@@ -333,6 +333,24 @@ mod tests {
         ))
     }
 
+    fn find_permissions_start(
+        account: AccountId,
+        params: QueryParams,
+    ) -> iroha_data_model::query::QueryRequest {
+        let payload = norito::codec::Encode::encode(
+            &iroha_data_model::query::permission::prelude::FindPermissionsByAccountId::new(account),
+        );
+        let erased = iroha_data_model::query::ErasedIterQuery::<Permission>::new(
+            iroha_data_model::query::dsl::CompoundPredicate::PASS,
+            iroha_data_model::query::dsl::SelectorTuple::default(),
+            payload,
+        );
+        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
+        iroha_data_model::query::QueryRequest::Start(iroha_data_model::query::QueryWithParams::new(
+            &qbox, params,
+        ))
+    }
+
     fn domain_ids_from_batch(
         batch: iroha_data_model::query::QueryOutputBatchBoxTuple,
     ) -> Vec<DomainId> {
@@ -389,20 +407,35 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
-        let mut ad1 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap(),
-        ))
+        let ad3 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "peony".parse().unwrap(),
+            ),
+            "peony".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
@@ -455,20 +488,35 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
-        let mut ad1 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
+        let mut ad1 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        ))
+        let mut ad2 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap(),
-        ))
+        let ad3 = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                "peony".parse().unwrap(),
+            ),
+            "peony".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
         .build(&ALICE_ID);
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
@@ -1213,6 +1261,183 @@ mod tests {
         let (batch, _remaining_hint, cursor) = next.into_parts();
         assert!(cursor.is_none());
         assert_eq!(domain_ids_from_batch(batch), vec![d3.id]);
+    }
+
+    #[tokio::test]
+    async fn stored_account_cursor_revalidates_exact_grant_without_advancing_on_denial() {
+        let exact: Permission = iroha_executor_data_model::permission::query::CanReadAccountData {
+            account: BOB_ID.clone(),
+        }
+        .into();
+        let bob_permissions = std::collections::BTreeSet::from([
+            Permission::new(
+                "cursor-page-a".to_owned(),
+                iroha_primitives::json::Json::new(()),
+            ),
+            Permission::new(
+                "cursor-page-b".to_owned(),
+                iroha_primitives::json::Json::new(()),
+            ),
+            Permission::new(
+                "cursor-page-c".to_owned(),
+                iroha_primitives::json::Json::new(()),
+            ),
+        ]);
+        let expected_permissions = bob_permissions.iter().cloned().collect::<Vec<_>>();
+        let mut world = World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&BOB_ID),
+            ],
+            [],
+        );
+        world.account_permissions.insert(
+            ALICE_ID.clone(),
+            std::collections::BTreeSet::from([exact.clone()]),
+        );
+        world
+            .account_permissions
+            .insert(BOB_ID.clone(), bob_permissions.clone());
+        let store = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            store.clone(),
+            ChainId::from("account-cursor-revalidation"),
+        );
+        let params = QueryParams {
+            fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
+            ..QueryParams::default()
+        };
+
+        let QueryResponse::Iterable(first) = run_on_snapshot_with_mode(
+            &state,
+            &store,
+            &ALICE_ID,
+            find_permissions_start(BOB_ID.clone(), params),
+            CursorMode::Stored,
+            QueryLimits::default(),
+        )
+        .expect("the exact direct grant must authorize the stored Start") else {
+            panic!("expected iterable response")
+        };
+        let (first_batch, _, first_cursor) = first.into_parts();
+        let first_permission = match first_batch.into_iter().next().expect("permission slice") {
+            iroha_data_model::query::QueryOutputBatchBox::Permission(permissions) => {
+                assert_eq!(permissions.len(), 1);
+                permissions.into_iter().next().expect("first permission")
+            }
+            other => panic!("unexpected permission batch: {other:?}"),
+        };
+        let first_cursor = first_cursor.expect("three permissions require a continuation");
+        assert_eq!(
+            first_permission, expected_permissions[0],
+            "the first stored page must match the canonical permission order"
+        );
+
+        let mut block = state.block(BlockHeader::new(
+            nonzero_ext::nonzero!(1_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        Revoke::account_permission(exact.clone(), ALICE_ID.clone())
+            .execute(&BOB_ID, &mut transaction)
+            .expect("revoke exact direct reader grant");
+        transaction.apply();
+        let _ = block.commit();
+
+        let denied = run_on_snapshot_with_mode(
+            &state,
+            &store,
+            &ALICE_ID,
+            QueryRequest::Continue(first_cursor.clone()),
+            CursorMode::Stored,
+            QueryLimits::default(),
+        )
+        .expect_err("continuation must revalidate the archived Start request");
+        assert!(matches!(denied, SnapshotQueryError::Validation(
+            ValidationFail::NotPermitted(message)
+        ) if message.contains("CanReadAccountData")));
+
+        let role_id: RoleId = "cursor_account_reader".parse().expect("role id");
+        let mut block = state.block(BlockHeader::new(
+            nonzero_ext::nonzero!(2_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        Register::role(Role::new(role_id.clone(), ALICE_ID.clone()).add_permission(exact.clone()))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("restore the exact reader through an assigned role");
+        transaction.apply();
+        let _ = block.commit();
+
+        let QueryResponse::Iterable(second) = run_on_snapshot_with_mode(
+            &state,
+            &store,
+            &ALICE_ID,
+            QueryRequest::Continue(first_cursor),
+            CursorMode::Stored,
+            QueryLimits::default(),
+        )
+        .expect("the same cursor must remain usable after authorization is restored") else {
+            panic!("expected iterable response")
+        };
+        let (second_batch, _, second_cursor) = second.into_parts();
+        let second_permission = match second_batch.into_iter().next().expect("permission slice") {
+            iroha_data_model::query::QueryOutputBatchBox::Permission(permissions) => {
+                assert_eq!(permissions.len(), 1);
+                permissions.into_iter().next().expect("second permission")
+            }
+            other => panic!("unexpected permission batch: {other:?}"),
+        };
+        assert_eq!(
+            second_permission, expected_permissions[1],
+            "the denied continuation must not consume the second page"
+        );
+        let second_cursor = second_cursor.expect("one archived page must remain");
+
+        let mut block = state.block(BlockHeader::new(
+            nonzero_ext::nonzero!(3_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        Unregister::account(BOB_ID.clone())
+            .execute(&BOB_ID, &mut transaction)
+            .expect("unregister the account whose private data was delegated");
+        transaction.apply();
+        let _ = block.commit();
+
+        let view = state.view();
+        let role = view.world.roles.get(&role_id).expect("reader role remains");
+        assert!(!role.permissions().any(|permission| permission == &exact));
+        assert!(!role.permission_epochs().contains_key(&exact));
+        drop(view);
+
+        let denied = run_on_snapshot_with_mode(
+            &state,
+            &store,
+            &ALICE_ID,
+            QueryRequest::Continue(second_cursor),
+            CursorMode::Stored,
+            QueryLimits::default(),
+        )
+        .expect_err("account removal must purge grants before continuation revalidation");
+        assert!(matches!(denied, SnapshotQueryError::Validation(
+            ValidationFail::NotPermitted(message)
+        ) if message.contains("CanReadAccountData")));
     }
 
     #[tokio::test]

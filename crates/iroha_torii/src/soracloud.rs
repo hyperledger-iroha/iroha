@@ -33,19 +33,7 @@ use iroha_core::soracloud_runtime::{
     soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{
-    Algorithm, Hash, PublicKey, Signature,
-    fhe_bfv::{
-        BfvBootstrapKey, BfvBootstrapKeyMode, BfvEvaluationKeyBundle,
-        BfvFullBootstrapCircuitArtifactBundleV1, BfvFullBootstrapCircuitMaterialV1, BfvParameters,
-        ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
-        registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
-        validate_bfv_full_bootstrap_circuit_artifact_bundle_v1,
-        validate_bfv_full_bootstrap_material_proof_profile_v1,
-        validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1,
-        validate_registered_bfv_parameters,
-    },
-};
+use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     Encode,
     account::AccountId,
@@ -54,25 +42,24 @@ use iroha_data_model::{
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        AgentApartmentManifestV1, BfvEvaluationKeyRefreshTranscriptV1,
-        CIPHERTEXT_QUERY_PROOF_VERSION_V1, CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
-        CiphertextInclusionProofV1, CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1,
-        CiphertextQueryResultItemV1, CiphertextQuerySpecV1, DecryptionAuthorityPolicyV1,
-        DecryptionRequestV1, FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobOperationV1,
-        FheJobSpecV1, FheParamSetV1, FheSchemeV1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
-        SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1,
-        SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
-        SoraAgentRuntimeStatusV1, SoraAppInfraAuditEventV1, SoraAppInfraManifestV1,
-        SoraAppInfraStateV1, SoraCertifiedResponsePolicyV1, SoraConfigExportV1,
-        SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1,
-        SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraHfPlacementRecordV1,
-        SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
-        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
-        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1,
-        SoraLeaseVolumeBindingV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
-        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1, SoraModelProvenanceKindV1,
-        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
+        AgentApartmentManifestV1, CIPHERTEXT_QUERY_PROOF_VERSION_V1,
+        CIPHERTEXT_QUERY_RESPONSE_VERSION_V1, CiphertextInclusionProofV1,
+        CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
+        CiphertextQuerySpecV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
+        SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
+        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
+        SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentRuntimeStatusV1,
+        SoraAppInfraAuditEventV1, SoraAppInfraManifestV1, SoraAppInfraStateV1,
+        SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerRuntimeV1,
+        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
+        SoraHfModelFormatV1, SoraHfPlacementRecordV1, SoraHfResourceProfileV1,
+        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
+        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraLeaseVolumeBindingV1,
+        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
+        SoraModelHostCapabilityRecordV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraRolloutStageV1, SoraRuntimeReceiptV1,
         SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
         SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceLeaseStatusV1,
@@ -82,8 +69,8 @@ use iroha_data_model::{
         SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
         SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
         SoraUploadedModelRuntimeFormatV1, SoracloudFheBootstrapKeyProofV1,
-        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheFullBootstrapMaterialProofV1,
-        SoracloudFheInputAdmissionProofV1, SoracloudFhePublicKeyProofV1,
+        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheInputAdmissionProofV1,
+        SoracloudFhePolicyReferenceV1, SoracloudFhePublicKeyProofV1,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
@@ -191,6 +178,9 @@ pub(crate) enum SoracloudAction {
     SecretMutation,
     StateMutation,
     FheJobRun,
+    FhePolicyRegister,
+    FhePolicyRotate,
+    FhePolicyRevoke,
     DecryptionRequest,
     CiphertextQuery,
     Rollout,
@@ -776,25 +766,18 @@ pub(crate) struct AgentAutonomyFinalizeRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct FheJobRunPayload {
     pub service_name: String,
     pub binding_name: String,
     pub job: FheJobSpecV1,
-    pub policy: FheExecutionPolicyV1,
-    pub param_set: FheParamSetV1,
-    pub evaluation_keys: BfvEvaluationKeyBundle,
-    pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    pub policy_reference: SoracloudFhePolicyReferenceV1,
     #[norito(default)]
     pub public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     #[norito(default)]
     pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     #[norito(default)]
-    pub full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
-    #[norito(default)]
-    pub full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
-    #[norito(default)]
     pub full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
-    pub governance_tx_hash: Hash,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -4183,6 +4166,9 @@ fn soracloud_action_label(action: SoracloudAction) -> &'static str {
         SoracloudAction::SecretMutation => "secret_mutation",
         SoracloudAction::StateMutation => "state_mutation",
         SoracloudAction::FheJobRun => "fhe_job_run",
+        SoracloudAction::FhePolicyRegister => "fhe_policy_register",
+        SoracloudAction::FhePolicyRotate => "fhe_policy_rotate",
+        SoracloudAction::FhePolicyRevoke => "fhe_policy_revoke",
         SoracloudAction::DecryptionRequest => "decryption_request",
         SoracloudAction::CiphertextQuery => "ciphertext_query",
         SoracloudAction::Rollout => "rollout",
@@ -4607,519 +4593,13 @@ fn verify_fhe_job_run_signature(request: &SignedFheJobRunRequest) -> Result<(), 
     Ok(())
 }
 
-fn require_full_bootstrap_job_key<'a>(
-    payload: &'a FheJobRunPayload,
-    field: &'static str,
-) -> Result<&'a BfvBootstrapKey, SoracloudError> {
-    if payload.job.operation != FheJobOperationV1::Bootstrap || payload.job.bootstrap_count == 0 {
-        return Err(SoracloudError::bad_request(format!(
-            "invalid {field}: only accepted for full-bootstrap operations"
-        )));
-    }
-    let bootstrap_key = payload
-        .evaluation_keys
-        .bootstrap_key
-        .as_ref()
-        .ok_or_else(|| {
-            SoracloudError::bad_request(format!("invalid {field}: requires bootstrap key material"))
-        })?;
-    if bootstrap_key.mode != BfvBootstrapKeyMode::FullBootstrapV1 {
-        return Err(SoracloudError::bad_request(format!(
-            "invalid {field}: requires FullBootstrapV1 bootstrap key"
-        )));
-    }
-    validate_full_bootstrap_single_count_for_torii(payload, field)?;
-    Ok(bootstrap_key)
-}
-
-fn validate_full_bootstrap_single_count_for_torii(
-    payload: &FheJobRunPayload,
-    field: &'static str,
-) -> Result<(), SoracloudError> {
-    if payload.job.bootstrap_count != 1 {
-        return Err(SoracloudError::bad_request(format!(
-            "invalid {field}: full-bootstrap operations require bootstrap_count exactly 1"
-        )));
-    }
-    Ok(())
-}
-
-fn require_full_bootstrap_job_material<'a>(
-    payload: &'a FheJobRunPayload,
-    field: &'static str,
-) -> Result<&'a BfvFullBootstrapCircuitMaterialV1, SoracloudError> {
-    let bootstrap_key = require_full_bootstrap_job_key(payload, field)?;
-    bootstrap_key
-        .full_bootstrap_material
-        .as_ref()
-        .ok_or_else(|| {
-            SoracloudError::bad_request(format!(
-                "invalid {field}: requires full-bootstrap material"
-            ))
-        })
-}
-
-fn u64_bit_width(value: u64) -> u16 {
-    (u64::BITS - value.leading_zeros()) as u16
-}
-
-fn validate_registered_soracloud_bfv_descriptor_for_torii(
-    param_set: &FheParamSetV1,
-    params: &BfvParameters,
-) -> Result<(), SoracloudError> {
-    let expected_degree = u32::from(params.polynomial_degree);
-    if param_set.polynomial_modulus_degree.get() != expected_degree {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: polynomial degree does not match the registered BFV profile",
-        ));
-    }
-
-    if param_set.slot_count.get() != expected_degree {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: slot count does not match the registered BFV profile",
-        ));
-    }
-
-    let plaintext_bits = u64_bit_width(params.plaintext_modulus);
-    if param_set.plaintext_modulus_bits.get() != plaintext_bits {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: plaintext modulus bits do not match the registered BFV profile",
-        ));
-    }
-
-    let ciphertext_bits = u64_bit_width(params.ciphertext_modulus);
-    let largest_declared_limb = param_set
-        .ciphertext_modulus_bits
-        .first()
-        .ok_or_else(|| {
-            SoracloudError::bad_request(
-                "invalid FHE parameter set: ciphertext modulus bits must declare at least one limb",
-            )
-        })?
-        .get();
-    if largest_declared_limb > ciphertext_bits {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: ciphertext modulus bits exceed the registered BFV profile",
-        ));
-    }
-    let declared_chain_bits = param_set
-        .ciphertext_modulus_bits
-        .iter()
-        .map(|bits| u32::from(bits.get()))
-        .sum::<u32>();
-    if declared_chain_bits < u32::from(ciphertext_bits) {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: ciphertext modulus chain under-declares the registered BFV profile",
-        ));
-    }
-
-    let rns_modulus_chain_digest =
-        registered_bfv_rns_modulus_chain_digest(params).map_err(|err| {
-            SoracloudError::bad_request(format!(
-                "invalid FHE parameter set: failed to digest BFV RNS chain: {err}"
-            ))
-        })?;
-    if param_set.rns_modulus_chain_digest != rns_modulus_chain_digest {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: RNS modulus-chain digest does not match the registered BFV profile",
-        ));
-    }
-
-    let key_switch_decomposition_chain_digest =
-        registered_bfv_key_switch_decomposition_chain_digest(params).map_err(|err| {
-            SoracloudError::bad_request(format!(
-                "invalid FHE parameter set: failed to digest BFV key-switch decomposition chain: {err}"
-            ))
-        })?;
-    if param_set.key_switch_decomposition_chain_digest != key_switch_decomposition_chain_digest {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: key-switch decomposition-chain digest does not match the registered BFV profile",
-        ));
-    }
-
-    Ok(())
-}
-
-fn registered_soracloud_bfv_parameters_for_torii(
-    param_set: &FheParamSetV1,
-) -> Result<BfvParameters, SoracloudError> {
-    param_set
-        .validate()
-        .map_err(|err| SoracloudError::bad_request(format!("invalid FHE parameter set: {err}")))?;
-    if param_set.scheme != FheSchemeV1::Bfv {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: Soracloud FHE jobs currently require the registered BFV parameter profile",
-        ));
-    }
-
-    let params = ram_lfe_bfv_parameters_v1();
-    validate_registered_bfv_parameters(&params).map_err(|err| {
-        SoracloudError::bad_request(format!("invalid registered BFV parameters: {err}"))
-    })?;
-    let parameter_digest = registered_bfv_parameter_digest(&params).map_err(|err| {
-        SoracloudError::bad_request(format!(
-            "invalid FHE parameter set: failed to digest BFV parameters: {err}"
-        ))
-    })?;
-    if param_set.parameter_digest != parameter_digest {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE parameter set: digest does not match the registered BFV profile",
-        ));
-    }
-    validate_registered_soracloud_bfv_descriptor_for_torii(param_set, &params)?;
-    Ok(params)
-}
-
-fn validate_fhe_job_run_evaluation_material_for_torii(
-    params: &BfvParameters,
-    payload: &FheJobRunPayload,
-) -> Result<(), SoracloudError> {
-    payload.evaluation_keys.validate(params).map_err(|err| {
-        SoracloudError::bad_request(format!("invalid BFV evaluation keys: {err}"))
-    })?;
-    let evaluation_key_digest = payload.evaluation_keys.digest(params).map_err(|err| {
-        SoracloudError::bad_request(format!("invalid BFV evaluation keys: {err}"))
-    })?;
-    if evaluation_key_digest != payload.policy.evaluation_key_digest {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE execution policy: evaluation-key digest does not match signed evaluation keys",
-        ));
-    }
-
-    let refresh_transcript_digest = payload
-        .evaluation_key_refresh_transcript
-        .digest_for_evaluation_keys_with_mode(
-            params,
-            &payload.evaluation_keys,
-            payload.policy.refresh_transcript_mode,
-        )
-        .map_err(|err| {
-            SoracloudError::bad_request(format!(
-                "invalid FHE evaluation-key refresh transcript: {err}"
-            ))
-        })?;
-    if refresh_transcript_digest != payload.policy.evaluation_key_refresh_transcript_digest {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE execution policy: evaluation-key refresh transcript digest does not match signed transcript",
-        ));
-    }
-
-    let actual_public_key_statement = payload
-        .evaluation_key_refresh_transcript
-        .public_key_proof_statement_digest_with_mode(params, payload.policy.refresh_transcript_mode)
-        .map_err(|err| {
-            SoracloudError::bad_request(format!("invalid FHE execution policy: {err}"))
-        })?;
-    let Some(expected_public_key_statement) = payload.policy.public_key_proof_statement_digest
-    else {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE execution policy: public-key proof statement digest is required",
-        ));
-    };
-    if actual_public_key_statement != expected_public_key_statement {
-        return Err(SoracloudError::bad_request(
-            "invalid FHE execution policy: public-key proof statement digest does not match signed evaluation material",
-        ));
-    }
-
-    let actual_full_bootstrap_statement = payload
-        .evaluation_key_refresh_transcript
-        .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
-            params,
-            &payload.evaluation_keys,
-        )
-        .map_err(|err| {
-            SoracloudError::bad_request(format!("invalid FHE execution policy: {err}"))
-        })?;
-    match actual_full_bootstrap_statement {
-        Some(actual_full_bootstrap_statement) => {
-            let Some(expected_full_bootstrap_statement) = payload
-                .policy
-                .full_bootstrap_material_proof_statement_digest
-            else {
-                return Err(SoracloudError::bad_request(
-                    "invalid FHE execution policy: full-bootstrap policy must bind full-bootstrap material proof statement digest",
-                ));
-            };
-            if payload
-                .policy
-                .bootstrap_key_zero_refresh_proof_statement_digest
-                .is_some()
-            {
-                return Err(SoracloudError::bad_request(
-                    "invalid FHE execution policy: full-bootstrap policy must not bind bootstrap-key zero-refresh proof statement digest",
-                ));
-            }
-            if actual_full_bootstrap_statement != expected_full_bootstrap_statement {
-                return Err(SoracloudError::bad_request(
-                    "invalid FHE execution policy: full-bootstrap material proof statement digest does not match signed evaluation material",
-                ));
-            }
-        }
-        None => {
-            if payload
-                .policy
-                .full_bootstrap_material_proof_statement_digest
-                .is_some()
-            {
-                return Err(SoracloudError::bad_request(
-                    "invalid FHE execution policy: full-bootstrap material proof statement digest requires full-bootstrap key material",
-                ));
-            }
-            if let Some(expected) = payload
-                .policy
-                .bootstrap_key_zero_refresh_proof_statement_digest
-            {
-                let actual = payload
-                    .evaluation_key_refresh_transcript
-                    .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
-                        params,
-                        &payload.evaluation_keys,
-                        payload.policy.refresh_transcript_mode,
-                    )
-                    .map_err(|err| {
-                        SoracloudError::bad_request(format!(
-                            "invalid FHE execution policy: {err}"
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        SoracloudError::bad_request(
-                            "invalid FHE execution policy: bootstrap-key proof statement digest requires bootstrap key material",
-                        )
-                    })?;
-                if actual != expected {
-                    return Err(SoracloudError::bad_request(
-                        "invalid FHE execution policy: bootstrap-key proof statement digest does not match signed evaluation material",
-                    ));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_fhe_job_run_required_proofs_for_torii(
-    payload: &FheJobRunPayload,
-) -> Result<(), SoracloudError> {
-    let public_key_expected = payload
-        .policy
-        .public_key_proof_statement_digest
-        .ok_or_else(|| {
-            SoracloudError::bad_request(
-                "invalid public_key_proof: requires public-key proof statement digest",
-            )
-        })?;
-    if let Some(proof) = payload.public_key_proof.as_ref() {
-        if proof.statement_hash != public_key_expected {
-            return Err(SoracloudError::bad_request(
-                "invalid public_key_proof: statement hash mismatch",
-            ));
-        }
-    }
-
-    let bootstrap_expected = payload
-        .policy
-        .bootstrap_key_zero_refresh_proof_statement_digest;
-    let requires_bootstrap_proof = payload.job.bootstrap_count > 0 && bootstrap_expected.is_some();
-    match (
-        requires_bootstrap_proof,
-        bootstrap_expected,
-        payload.bootstrap_key_zero_refresh_proof.as_ref(),
-    ) {
-        (false, _, Some(_)) => {
-            return Err(SoracloudError::bad_request(
-                "invalid bootstrap_key_zero_refresh_proof: only accepted for bootstrap operations",
-            ));
-        }
-        (true, Some(expected), Some(proof)) => {
-            if proof.statement_hash != expected {
-                return Err(SoracloudError::bad_request(
-                    "invalid bootstrap_key_zero_refresh_proof: statement hash mismatch",
-                ));
-            }
-        }
-        (true, Some(_), None) => {
-            return Err(SoracloudError::bad_request(
-                "invalid bootstrap_key_zero_refresh_proof: requires bootstrap-key proof",
-            ));
-        }
-        (true, None, _) => {
-            return Err(SoracloudError::bad_request(
-                "invalid bootstrap_key_zero_refresh_proof: requires bootstrap-key proof statement digest",
-            ));
-        }
-        (false, _, None) => {}
-    }
-
-    let full_bootstrap_expected = payload
-        .policy
-        .full_bootstrap_material_proof_statement_digest;
-    let requires_full_bootstrap_proof =
-        payload.job.bootstrap_count > 0 && full_bootstrap_expected.is_some();
-    match (
-        requires_full_bootstrap_proof,
-        full_bootstrap_expected,
-        payload.full_bootstrap_material_proof.as_ref(),
-    ) {
-        (false, _, Some(_)) => {
-            return Err(SoracloudError::bad_request(
-                "invalid full_bootstrap_material_proof: only accepted for full-bootstrap operations",
-            ));
-        }
-        (true, Some(expected), Some(proof)) => {
-            if proof.statement_hash != expected {
-                return Err(SoracloudError::bad_request(
-                    "invalid full_bootstrap_material_proof: statement hash mismatch",
-                ));
-            }
-        }
-        (true, Some(_), None) => {
-            return Err(SoracloudError::bad_request(
-                "invalid full_bootstrap_material_proof: requires full-bootstrap material proof",
-            ));
-        }
-        (true, None, _) => {
-            return Err(SoracloudError::bad_request(
-                "invalid full_bootstrap_material_proof: requires full-bootstrap material proof statement digest",
-            ));
-        }
-        (false, _, None) => {}
-    }
-
-    if payload.public_key_proof.is_none() {
-        return Err(SoracloudError::bad_request(
-            "invalid public_key_proof: requires public-key proof",
-        ));
-    }
-
-    Ok(())
-}
-
-fn validate_full_bootstrap_material_proof_profile_for_torii(
-    params: &BfvParameters,
-    payload: &FheJobRunPayload,
-    expected_public_input_schema_digest: &Hash,
-) -> Result<(), SoracloudError> {
-    let Some(proof) = payload.full_bootstrap_material_proof.as_ref() else {
-        return Ok(());
-    };
-    let Some(material) = payload
-        .evaluation_keys
-        .bootstrap_key
-        .as_ref()
-        .filter(|bootstrap_key| bootstrap_key.mode == BfvBootstrapKeyMode::FullBootstrapV1)
-        .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
-    else {
-        return Ok(());
-    };
-    let vk_commitment = proof
-        .proof
-        .vk_commitment
-        .map(Hash::prehashed)
-        .ok_or_else(|| {
-            SoracloudError::bad_request(
-                "invalid full_bootstrap_material_proof: requires vk_commitment",
-            )
-        })?;
-    validate_bfv_full_bootstrap_material_proof_profile_v1(
-        params,
-        material,
-        expected_public_input_schema_digest,
-        Some(&vk_commitment),
-    )
-    .map_err(|err| {
-        SoracloudError::bad_request(format!("invalid full_bootstrap_material_proof: {err}"))
-    })
-}
-
-fn validate_full_bootstrap_release_audit_for_torii(
-    params: &BfvParameters,
-    payload: &FheJobRunPayload,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
-) -> Result<(), SoracloudError> {
-    let package = payload
-        .policy
-        .full_bootstrap_release_audit_package
-        .as_ref()
-        .ok_or_else(|| {
-            SoracloudError::bad_request(
-                "invalid FHE execution policy: full-bootstrap execution requires release audit package",
-            )
-        })?;
-    let expected_package_digest = payload
-        .policy
-        .full_bootstrap_release_audit_package_digest
-        .ok_or_else(|| {
-            SoracloudError::bad_request(
-                "invalid FHE execution policy: full-bootstrap execution requires release audit package digest",
-            )
-        })?;
-    let trusted_reviewer_id = payload
-        .policy
-        .full_bootstrap_release_audit_trusted_reviewer_id
-        .as_deref()
-        .ok_or_else(|| {
-            SoracloudError::bad_request(
-                "invalid FHE execution policy: full-bootstrap execution requires trusted release audit reviewer id",
-            )
-        })?;
-    let trusted_reviewer_public_key = payload
-        .policy
-        .full_bootstrap_release_audit_trusted_reviewer_public_key
-        .as_ref()
-        .ok_or_else(|| {
-            SoracloudError::bad_request(
-                "invalid FHE execution policy: full-bootstrap execution requires trusted release audit reviewer public key",
-            )
-        })?;
-    validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
-        params,
-        material,
-        artifacts,
-        package,
-        expected_package_digest,
-        trusted_reviewer_id,
-        trusted_reviewer_public_key,
-    )
-    .map_err(|err| {
-        SoracloudError::bad_request(format!(
-            "invalid FHE execution policy: full-bootstrap release audit package failed validation: {err}"
-        ))
-    })
-}
-
-fn requires_full_bootstrap_execution_material_for_torii(payload: &FheJobRunPayload) -> bool {
-    if payload.job.operation != FheJobOperationV1::Bootstrap || payload.job.bootstrap_count == 0 {
-        return false;
-    }
-    payload
-        .evaluation_keys
-        .bootstrap_key
-        .as_ref()
-        .is_some_and(|bootstrap_key| bootstrap_key.mode == BfvBootstrapKeyMode::FullBootstrapV1)
-}
-
 fn validate_fhe_job_run_proof_attachments(
     payload: &FheJobRunPayload,
 ) -> Result<(), SoracloudError> {
     payload
-        .policy
-        .validate_for_param_set(&payload.param_set)
-        .map_err(|err| {
-            SoracloudError::bad_request(format!("invalid FHE execution policy: {err}"))
-        })?;
-    payload
-        .job
-        .validate_for_execution(&payload.policy, &payload.param_set)
-        .map_err(|err| SoracloudError::bad_request(format!("invalid FHE job spec: {err}")))?;
-    let registered_bfv_params = registered_soracloud_bfv_parameters_for_torii(&payload.param_set)?;
-    validate_fhe_job_run_evaluation_material_for_torii(&registered_bfv_params, payload)?;
-    if requires_full_bootstrap_execution_material_for_torii(payload) {
-        validate_full_bootstrap_single_count_for_torii(payload, "FHE job spec")?;
-    }
-    validate_fhe_job_run_required_proofs_for_torii(payload)?;
+        .policy_reference
+        .validate()
+        .map_err(|err| SoracloudError::bad_request(format!("invalid policy_reference: {err}")))?;
     if let Some(proof) = &payload.public_key_proof {
         proof.validate().map_err(|err| {
             SoracloudError::bad_request(format!("invalid public_key_proof: {err}"))
@@ -5130,80 +4610,12 @@ fn validate_fhe_job_run_proof_attachments(
             SoracloudError::bad_request(format!("invalid bootstrap_key_zero_refresh_proof: {err}"))
         })?;
     }
-    if let Some(proof) = &payload.full_bootstrap_material_proof {
-        require_full_bootstrap_job_material(payload, "full_bootstrap_material_proof")?;
-        proof.validate().map_err(|err| {
-            SoracloudError::bad_request(format!("invalid full_bootstrap_material_proof: {err}"))
-        })?;
-    }
-    let requires_full_bootstrap_execution_material =
-        requires_full_bootstrap_execution_material_for_torii(payload);
-    if requires_full_bootstrap_execution_material
-        && payload.full_bootstrap_circuit_artifacts.is_none()
-        && payload.full_bootstrap_execution_proofs.is_empty()
-    {
-        return Err(SoracloudError::bad_request(
-            "invalid full_bootstrap_circuit_artifacts: requires full-bootstrap circuit artifacts",
-        ));
-    }
-    if !payload.full_bootstrap_execution_proofs.is_empty() {
-        require_full_bootstrap_job_material(payload, "full_bootstrap_execution_proofs")?;
-        if payload.full_bootstrap_circuit_artifacts.is_none() {
-            return Err(SoracloudError::bad_request(
-                "invalid full_bootstrap_execution_proofs: requires full_bootstrap_circuit_artifacts",
-            ));
-        }
-        let max_execution_proofs =
-            usize::try_from(payload.param_set.slot_count.get()).map_err(|_| {
-                SoracloudError::bad_request(
-                    "invalid full_bootstrap_execution_proofs: parameter-set slot count exceeds platform capacity",
-                )
-            })?;
-        if payload.full_bootstrap_execution_proofs.len() > max_execution_proofs {
-            return Err(SoracloudError::bad_request(
-                "invalid full_bootstrap_execution_proofs: proof count exceeds parameter-set slot count",
-            ));
-        }
-    }
     for (index, proof) in payload.full_bootstrap_execution_proofs.iter().enumerate() {
         proof.validate().map_err(|err| {
             SoracloudError::bad_request(format!(
                 "invalid full_bootstrap_execution_proofs[{index}]: {err}"
             ))
         })?;
-    }
-    if let Some(artifacts) = &payload.full_bootstrap_circuit_artifacts {
-        let material =
-            require_full_bootstrap_job_material(payload, "full_bootstrap_circuit_artifacts")?;
-        validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
-            &registered_bfv_params,
-            material,
-            artifacts,
-        )
-        .map_err(|err| {
-            SoracloudError::bad_request(format!("invalid full_bootstrap_circuit_artifacts: {err}"))
-        })?;
-        let expected_public_input_schema_digest = Hash::new(&artifacts.proof_public_input_schema);
-        validate_full_bootstrap_material_proof_profile_for_torii(
-            &registered_bfv_params,
-            payload,
-            &expected_public_input_schema_digest,
-        )?;
-        if requires_full_bootstrap_execution_material {
-            validate_full_bootstrap_release_audit_for_torii(
-                &registered_bfv_params,
-                payload,
-                material,
-                artifacts,
-            )?;
-        }
-    }
-    if requires_full_bootstrap_execution_material
-        && payload.full_bootstrap_execution_proofs.is_empty()
-    {
-        return Err(SoracloudError::bad_request(
-            "invalid full_bootstrap_execution_proofs: requires at least one full-bootstrap execution proof",
-        ));
     }
     Ok(())
 }
@@ -5667,16 +5079,10 @@ fn encode_fhe_job_run_signature_payload(
         payload.service_name.as_str(),
         payload.binding_name.as_str(),
         payload.job.clone(),
-        payload.policy.clone(),
-        payload.param_set.clone(),
-        payload.evaluation_keys.clone(),
-        payload.evaluation_key_refresh_transcript.clone(),
+        payload.policy_reference.clone(),
         payload.public_key_proof.clone(),
         payload.bootstrap_key_zero_refresh_proof.clone(),
-        payload.full_bootstrap_material_proof.clone(),
-        payload.full_bootstrap_circuit_artifacts.clone(),
         payload.full_bootstrap_execution_proofs.clone(),
-        payload.governance_tx_hash.clone(),
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode fhe job payload: {err}")))
 }
@@ -6568,6 +5974,9 @@ fn audit_action_to_control_plane_action(action: SoraServiceLifecycleActionV1) ->
         SoraServiceLifecycleActionV1::SecretMutation => SoracloudAction::SecretMutation,
         SoraServiceLifecycleActionV1::StateMutation => SoracloudAction::StateMutation,
         SoraServiceLifecycleActionV1::FheJobRun => SoracloudAction::FheJobRun,
+        SoraServiceLifecycleActionV1::FhePolicyRegister => SoracloudAction::FhePolicyRegister,
+        SoraServiceLifecycleActionV1::FhePolicyRotate => SoracloudAction::FhePolicyRotate,
+        SoraServiceLifecycleActionV1::FhePolicyRevoke => SoracloudAction::FhePolicyRevoke,
         SoraServiceLifecycleActionV1::DecryptionRequest => SoracloudAction::DecryptionRequest,
         SoraServiceLifecycleActionV1::CiphertextQuery => SoracloudAction::CiphertextQuery,
         SoraServiceLifecycleActionV1::Rollout => SoracloudAction::Rollout,
@@ -8189,7 +7598,6 @@ fn authoritative_fhe_job_mutation_response(
     service_name: &str,
     binding_name: &str,
     job: &FheJobSpecV1,
-    governance_tx_hash: Hash,
 ) -> Result<FheJobRunResponse, SoracloudError> {
     let state_view = app.state.view();
     let world = state_view.world();
@@ -8230,7 +7638,11 @@ fn authoritative_fhe_job_mutation_response(
         job_id: job.job_id.clone(),
         operation: job.operation,
         sequence: event.sequence,
-        governance_tx_hash: event.governance_tx_hash.unwrap_or(governance_tx_hash),
+        governance_tx_hash: event.governance_tx_hash.ok_or_else(|| {
+            SoracloudError::conflict(
+                "authoritative FHE audit event is missing governed-material transaction hash",
+            )
+        })?,
         output_state_key: job.output_state_key.clone(),
         output_payload_bytes: entry.payload_bytes.get(),
         output_commitment: entry.payload_commitment,
@@ -10837,7 +10249,7 @@ pub(crate) async fn handle_rollout(
     };
     let service_label = service_name.to_string();
     let rollout_handle = request.payload.rollout_handle.clone();
-    let governance_tx_hash = request.payload.governance_tx_hash;
+    let governance_tx_hash = request.payload.governance_tx_hash.clone();
     match submit_confirm_and_respond(
         &app,
         signer,
@@ -11344,7 +10756,6 @@ pub(crate) async fn handle_fhe_job_run(
     let service_label = service_name.to_string();
     let binding_label = binding_name.to_string();
     let job = request.payload.job.clone();
-    let governance_tx_hash = request.payload.governance_tx_hash;
     match submit_confirm_and_respond(
         &app,
         signer,
@@ -11352,16 +10763,10 @@ pub(crate) async fn handle_fhe_job_run(
             service_name,
             binding_name,
             job: request.payload.job,
-            policy: request.payload.policy,
-            param_set: request.payload.param_set,
-            evaluation_keys: request.payload.evaluation_keys,
-            evaluation_key_refresh_transcript: request.payload.evaluation_key_refresh_transcript,
+            policy_reference: request.payload.policy_reference,
             public_key_proof: request.payload.public_key_proof,
             bootstrap_key_zero_refresh_proof: request.payload.bootstrap_key_zero_refresh_proof,
-            full_bootstrap_material_proof: request.payload.full_bootstrap_material_proof,
-            full_bootstrap_circuit_artifacts: request.payload.full_bootstrap_circuit_artifacts,
             full_bootstrap_execution_proofs: request.payload.full_bootstrap_execution_proofs,
-            governance_tx_hash: request.payload.governance_tx_hash,
             provenance: request.provenance,
         }),
         "/v1/soracloud/fhe/job/run",
@@ -11372,7 +10777,6 @@ pub(crate) async fn handle_fhe_job_run(
                 &service_label,
                 &binding_label,
                 &job,
-                governance_tx_hash,
             )
         },
     )
@@ -13907,15 +13311,14 @@ mod tests {
         name::Name,
         permission::Permission,
         prelude::Register,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         sns::{NameControllerV1, NameRecordV1},
         soracloud::{
             AgentApartmentManifestV1, CiphertextQueryMetadataLevelV1, CiphertextQuerySpecV1,
-            DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobSpecV1,
-            FheParamSetV1, SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
-            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-            SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-            SORA_HF_SOURCE_RECORD_VERSION_V1, SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
+            SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+            SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_HF_SOURCE_RECORD_VERSION_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1, SecretEnvelopeEncryptionV1,
             SecretEnvelopeV1, SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1,
@@ -13929,13 +13332,11 @@ mod tests {
             SoraServiceManifestV1, SoraServiceSecretEntryV1, SoraServiceStateEntryV1,
             SoraStateEncryptionV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
             SoraUploadedModelPricingPolicyV1, SoraUploadedModelRuntimeFormatV1,
-            SoracloudFheFullBootstrapMaterialProofV1, SoracloudManifestError,
         },
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
             StorageClass,
         },
-        zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
@@ -13949,6 +13350,30 @@ mod tests {
     fn checked_test_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("test fixture key derivation should succeed")
+    }
+
+    #[test]
+    fn fhe_policy_lifecycle_actions_keep_distinct_control_plane_identity() {
+        for (source, expected, label) in [
+            (
+                SoraServiceLifecycleActionV1::FhePolicyRegister,
+                SoracloudAction::FhePolicyRegister,
+                "fhe_policy_register",
+            ),
+            (
+                SoraServiceLifecycleActionV1::FhePolicyRotate,
+                SoracloudAction::FhePolicyRotate,
+                "fhe_policy_rotate",
+            ),
+            (
+                SoraServiceLifecycleActionV1::FhePolicyRevoke,
+                SoracloudAction::FhePolicyRevoke,
+                "fhe_policy_revoke",
+            ),
+        ] {
+            assert_eq!(audit_action_to_control_plane_action(source), expected);
+            assert_eq!(soracloud_action_label(expected), label);
+        }
     }
 
     fn checked_test_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
@@ -14133,851 +13558,19 @@ mod tests {
         bundle
     }
 
-    fn fixture_fhe_param_set() -> FheParamSetV1 {
-        load_json(&workspace_fixture(
-            "fixtures/soracloud/fhe_param_set_v1.json",
-        ))
-    }
-
-    fn fixture_fhe_execution_policy() -> FheExecutionPolicyV1 {
-        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        let transcript = fixture_bfv_evaluation_key_refresh_transcript();
-        fixture_fhe_execution_policy_for_evaluation_material(&evaluation_keys, &transcript)
-    }
-
-    fn fixture_fhe_execution_policy_for_evaluation_material(
-        evaluation_keys: &BfvEvaluationKeyBundle,
-        transcript: &BfvEvaluationKeyRefreshTranscriptV1,
-    ) -> FheExecutionPolicyV1 {
-        let params = ram_lfe_bfv_parameters_v1();
-        let mut policy: FheExecutionPolicyV1 = load_json(&workspace_fixture(
-            "fixtures/soracloud/fhe_execution_policy_v1.json",
-        ));
-        policy.evaluation_key_digest = evaluation_keys
-            .digest(&params)
-            .expect("fixture evaluation-key digest");
-        policy.evaluation_key_refresh_transcript_digest = transcript
-            .digest_for_evaluation_keys_with_mode(
-                &params,
-                evaluation_keys,
-                policy.refresh_transcript_mode,
-            )
-            .expect("fixture refresh transcript digest");
-        policy.public_key_proof_statement_digest = Some(
-            transcript
-                .public_key_proof_statement_digest_with_mode(
-                    &params,
-                    policy.refresh_transcript_mode,
-                )
-                .expect("fixture public-key proof statement digest"),
-        );
-        if let Some(statement) = transcript
-            .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
-                &params,
-                evaluation_keys,
-            )
-            .expect("fixture full-bootstrap material proof statement digest")
-        {
-            policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
-            policy.full_bootstrap_material_proof_statement_digest = Some(statement);
-        } else {
-            policy.bootstrap_key_zero_refresh_proof_statement_digest = transcript
-                .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
-                    &params,
-                    evaluation_keys,
-                    policy.refresh_transcript_mode,
-                )
-                .expect("fixture bootstrap proof statement digest")
-                .or(policy.bootstrap_key_zero_refresh_proof_statement_digest);
-            policy.full_bootstrap_material_proof_statement_digest = None;
-        }
-        policy
-    }
-
     fn fixture_fhe_job_spec() -> FheJobSpecV1 {
         load_json(&workspace_fixture(
             "fixtures/soracloud/fhe_job_spec_v1.json",
         ))
     }
 
-    fn fixture_full_bootstrap_job_spec() -> FheJobSpecV1 {
-        let mut job = fixture_fhe_job_spec();
-        job.operation = FheJobOperationV1::Bootstrap;
-        job.inputs.truncate(1);
-        job.bootstrap_count = 1;
-        job
-    }
-
-    fn fixture_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
-        let params = ram_lfe_bfv_parameters_v1();
-        let (_secret_key, public_key, relinearization_key) =
-            iroha_crypto::fhe_bfv::keygen_from_seed(
-                &params,
-                b"torii-soracloud-fhe-preflight-keygen",
-            )
-            .expect("fixture BFV keygen");
-        BfvEvaluationKeyBundle {
-            relinearization_key,
-            rotation_keys: vec![
-                iroha_crypto::fhe_bfv::rotation_key_from_seed(
-                    &params,
-                    &public_key,
-                    1,
-                    b"torii-soracloud-fhe-preflight-rotation",
-                )
-                .expect("fixture BFV rotation key"),
-            ],
-            galois_keys: Vec::new(),
-            bootstrap_key: Some(
-                iroha_crypto::fhe_bfv::bootstrap_key_with_max_refresh_rounds_from_seed(
-                    &params,
-                    &public_key,
-                    "torii-soracloud-fhe-preflight-bootstrap",
-                    2,
-                    b"torii-soracloud-fhe-preflight-bootstrap",
-                )
-                .expect("fixture BFV bootstrap key"),
-            ),
+    fn fixture_fhe_policy_reference() -> SoracloudFhePolicyReferenceV1 {
+        SoracloudFhePolicyReferenceV1 {
+            schema_version: iroha_data_model::soracloud::SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1,
+            policy_name: "health_policy".parse().expect("policy name"),
+            version: NonZeroU32::new(1).expect("non-zero policy version"),
+            material_digest: Hash::new(b"governed-fhe-material-v1"),
         }
-    }
-
-    fn fixture_bfv_evaluation_key_refresh_transcript() -> BfvEvaluationKeyRefreshTranscriptV1 {
-        let params = ram_lfe_bfv_parameters_v1();
-        let (_secret_key, public_key, _relinearization_key) =
-            iroha_crypto::fhe_bfv::keygen_from_seed(
-                &params,
-                b"torii-soracloud-fhe-preflight-keygen",
-            )
-            .expect("fixture BFV keygen");
-        BfvEvaluationKeyRefreshTranscriptV1 {
-            public_key,
-            rotation_transcripts: vec![
-                iroha_data_model::soracloud::BfvRotationRefreshTranscriptV1 {
-                    rotation_steps: 1,
-                    seed: b"torii-soracloud-fhe-preflight-rotation".to_vec(),
-                },
-            ],
-            bootstrap_transcript: Some(
-                iroha_data_model::soracloud::BfvBootstrapRefreshTranscriptV1 {
-                    key_id: "torii-soracloud-fhe-preflight-bootstrap".to_owned(),
-                    max_refresh_rounds: 2,
-                    seed: b"torii-soracloud-fhe-preflight-bootstrap".to_vec(),
-                },
-            ),
-        }
-    }
-
-    fn fixture_full_bootstrap_evaluation_key_refresh_transcript()
-    -> BfvEvaluationKeyRefreshTranscriptV1 {
-        let mut transcript = fixture_bfv_evaluation_key_refresh_transcript();
-        transcript.bootstrap_transcript = None;
-        transcript
-    }
-
-    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID: &str = "sora-zk-audit-wg-2026";
-
-    fn attach_full_bootstrap_release_audit_policy_fields(
-        policy: &mut FheExecutionPolicyV1,
-        evaluation_keys: &BfvEvaluationKeyBundle,
-        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
-    ) {
-        let reviewer_keypair = checked_test_keypair(0x91);
-        let params = ram_lfe_bfv_parameters_v1();
-        let material = evaluation_keys
-            .bootstrap_key
-            .as_ref()
-            .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
-            .expect("fixture evaluation keys carry full-bootstrap material");
-        let (generated_report_bytes, generated_archive_bytes) =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v1(
-                &params,
-                material,
-                artifacts,
-            )
-            .expect("fixture release audit generated report/archive bytes");
-        let generated_report_body = generated_report_bytes
-            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1)
-            .expect("generated report bytes carry canonical header");
-        let generated_archive_body = generated_archive_bytes
-            .strip_prefix(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1)
-            .expect("generated archive bytes carry canonical header");
-        let report_suffix = generated_report_body
-            .strip_prefix(b"machine-generated BFV full-bootstrap release audit report inventory v1")
-            .expect("generated report body carries deterministic inventory prefix");
-        let archive_suffix = generated_archive_body
-            .strip_prefix(
-                b"machine-generated BFV full-bootstrap release evidence archive inventory v1",
-            )
-            .expect("generated archive body carries deterministic inventory prefix");
-        let report_body = [
-            b"external-review-approved: independent BFV full-bootstrap release audit report v1"
-                .as_slice(),
-            report_suffix,
-        ]
-        .concat();
-        let archive_body = [
-            b"external-review-evidence-archive: independent BFV full-bootstrap prover verifier evidence v1"
-                .as_slice(),
-            archive_suffix,
-        ]
-        .concat();
-        let report_bytes =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(&report_body)
-                .expect("fixture external-review report bytes");
-        let archive_bytes =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(&archive_body)
-                .expect("fixture external-review archive bytes");
-        let (package, package_digest) =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
-            &params,
-            material,
-            artifacts,
-            &report_bytes,
-            &archive_bytes,
-            SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID,
-            reviewer_keypair.private_key(),
-        )
-            .expect("fixture external-review release audit package and digest");
-        policy.full_bootstrap_release_audit_package = Some(package);
-        policy.full_bootstrap_release_audit_package_digest = Some(package_digest);
-        policy.full_bootstrap_release_audit_trusted_reviewer_id =
-            Some(SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID.to_string());
-        policy.full_bootstrap_release_audit_trusted_reviewer_public_key =
-            Some(reviewer_keypair.public_key().clone());
-    }
-
-    fn fixture_release_audited_full_bootstrap_policy(
-        evaluation_keys: &BfvEvaluationKeyBundle,
-        transcript: &BfvEvaluationKeyRefreshTranscriptV1,
-        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
-    ) -> FheExecutionPolicyV1 {
-        let mut policy =
-            fixture_fhe_execution_policy_for_evaluation_material(evaluation_keys, transcript);
-        attach_full_bootstrap_release_audit_policy_fields(&mut policy, evaluation_keys, artifacts);
-        policy
-    }
-
-    fn sample_fhe_public_key_proof() -> SoracloudFhePublicKeyProofV1 {
-        sample_fhe_public_key_proof_with_statement(Hash::new(b"torii-public-key-proof-statement"))
-    }
-
-    fn sample_fhe_public_key_proof_for_policy(
-        policy: &FheExecutionPolicyV1,
-    ) -> SoracloudFhePublicKeyProofV1 {
-        sample_fhe_public_key_proof_with_statement(
-            policy
-                .public_key_proof_statement_digest
-                .expect("fixture policy binds public-key proof statement"),
-        )
-    }
-
-    fn attach_public_key_proof_for_policy(payload: &mut FheJobRunPayload) {
-        payload.public_key_proof = Some(sample_fhe_public_key_proof_for_policy(&payload.policy));
-    }
-
-    fn fixture_release_audited_full_bootstrap_payload(
-        governance_tx_hash: Hash,
-    ) -> FheJobRunPayload {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_release_audited_full_bootstrap_policy(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-            &artifacts,
-        );
-        let material_proof =
-            sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
-                &policy,
-                &evaluation_keys,
-            );
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: vec![sample_fhe_full_bootstrap_execution_proof()],
-            governance_tx_hash,
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        payload
-    }
-
-    fn sample_fhe_public_key_proof_with_statement(
-        statement_hash: Hash,
-    ) -> SoracloudFhePublicKeyProofV1 {
-        let vk_hash = [0x51; Hash::LENGTH];
-        let open_proof = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-            envelope_bytes: vec![0xA5; 32],
-        };
-        let envelope = OpenVerifyEnvelope::new(
-            BackendTag::Stark,
-            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
-            vk_hash,
-            SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof).expect("encode FHE public-key STARK wrapper"),
-        );
-        let proof_box = ProofBox::new(
-            "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope).expect("encode FHE public-key OpenVerifyEnvelope"),
-        );
-        let mut proof = ProofAttachment::new_ref(
-            "stark/fri/sha256-goldilocks".into(),
-            proof_box,
-            VerifyingKeyId::new(
-                "stark/fri/sha256-goldilocks",
-                SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
-            ),
-        );
-        proof.vk_commitment = Some(vk_hash);
-        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
-        SoracloudFhePublicKeyProofV1 {
-            schema_version: SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1,
-            statement_hash,
-            proof,
-        }
-    }
-
-    fn sample_fhe_bootstrap_key_proof() -> SoracloudFheBootstrapKeyProofV1 {
-        sample_fhe_bootstrap_key_proof_with_statement(Hash::new(
-            b"torii-bootstrap-key-proof-statement",
-        ))
-    }
-
-    fn sample_fhe_bootstrap_key_proof_with_statement(
-        statement_hash: Hash,
-    ) -> SoracloudFheBootstrapKeyProofV1 {
-        let vk_hash = [0x52; Hash::LENGTH];
-        let open_proof = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-            envelope_bytes: vec![0xB5; 32],
-        };
-        let envelope = OpenVerifyEnvelope::new(
-            BackendTag::Stark,
-            iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
-            vk_hash,
-            iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-                .to_vec(),
-            norito::to_bytes(&open_proof).expect("encode FHE bootstrap-key STARK wrapper"),
-        );
-        let proof_box = ProofBox::new(
-            "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope).expect("encode FHE bootstrap-key OpenVerifyEnvelope"),
-        );
-        let mut proof = ProofAttachment::new_ref(
-            "stark/fri/sha256-goldilocks".into(),
-            proof_box,
-            VerifyingKeyId::new(
-                "stark/fri/sha256-goldilocks",
-                iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
-            ),
-        );
-        proof.vk_commitment = Some(vk_hash);
-        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
-        SoracloudFheBootstrapKeyProofV1 {
-            schema_version:
-                iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
-            statement_hash,
-            proof,
-        }
-    }
-
-    fn sample_fhe_full_bootstrap_material_proof() -> SoracloudFheFullBootstrapMaterialProofV1 {
-        sample_fhe_full_bootstrap_material_proof_with_statement(Hash::new(
-            b"torii-full-bootstrap-material-proof-statement",
-        ))
-    }
-
-    fn sample_fhe_full_bootstrap_material_proof_with_statement(
-        statement_hash: Hash,
-    ) -> SoracloudFheFullBootstrapMaterialProofV1 {
-        sample_fhe_full_bootstrap_material_proof_with_statement_and_vk_commitment(
-            statement_hash,
-            [0x62; Hash::LENGTH],
-        )
-    }
-
-    fn sample_fhe_full_bootstrap_material_proof_with_statement_and_vk_commitment(
-        statement_hash: Hash,
-        vk_hash: [u8; Hash::LENGTH],
-    ) -> SoracloudFheFullBootstrapMaterialProofV1 {
-        let open_proof = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-            envelope_bytes: vec![0xC5; 32],
-        };
-        let envelope = OpenVerifyEnvelope::new(
-            BackendTag::Stark,
-            iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-            vk_hash,
-            iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-                .to_vec(),
-            norito::to_bytes(&open_proof)
-                .expect("encode FHE full-bootstrap material STARK wrapper"),
-        );
-        let proof_box = ProofBox::new(
-            "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope)
-                .expect("encode FHE full-bootstrap material OpenVerifyEnvelope"),
-        );
-        let mut proof = ProofAttachment::new_ref(
-            "stark/fri/sha256-goldilocks".into(),
-            proof_box,
-            VerifyingKeyId::new(
-                "stark/fri/sha256-goldilocks",
-                iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-            ),
-        );
-        proof.vk_commitment = Some(vk_hash);
-        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
-        SoracloudFheFullBootstrapMaterialProofV1 {
-            schema_version:
-                iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-            statement_hash,
-            proof,
-        }
-    }
-
-    fn sample_fhe_full_bootstrap_material_proof_for_policy(
-        policy: &FheExecutionPolicyV1,
-    ) -> SoracloudFheFullBootstrapMaterialProofV1 {
-        sample_fhe_full_bootstrap_material_proof_with_statement(
-            policy
-                .full_bootstrap_material_proof_statement_digest
-                .expect("fixture policy binds full-bootstrap material proof statement"),
-        )
-    }
-
-    fn sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
-        policy: &FheExecutionPolicyV1,
-        evaluation_keys: &BfvEvaluationKeyBundle,
-    ) -> SoracloudFheFullBootstrapMaterialProofV1 {
-        let statement_hash = policy
-            .full_bootstrap_material_proof_statement_digest
-            .expect("fixture policy binds full-bootstrap material proof statement");
-        let material = evaluation_keys
-            .bootstrap_key
-            .as_ref()
-            .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
-            .expect("fixture evaluation keys carry full-bootstrap material");
-        sample_fhe_full_bootstrap_material_proof_with_statement_and_vk_commitment(
-            statement_hash,
-            <[u8; Hash::LENGTH]>::from(material.verifier_key_material_commitment),
-        )
-    }
-
-    fn sample_fhe_full_bootstrap_execution_proof() -> SoracloudFheFullBootstrapExecutionProofV1 {
-        sample_fhe_full_bootstrap_execution_proof_with_statement(Hash::new(
-            b"torii-full-bootstrap-execution-proof-statement",
-        ))
-    }
-
-    fn sample_fhe_full_bootstrap_execution_proof_with_statement(
-        statement_hash: Hash,
-    ) -> SoracloudFheFullBootstrapExecutionProofV1 {
-        let vk_hash = [0x63; Hash::LENGTH];
-        let open_proof = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-            envelope_bytes: vec![0xD5; 32],
-        };
-        let envelope = OpenVerifyEnvelope::new(
-            BackendTag::Stark,
-            iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-            vk_hash,
-            iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-                .to_vec(),
-            norito::to_bytes(&open_proof)
-                .expect("encode FHE full-bootstrap execution STARK wrapper"),
-        );
-        let proof_box = ProofBox::new(
-            "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope)
-                .expect("encode FHE full-bootstrap execution OpenVerifyEnvelope"),
-        );
-        let mut proof = ProofAttachment::new_ref(
-            "stark/fri/sha256-goldilocks".into(),
-            proof_box,
-            VerifyingKeyId::new(
-                "stark/fri/sha256-goldilocks",
-                iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-            ),
-        );
-        proof.vk_commitment = Some(vk_hash);
-        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
-        SoracloudFheFullBootstrapExecutionProofV1 {
-            schema_version:
-                iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
-            statement_hash,
-            proof,
-        }
-    }
-
-    fn open_verify_envelope_with_native_envelope_bytes(
-        proof: &ProofAttachment,
-        native_envelope_bytes: &[u8],
-    ) -> OpenVerifyEnvelope {
-        let mut envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&proof.proof.bytes)
-            .expect("decode sample OpenVerifyEnvelope");
-        let mut open_proof =
-            norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-                .expect("decode sample STARK public-input wrapper");
-        open_proof.envelope_bytes = native_envelope_bytes.to_vec();
-        envelope.proof_bytes =
-            norito::to_bytes(&open_proof).expect("encode mutated STARK public-input wrapper");
-        envelope
-    }
-
-    fn replace_open_verify_envelope(proof: &mut ProofAttachment, envelope: &OpenVerifyEnvelope) {
-        proof.proof.bytes = norito::to_bytes(envelope).expect("encode mutated OpenVerifyEnvelope");
-        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
-    }
-
-    fn replace_fhe_full_bootstrap_execution_open_verify_envelope(
-        proof: &mut SoracloudFheFullBootstrapExecutionProofV1,
-        envelope: &OpenVerifyEnvelope,
-    ) {
-        replace_open_verify_envelope(&mut proof.proof, envelope);
-    }
-
-    fn sample_full_bootstrap_circuit_artifacts() -> BfvFullBootstrapCircuitArtifactBundleV1 {
-        BfvFullBootstrapCircuitArtifactBundleV1 {
-            coefficient_to_slot_key: b"soracloud-full-bootstrap-coeff-to-slot".to_vec(),
-            slot_to_coefficient_key: b"soracloud-full-bootstrap-slot-to-coeff".to_vec(),
-            blind_rotation_key: b"soracloud-full-bootstrap-blind-rotation".to_vec(),
-            sample_extraction_key: b"soracloud-full-bootstrap-sample-extraction".to_vec(),
-            accumulator: b"soracloud-full-bootstrap-accumulator".to_vec(),
-            proof_public_input_schema: b"soracloud-full-bootstrap-proof-schema".to_vec(),
-            arithmetic_air_constraint_system: b"soracloud-full-bootstrap-arithmetic-air".to_vec(),
-            prover_key: b"soracloud-full-bootstrap-prover-key".to_vec(),
-            verifier_key: b"soracloud-full-bootstrap-verifier-key".to_vec(),
-        }
-    }
-
-    fn valid_full_bootstrap_linear_transform_artifact_payload(
-        params: &BfvParameters,
-        role: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1,
-    ) -> Vec<u8> {
-        let transform = iroha_crypto::fhe_bfv::BfvFullBootstrapLinearTransformV1 {
-            input_slot_count: params.polynomial_degree,
-            output_slot_count: params.polynomial_degree,
-            diagonals: vec![
-                iroha_crypto::fhe_bfv::BfvFullBootstrapLinearTransformDiagonalV1 {
-                    rotation_steps: 0,
-                    plaintext: iroha_crypto::fhe_bfv::encode_packed_plaintext_slots(
-                        params,
-                        &vec![1; usize::from(params.polynomial_degree)],
-                    )
-                    .expect("encode identity packed-slot mask"),
-                },
-            ],
-        };
-        iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_linear_transform_artifact_v1(
-            params, 1, role, &transform,
-        )
-        .expect("encode valid full-bootstrap linear transform artifact")
-    }
-
-    fn valid_full_bootstrap_accumulator_artifact_payload(params: &BfvParameters) -> Vec<u8> {
-        let accumulator = iroha_crypto::fhe_bfv::BfvFullBootstrapAccumulatorV1 {
-            slot_count: params.polynomial_degree,
-            test_vector: iroha_crypto::fhe_bfv::encode_packed_plaintext_slots(
-                params,
-                &vec![1; usize::from(params.polynomial_degree)],
-            )
-            .expect("encode full-bootstrap accumulator test vector"),
-        };
-        iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_accumulator_artifact_v1(
-            params,
-            1,
-            &accumulator,
-        )
-        .expect("encode valid full-bootstrap accumulator artifact")
-    }
-
-    fn valid_full_bootstrap_sample_extraction_switch_key_artifact_payload(
-        params: &BfvParameters,
-        secret_key: &iroha_crypto::fhe_bfv::BfvSecretKey,
-    ) -> Vec<u8> {
-        let sample_extraction = iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionV1 {
-            source_slot_count: params.polynomial_degree,
-            source_ciphertext_component_count: 2,
-            extracted_coefficient_index: 0,
-            output_ciphertext_component_count: 2,
-        };
-        let switch_key =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
-                params,
-                secret_key,
-                sample_extraction,
-                b"torii-full-bootstrap-valid-sample-switch-artifact",
-            )
-            .expect("build valid full-bootstrap sample switch key");
-        iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
-            params,
-            1,
-            &switch_key,
-        )
-        .expect("encode valid full-bootstrap sample switch-key artifact")
-    }
-
-    fn valid_full_bootstrap_blind_rotation_artifact_payload(
-        params: &BfvParameters,
-        accumulator_digest: Hash,
-    ) -> Vec<u8> {
-        let blind_rotation =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
-                params,
-                accumulator_digest,
-                1,
-            )
-            .expect("build valid full-bootstrap blind-rotation key");
-        iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
-            params,
-            1,
-            &blind_rotation,
-        )
-        .expect("encode valid full-bootstrap blind-rotation artifact")
-    }
-
-    fn valid_full_bootstrap_proof_public_input_schema_artifact_payload(
-        params: &BfvParameters,
-    ) -> Vec<u8> {
-        iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
-            params,
-            1,
-            &iroha_crypto::fhe_bfv::bfv_full_bootstrap_proof_public_input_schema_v1(),
-        )
-        .expect("encode valid full-bootstrap proof public-input schema artifact")
-    }
-
-    fn valid_full_bootstrap_proof_key_artifact_payload(
-        params: &BfvParameters,
-        role: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1,
-        key: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1,
-    ) -> Vec<u8> {
-        iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_proof_key_artifact_v1(params, 1, role, key)
-            .expect("encode valid full-bootstrap proof key artifact")
-    }
-
-    fn valid_full_bootstrap_circuit_artifacts() -> BfvFullBootstrapCircuitArtifactBundleV1 {
-        let params = ram_lfe_bfv_parameters_v1();
-        let (secret_key, _public_key, _relinearization_key) =
-            iroha_crypto::fhe_bfv::keygen_from_seed(
-                &params,
-                b"torii-valid-full-bootstrap-artifact-keygen",
-            )
-            .expect("valid full-bootstrap artifact keygen");
-        let accumulator = valid_full_bootstrap_accumulator_artifact_payload(&params);
-        let accumulator_digest = Hash::new(&accumulator);
-        let proof_public_input_schema =
-            valid_full_bootstrap_proof_public_input_schema_artifact_payload(&params);
-        let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
-        let arithmetic_air_constraint_system =
-            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
-                &params,
-                1,
-                &iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
-            )
-            .expect("encode valid full-bootstrap arithmetic AIR constraint-system artifact");
-        let coefficient_to_slot_key = valid_full_bootstrap_linear_transform_artifact_payload(
-            &params,
-            iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
-        );
-        let slot_to_coefficient_key = valid_full_bootstrap_linear_transform_artifact_payload(
-            &params,
-            iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
-        );
-        let blind_rotation_key =
-            valid_full_bootstrap_blind_rotation_artifact_payload(&params, accumulator_digest);
-        let sample_extraction_key =
-            valid_full_bootstrap_sample_extraction_switch_key_artifact_payload(
-                &params,
-                &secret_key,
-            );
-        let evaluator_artifact_set_digest =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
-                &params,
-                1,
-                &coefficient_to_slot_key,
-                &slot_to_coefficient_key,
-                &blind_rotation_key,
-                &sample_extraction_key,
-                &accumulator,
-                &proof_public_input_schema,
-                &arithmetic_air_constraint_system,
-            )
-            .expect("derive valid full-bootstrap evaluator artifact-set digest");
-        let prover_key_material =
-            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
-                iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-            )
-            .expect("valid native full-bootstrap prover-key material");
-        let verifier_key_material =
-            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(
-                iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-            )
-            .expect("valid native full-bootstrap verifier-key material");
-        let (prover_key, verifier_key) =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
-                &params,
-                1,
-                proof_public_input_schema_digest,
-                evaluator_artifact_set_digest,
-                &prover_key_material,
-                &verifier_key_material,
-            )
-            .expect("valid full-bootstrap proof-key pair");
-        BfvFullBootstrapCircuitArtifactBundleV1 {
-            coefficient_to_slot_key,
-            slot_to_coefficient_key,
-            blind_rotation_key,
-            sample_extraction_key,
-            accumulator,
-            proof_public_input_schema,
-            arithmetic_air_constraint_system,
-            prover_key: valid_full_bootstrap_proof_key_artifact_payload(
-                &params,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                &prover_key,
-            ),
-            verifier_key: valid_full_bootstrap_proof_key_artifact_payload(
-                &params,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
-                &verifier_key,
-            ),
-        }
-    }
-
-    fn full_bootstrap_proof_key_artifact_with_stale_material_commitment(
-        params: &BfvParameters,
-        role: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1,
-        artifact: &[u8],
-        stale_commitment_domain: &[u8],
-    ) -> (Vec<u8>, Hash) {
-        let artifact_payload = norito::decode_from_bytes::<
-            iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1,
-        >(artifact)
-        .expect("decode valid full-bootstrap proof-key artifact envelope");
-        let mut key =
-            norito::decode_from_bytes::<iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1>(
-                &artifact_payload.payload,
-            )
-            .expect("decode valid full-bootstrap proof-key payload");
-        let proof_key_pair_commitment = key.proof_key_pair_commitment;
-        key.key_material_commitment = Hash::new(stale_commitment_domain);
-        (
-            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
-                params,
-                1,
-                role,
-                &norito::to_bytes(&key).expect("encode stale proof-key payload"),
-            )
-            .expect("encode stale proof-key artifact envelope"),
-            proof_key_pair_commitment,
-        )
-    }
-
-    fn sample_full_bootstrap_material_for_artifacts(
-        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
-    ) -> iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1 {
-        let params = ram_lfe_bfv_parameters_v1();
-        let prover_key_material_commitment =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
-                &params,
-                1,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                &artifacts.prover_key,
-            )
-            .unwrap_or_else(|_| {
-                Hash::new(b"torii-malformed-full-bootstrap-prover-key-material-commitment")
-            });
-        let verifier_key_material_commitment =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
-                &params,
-                1,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
-                &artifacts.verifier_key,
-            )
-            .unwrap_or_else(|_| {
-                Hash::new(b"torii-malformed-full-bootstrap-verifier-key-material-commitment")
-            });
-        let proof_key_pair_commitment =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_v1(
-                &params,
-                1,
-                &artifacts.prover_key,
-                &artifacts.verifier_key,
-            )
-            .unwrap_or_else(|_| {
-                Hash::new(b"torii-malformed-full-bootstrap-proof-key-pair-commitment")
-            });
-        iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1 {
-            circuit_id: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-            parameter_digest: iroha_crypto::fhe_bfv::registered_bfv_parameter_digest(&params)
-                .expect("registered BFV parameter digest"),
-            rns_modulus_chain_digest:
-                iroha_crypto::fhe_bfv::registered_bfv_rns_modulus_chain_digest(&params)
-                    .expect("registered BFV RNS digest"),
-            key_switch_decomposition_chain_digest:
-                iroha_crypto::fhe_bfv::registered_bfv_key_switch_decomposition_chain_digest(&params)
-                    .expect("registered BFV decomposition digest"),
-            centered_scale_round_source_chain_digest:
-                iroha_crypto::fhe_bfv::registered_bfv_centered_scale_round_source_chain_digest(
-                    &params,
-                )
-                .expect("registered BFV centered-scale source-chain digest"),
-            coefficient_to_slot_key_digest: Hash::new(&artifacts.coefficient_to_slot_key),
-            slot_to_coefficient_key_digest: Hash::new(&artifacts.slot_to_coefficient_key),
-            blind_rotation_key_digest: Hash::new(&artifacts.blind_rotation_key),
-            sample_extraction_key_digest: Hash::new(&artifacts.sample_extraction_key),
-            accumulator_digest: Hash::new(&artifacts.accumulator),
-            proof_public_input_schema_digest: Hash::new(&artifacts.proof_public_input_schema),
-            arithmetic_air_constraint_system_artifact_digest: Hash::new(
-                &artifacts.arithmetic_air_constraint_system,
-            ),
-            prover_key_digest: Hash::new(&artifacts.prover_key),
-            prover_key_material_commitment,
-            verifier_key_digest: Hash::new(&artifacts.verifier_key),
-            verifier_key_material_commitment,
-            proof_key_pair_commitment,
-            max_bootstrap_depth: 1,
-        }
-    }
-
-    fn fixture_full_bootstrap_evaluation_key_bundle(
-        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
-    ) -> BfvEvaluationKeyBundle {
-        let params = ram_lfe_bfv_parameters_v1();
-        let (_secret_key, public_key, _relinearization_key) =
-            iroha_crypto::fhe_bfv::keygen_from_seed(
-                &params,
-                b"torii-soracloud-fhe-preflight-keygen",
-            )
-            .expect("fixture BFV keygen");
-        let material = sample_full_bootstrap_material_for_artifacts(artifacts);
-        let mut evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        evaluation_keys.bootstrap_key = Some(
-            iroha_crypto::fhe_bfv::full_bootstrap_key_from_material_v1(
-                &params,
-                &public_key,
-                "torii-soracloud-fhe-preflight-full-bootstrap",
-                material,
-            )
-            .expect("fixture full-bootstrap key"),
-        );
-        evaluation_keys
     }
 
     fn fixture_decryption_authority_policy() -> DecryptionAuthorityPolicyV1 {
@@ -15626,6 +14219,7 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: None,
                     lease_volume_states: Vec::new(),
                 },
@@ -15695,6 +14289,7 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
                         schema_version:
                             iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
@@ -15829,6 +14424,7 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: if bundle.service.execution_plane
                             == iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
                         {
@@ -15938,6 +14534,7 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
                         schema_version:
                             iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
@@ -16003,6 +14600,7 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: None,
                     lease_volume_states: Vec::new(),
                 },
@@ -16096,6 +14694,7 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: None,
                     lease_volume_states: Vec::new(),
                 },
@@ -16170,6 +14769,7 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: None,
                         lease_volume_states: Vec::new(),
                     },
@@ -16297,6 +14897,7 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: None,
                         lease_volume_states: Vec::new(),
                     },
@@ -16443,6 +15044,7 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: None,
                         lease_volume_states: Vec::new(),
                     },
@@ -16545,6 +15147,7 @@ mod tests {
                         },
                     )]),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: None,
                     lease_volume_states: Vec::new(),
                 },
@@ -16668,6 +15271,7 @@ mod tests {
                         },
                     )]),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: None,
                     lease_volume_states: Vec::new(),
                 },
@@ -16760,6 +15364,7 @@ mod tests {
                             last_update_sequence: 9,
                         },
                     )]),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: None,
                     lease_volume_states: Vec::new(),
                 },
@@ -16834,6 +15439,7 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: None,
                         lease_volume_states: Vec::new(),
                     },
@@ -16937,6 +15543,7 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: None,
                         lease_volume_states: Vec::new(),
                     },
@@ -18345,2121 +16952,74 @@ mod tests {
     }
 
     #[test]
-    fn fhe_execution_policy_fixture_validates_bootstrap_digest_contract() {
-        let param_set = fixture_fhe_param_set();
-        let policy = fixture_fhe_execution_policy();
-
-        assert!(
-            policy.max_bootstrap_count > 0,
-            "shared FHE policy fixture should exercise bootstrap-capable admission"
-        );
-        assert!(
-            policy
-                .bootstrap_key_zero_refresh_proof_statement_digest
-                .is_some(),
-            "bootstrap-capable fixture must bind the bootstrap proof statement digest"
-        );
-        policy
-            .validate_for_param_set(&param_set)
-            .expect("shared FHE policy fixture should validate against its parameter set");
-
-        let mut missing_digest = policy.clone();
-        missing_digest.bootstrap_key_zero_refresh_proof_statement_digest = None;
-        let error = missing_digest
-            .validate_for_param_set(&param_set)
-            .expect_err(
-                "bootstrap-capable fixture must reject a defaulted missing proof statement digest",
-            );
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "bootstrap_key_zero_refresh_proof_statement_digest",
-                ..
-            }
-        ));
-
-        let mut stale_digest = policy.clone();
-        stale_digest.max_bootstrap_count = 0;
-        let error = stale_digest
-            .validate_for_param_set(&param_set)
-            .expect_err("zero-bootstrap fixture variants must reject stale proof statements");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "bootstrap_key_zero_refresh_proof_statement_digest",
-                ..
-            }
-        ));
-
-        stale_digest.bootstrap_key_zero_refresh_proof_statement_digest = None;
-        stale_digest
-            .validate_for_param_set(&param_set)
-            .expect("zero-bootstrap fixture variants may omit the proof statement digest");
-    }
-
-    #[test]
-    fn fhe_job_run_signature_payload_layout_is_canonical_tuple() {
+    fn fhe_job_run_signature_payload_binds_exact_governed_reference() {
         let job = fixture_fhe_job_spec();
-        let policy = fixture_fhe_execution_policy();
-        let param_set = fixture_fhe_param_set();
-        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let governance_tx_hash = Hash::new(b"governance");
+        let policy_reference = fixture_fhe_policy_reference();
         let payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            policy_reference: policy_reference.clone(),
             public_key_proof: None,
             bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
             full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: governance_tx_hash.clone(),
         };
+
         let encoded =
             encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
         let expected = encode_fhe_job_run_provenance_payload(
             payload.service_name.as_str(),
             payload.binding_name.as_str(),
             job,
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            Option::<SoracloudFhePublicKeyProofV1>::None,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            governance_tx_hash,
+            policy_reference,
+            None,
+            None,
+            Vec::new(),
         )
         .expect("encode canonical payload");
         assert_eq!(encoded, expected);
     }
 
     #[test]
-    fn fhe_job_run_signature_payload_binds_public_key_proof_option() {
-        let job = fixture_fhe_job_spec();
-        let policy = fixture_fhe_execution_policy();
-        let param_set = fixture_fhe_param_set();
-        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let proof = sample_fhe_public_key_proof_for_policy(&policy);
-        let governance_tx_hash = Hash::new(b"governance-with-public-key-proof");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: Some(proof.clone()),
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: governance_tx_hash.clone(),
-        };
-        let encoded =
-            encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
-        let expected = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job.clone(),
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            Some(proof),
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            governance_tx_hash,
-        )
-        .expect("encode canonical payload");
-        assert_eq!(encoded, expected);
-
-        let stripped = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job,
-            payload.policy,
-            payload.param_set,
-            payload.evaluation_keys,
-            payload.evaluation_key_refresh_transcript,
-            Option::<SoracloudFhePublicKeyProofV1>::None,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            payload.governance_tx_hash,
-        )
-        .expect("encode stripped canonical payload");
-        assert_ne!(encoded, stripped);
-    }
-
-    #[test]
-    fn fhe_job_run_signature_payload_binds_bootstrap_key_proof_option() {
-        let job = fixture_fhe_job_spec();
-        let policy = fixture_fhe_execution_policy();
-        let param_set = fixture_fhe_param_set();
-        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let proof = sample_fhe_bootstrap_key_proof();
-        let governance_tx_hash = Hash::new(b"governance-with-bootstrap-proof");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: Some(proof.clone()),
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: governance_tx_hash.clone(),
-        };
-        let encoded =
-            encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
-        let expected = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job.clone(),
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            Option::<SoracloudFhePublicKeyProofV1>::None,
-            Some(proof),
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            governance_tx_hash,
-        )
-        .expect("encode canonical payload");
-        assert_eq!(encoded, expected);
-
-        let stripped = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job,
-            payload.policy,
-            payload.param_set,
-            payload.evaluation_keys,
-            payload.evaluation_key_refresh_transcript,
-            payload.public_key_proof,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            payload.governance_tx_hash,
-        )
-        .expect("encode stripped canonical payload");
-        assert_ne!(encoded, stripped);
-    }
-
-    #[test]
-    fn fhe_job_run_signature_payload_binds_full_bootstrap_material_proof_option() {
-        let job = fixture_fhe_job_spec();
-        let policy = fixture_fhe_execution_policy();
-        let param_set = fixture_fhe_param_set();
-        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let proof = sample_fhe_full_bootstrap_material_proof();
-        let governance_tx_hash = Hash::new(b"governance-with-full-bootstrap-material-proof");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(proof.clone()),
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: governance_tx_hash.clone(),
-        };
-        let encoded =
-            encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
-        let expected = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job.clone(),
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            Option::<SoracloudFhePublicKeyProofV1>::None,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Some(proof),
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            governance_tx_hash,
-        )
-        .expect("encode canonical payload");
-        assert_eq!(encoded, expected);
-
-        let stripped = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job,
-            payload.policy,
-            payload.param_set,
-            payload.evaluation_keys,
-            payload.evaluation_key_refresh_transcript,
-            payload.public_key_proof,
-            payload.bootstrap_key_zero_refresh_proof,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            payload.governance_tx_hash,
-        )
-        .expect("encode stripped canonical payload");
-        assert_ne!(encoded, stripped);
-    }
-
-    #[test]
-    fn fhe_job_run_signature_payload_binds_full_bootstrap_artifact_option() {
-        let job = fixture_fhe_job_spec();
-        let policy = fixture_fhe_execution_policy();
-        let param_set = fixture_fhe_param_set();
-        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let governance_tx_hash = Hash::new(b"governance-with-full-bootstrap-artifacts");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: Some(artifacts.clone()),
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: governance_tx_hash.clone(),
-        };
-        let encoded =
-            encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
-        let expected = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job.clone(),
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            Option::<SoracloudFhePublicKeyProofV1>::None,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Some(artifacts),
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            governance_tx_hash,
-        )
-        .expect("encode canonical payload");
-        assert_eq!(encoded, expected);
-
-        let stripped = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job,
-            payload.policy,
-            payload.param_set,
-            payload.evaluation_keys,
-            payload.evaluation_key_refresh_transcript,
-            payload.public_key_proof,
-            payload.bootstrap_key_zero_refresh_proof,
-            payload.full_bootstrap_material_proof,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            payload.governance_tx_hash,
-        )
-        .expect("encode stripped canonical payload");
-        assert_ne!(encoded, stripped);
-    }
-
-    #[test]
-    fn fhe_job_run_signature_payload_binds_full_bootstrap_execution_proof_vector() {
-        let job = fixture_fhe_job_spec();
-        let policy = fixture_fhe_execution_policy();
-        let param_set = fixture_fhe_param_set();
-        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let first_proof = sample_fhe_full_bootstrap_execution_proof();
-        let second_proof = sample_fhe_full_bootstrap_execution_proof_with_statement(Hash::new(
-            b"torii-full-bootstrap-execution-proof-statement-2",
-        ));
-        let governance_tx_hash = Hash::new(b"governance-with-full-bootstrap-execution-proof");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: job.clone(),
-            policy: policy.clone(),
-            param_set: param_set.clone(),
-            evaluation_keys: evaluation_keys.clone(),
-            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: vec![first_proof.clone(), second_proof.clone()],
-            governance_tx_hash: governance_tx_hash.clone(),
-        };
-        let encoded =
-            encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
-        let expected = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job.clone(),
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            Option::<SoracloudFhePublicKeyProofV1>::None,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            vec![first_proof.clone(), second_proof.clone()],
-            governance_tx_hash,
-        )
-        .expect("encode canonical payload");
-        assert_eq!(encoded, expected);
-
-        let stripped = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            job,
-            payload.policy,
-            payload.param_set,
-            payload.evaluation_keys,
-            payload.evaluation_key_refresh_transcript,
-            payload.public_key_proof,
-            payload.bootstrap_key_zero_refresh_proof,
-            payload.full_bootstrap_material_proof,
-            payload.full_bootstrap_circuit_artifacts,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
-            payload.governance_tx_hash,
-        )
-        .expect("encode stripped canonical payload");
-        assert_ne!(encoded, stripped);
-
-        let swapped = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            fixture_fhe_job_spec(),
-            fixture_fhe_execution_policy(),
-            fixture_fhe_param_set(),
-            fixture_bfv_evaluation_key_bundle(),
-            fixture_bfv_evaluation_key_refresh_transcript(),
-            Option::<SoracloudFhePublicKeyProofV1>::None,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            vec![second_proof.clone(), first_proof.clone()],
-            payload.governance_tx_hash.clone(),
-        )
-        .expect("encode swapped canonical payload");
-        assert_ne!(encoded, swapped);
-
-        let surplus = encode_fhe_job_run_provenance_payload(
-            payload.service_name.as_str(),
-            payload.binding_name.as_str(),
-            fixture_fhe_job_spec(),
-            fixture_fhe_execution_policy(),
-            fixture_fhe_param_set(),
-            fixture_bfv_evaluation_key_bundle(),
-            fixture_bfv_evaluation_key_refresh_transcript(),
-            Option::<SoracloudFhePublicKeyProofV1>::None,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            vec![first_proof, second_proof.clone(), second_proof],
-            payload.governance_tx_hash,
-        )
-        .expect("encode surplus canonical payload");
-        assert_ne!(encoded, surplus);
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_execution_public_input_shape_replay() {
-        let mut proof = sample_fhe_full_bootstrap_execution_proof();
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&proof.proof.proof.bytes)
-            .expect("decode sample OpenVerifyEnvelope");
-        let mut replay_envelope = envelope.clone();
-        let mut open_proof =
-            norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-                .expect("decode sample STARK public-input wrapper");
-        let statement = <[u8; Hash::LENGTH]>::from(proof.statement_hash);
-        open_proof.public_inputs = vec![vec![statement], vec![statement]];
-        replay_envelope.proof_bytes =
-            norito::to_bytes(&open_proof).expect("encode replay-shaped STARK wrapper");
-        replace_fhe_full_bootstrap_execution_open_verify_envelope(&mut proof, &replay_envelope);
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material_proof =
-            sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
-                &policy,
-                &evaluation_keys,
-            );
-
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: vec![proof],
-            governance_tx_hash: Hash::new(b"governance-with-replay-shaped-execution-proof"),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed replay-shaped payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("replay-shaped proof attachment must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_execution_proofs[0]"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    fn assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
-        payload: FheJobRunPayload,
-        expected_field: &str,
-    ) {
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed placeholder-native-envelope payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("placeholder native proof envelope must fail Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains(expected_field)
-                && err.message.contains("placeholder or non-production text"),
-            "unexpected error for {expected_field}: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_placeholder_native_envelope_bytes() {
-        let placeholder_native_envelope =
-            b"\x00\xff\x80pending native stark proof before production\x81\xfe\x00";
-
-        let mut public_key_payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
-            b"governance-with-placeholder-public-key-native-envelope",
-        ));
-        let public_key_proof = public_key_payload
-            .public_key_proof
-            .as_mut()
-            .expect("fixture carries public-key proof");
-        let public_key_envelope = open_verify_envelope_with_native_envelope_bytes(
-            &public_key_proof.proof,
-            placeholder_native_envelope,
-        );
-        replace_open_verify_envelope(&mut public_key_proof.proof, &public_key_envelope);
-        assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
-            public_key_payload,
-            "invalid public_key_proof",
-        );
-
-        let bootstrap_policy = fixture_fhe_execution_policy();
-        let bootstrap_statement = bootstrap_policy
-            .bootstrap_key_zero_refresh_proof_statement_digest
-            .expect("fixture policy binds bootstrap-key proof statement");
-        let mut bootstrap_key_proof =
-            sample_fhe_bootstrap_key_proof_with_statement(bootstrap_statement);
-        let bootstrap_key_envelope = open_verify_envelope_with_native_envelope_bytes(
-            &bootstrap_key_proof.proof,
-            placeholder_native_envelope,
-        );
-        replace_open_verify_envelope(&mut bootstrap_key_proof.proof, &bootstrap_key_envelope);
-        let mut bootstrap_payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy: bootstrap_policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: Some(bootstrap_key_proof),
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(
-                b"governance-with-placeholder-bootstrap-key-native-envelope",
-            ),
-        };
-        attach_public_key_proof_for_policy(&mut bootstrap_payload);
-        assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
-            bootstrap_payload,
-            "invalid bootstrap_key_zero_refresh_proof",
-        );
-
-        let mut material_payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
-            b"governance-with-placeholder-material-native-envelope",
-        ));
-        let material_proof = material_payload
-            .full_bootstrap_material_proof
-            .as_mut()
-            .expect("fixture carries full-bootstrap material proof");
-        let material_envelope = open_verify_envelope_with_native_envelope_bytes(
-            &material_proof.proof,
-            placeholder_native_envelope,
-        );
-        replace_open_verify_envelope(&mut material_proof.proof, &material_envelope);
-        assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
-            material_payload,
-            "invalid full_bootstrap_material_proof",
-        );
-
-        let mut execution_payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
-            b"governance-with-placeholder-execution-native-envelope",
-        ));
-        let execution_proof = execution_payload
-            .full_bootstrap_execution_proofs
-            .first_mut()
-            .expect("fixture carries full-bootstrap execution proof");
-        let execution_envelope = open_verify_envelope_with_native_envelope_bytes(
-            &execution_proof.proof,
-            placeholder_native_envelope,
-        );
-        replace_fhe_full_bootstrap_execution_open_verify_envelope(
-            execution_proof,
-            &execution_envelope,
-        );
-        assert_fhe_job_run_payload_rejects_placeholder_native_envelope(
-            execution_payload,
-            "invalid full_bootstrap_execution_proofs[0]",
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_param_set_drift_without_attachments() {
-        let mut param_set = fixture_fhe_param_set();
-        param_set.parameter_digest = Hash::new(b"drifted-signed-fhe-param-set-without-proofs");
+    fn fhe_job_run_signature_rejects_policy_reference_substitution() {
         let payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_fhe_job_spec(),
-            policy: fixture_fhe_execution_policy(),
-            param_set,
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
+            policy_reference: fixture_fhe_policy_reference(),
             public_key_proof: None,
             bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
             full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-param-set"),
         };
         let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed parameter-drift payload still has a valid provenance signature");
+        let mut request = signed_fhe_job_run_request(payload, &key_pair);
+        request.payload.policy_reference.material_digest =
+            Hash::new(b"different-governed-fhe-material");
 
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("parameter drift must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE parameter set")
-                && err
-                    .message
-                    .contains("does not match the registered BFV profile"),
-            "unexpected error: {err:?}"
-        );
+        let err = verify_fhe_job_run_signature(&request)
+            .expect_err("signed jobs must bind the exact governed material digest");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
-    fn fhe_job_run_proof_preflight_rejects_policy_param_set_drift_without_attachments() {
-        let mut policy = fixture_fhe_execution_policy();
-        policy.param_set = "drifted".parse().expect("valid parameter-set name");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-policy-param-set"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed policy-drift payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("policy parameter-set drift must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err.message.contains("policy references"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_job_policy_drift_without_attachments() {
-        let mut job = fixture_fhe_job_spec();
-        job.policy_name = "drifted".parse().expect("valid policy name");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job,
-            policy: fixture_fhe_execution_policy(),
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-job-policy"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed job-drift payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("job policy drift must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE job spec") && err.message.contains("job references"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_evaluation_key_digest_drift_without_attachments() {
-        let mut policy = fixture_fhe_execution_policy();
-        policy.evaluation_key_digest = Hash::new(b"drifted-signed-fhe-evaluation-key-digest");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-evaluation-key-digest"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed evaluation-key-drift payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("evaluation-key digest drift must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err.message.contains("evaluation-key digest"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_refresh_transcript_digest_drift_without_attachments() {
-        let mut policy = fixture_fhe_execution_policy();
-        policy.evaluation_key_refresh_transcript_digest =
-            Hash::new(b"drifted-signed-fhe-refresh-transcript-digest");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-refresh-transcript-digest"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request).expect(
-            "signed refresh-transcript-drift payload still has a valid provenance signature",
-        );
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("refresh transcript digest drift must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err
-                    .message
-                    .contains("evaluation-key refresh transcript digest"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_missing_public_key_statement_digest() {
-        let mut policy = fixture_fhe_execution_policy();
-        policy.public_key_proof_statement_digest = None;
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-missing-public-key-statement"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request).expect(
-            "signed missing-public-key-statement payload still has a valid provenance signature",
-        );
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("missing public-key statement digest must fail Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("public-key proof statement digest"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_public_key_statement_digest_drift() {
-        let mut policy = fixture_fhe_execution_policy();
-        policy.public_key_proof_statement_digest =
-            Some(Hash::new(b"drifted-public-key-proof-statement"));
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-public-key-statement"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request).expect(
-            "signed public-key-statement-drift payload still has a valid provenance signature",
-        );
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("public-key statement digest drift must fail Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("public-key proof statement digest does not match"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_public_key_proof_statement_mismatch() {
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy: fixture_fhe_execution_policy(),
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: Some(sample_fhe_public_key_proof()),
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-wrong-public-key-proof"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed wrong-public-key-proof payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("public-key proof statement mismatch must fail Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid public_key_proof")
-                && err.message.contains("statement hash mismatch"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_missing_required_public_key_proof() {
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy: fixture_fhe_execution_policy(),
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-without-public-key-proof"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed missing-public-key-proof payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("missing public-key proof must fail Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid public_key_proof")
-                && err.message.contains("requires public-key proof"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_bootstrap_statement_digest_drift_without_proof() {
-        let mut policy = fixture_fhe_execution_policy();
-        policy.bootstrap_key_zero_refresh_proof_statement_digest =
-            Some(Hash::new(b"drifted-bootstrap-statement-digest"));
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-bootstrap-statement"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed bootstrap-statement-drift payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("bootstrap statement drift must fail before missing-proof checks");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err
-                    .message
-                    .contains("bootstrap-key proof statement digest does not match"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_full_bootstrap_statement_digest_drift_without_proof() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let mut policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        policy.full_bootstrap_material_proof_statement_digest =
-            Some(Hash::new(b"drifted-full-bootstrap-statement-digest"));
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-full-bootstrap-statement"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed full-bootstrap-statement-drift payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("full-bootstrap statement drift must fail before missing-proof checks");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err
-                    .message
-                    .contains("full-bootstrap material proof statement digest does not match"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_full_bootstrap_multi_count_before_missing_proofs() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let mut policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        policy.max_bootstrap_count = 2;
-        let mut job = fixture_full_bootstrap_job_spec();
-        job.bootstrap_count = 2;
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job,
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-full-bootstrap-multi-count"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed full-bootstrap multi-count payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("full-bootstrap multi-count must fail before missing-proof checks");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE job spec")
-                && err.message.contains("bootstrap_count exactly 1"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_full_bootstrap_policy_with_zero_refresh_statement() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let mut policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        policy.full_bootstrap_material_proof_statement_digest = None;
-        policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(Hash::new(
-            b"stale-zero-refresh-statement-for-full-bootstrap",
-        ));
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-full-bootstrap-zero-refresh-statement"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed full-bootstrap zero-refresh policy still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("full-bootstrap keys must not accept zero-refresh statement policies");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err
-                    .message
-                    .contains("must bind full-bootstrap material proof statement digest"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_full_bootstrap_statement_without_full_key_material() {
-        let mut policy = fixture_fhe_execution_policy();
-        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
-        policy.full_bootstrap_material_proof_statement_digest =
-            Some(Hash::new(b"full-bootstrap-statement-with-refresh-only-key"));
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(
-                b"governance-with-full-bootstrap-statement-refresh-only-key",
-            ),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed refresh-only full-bootstrap policy still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("full-bootstrap statement requires full-bootstrap key material");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err.message.contains("requires full-bootstrap key material"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_missing_required_bootstrap_key_proof() {
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy: fixture_fhe_execution_policy(),
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-missing-bootstrap-key-proof"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request).expect(
-            "signed missing-bootstrap-proof payload still has a valid provenance signature",
-        );
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("policy-required bootstrap-key proof must fail when omitted");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid bootstrap_key_zero_refresh_proof")
-                && err.message.contains("requires bootstrap-key proof"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_bootstrap_key_proof_statement_mismatch() {
-        let policy = fixture_fhe_execution_policy();
-        let proof = sample_fhe_bootstrap_key_proof_with_statement(Hash::new(
-            b"wrong-bootstrap-key-proof-statement",
-        ));
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: Some(proof),
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-bootstrap-key-proof-statement-drift"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed bootstrap-proof-drift payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("bootstrap-key proof statement drift must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("bootstrap_key_zero_refresh_proof")
-                && err.message.contains("statement hash mismatch"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_missing_required_full_bootstrap_material_proof() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-missing-full-bootstrap-material-proof"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed missing-material-proof payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("policy-required full-bootstrap material proof must fail when omitted");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_material_proof")
-                && err
-                    .message
-                    .contains("requires full-bootstrap material proof"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_full_bootstrap_material_proof_statement_mismatch() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let proof = sample_fhe_full_bootstrap_material_proof_with_statement(Hash::new(
-            b"wrong-full-bootstrap-material-proof-statement",
-        ));
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(proof),
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(
-                b"governance-with-full-bootstrap-material-proof-statement-drift",
-            ),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed material-proof-drift payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload).expect_err(
-            "full-bootstrap material proof statement drift must fail local Torii preflight",
-        );
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("full_bootstrap_material_proof")
-                && err.message.contains("statement hash mismatch"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_material_proof_without_full_bootstrap_context() {
-        let proof = sample_fhe_full_bootstrap_material_proof();
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy: fixture_fhe_execution_policy(),
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(proof),
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-out-of-scope-material-proof"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed out-of-scope material-proof payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("out-of-scope full-bootstrap material proof must fail preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_material_proof"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_execution_proofs_without_full_bootstrap_context() {
-        let proof = sample_fhe_full_bootstrap_execution_proof();
+    fn fhe_job_run_preflight_validates_reference_and_attachment_syntax_only() {
         let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_fhe_job_spec(),
-            policy: fixture_fhe_execution_policy(),
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
+            policy_reference: fixture_fhe_policy_reference(),
             public_key_proof: None,
             bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: vec![proof],
-            governance_tx_hash: Hash::new(b"governance-with-out-of-scope-execution-proof"),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed out-of-scope execution-proof payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("out-of-scope full-bootstrap execution proof must fail preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_execution_proofs"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_artifacts_without_full_bootstrap_context() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_fhe_job_spec(),
-            policy: fixture_fhe_execution_policy(),
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
-            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: Some(artifacts),
             full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-out-of-scope-artifacts"),
         };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed out-of-scope artifact payload still has a valid signature");
+        validate_fhe_job_run_proof_attachments(&payload)
+            .expect("state-bound execution material is resolved by the instruction executor");
 
+        payload.policy_reference.schema_version = 0;
         let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("out-of-scope full-bootstrap artifacts must fail preflight");
+            .expect_err("unsupported governed reference versions must fail at Torii");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_circuit_artifacts")
-                && err
-                    .message
-                    .contains("only accepted for full-bootstrap operations"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_execution_proofs_without_artifacts() {
-        let proof = sample_fhe_full_bootstrap_execution_proof();
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material_proof =
-            sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
-                &policy,
-                &evaluation_keys,
-            );
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: vec![proof],
-            governance_tx_hash: Hash::new(b"governance-with-execution-proof-without-artifacts"),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed missing-artifact execution-proof payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("full-bootstrap execution proofs without artifacts must fail preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("requires full_bootstrap_circuit_artifacts"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_missing_artifacts_for_full_bootstrap_job() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material_proof =
-            sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
-                &policy,
-                &evaluation_keys,
-            );
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-missing-full-bootstrap-artifacts"),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed missing-artifacts payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("full-bootstrap jobs must carry signed circuit artifacts");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_circuit_artifacts")
-                && err
-                    .message
-                    .contains("requires full-bootstrap circuit artifacts"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_empty_execution_proofs_for_full_bootstrap_job() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_release_audited_full_bootstrap_policy(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-            &artifacts,
-        );
-        let material_proof =
-            sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
-                &policy,
-                &evaluation_keys,
-            );
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-empty-full-bootstrap-execution-proofs"),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed empty-execution-proof payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("full-bootstrap jobs must carry execution proofs");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_execution_proofs")
-                && err
-                    .message
-                    .contains("requires at least one full-bootstrap execution proof"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_placeholder_release_audit_package_digest() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_release_audited_full_bootstrap_policy(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-            &artifacts,
-        );
-        let material_proof =
-            sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
-                &policy,
-                &evaluation_keys,
-            );
-
-        for (label, placeholder_digest) in [
-            ("direct", Hash::new(b"not production ready")),
-            (
-                "delayed",
-                Hash::new(b"governed material digest before placeholder: template"),
-            ),
-            ("mock", Hash::new(b"mock")),
-            (
-                "delayed-fixture",
-                Hash::new(b"full-bootstrap material before placeholder: fixture"),
-            ),
-        ] {
-            let mut payload = FheJobRunPayload {
-                service_name: "health_portal".to_owned(),
-                binding_name: "private_state".to_owned(),
-                job: fixture_full_bootstrap_job_spec(),
-                policy: policy.clone(),
-                param_set: fixture_fhe_param_set(),
-                evaluation_keys: evaluation_keys.clone(),
-                evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
-                public_key_proof: None,
-                bootstrap_key_zero_refresh_proof: None,
-                full_bootstrap_material_proof: Some(material_proof.clone()),
-                full_bootstrap_circuit_artifacts: Some(artifacts.clone()),
-                full_bootstrap_execution_proofs: vec![sample_fhe_full_bootstrap_execution_proof()],
-                governance_tx_hash: Hash::new(
-                    format!("governance-with-{label}-placeholder-release-audit-digest").as_bytes(),
-                ),
-            };
-            payload.policy.full_bootstrap_release_audit_package_digest = Some(placeholder_digest);
-            attach_public_key_proof_for_policy(&mut payload);
-            let key_pair = checked_test_keypair(0x90);
-            let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-            verify_fhe_job_run_signature(&request).expect(
-                "signed placeholder release-audit digest payload still has a valid signature",
-            );
-
-            let err = validate_fhe_job_run_proof_attachments(&payload)
-                .expect_err("placeholder release-audit package digest must fail preflight");
-            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-            assert!(
-                err.message.contains("invalid FHE execution policy")
-                    && err.message.contains("placeholder full-bootstrap digest"),
-                "unexpected error for {label} placeholder digest: {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_missing_release_audit_policy_fields() {
-        let cases: [(&str, fn(&mut FheExecutionPolicyV1), &str); 4] = [
-            (
-                "package",
-                |policy: &mut FheExecutionPolicyV1| {
-                    policy.full_bootstrap_release_audit_package = None;
-                },
-                "requires release audit package",
-            ),
-            (
-                "package digest",
-                |policy: &mut FheExecutionPolicyV1| {
-                    policy.full_bootstrap_release_audit_package_digest = None;
-                },
-                "requires release audit package digest",
-            ),
-            (
-                "trusted reviewer id",
-                |policy: &mut FheExecutionPolicyV1| {
-                    policy.full_bootstrap_release_audit_trusted_reviewer_id = None;
-                },
-                "requires trusted release audit reviewer id",
-            ),
-            (
-                "trusted reviewer public key",
-                |policy: &mut FheExecutionPolicyV1| {
-                    policy.full_bootstrap_release_audit_trusted_reviewer_public_key = None;
-                },
-                "requires trusted release audit reviewer public key",
-            ),
-        ];
-        for (label, mutate_policy, expected_message) in cases {
-            let mut payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
-                format!("governance-with-missing-release-audit-{label}").as_bytes(),
-            ));
-            mutate_policy(&mut payload.policy);
-            let key_pair = checked_test_keypair(0x90);
-            let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-            verify_fhe_job_run_signature(&request)
-                .expect("signed missing release-audit policy payload still has a valid signature");
-
-            let err = validate_fhe_job_run_proof_attachments(&payload)
-                .expect_err("missing release-audit policy field must fail Torii preflight");
-            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-            assert!(
-                err.message.contains("invalid FHE execution policy")
-                    && err.message.contains(expected_message),
-                "unexpected error for missing {label}: {err:?}"
-            );
-            assert!(
-                !err.message
-                    .contains("release audit package failed validation"),
-                "missing {label} should fail before package validation: {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_placeholder_release_audit_trusted_reviewer_id() {
-        let mut payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
-            b"governance-with-placeholder-release-audit-reviewer-id",
-        ));
-        payload
-            .policy
-            .full_bootstrap_release_audit_trusted_reviewer_id =
-            Some("not-production-ready-reviewer".to_owned());
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed placeholder reviewer-id payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("placeholder release-audit trusted reviewer id must fail preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err
-                    .message
-                    .contains("full_bootstrap_release_audit_trusted_reviewer_id")
-                && err.message.contains("placeholder"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            !err.message
-                .contains("release audit package failed validation"),
-            "reviewer id policy validation should fail before package matching: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_non_ed25519_release_audit_trusted_reviewer_key() {
-        let mut payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
-            b"governance-with-non-ed25519-release-audit-reviewer-key",
-        ));
-        payload
-            .policy
-            .full_bootstrap_release_audit_trusted_reviewer_public_key =
-            Some(checked_test_bls_keypair(0x92).public_key().clone());
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed non-Ed25519 reviewer-key payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("non-Ed25519 release-audit trusted reviewer key must fail preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE execution policy")
-                && err
-                    .message
-                    .contains("full_bootstrap_release_audit_trusted_reviewer_public_key")
-                && err.message.contains("Ed25519"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            !err.message
-                .contains("release audit package failed validation"),
-            "reviewer key policy validation should fail before package matching: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_execution_proof_count_above_slot_count() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let param_set = fixture_fhe_param_set();
-        let oversized_count =
-            usize::try_from(param_set.slot_count.get()).expect("fixture slot count fits usize") + 1;
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: vec![
-                sample_fhe_full_bootstrap_execution_proof();
-                oversized_count
-            ],
-            governance_tx_hash: Hash::new(b"governance-with-too-many-execution-proofs"),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed oversized execution-proof payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("execution proof count above slot count must fail preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("proof count exceeds parameter-set slot count"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            !err.message
-                .contains("invalid full_bootstrap_circuit_artifacts"),
-            "oversized proof count should fail before artifact validation: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_artifacts_with_param_set_drift_before_decode() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let mut param_set = fixture_fhe_param_set();
-        param_set.parameter_digest = Hash::new(b"drifted-signed-fhe-param-set");
-        let payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set,
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: None,
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-param-set-artifacts"),
-        };
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed parameter-drift payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("parameter drift must fail before artifact decoding");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message.contains("invalid FHE parameter set")
-                && err
-                    .message
-                    .contains("does not match the registered BFV profile"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            !err.message
-                .contains("invalid full_bootstrap_circuit_artifacts"),
-            "parameter drift should fail before artifact validation: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_malformed_full_bootstrap_artifacts_locally() {
-        let artifacts = sample_full_bootstrap_circuit_artifacts();
-        let valid_artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&valid_artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-malformed-full-bootstrap-artifacts"),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed malformed-artifact payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("malformed artifacts must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_circuit_artifacts"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_role_swapped_full_bootstrap_artifacts_locally() {
-        let params = ram_lfe_bfv_parameters_v1();
-        let mut artifacts = valid_full_bootstrap_circuit_artifacts();
-        artifacts.sample_extraction_key =
-            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
-                &params,
-                1,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
-                b"torii-role-swapped-full-bootstrap-sample-extraction",
-            )
-            .expect("encode role-swapped full-bootstrap sample extraction artifact");
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(b"governance-with-role-swapped-full-bootstrap-artifacts"),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed role-swapped-artifact payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("role-swapped artifacts must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_circuit_artifacts")
-                && err.message.contains("role"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_material_proof_verifier_commitment_drift_locally() {
-        let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material = evaluation_keys
-            .bootstrap_key
-            .as_ref()
-            .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
-            .expect("fixture carries full-bootstrap material");
-        assert_ne!(
-            material.verifier_key_material_commitment,
-            Hash::prehashed([0x62; Hash::LENGTH]),
-            "drift regression requires a forged verifier-key material commitment"
-        );
-        let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: vec![sample_fhe_full_bootstrap_execution_proof()],
-            governance_tx_hash: Hash::new(
-                b"governance-with-material-proof-verifier-commitment-drift",
-            ),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed verifier-commitment drift payload still has a valid signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("forged material-proof verifier commitment must fail local preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_material_proof")
-                && err.message.contains("verifier-key material commitment"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_stale_full_bootstrap_verifier_key_commitment_locally() {
-        let params = ram_lfe_bfv_parameters_v1();
-        let mut artifacts = valid_full_bootstrap_circuit_artifacts();
-        let (verifier_key, proof_key_pair_commitment) =
-            full_bootstrap_proof_key_artifact_with_stale_material_commitment(
-                &params,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
-                &artifacts.verifier_key,
-                b"stale-torii-full-bootstrap-verifier-key-material-commitment",
-            );
-        artifacts.verifier_key = verifier_key;
-        let mut evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        evaluation_keys
-            .bootstrap_key
-            .as_mut()
-            .expect("fixture carries bootstrap key")
-            .full_bootstrap_material
-            .as_mut()
-            .expect("full-bootstrap material")
-            .proof_key_pair_commitment = proof_key_pair_commitment;
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(
-                b"governance-with-stale-full-bootstrap-verifier-key-commitment",
-            ),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed stale-verifier-key payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("stale verifier-key commitment must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_circuit_artifacts")
-                && err.message.contains("key material commitment"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn fhe_job_run_proof_preflight_rejects_stale_full_bootstrap_prover_key_commitment_locally() {
-        let params = ram_lfe_bfv_parameters_v1();
-        let mut artifacts = valid_full_bootstrap_circuit_artifacts();
-        let (prover_key, proof_key_pair_commitment) =
-            full_bootstrap_proof_key_artifact_with_stale_material_commitment(
-                &params,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                &artifacts.prover_key,
-                b"stale-torii-full-bootstrap-prover-key-material-commitment",
-            );
-        artifacts.prover_key = prover_key;
-        let mut evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
-        evaluation_keys
-            .bootstrap_key
-            .as_mut()
-            .expect("fixture carries bootstrap key")
-            .full_bootstrap_material
-            .as_mut()
-            .expect("full-bootstrap material")
-            .proof_key_pair_commitment = proof_key_pair_commitment;
-        let evaluation_key_refresh_transcript =
-            fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
-            &evaluation_keys,
-            &evaluation_key_refresh_transcript,
-        );
-        let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let mut payload = FheJobRunPayload {
-            service_name: "health_portal".to_owned(),
-            binding_name: "private_state".to_owned(),
-            job: fixture_full_bootstrap_job_spec(),
-            policy,
-            param_set: fixture_fhe_param_set(),
-            evaluation_keys,
-            evaluation_key_refresh_transcript,
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_material_proof: Some(material_proof),
-            full_bootstrap_circuit_artifacts: Some(artifacts),
-            full_bootstrap_execution_proofs: Vec::new(),
-            governance_tx_hash: Hash::new(
-                b"governance-with-stale-full-bootstrap-prover-key-commitment",
-            ),
-        };
-        attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = checked_test_keypair(0x90);
-        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
-        verify_fhe_job_run_signature(&request)
-            .expect("signed stale-prover-key payload still has a valid provenance signature");
-
-        let err = validate_fhe_job_run_proof_attachments(&payload)
-            .expect_err("stale prover-key commitment must fail local Torii preflight");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.message
-                .contains("invalid full_bootstrap_circuit_artifacts")
-                && err.message.contains("key material commitment"),
-            "unexpected error: {err:?}"
-        );
+        assert!(err.message.contains("invalid policy_reference"));
     }
 
     #[test]
@@ -21132,6 +17692,7 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: None,
                         lease_volume_states: Vec::new(),
                     },
@@ -21331,6 +17892,7 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: None,
                         lease_volume_states: Vec::new(),
                     },
@@ -21565,6 +18127,7 @@ mod tests {
             secret_generation: 0,
             service_configs: BTreeMap::new(),
             service_secrets: BTreeMap::new(),
+            fhe_policy_records: BTreeMap::new(),
             service_lease: None,
             lease_volume_states: Vec::new(),
         };

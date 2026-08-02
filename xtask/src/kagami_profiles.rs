@@ -10,6 +10,7 @@ use std::{
 use blake2::{Blake2b512, digest::Digest};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
+    account::AccountId,
     asset::AssetDefinitionId,
     block::{consensus_v2::is_valid_committee_size, decode_framed_signed_block},
     isi::SetParameter,
@@ -65,12 +66,14 @@ struct PeerMaterial {
 struct StagedGenesis {
     manifest: RawGenesisTransaction,
     signed_wire: Vec<u8>,
+    expected_hash: String,
 }
 
 type AnyResult<T> = Result<T, Box<dyn Error>>;
 const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
 const PROFILE_GENESIS_CREATION_TIME_MS: u64 = 1_700_000_000_000;
+const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 const NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED: &str =
     "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>";
 
@@ -165,11 +168,11 @@ fn write_profile_bundle(
     output_root: &Path,
     nexus_xor_asset_definition_id: Option<&str>,
 ) -> AnyResult<()> {
-    let bundle_root = output_root.join(spec.slug);
-    if bundle_root.exists() {
-        fs::remove_dir_all(&bundle_root)?;
-    }
-    fs::create_dir_all(&bundle_root)?;
+    fs::create_dir_all(output_root)?;
+    let staging = tempfile::Builder::new()
+        .prefix(&format!(".{}-staging-", spec.slug))
+        .tempdir_in(output_root)?;
+    let bundle_root = staging.path().to_path_buf();
 
     let genesis_key =
         deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519)?;
@@ -185,21 +188,35 @@ fn write_profile_bundle(
     let genesis_path = bundle_root.join("genesis.json");
     write_json(&genesis_path, &patched_genesis)?;
 
-    let config_text = render_config(spec, &peers, genesis_key.public_key());
-    let config_path = bundle_root.join("config.toml");
-    fs::write(&config_path, &config_text)?;
-    for peer_index in 1..peers.len() {
-        fs::write(
-            bundle_root.join(peer_config_file_name(peer_index)),
-            render_peer_config(spec, &peers, peer_index, genesis_key.public_key()),
-        )?;
-    }
+    write_peer_configs(
+        spec,
+        &peers,
+        genesis_key.public_key(),
+        &bundle_root,
+        GENESIS_EXPECTED_HASH_PLACEHOLDER,
+    )?;
+    let config_path = bundle_root.join(peer_config_file_name(0));
     let staged_genesis =
         bind_staged_context(spec, kagami_bin, &genesis_path, &config_path, &genesis_key)?;
     write_json(&genesis_path, &staged_genesis.manifest)?;
     fs::write(
         bundle_root.join("genesis.signed.nrt"),
         staged_genesis.signed_wire,
+    )?;
+    fs::write(
+        bundle_root.join("genesis.public_key"),
+        format!("{}\n", genesis_key.public_key()),
+    )?;
+    fs::write(
+        bundle_root.join("genesis.expected_hash"),
+        format!("{}\n", staged_genesis.expected_hash),
+    )?;
+    write_peer_configs(
+        spec,
+        &peers,
+        genesis_key.public_key(),
+        &bundle_root,
+        &staged_genesis.expected_hash,
     )?;
 
     let vrf_seed_hex = if spec.requires_seed {
@@ -229,7 +246,56 @@ fn write_profile_bundle(
     );
     fs::write(bundle_root.join("README.md"), readme)?;
 
+    publish_profile_bundle(staging, &output_root.join(spec.slug))?;
     Ok(())
+}
+
+fn publish_profile_bundle(staging: tempfile::TempDir, destination: &Path) -> AnyResult<()> {
+    if !destination.exists() {
+        let staged_path = staging.keep();
+        fs::rename(&staged_path, destination)?;
+        return Ok(());
+    }
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("profile destination filename is not UTF-8")?;
+    let backup = destination.with_file_name(format!(".{name}.backup-{}", std::process::id()));
+    if backup.exists() {
+        return Err(format!(
+            "refusing to replace {} while recovery backup {} exists",
+            destination.display(),
+            backup.display()
+        )
+        .into());
+    }
+    fs::rename(destination, &backup)?;
+    let staged_path = staging.keep();
+    if let Err(publish_error) = fs::rename(&staged_path, destination) {
+        let restore = fs::rename(&backup, destination);
+        let _ = fs::remove_dir_all(&staged_path);
+        return match restore {
+            Ok(()) => Err(format!(
+                "failed to publish validated profile bundle {}: {publish_error}; restored previous bundle",
+                destination.display()
+            )
+            .into()),
+            Err(restore_error) => Err(format!(
+                "failed to publish validated profile bundle {}: {publish_error}; previous bundle remains at {} because restoration failed: {restore_error}",
+                destination.display(),
+                backup.display()
+            )
+            .into()),
+        };
+    }
+    fs::remove_dir_all(&backup).map_err(|err| {
+        format!(
+            "published {} but failed to remove recovery backup {}: {err}",
+            destination.display(),
+            backup.display()
+        )
+        .into()
+    })
 }
 
 fn generate_genesis(
@@ -315,6 +381,24 @@ fn bind_staged_context(
     config_path: &Path,
     genesis_key: &KeyPair,
 ) -> AnyResult<StagedGenesis> {
+    let workdir = genesis_path
+        .parent()
+        .ok_or_else(|| format!("{} genesis path has no parent", spec.slug))?;
+    if config_path.parent() != Some(workdir) {
+        return Err(format!(
+            "{} genesis and config paths must share one staging directory",
+            spec.slug
+        )
+        .into());
+    }
+    let genesis_file = genesis_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{} genesis filename is not UTF-8", spec.slug))?;
+    let config_file = config_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{} config filename is not UTF-8", spec.slug))?;
     let private_key_hex = hex::encode(genesis_key.private_key().to_bytes().1);
     let expected_public_key = genesis_key.public_key().to_string();
     let creation_time_ms = PROFILE_GENESIS_CREATION_TIME_MS.to_string();
@@ -322,7 +406,7 @@ fn bind_staged_context(
         .args([
             "genesis",
             "sign",
-            genesis_path.to_str().expect("genesis path utf-8"),
+            genesis_file,
             "--private-key",
             &private_key_hex,
             "--expected-public-key",
@@ -330,10 +414,11 @@ fn bind_staged_context(
             "--creation-time-ms",
             &creation_time_ms,
             "--config",
-            config_path.to_str().expect("config path utf-8"),
+            config_file,
             "--bound-manifest-out",
-            genesis_path.to_str().expect("genesis path utf-8"),
+            genesis_file,
         ])
+        .current_dir(workdir)
         .output()
         .map_err(|err| format!("failed to stage {} genesis: {err}", spec.slug))?;
     if !output.status.success() {
@@ -352,6 +437,46 @@ fn bind_staged_context(
     let signed_wire = output.stdout;
     let block = decode_framed_signed_block(&signed_wire)
         .map_err(|err| format!("failed to decode staged {} genesis: {err}", spec.slug))?;
+    let canonical_wire = block
+        .encode_wire()
+        .map_err(|err| format!("failed to re-encode staged {} genesis: {err}", spec.slug))?;
+    if canonical_wire != signed_wire {
+        return Err(format!(
+            "staged {} genesis is not canonical framed Norito",
+            spec.slug
+        )
+        .into());
+    }
+    {
+        let mut signatures = block.signatures();
+        let signature = signatures
+            .next()
+            .ok_or_else(|| format!("staged {} genesis has no block signature", spec.slug))?;
+        if signature.index() != 0 || signatures.next().is_some() {
+            return Err(format!(
+                "staged {} genesis must have exactly one block signature at index 0",
+                spec.slug
+            )
+            .into());
+        }
+        signature
+            .signature()
+            .verify_hash(genesis_key.public_key(), block.hash())
+            .map_err(|err| {
+                format!(
+                    "staged {} genesis block signature does not match its configured signer: {err}",
+                    spec.slug
+                )
+            })?;
+    }
+    for transaction in block.external_transactions() {
+        transaction.verify_signature().map_err(|err| {
+            format!(
+                "staged {} genesis contains an invalid transaction signature: {err}",
+                spec.slug
+            )
+        })?;
+    }
     let mut metadata = None;
     for transaction in block.external_transactions() {
         if let Executable::Instructions(batch) = transaction.instructions() {
@@ -360,17 +485,22 @@ fn bind_staged_context(
                     && let Parameter::Custom(custom) = set_parameter.inner()
                     && custom.id() == &consensus_metadata::handshake_meta_id()
                 {
-                    metadata = Some(
-                        custom
-                            .payload()
-                            .try_into_any::<ConsensusHandshakeMetadata>()
-                            .map_err(|err| {
-                                format!(
-                                    "failed to decode staged {} consensus metadata: {err}",
-                                    spec.slug
-                                )
-                            })?,
-                    );
+                    let decoded = custom
+                        .payload()
+                        .try_into_any::<ConsensusHandshakeMetadata>()
+                        .map_err(|err| {
+                            format!(
+                                "failed to decode staged {} consensus metadata: {err}",
+                                spec.slug
+                            )
+                        })?;
+                    if metadata.replace(decoded).is_some() {
+                        return Err(format!(
+                            "staged {} genesis contains duplicate consensus metadata",
+                            spec.slug
+                        )
+                        .into());
+                    }
                 }
             }
         }
@@ -396,8 +526,10 @@ fn bind_staged_context(
         .into());
     }
 
-    let bound_manifest = RawGenesisTransaction::from_path(genesis_path)
-        .map_err(|err| format!("failed to load bound {} genesis: {err}", spec.slug))?;
+    let bound_manifest_bytes = fs::read(genesis_path)
+        .map_err(|err| format!("failed to read bound {} genesis: {err}", spec.slug))?;
+    let bound_manifest: RawGenesisTransaction = json::from_slice(&bound_manifest_bytes)
+        .map_err(|err| format!("failed to parse bound {} genesis: {err}", spec.slug))?;
     if bound_manifest.consensus_fingerprint() != Some(metadata.consensus_fingerprint) {
         return Err(format!(
             "staged {} consensus fingerprint did not cover the bound Nexus/AMX context",
@@ -405,9 +537,62 @@ fn bind_staged_context(
         )
         .into());
     }
+    let expected_batches = bound_manifest
+        .clone()
+        .parse()
+        .map_err(|err| format!("failed to expand bound {} genesis: {err}", spec.slug))?;
+    let actual_transactions = block.external_transactions().collect::<Vec<_>>();
+    if expected_batches.len() != actual_transactions.len() {
+        return Err(format!(
+            "staged {} signed transaction count differs from its bound manifest",
+            spec.slug
+        )
+        .into());
+    }
+    let genesis_account = AccountId::new(genesis_key.public_key().clone());
+    for (index, (expected_batch, transaction)) in expected_batches
+        .iter()
+        .zip(&actual_transactions)
+        .enumerate()
+    {
+        if transaction.chain() != bound_manifest.chain_id()
+            || transaction.authority() != &genesis_account
+        {
+            return Err(format!(
+                "staged {} transaction {index} has the wrong chain or genesis authority",
+                spec.slug
+            )
+            .into());
+        }
+        let Executable::Instructions(actual_batch) = transaction.instructions() else {
+            return Err(format!(
+                "staged {} transaction {index} is not an instruction batch",
+                spec.slug
+            )
+            .into());
+        };
+        let expected = expected_batch
+            .iter()
+            .map(iroha_data_model::Encode::encode)
+            .collect::<Vec<_>>();
+        let actual = actual_batch
+            .iter()
+            .map(iroha_data_model::Encode::encode)
+            .collect::<Vec<_>>();
+        if expected != actual {
+            return Err(format!(
+                "staged {} transaction {index} differs from its bound manifest",
+                spec.slug
+            )
+            .into());
+        }
+    }
+    iroha_core::validate_genesis_block(&block, &genesis_account, bound_manifest.chain_id())
+        .map_err(|err| format!("staged {} genesis failed full validation: {err}", spec.slug))?;
     Ok(StagedGenesis {
         manifest: bound_manifest,
         signed_wire,
+        expected_hash: block.hash().to_string(),
     })
 }
 
@@ -417,18 +602,26 @@ fn run_verify(
     genesis_path: &Path,
     vrf_seed_hex: Option<&str>,
 ) -> AnyResult<String> {
+    let workdir = genesis_path
+        .parent()
+        .ok_or_else(|| format!("{} genesis path has no parent", spec.slug))?;
+    let genesis_file = genesis_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{} genesis filename is not UTF-8", spec.slug))?;
     let mut command = Command::new(kagami_bin);
     command.args([
         "verify",
         "--profile",
         spec.profile_flag,
         "--genesis",
-        genesis_path.to_str().expect("genesis path utf-8"),
+        genesis_file,
     ]);
     if let Some(seed) = vrf_seed_hex {
         command.args(["--vrf-seed-hex", seed]);
     }
     let output = command
+        .current_dir(workdir)
         .output()
         .map_err(|err| format!("failed to run kagami verify: {err}"))?;
     if !output.status.success() {
@@ -449,8 +642,9 @@ fn render_config(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
     genesis_public_key: &iroha_crypto::PublicKey,
+    genesis_expected_hash: &str,
 ) -> String {
-    render_peer_config(spec, peers, 0, genesis_public_key)
+    render_peer_config(spec, peers, 0, genesis_public_key, genesis_expected_hash)
 }
 
 fn render_peer_config(
@@ -458,7 +652,13 @@ fn render_peer_config(
     peers: &[PeerMaterial],
     peer_index: usize,
     genesis_public_key: &iroha_crypto::PublicKey,
+    genesis_expected_hash: &str,
 ) -> String {
+    let genesis_expected_hash = if genesis_expected_hash == GENESIS_EXPECTED_HASH_PLACEHOLDER {
+        genesis_expected_hash.to_owned()
+    } else {
+        norito::literal::format("hash", &genesis_expected_hash.to_ascii_uppercase())
+    };
     let node = peers
         .get(peer_index)
         .expect("peer config index must address signed topology");
@@ -649,7 +849,7 @@ lane_count = 3
 [genesis]
 public_key = "{genesis_pk}"
 file = "genesis.signed.nrt"
-manifest_json = "genesis.json"
+expected_hash = "{genesis_expected_hash}"
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
@@ -672,9 +872,38 @@ manifest_json = "genesis.json"
         taira_mcp_overrides = taira_mcp_overrides,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
+        genesis_expected_hash = genesis_expected_hash,
         stream_pub = node.streaming_public_key,
         stream_priv = node.streaming_private_key,
     )
+}
+
+fn write_peer_configs(
+    spec: &ProfileSpec,
+    peers: &[PeerMaterial],
+    genesis_public_key: &iroha_crypto::PublicKey,
+    bundle_root: &Path,
+    genesis_expected_hash: &str,
+) -> AnyResult<()> {
+    for peer_index in 0..peers.len() {
+        let rendered = if peer_index == 0 {
+            render_config(spec, peers, genesis_public_key, genesis_expected_hash)
+        } else {
+            render_peer_config(
+                spec,
+                peers,
+                peer_index,
+                genesis_public_key,
+                genesis_expected_hash,
+            )
+        };
+        fs::write(
+            bundle_root.join(peer_config_file_name(peer_index)),
+            &rendered,
+        )?;
+        fs::write(bundle_root.join(format!("peer{peer_index}.toml")), rendered)?;
+    }
+    Ok(())
 }
 
 fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
@@ -803,8 +1032,11 @@ fn render_readme(
 Files:
 - genesis.json — generated with `kagami genesis generate --profile {profile}`, patched with deterministic topology+PoPs, and rebound to the exact staged Nexus/AMX context through `kagami genesis sign`
 - genesis.signed.nrt — canonical signed genesis wire artifact consumed by every validator
+- genesis.public_key — canonical one-line verifier key for the signed genesis artifact
+- genesis.expected_hash — canonical one-line independently provisioned signed-header hash
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json`
-- config.toml and config-peer-*.toml — one unique validator config per signed topology member
+- config.toml and config-peer-*.toml — compatibility names for the generated validator configs
+- peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 {site_bindings_file}- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 
 Regenerate:
@@ -890,7 +1122,9 @@ fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
         if !path.is_file() {
             return Err(format!("kagami override {} is not a file", path.display()).into());
         }
-        return Ok(path.to_path_buf());
+        return path.canonicalize().map_err(|err| {
+            format!("canonicalize kagami override {}: {err}", path.display()).into()
+        });
     }
 
     let target_dir = cargo_target_dir();
@@ -898,14 +1132,26 @@ fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
         .join("release")
         .join(format!("kagami{}", std::env::consts::EXE_SUFFIX));
     if release_candidate.exists() {
-        return Ok(release_candidate);
+        return release_candidate.canonicalize().map_err(|err| {
+            format!(
+                "canonicalize release kagami binary {}: {err}",
+                release_candidate.display()
+            )
+            .into()
+        });
     }
 
     let debug_candidate = target_dir
         .join("debug")
         .join(format!("kagami{}", std::env::consts::EXE_SUFFIX));
     if debug_candidate.exists() {
-        return Ok(debug_candidate);
+        return debug_candidate.canonicalize().map_err(|err| {
+            format!(
+                "canonicalize debug kagami binary {}: {err}",
+                debug_candidate.display()
+            )
+            .into()
+        });
     }
 
     let status = Command::new("cargo")
@@ -919,7 +1165,13 @@ fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
         .join("release")
         .join(format!("kagami{}", std::env::consts::EXE_SUFFIX));
     if release_candidate.exists() {
-        Ok(release_candidate)
+        release_candidate.canonicalize().map_err(|err| {
+            format!(
+                "canonicalize built kagami binary {}: {err}",
+                release_candidate.display()
+            )
+            .into()
+        })
     } else {
         Err(format!(
             "expected kagami binary at {} after build",
@@ -1066,7 +1318,12 @@ mod tests {
         let peers = build_peers(&PROFILES[2]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("config-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
-        let rendered = render_config(&PROFILES[2], &peers, genesis_key.public_key());
+        let rendered = render_config(
+            &PROFILES[2],
+            &peers,
+            genesis_key.public_key(),
+            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        );
         assert!(rendered.contains(PROFILES[2].chain_id));
         assert!(rendered.contains("chain_discriminant = 753"));
         assert!(rendered.contains("viral_incentive_pool_account"));
@@ -1085,6 +1342,37 @@ mod tests {
     }
 
     #[test]
+    fn final_peer_configs_pin_the_exact_genesis_hash_and_prepared_names() {
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
+        let genesis_key = deterministic_keypair("prepared-config-genesis", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
+        let bundle = tempdir().expect("prepared config bundle");
+        let expected_hash = Hash::new(b"prepared profile genesis").to_string();
+        let expected_hash_literal =
+            norito::literal::format("hash", &expected_hash.to_ascii_uppercase());
+
+        write_peer_configs(
+            &PROFILES[0],
+            &peers,
+            genesis_key.public_key(),
+            bundle.path(),
+            &expected_hash,
+        )
+        .expect("write prepared validator configs");
+
+        for peer_index in 0..peers.len() {
+            let compatibility =
+                fs::read_to_string(bundle.path().join(peer_config_file_name(peer_index)))
+                    .expect("read compatibility config");
+            let prepared = fs::read_to_string(bundle.path().join(format!("peer{peer_index}.toml")))
+                .expect("read prepared config");
+            assert_eq!(compatibility, prepared);
+            assert!(prepared.contains(&format!("expected_hash = \"{expected_hash_literal}\"")));
+            assert!(!prepared.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
+        }
+    }
+
+    #[test]
     fn readme_carries_profile_metadata() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("readme-genesis", Algorithm::Ed25519)
@@ -1092,6 +1380,9 @@ mod tests {
         let readme = render_readme(&PROFILES[0], &peers, genesis_key.public_key(), None, None);
         assert!(readme.contains(PROFILES[0].slug));
         assert!(readme.contains("Regenerate"));
+        assert!(readme.contains("genesis.public_key"));
+        assert!(readme.contains("genesis.expected_hash"));
+        assert!(readme.contains("peer0.toml through peerN.toml"));
         assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-dev\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }
@@ -1162,6 +1453,39 @@ mod tests {
     }
 
     #[test]
+    fn validated_profile_publication_replaces_the_directory_without_mixing_files() {
+        let temp = tempdir().expect("profile publication root");
+        let destination = temp.path().join("iroha3-dev");
+        fs::create_dir(&destination).expect("create previous bundle");
+        fs::write(destination.join("old-only"), b"old").expect("write previous bundle");
+        let staging = tempfile::Builder::new()
+            .prefix(".profile-publication-test-")
+            .tempdir_in(temp.path())
+            .expect("create staged bundle");
+        fs::write(staging.path().join("new-only"), b"new").expect("write staged bundle");
+
+        publish_profile_bundle(staging, &destination).expect("publish validated bundle");
+
+        assert_eq!(
+            fs::read(destination.join("new-only")).expect("read published file"),
+            b"new"
+        );
+        assert!(!destination.join("old-only").exists());
+        assert!(
+            fs::read_dir(temp.path())
+                .expect("read publication root")
+                .all(|entry| {
+                    !entry
+                        .expect("read publication entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .contains(".backup-")
+                }),
+            "successful publication must remove its recovery backup"
+        );
+    }
+
+    #[test]
     fn invalid_nexus_identity_is_preflighted_before_profile_mutation() {
         let temp = tempdir().expect("temp dir");
         let output = temp.path().join("profiles");
@@ -1201,6 +1525,25 @@ mod tests {
     }
 
     #[test]
+    fn relative_kagami_override_is_canonicalized_before_staged_chdir() {
+        let current_dir = std::env::current_dir().expect("current directory");
+        let temp = tempfile::tempdir_in(&current_dir).expect("temp dir under current directory");
+        let kagami = temp.path().join("kagami-test-bin");
+        fs::write(&kagami, b"test executable placeholder").expect("write kagami placeholder");
+        let relative = kagami
+            .strip_prefix(&current_dir)
+            .expect("temporary kagami is below current directory");
+
+        let resolved = resolve_kagami_path(Some(relative)).expect("resolve relative override");
+
+        assert!(resolved.is_absolute());
+        assert_eq!(
+            resolved,
+            kagami.canonicalize().expect("canonical temporary kagami")
+        );
+    }
+
+    #[test]
     fn all_profile_configs_pin_default_torii_max_content_len() {
         let expected = format!(
             "max_content_len = {}",
@@ -1211,7 +1554,12 @@ mod tests {
             let seed = format!("config-{}-genesis", profile.slug);
             let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
                 .expect("derive deterministic genesis key");
-            let rendered = render_config(profile, &peers, genesis_key.public_key());
+            let rendered = render_config(
+                profile,
+                &peers,
+                genesis_key.public_key(),
+                GENESIS_EXPECTED_HASH_PLACEHOLDER,
+            );
             assert!(
                 rendered.contains(&expected),
                 "profile {} should pin the Torii body-cap default explicitly",
@@ -1233,7 +1581,12 @@ mod tests {
             let seed = format!("config-{}-address-genesis", profile.slug);
             let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
                 .expect("derive deterministic genesis key");
-            let rendered = render_config(profile, &peers, genesis_key.public_key());
+            let rendered = render_config(
+                profile,
+                &peers,
+                genesis_key.public_key(),
+                GENESIS_EXPECTED_HASH_PLACEHOLDER,
+            );
             assert!(
                 rendered.contains(&format!("address = \"{expected_listen}\"")),
                 "profile {} must render the canonical network listen literal",
@@ -1269,7 +1622,12 @@ mod tests {
                 Algorithm::Ed25519,
             )
             .expect("derive deterministic genesis key");
-            let rendered = render_config(profile, &peers, genesis_key.public_key());
+            let rendered = render_config(
+                profile,
+                &peers,
+                genesis_key.public_key(),
+                GENESIS_EXPECTED_HASH_PLACEHOLDER,
+            );
             let expected_body_bytes = peers
                 .len()
                 .checked_add(authenticated_non_validator_sources)
@@ -1296,7 +1654,12 @@ mod tests {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("config-taira-quota-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
-        let rendered = render_config(&PROFILES[1], &peers, genesis_key.public_key());
+        let rendered = render_config(
+            &PROFILES[1],
+            &peers,
+            genesis_key.public_key(),
+            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        );
         assert!(rendered.contains("[sorafs.gateway.site_bindings]"));
         assert!(rendered.contains("path = \"/config/sorafs_sites.json\""));
         assert!(rendered.contains("max_bytes = 1048576"));
@@ -1312,7 +1675,12 @@ mod tests {
         let dev_genesis_key =
             deterministic_keypair("config-dev-policy-genesis", Algorithm::Ed25519)
                 .expect("derive deterministic dev genesis key");
-        let dev = render_config(&PROFILES[0], &dev_peers, dev_genesis_key.public_key());
+        let dev = render_config(
+            &PROFILES[0],
+            &dev_peers,
+            dev_genesis_key.public_key(),
+            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        );
         assert!(!dev.contains("[torii.mcp]"));
         assert!(!dev.contains("[nexus.fees]"));
         assert!(!dev.contains("[nexus.staking]"));
@@ -1320,12 +1688,17 @@ mod tests {
 
     #[test]
     fn profiles_do_not_emit_backend_offline_capability_switches() {
-        for profile in &PROFILES {
+        for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic generic peers");
             let seed = format!("config-{}-universal-offline-genesis", profile.slug);
             let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
                 .expect("derive deterministic generic genesis key");
-            let rendered = render_config(profile, &peers, genesis_key.public_key());
+            let rendered = render_config(
+                profile,
+                &peers,
+                genesis_key.public_key(),
+                GENESIS_EXPECTED_HASH_PLACEHOLDER,
+            );
             let config: toml::Value =
                 toml::from_str(&rendered).expect("parse rendered generic config");
 
@@ -1412,15 +1785,20 @@ mod tests {
             .expect("derive deterministic genesis key");
 
         for (peer_index, peer) in peers.iter().enumerate() {
-            let rendered =
-                render_peer_config(&PROFILES[0], &peers, peer_index, genesis_key.public_key());
+            let rendered = render_peer_config(
+                &PROFILES[0],
+                &peers,
+                peer_index,
+                genesis_key.public_key(),
+                GENESIS_EXPECTED_HASH_PLACEHOLDER,
+            );
             let torii_port = 8080 + peer_index;
             assert!(rendered.contains(&format!("private_key = \"{}\"", peer.private_key)));
             assert!(rendered.contains(&peer.streaming_public_key));
             assert!(rendered.contains(&peer.streaming_private_key));
             assert!(rendered.contains(&format!("0.0.0.0:{torii_port}")));
             assert!(rendered.contains("file = \"genesis.signed.nrt\""));
-            assert!(rendered.contains("manifest_json = \"genesis.json\""));
+            assert!(!rendered.contains("manifest_json"));
             for (other_index, other) in peers.iter().enumerate() {
                 if peer_index != other_index {
                     assert!(

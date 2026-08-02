@@ -81,6 +81,12 @@ pub enum AuthenticationPolicy {
     /// The route requires canonical `X-Iroha-*` request authentication bound to
     /// an on-ledger account identity.
     CanonicalAccountSignature,
+    /// Access is selected by the authenticated content manifest.
+    ///
+    /// `Public` manifests admit anonymous reads. `RoleGate` and `Sponsor`
+    /// manifests require canonical account request authentication followed by
+    /// current-state role or sponsor authorization inside the handler.
+    ManifestConditionalContent,
     /// The route requires an operator-style request signature bound to a
     /// handler-validated dynamic key identity.
     IdentityBoundSignature,
@@ -1325,6 +1331,17 @@ pub mod core {
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
+    /// Read the exact canonical executed block wire at one finalized height.
+    pub const LEDGER_EXECUTED_BLOCK_WIRE: RouteDescriptor = RouteDescriptor::new(
+        "ledger.executed_block_wire",
+        HttpMethod::Get,
+        "/v1/ledger/block/{height}",
+        ApiSurface::Public,
+        Listener::Torii,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_implicit_head(true)
+    .with_cors_options(true);
     /// Read a transaction-entry proof from a block.
     pub const LEDGER_BLOCK_PROOF: RouteDescriptor = RouteDescriptor::new(
         "ledger.block_proof",
@@ -1461,6 +1478,7 @@ pub mod core {
         LEDGER_HEADERS,
         LEDGER_STATE_ROOT,
         LEDGER_STATE_PROOF,
+        LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
         INTERNAL_PROXY,
         VPN_PROFILE,
@@ -1602,7 +1620,10 @@ pub mod diagnostic {
 
 /// Transaction, query, proof, and pipeline routes.
 pub mod pipeline {
-    use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
+    use super::{
+        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
+        RouteProjections,
+    };
 
     /// Submit one signed transaction.
     pub const TRANSACTION: RouteDescriptor = RouteDescriptor::new(
@@ -1716,9 +1737,10 @@ pub mod pipeline {
         "pipeline.recovery_fastpq_proofs",
         HttpMethod::Get,
         "/v1/pipeline/recovery/{height}/fastpq-proofs",
-        ApiSurface::Public,
+        ApiSurface::Operator,
         Listener::Torii,
     )
+    .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
@@ -1954,23 +1976,9 @@ pub mod data_availability {
     ];
 }
 
-/// Musubi package-registry and unsigned-instruction builder descriptors.
+/// First-release Musubi typed-query and unsigned-instruction descriptors.
 pub mod musubi {
     use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
-
-    const fn app_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
-        RouteDescriptor::new(
-            stable_route_id,
-            HttpMethod::Get,
-            path,
-            ApiSurface::Public,
-            Listener::Torii,
-        )
-        .with_feature_gate(FeatureGate::Feature("app_api"))
-        .with_projections(RouteProjections::ALL)
-        .with_implicit_head(true)
-        .with_cors_options(true)
-    }
 
     const fn app_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -1985,49 +1993,177 @@ pub mod musubi {
         .with_cors_options(true)
     }
 
-    /// Search package records.
-    pub const PACKAGES: RouteDescriptor = app_get("musubi.package.search", "/v1/musubi/packages");
-    /// Read one package release selected by query parameters.
-    pub const RELEASE: RouteDescriptor = app_get("musubi.release.read", "/v1/musubi/release");
-    /// List releases for a package selected by query parameters.
-    pub const RELEASES: RouteDescriptor = app_get("musubi.release.list", "/v1/musubi/releases");
-    /// List versions for a package selected by query parameters.
-    pub const VERSIONS: RouteDescriptor = app_get("musubi.version.list", "/v1/musubi/versions");
-    /// Resolve a package alias.
+    /// Fetch one exact structural package record.
+    pub const EXACT_PACKAGE: RouteDescriptor = app_post(
+        "musubi.v1.query.exact_package",
+        "/v1/musubi/queries/exact-package",
+    );
+    /// Fetch one exact structural release record.
+    pub const EXACT_RELEASE: RouteDescriptor = app_post(
+        "musubi.v1.query.exact_release",
+        "/v1/musubi/queries/exact-release",
+    );
+    /// Fetch a finalized resolver-index page.
+    pub const RESOLVER_INDEX: RouteDescriptor = app_post(
+        "musubi.v1.query.resolver_index",
+        "/v1/musubi/queries/resolver-index",
+    );
+    /// Fetch a finalized structured-version page.
+    pub const VERSIONS: RouteDescriptor =
+        app_post("musubi.v1.query.versions", "/v1/musubi/queries/versions");
+    /// Fetch finalized accepted members and pending maintainer invitations.
+    pub const MAINTAINERS: RouteDescriptor = app_post(
+        "musubi.v1.query.maintainers",
+        "/v1/musubi/queries/maintainers",
+    );
+    /// Fetch a finalized archive-location page.
+    pub const ARCHIVE_LOCATIONS: RouteDescriptor = app_post(
+        "musubi.v1.query.archive_locations",
+        "/v1/musubi/queries/archive-locations",
+    );
+    /// Fetch bounded exact finalized cache-retention decisions.
+    pub const ARCHIVE_RETENTION: RouteDescriptor = app_post(
+        "musubi.v1.query.archive_retention",
+        "/v1/musubi/queries/archive-retention",
+    );
+    /// Fetch one exact permanent global alias.
     pub const ALIAS: RouteDescriptor =
-        app_get("musubi.alias.resolve", "/v1/musubi/aliases/{alias}");
-    /// Build an unsigned publish-release instruction.
-    pub const PUBLISH_RELEASE: RouteDescriptor = app_post(
-        "musubi.instruction.publish_release",
-        "/v1/musubi/instructions/publish-release",
+        app_post("musubi.v1.query.alias", "/v1/musubi/queries/alias");
+    /// Fetch a finalized permanent-alias history page.
+    pub const ALIAS_HISTORY: RouteDescriptor = app_post(
+        "musubi.v1.query.alias_history",
+        "/v1/musubi/queries/alias-history",
     );
-    /// Build an unsigned yank-release instruction.
-    pub const YANK_RELEASE: RouteDescriptor = app_post(
-        "musubi.instruction.yank_release",
-        "/v1/musubi/instructions/yank-release",
+    /// Fetch a finalized byte-ordered package-prefix page.
+    pub const ORDERED_PREFIX: RouteDescriptor = app_post(
+        "musubi.v1.query.ordered_prefix",
+        "/v1/musubi/queries/ordered-prefix",
     );
-    /// Build an unsigned set-alias instruction.
-    pub const SET_ALIAS: RouteDescriptor = app_post(
-        "musubi.instruction.set_alias",
-        "/v1/musubi/instructions/set-alias",
+    /// Search package names, namespaces, descriptions, and keywords by exact normalized terms.
+    pub const SEARCH: RouteDescriptor =
+        app_post("musubi.v1.query.search", "/v1/musubi/queries/search");
+    /// Build an unsigned namespace-binding registration.
+    pub const NAMESPACE_BINDING_REGISTER: RouteDescriptor = app_post(
+        "musubi.v1.instruction.namespace_binding_register",
+        "/v1/musubi/instructions/namespace-binding-register",
     );
-    /// Build an unsigned assert-release-exists instruction.
-    pub const ASSERT_RELEASE_EXISTS: RouteDescriptor = app_post(
-        "musubi.instruction.assert_release_exists",
-        "/v1/musubi/instructions/assert-release-exists",
+    /// Build an unsigned archive registration.
+    pub const ARCHIVE_REGISTER: RouteDescriptor = app_post(
+        "musubi.v1.instruction.archive_register",
+        "/v1/musubi/instructions/archive-register",
+    );
+    /// Build an unsigned archive-location add or renewal.
+    pub const ARCHIVE_LOCATION_ADD: RouteDescriptor = app_post(
+        "musubi.v1.instruction.archive_location_add",
+        "/v1/musubi/instructions/archive-location-add",
+    );
+    /// Build an unsigned archive-location retirement.
+    pub const ARCHIVE_LOCATION_RETIRE: RouteDescriptor = app_post(
+        "musubi.v1.instruction.archive_location_retire",
+        "/v1/musubi/instructions/archive-location-retire",
+    );
+    /// Build an unsigned release publication.
+    pub const RELEASE_PUBLISH: RouteDescriptor = app_post(
+        "musubi.v1.instruction.release_publish",
+        "/v1/musubi/instructions/release-publish",
+    );
+    /// Build an unsigned reversible yank transition.
+    pub const RELEASE_YANK_SET: RouteDescriptor = app_post(
+        "musubi.v1.instruction.release_yank_set",
+        "/v1/musubi/instructions/release-yank-set",
+    );
+    /// Build an unsigned package metadata replacement.
+    pub const PACKAGE_METADATA_SET: RouteDescriptor = app_post(
+        "musubi.v1.instruction.package_metadata_set",
+        "/v1/musubi/instructions/package-metadata-set",
+    );
+    /// Build an unsigned package-member invitation.
+    pub const PACKAGE_MEMBER_INVITE: RouteDescriptor = app_post(
+        "musubi.v1.instruction.package_member_invite",
+        "/v1/musubi/instructions/package-member-invite",
+    );
+    /// Build an unsigned package-member invitation acceptance.
+    pub const PACKAGE_MEMBER_ACCEPT: RouteDescriptor = app_post(
+        "musubi.v1.instruction.package_member_accept",
+        "/v1/musubi/instructions/package-member-accept",
+    );
+    /// Build an unsigned pending package-member invitation revocation.
+    pub const PACKAGE_MEMBER_INVITATION_REVOKE: RouteDescriptor = app_post(
+        "musubi.v1.instruction.package_member_invitation_revoke",
+        "/v1/musubi/instructions/package-member-invitation-revoke",
+    );
+    /// Build an unsigned package-member role replacement.
+    pub const PACKAGE_MEMBER_SET_ROLE: RouteDescriptor = app_post(
+        "musubi.v1.instruction.package_member_set_role",
+        "/v1/musubi/instructions/package-member-set-role",
+    );
+    /// Build an unsigned package-member removal.
+    pub const PACKAGE_MEMBER_REMOVE: RouteDescriptor = app_post(
+        "musubi.v1.instruction.package_member_remove",
+        "/v1/musubi/instructions/package-member-remove",
+    );
+    /// Build an unsigned paid permanent-alias registration.
+    pub const ALIAS_REGISTER: RouteDescriptor = app_post(
+        "musubi.v1.instruction.alias_register",
+        "/v1/musubi/instructions/alias-register",
+    );
+    /// Build an unsigned Parliament-enacted package recovery.
+    pub const PACKAGE_RECOVER: RouteDescriptor = app_post(
+        "musubi.v1.instruction.package_recover",
+        "/v1/musubi/instructions/package-recover",
+    );
+    /// Build an unsigned Parliament-enacted alias retarget.
+    pub const ALIAS_RETARGET: RouteDescriptor = app_post(
+        "musubi.v1.instruction.alias_retarget",
+        "/v1/musubi/instructions/alias-retarget",
+    );
+    /// Build an unsigned Parliament-enacted artifact takedown.
+    pub const ARTIFACT_TAKEDOWN: RouteDescriptor = app_post(
+        "musubi.v1.instruction.artifact_takedown",
+        "/v1/musubi/instructions/artifact-takedown",
+    );
+    /// Build an unsigned Parliament-enacted registry-policy replacement.
+    pub const REGISTRY_POLICY_SET: RouteDescriptor = app_post(
+        "musubi.v1.instruction.registry_policy_set",
+        "/v1/musubi/instructions/registry-policy-set",
+    );
+    /// Build an unsigned exact release-digest assertion.
+    pub const RELEASE_DIGEST_ASSERT: RouteDescriptor = app_post(
+        "musubi.v1.instruction.release_digest_assert",
+        "/v1/musubi/instructions/release-digest-assert",
     );
 
     /// Complete Musubi route family registered when `app_api` is compiled.
     pub const ROUTES: &[RouteDescriptor] = &[
-        PACKAGES,
-        RELEASE,
-        RELEASES,
+        EXACT_PACKAGE,
+        EXACT_RELEASE,
+        RESOLVER_INDEX,
         VERSIONS,
+        MAINTAINERS,
+        ARCHIVE_LOCATIONS,
+        ARCHIVE_RETENTION,
         ALIAS,
-        PUBLISH_RELEASE,
-        YANK_RELEASE,
-        SET_ALIAS,
-        ASSERT_RELEASE_EXISTS,
+        ALIAS_HISTORY,
+        ORDERED_PREFIX,
+        SEARCH,
+        NAMESPACE_BINDING_REGISTER,
+        ARCHIVE_REGISTER,
+        ARCHIVE_LOCATION_ADD,
+        ARCHIVE_LOCATION_RETIRE,
+        RELEASE_PUBLISH,
+        RELEASE_YANK_SET,
+        PACKAGE_METADATA_SET,
+        PACKAGE_MEMBER_INVITE,
+        PACKAGE_MEMBER_ACCEPT,
+        PACKAGE_MEMBER_INVITATION_REVOKE,
+        PACKAGE_MEMBER_SET_ROLE,
+        PACKAGE_MEMBER_REMOVE,
+        ALIAS_REGISTER,
+        PACKAGE_RECOVER,
+        ALIAS_RETARGET,
+        ARTIFACT_TAKEDOWN,
+        REGISTRY_POLICY_SET,
+        RELEASE_DIGEST_ASSERT,
     ];
 }
 
@@ -2665,6 +2801,18 @@ pub mod runtime_governance {
     /// Read the authoritative committed privacy capability snapshot.
     pub const PRIVACY_CAPABILITIES: RouteDescriptor =
         public_get("privacy.capabilities", "/v1/privacy/capabilities");
+    /// Mint one canonical Bootle/Lantern blind-issuance authorization.
+    pub const PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE: RouteDescriptor = public_post(
+        "privacy.bootle_lantern.issuance.authorize",
+        "/v1/privacy/bootle-lantern/issuance/authorize",
+    )
+    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
+    /// Issue one canonical Bootle/Lantern blind credential.
+    pub const PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE: RouteDescriptor = public_post(
+        "privacy.bootle_lantern.issuance.issue",
+        "/v1/privacy/bootle-lantern/issuance/issue",
+    )
+    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
     /// Read the latest query-projection checkpoint.
     pub const NODE_PROJECTION_CHECKPOINT: RouteDescriptor = public_get(
         "node.query_projection.checkpoint",
@@ -2870,6 +3018,8 @@ pub mod runtime_governance {
         RUNTIME_METRICS,
         NODE_CAPABILITIES,
         PRIVACY_CAPABILITIES,
+        PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
+        PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
         NODE_PROJECTION_CHECKPOINT,
         NODE_PROJECTION_CHECKPOINT_PLAN,
         NODE_PROJECTION_CHECKPOINT_PUBLISH,
@@ -3154,18 +3304,13 @@ pub mod sorafs {
         "/v1/sorafs/transparency/explorer/ui",
         RouteProjections::OPENAPI,
     );
-    /// Submit a typed transparency source entry.
-    pub const TRANSPARENCY_SOURCE_ENTRY: RouteDescriptor = documented_post(
-        "sorafs.transparency_source_entry.submit",
-        "/v1/sorafs/transparency/source-entries/{source_kind}",
-    );
     /// Submit a privacy-aggregate source event.
-    pub const TRANSPARENCY_PRIVACY_SOURCE_EVENT: RouteDescriptor = documented_post(
+    pub const TRANSPARENCY_PRIVACY_SOURCE_EVENT: RouteDescriptor = authenticated_documented_post(
         "sorafs.transparency_privacy_aggregate.source_event",
         "/v1/sorafs/transparency/privacy-aggregates/source-events",
     );
     /// Publish the oldest due privacy-aggregate cycle.
-    pub const TRANSPARENCY_PRIVACY_PUBLISH_DUE: RouteDescriptor = documented_post(
+    pub const TRANSPARENCY_PRIVACY_PUBLISH_DUE: RouteDescriptor = authenticated_documented_post(
         "sorafs.transparency_privacy_aggregate.publish_due",
         "/v1/sorafs/transparency/privacy-aggregates/publish-due",
     );
@@ -3175,7 +3320,7 @@ pub mod sorafs {
         "/v1/sorafs/transparency/tokens",
     );
     /// Submit a proof-token issuance.
-    pub const TRANSPARENCY_TOKEN_ISSUANCE: RouteDescriptor = documented_post(
+    pub const TRANSPARENCY_TOKEN_ISSUANCE: RouteDescriptor = authenticated_documented_post(
         "sorafs.transparency_token.issue",
         "/v1/sorafs/transparency/tokens/issuances",
     );
@@ -3191,7 +3336,7 @@ pub mod sorafs {
         "/v1/sorafs/appeals/finance/reports",
     );
     /// Publish an appeal-finance report.
-    pub const APPEAL_FINANCE_REPORTS_POST: RouteDescriptor = documented_post(
+    pub const APPEAL_FINANCE_REPORTS_POST: RouteDescriptor = authenticated_documented_post(
         "sorafs.appeal_finance_report.publish",
         "/v1/sorafs/appeals/finance/reports",
     );
@@ -3201,7 +3346,7 @@ pub mod sorafs {
         "/v1/sorafs/appeals/finance/weekly-rollups",
     );
     /// Publish an appeal-finance weekly rollup.
-    pub const APPEAL_FINANCE_WEEKLY_ROLLUPS_POST: RouteDescriptor = documented_post(
+    pub const APPEAL_FINANCE_WEEKLY_ROLLUPS_POST: RouteDescriptor = authenticated_documented_post(
         "sorafs.appeal_finance_weekly_rollup.publish",
         "/v1/sorafs/appeals/finance/weekly-rollups",
     );
@@ -3500,7 +3645,6 @@ pub mod sorafs {
         TRANSPARENCY_CYCLE_ENTRY,
         TRANSPARENCY_EXPLORER,
         TRANSPARENCY_EXPLORER_UI,
-        TRANSPARENCY_SOURCE_ENTRY,
         TRANSPARENCY_PRIVACY_SOURCE_EVENT,
         TRANSPARENCY_PRIVACY_PUBLISH_DUE,
         TRANSPARENCY_TOKENS,
@@ -4258,8 +4402,8 @@ pub mod soracloud_gateway {
 /// Raw content and `SoraDNS` directory routes.
 pub mod content_directory {
     use super::{
-        ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteMatch,
-        RouteProjections,
+        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
+        RouteMatch, RouteProjections,
     };
 
     /// Read one path from a registered content bundle.
@@ -4270,6 +4414,7 @@ pub mod content_directory {
         ApiSurface::Protocol,
         Listener::Torii,
     )
+    .with_authentication(AuthenticationPolicy::ManifestConditionalContent)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI)
     .with_route_match(RouteMatch::Wildcard)
@@ -4335,6 +4480,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     core::LEDGER_HEADERS,
     core::LEDGER_STATE_ROOT,
     core::LEDGER_STATE_PROOF,
+    core::LEDGER_EXECUTED_BLOCK_WIRE,
     core::LEDGER_BLOCK_PROOF,
     core::INTERNAL_PROXY,
     core::VPN_PROFILE,
@@ -4391,15 +4537,35 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     data_availability::PIN_INTENTS,
     data_availability::PIN_INTENTS_PROVE,
     data_availability::PIN_INTENTS_VERIFY,
-    musubi::PACKAGES,
-    musubi::RELEASE,
-    musubi::RELEASES,
+    musubi::EXACT_PACKAGE,
+    musubi::EXACT_RELEASE,
+    musubi::RESOLVER_INDEX,
     musubi::VERSIONS,
+    musubi::MAINTAINERS,
+    musubi::ARCHIVE_LOCATIONS,
+    musubi::ARCHIVE_RETENTION,
     musubi::ALIAS,
-    musubi::PUBLISH_RELEASE,
-    musubi::YANK_RELEASE,
-    musubi::SET_ALIAS,
-    musubi::ASSERT_RELEASE_EXISTS,
+    musubi::ALIAS_HISTORY,
+    musubi::ORDERED_PREFIX,
+    musubi::SEARCH,
+    musubi::NAMESPACE_BINDING_REGISTER,
+    musubi::ARCHIVE_REGISTER,
+    musubi::ARCHIVE_LOCATION_ADD,
+    musubi::ARCHIVE_LOCATION_RETIRE,
+    musubi::RELEASE_PUBLISH,
+    musubi::RELEASE_YANK_SET,
+    musubi::PACKAGE_METADATA_SET,
+    musubi::PACKAGE_MEMBER_INVITE,
+    musubi::PACKAGE_MEMBER_ACCEPT,
+    musubi::PACKAGE_MEMBER_INVITATION_REVOKE,
+    musubi::PACKAGE_MEMBER_SET_ROLE,
+    musubi::PACKAGE_MEMBER_REMOVE,
+    musubi::ALIAS_REGISTER,
+    musubi::PACKAGE_RECOVER,
+    musubi::ALIAS_RETARGET,
+    musubi::ARTIFACT_TAKEDOWN,
+    musubi::REGISTRY_POLICY_SET,
+    musubi::RELEASE_DIGEST_ASSERT,
     streaming::P2P,
     streaming::EVENTS_SSE,
     streaming::CONTRACT_EVENTS_SSE,
@@ -4468,6 +4634,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::RUNTIME_METRICS,
     runtime_governance::NODE_CAPABILITIES,
     runtime_governance::PRIVACY_CAPABILITIES,
+    runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
+    runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
     runtime_governance::NODE_PROJECTION_CHECKPOINT,
     runtime_governance::NODE_PROJECTION_CHECKPOINT_PLAN,
     runtime_governance::NODE_PROJECTION_CHECKPOINT_PUBLISH,
@@ -4532,7 +4700,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::TRANSPARENCY_CYCLE_ENTRY,
     sorafs::TRANSPARENCY_EXPLORER,
     sorafs::TRANSPARENCY_EXPLORER_UI,
-    sorafs::TRANSPARENCY_SOURCE_ENTRY,
     sorafs::TRANSPARENCY_PRIVACY_SOURCE_EVENT,
     sorafs::TRANSPARENCY_PRIVACY_PUBLISH_DUE,
     sorafs::TRANSPARENCY_TOKENS,
@@ -5042,14 +5209,18 @@ mod tests {
     }
 
     #[test]
-    fn canonical_catalog_exposes_only_the_authoritative_privacy_snapshot_route() {
+    fn canonical_catalog_exposes_only_the_authoritative_privacy_routes() {
         let privacy_routes = CATALOGED_ROUTES
             .iter()
             .filter(|route| route.path().starts_with("/v1/privacy/"))
             .collect::<Vec<_>>();
         assert_eq!(
             privacy_routes,
-            vec![&runtime_governance::PRIVACY_CAPABILITIES]
+            vec![
+                &runtime_governance::PRIVACY_CAPABILITIES,
+                &runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
+                &runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
+            ]
         );
         assert_eq!(
             runtime_governance::PRIVACY_CAPABILITIES.path(),
@@ -5063,6 +5234,37 @@ mod tests {
             runtime_governance::PRIVACY_CAPABILITIES.stable_route_id(),
             "privacy.capabilities"
         );
+
+        for (route, stable_route_id, path) in [
+            (
+                runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
+                "privacy.bootle_lantern.issuance.authorize",
+                "/v1/privacy/bootle-lantern/issuance/authorize",
+            ),
+            (
+                runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
+                "privacy.bootle_lantern.issuance.issue",
+                "/v1/privacy/bootle-lantern/issuance/issue",
+            ),
+        ] {
+            assert_eq!(route.stable_route_id(), stable_route_id);
+            assert_eq!(route.path(), path);
+            assert_eq!(route.method(), HttpMethod::Post);
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(route.listener(), Listener::Torii);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::ProtocolHandshake
+            );
+            assert_eq!(route.feature_gate(), FeatureGate::Always);
+            assert!(route.projections().openapi());
+            assert!(route.projections().sdk());
+            assert!(!route.projections().mcp());
+            assert_eq!(route.route_match(), RouteMatch::Exact);
+            assert_eq!(route.path_normalization(), PathNormalization::Strict);
+            assert!(route.cors_options());
+            assert!(!route.implicit_head());
+        }
     }
 
     #[test]
@@ -5919,6 +6121,17 @@ mod tests {
     }
 
     #[test]
+    fn content_wildcard_declares_manifest_conditional_authentication() {
+        let descriptor = content_directory::CONTENT;
+        assert_eq!(
+            descriptor.authentication(),
+            AuthenticationPolicy::ManifestConditionalContent
+        );
+        assert_eq!(descriptor.route_match(), RouteMatch::Wildcard);
+        assert!(descriptor.projections().openapi());
+    }
+
+    #[test]
     fn validation_reports_duplicate_ids_and_method_paths() {
         let routes = [
             RouteDescriptor::new(
@@ -6253,6 +6466,47 @@ mod tests {
                 error.kind == CatalogValidationErrorKind::AnyMethodToolingProjection
             })
         );
+    }
+
+    #[test]
+    fn musubi_v1_catalog_is_post_only_and_has_no_legacy_routes() {
+        assert_eq!(musubi::ROUTES.len(), 29);
+        assert_eq!(RouteCatalog::new(musubi::ROUTES).validate(), Ok(()));
+        assert!(musubi::ROUTES.iter().all(|route| {
+            route.method() == HttpMethod::Post
+                && (route.path().starts_with("/v1/musubi/queries/")
+                    || route.path().starts_with("/v1/musubi/instructions/"))
+        }));
+        assert!(musubi::ARCHIVE_RETENTION.projections().openapi());
+        assert!(musubi::ARCHIVE_RETENTION.projections().sdk());
+        assert!(musubi::ARCHIVE_RETENTION.projections().mcp());
+
+        for expected in musubi::ROUTES {
+            assert!(
+                CATALOGED_ROUTES.iter().any(|route| route == expected),
+                "missing canonical Musubi route {}",
+                expected.stable_route_id()
+            );
+        }
+
+        for legacy_path in [
+            "/v1/musubi/packages",
+            "/v1/musubi/release",
+            "/v1/musubi/releases",
+            "/v1/musubi/versions",
+            "/v1/musubi/aliases/{alias}",
+            "/v1/musubi/instructions/publish-release",
+            "/v1/musubi/instructions/yank-release",
+            "/v1/musubi/instructions/set-alias",
+            "/v1/musubi/instructions/assert-release-exists",
+        ] {
+            assert!(
+                !CATALOGED_ROUTES
+                    .iter()
+                    .any(|route| route.path() == legacy_path),
+                "retired Musubi route remains cataloged: {legacy_path}"
+            );
+        }
     }
 
     #[test]

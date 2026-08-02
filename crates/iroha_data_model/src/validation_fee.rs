@@ -1916,14 +1916,14 @@ mod parliament_tests {
     }
 
     fn fee_asset() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "validation").expect("domain id"),
             Name::from_str("fee").expect("asset name"),
         )
     }
 
     fn xor_asset() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("xor", "validation").expect("domain id"),
             Name::from_str("xor").expect("asset name"),
         )
@@ -1952,7 +1952,7 @@ mod parliament_tests {
 
     fn payout_binding() -> ValidationFeeTreasuryPayoutBindingV1 {
         let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         ValidationFeeTreasuryPayoutBindingV1 {

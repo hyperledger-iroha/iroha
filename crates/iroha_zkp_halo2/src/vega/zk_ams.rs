@@ -29,12 +29,133 @@ use super::{
     sponge::keccak256,
 };
 
+#[path = "zk_ams/mkhe.rs"]
+mod mkhe;
+
+pub use mkhe::{
+    ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1,
+    ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1, ZK_AMS_MKHE_EVIDENCE_CHUNK_BYTES_V1,
+    ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZK_AMS_PHASE3_MAX_TERMINAL_PROOF_BYTES_V1,
+    ZK_AMS_PHASE23_FRESHNESS_CERTIFIES_HIDDEN_MASK_SHARES_V1,
+    ZK_AMS_PHASE23_FRESHNESS_COMMIT_WIRE_BYTES_V1, ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1,
+    ZK_AMS_PHASE23_FRESHNESS_REVEAL_WIRE_BYTES_V1, ZK_AMS_PHASE23_MAX_CANONICAL_SPARSE_ENTRIES_V1,
+    ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1, ZK_AMS_PHASE23_RELEASE_MAP_SET_KAT_DIGEST_V1,
+    ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
+    ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZK_AMS_T256_GALOIS_KEY_COUNT_V1,
+    ZK_AMS_T256_GALOIS_KEY_SCHEDULE_DIGEST_V1, ZK_AMS_T256_MAX_LOGICAL_VALUES_V1,
+    ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_PACKED_OUTPUT_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_CASE_COUNT_V1,
+    ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1,
+    ZK_AMS_T256_RELEASE_TRANSFORMED_RNS_KAT_DIGEST_V1, ZkAmsMkheAbortReasonV1,
+    ZkAmsMkheActiveCollectivePublicKeyStatementV1, ZkAmsMkheActiveCollectivePublicKeyWitnessV1,
+    ZkAmsMkheActiveContributionV1, ZkAmsMkheActivePartySecretV1,
+    ZkAmsMkheActiveRkgLinearProofSecurityV1, ZkAmsMkheActiveRkgProofV1,
+    ZkAmsMkheActiveRkgRoundOneStatementV1, ZkAmsMkheActiveRkgRoundOneWitnessV1,
+    ZkAmsMkheActiveRkgRoundTwoStatementV1, ZkAmsMkheActiveRkgRoundTwoWitnessV1,
+    ZkAmsMkheActiveRoundReceiptV1, ZkAmsMkheActiveRoundV1, ZkAmsMkheAuthenticatedCksContributionV1,
+    ZkAmsMkheAuthenticatedDecryptionShareV1, ZkAmsMkheAuthenticationWireV1,
+    ZkAmsMkheCksAbortReasonV1, ZkAmsMkheCksContributionWireV1, ZkAmsMkheCksProofV1,
+    ZkAmsMkheCksResourceEvidenceV1, ZkAmsMkheCksSourceCiphertextV1, ZkAmsMkheCksStatementV1,
+    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveCiphertextWireV1,
+    ZkAmsMkheCollectiveCksDigitEvidenceV1, ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
+    ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
+    ZkAmsMkheCollectiveEvaluatedKeyProviderV1, ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1,
+    ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1,
+    ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1, ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
+    ZkAmsMkheCollectiveEvidenceRecordFooterV1, ZkAmsMkheCollectiveEvidenceRecordHeaderV1,
+    ZkAmsMkheCollectiveEvidenceRecordKindV1, ZkAmsMkheCollectiveEvidenceSetFooterV1,
+    ZkAmsMkheCollectiveEvidenceSetHeaderV1, ZkAmsMkheCollectiveEvidenceSetKindV1,
+    ZkAmsMkheCollectiveLevelOneV1, ZkAmsMkheCollectivePartyStateV1,
+    ZkAmsMkheCollectivePublicKeyShareV1, ZkAmsMkheCollectivePublicKeyV1,
+    ZkAmsMkheCollectiveSourceProofEvidenceV1, ZkAmsMkheCollectiveSourceStatementEvidenceV1,
+    ZkAmsMkheDecryptedPlaintextV1, ZkAmsMkheDecryptionAbortReasonV1, ZkAmsMkheDecryptionProofV1,
+    ZkAmsMkheDecryptionResourceEvidenceV1, ZkAmsMkheDecryptionSplitTransportV1,
+    ZkAmsMkheDecryptionStatementV1, ZkAmsMkheDecryptionTransportComponentKindV1,
+    ZkAmsMkheDecryptionTransportManifestV1, ZkAmsMkheDecryptionTransportPointerV1,
+    ZkAmsMkheDirectAdmittedContributionSetV1, ZkAmsMkheDirectCeremonyContextV1,
+    ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheDirectCoordinatorV1,
+    ZkAmsMkheDirectEvaluatedKeySetAdmissionV1, ZkAmsMkheDirectEvaluatedKeyTargetV1,
+    ZkAmsMkheDirectNoiseCertificateV1, ZkAmsMkheDirectNoiseIntegrationCertificateV1,
+    ZkAmsMkheDirectPolynomialRoleV1, ZkAmsMkheDirectPolynomialStreamReceiptV1,
+    ZkAmsMkheDirectPolynomialStreamV1, ZkAmsMkheDirectProofAuditV1,
+    ZkAmsMkheDirectResourceCertificateV1, ZkAmsMkheDirectVerifiedContributionProviderV1,
+    ZkAmsMkheDirectVerifiedContributionV1, ZkAmsMkheErrorV1, ZkAmsMkheEvaluatedKeySorafsPointerV1,
+    ZkAmsMkheFullRosterDecryptionResultV1, ZkAmsMkheGovernedActiveRosterV1,
+    ZkAmsMkheGovernedCollectiveKeyMaterialIdentityV1, ZkAmsMkheGovernedParticipantV1,
+    ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheIdentifiableAbortV1, ZkAmsMkheIdentifiableCksAbortV1,
+    ZkAmsMkheIdentifiableDecryptionAbortV1, ZkAmsMkheNoiseCertificateV1,
+    ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1, ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1,
+    ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1, ZkAmsMkheProofEnvelopeWireV1,
+    ZkAmsMkheProofKindV1, ZkAmsMkheReadinessV1, ZkAmsMkheReleaseManifestV1,
+    ZkAmsMkheResourceCertificateV1, ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheRosterKeyProofV1,
+    ZkAmsMkheSecurityAttackRecordV1, ZkAmsMkheSecurityAttackV1, ZkAmsMkheSecurityCandidateV1,
+    ZkAmsMkheSecurityCertificateV1, ZkAmsMkheSecurityEstimatorSuiteV1, ZkAmsMkheSeededRkgKeyWireV1,
+    ZkAmsMkheSeekableEvaluatedKeyAccountingV1, ZkAmsMkheWireBindingV1, ZkAmsPhase3BatchAnchorV1,
+    ZkAmsPhase3FoldHistoryV1, ZkAmsPhase3GovernedBatchV1, ZkAmsPhase3TerminalContextV1,
+    ZkAmsPhase3TerminalImplementationV1, ZkAmsPhase3TerminalProverOutputV1,
+    ZkAmsPhase3TerminalReceiptV1, ZkAmsPhase23AccumulatorShapeV1,
+    ZkAmsPhase23CommitmentPreimageLayoutV1, ZkAmsPhase23CrossTermCommitmentV1,
+    ZkAmsPhase23EncryptedBindingV1, ZkAmsPhase23EncryptedImplementationV1,
+    ZkAmsPhase23EquationCertificateV1, ZkAmsPhase23FreshnessCommitV1,
+    ZkAmsPhase23FreshnessContextV1, ZkAmsPhase23FreshnessPhaseV1, ZkAmsPhase23FreshnessReceiptV1,
+    ZkAmsPhase23FreshnessRevealV1, ZkAmsPhase23MapKindV1, ZkAmsPhase23MaterializedAccumulatorsV1,
+    ZkAmsPhase23PackedAccumulatorSetV1, ZkAmsPhase23PendingRevealV1,
+    ZkAmsPhase23PublicAccumulatorV1, ZkAmsPhase23PublicChallengeFamilyV1,
+    ZkAmsPhase23PublicChallengeRoleV1, ZkAmsPhase23PublicChallengeV1,
+    ZkAmsPhase23PublicFoldHistoryV1, ZkAmsPhase23PublicFoldRecordV1, ZkAmsPhase23ReleaseMapsV1,
+    ZkAmsPhase23SparseMapV1, ZkAmsPhase23StrictPublicInstanceV1, ZkAmsPhase23VerifiedCommitSetV1,
+    ZkAmsT256GaloisKeyScheduleEntryV1, ZkAmsT256GaloisKeyScheduleV1, ZkAmsT256PackedPlaintextV1,
+    ZkAmsT256PackingLayoutV1, ZkAmsT256ReleasePackingCertificateV1, ZkAmsT256RotationCertificateV1,
+    ZkAmsT256RotationDirectionV1, ZkAmsT256RotationV1,
+    admit_zk_ams_mkhe_direct_contribution_set_v1, aggregate_zk_ams_mkhe_collective_public_key_v1,
+    combine_zk_ams_mkhe_cks_v1, commit_zk_ams_phase23_freshness_v1,
+    decode_zk_ams_t256_packed_plaintext_v1, encode_zk_ams_t256_packed_plaintext_v1,
+    encrypt_zk_ams_mkhe_collective_packed_v1, finalize_zk_ams_phase23_freshness_v1,
+    generate_zk_ams_mkhe_collective_party_state_v1, open_zk_ams_phase23_freshness_reveal_v1,
+    permute_zk_ams_t256_slots_v1, prove_zk_ams_mkhe_active_collective_public_key_v1,
+    prove_zk_ams_mkhe_active_rkg_round_one_v1, prove_zk_ams_mkhe_active_rkg_round_two_v1,
+    prove_zk_ams_mkhe_cks_contribution_v1, prove_zk_ams_mkhe_decryption_share_v1,
+    prove_zk_ams_phase3_terminal_v1, reconstruct_zk_ams_mkhe_decryption_share_v1,
+    rotate_zk_ams_t256_packed_plaintext_v1, split_zk_ams_mkhe_decryption_share_v1,
+    validate_zk_ams_t256_galois_key_exponents_v1, validate_zk_ams_t256_galois_key_schedule_v1,
+    verify_combine_decode_zk_ams_mkhe_decryption_v1,
+    verify_zk_ams_mkhe_active_collective_public_key_v1, verify_zk_ams_mkhe_active_rkg_round_one_v1,
+    verify_zk_ams_mkhe_active_rkg_round_two_v1, verify_zk_ams_mkhe_cks_contribution_v1,
+    verify_zk_ams_mkhe_decryption_share_v1, verify_zk_ams_phase3_terminal_v1,
+    zk_ams_mkhe_active_collective_public_a_v1, zk_ams_mkhe_active_rkg_linear_proof_security_v1,
+    zk_ams_mkhe_cks_resource_evidence_v1, zk_ams_mkhe_cks_statement_digest_v1,
+    zk_ams_mkhe_collect_active_round_v1, zk_ams_mkhe_compact_key_switch_ring_multiplications_v1,
+    zk_ams_mkhe_decryption_resource_evidence_v1, zk_ams_mkhe_direct_noise_certificate_v1,
+    zk_ams_mkhe_direct_noise_integration_certificate_v1,
+    zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1, zk_ams_mkhe_direct_proof_audit_v1,
+    zk_ams_mkhe_direct_resource_certificate_v1, zk_ams_mkhe_manifest_digest_v1,
+    zk_ams_mkhe_noise_certificate_v1, zk_ams_mkhe_readiness_digest_v1, zk_ams_mkhe_readiness_v1,
+    zk_ams_mkhe_release_manifest_v1, zk_ams_mkhe_resource_certificate_digest_v1,
+    zk_ams_mkhe_resource_certificate_v1, zk_ams_mkhe_security_candidate_input_digest_v1,
+    zk_ams_mkhe_security_candidate_v1, zk_ams_mkhe_security_certificate_v1,
+    zk_ams_mkhe_seekable_evaluated_key_accounting_v1, zk_ams_phase3_nifs_verifier_digest_v1,
+    zk_ams_phase3_ordered_public_inputs_digest_v1, zk_ams_phase3_terminal_implementation_v1,
+    zk_ams_phase23_cross_term_v1, zk_ams_phase23_encrypted_implementation_v1,
+    zk_ams_phase23_equation_certificate_digest_v1, zk_ams_phase23_equation_certificate_v1,
+    zk_ams_phase23_fold_linear_v1, zk_ams_phase23_fold_quadratic_v1,
+    zk_ams_phase23_materialize_release_accumulators_v1, zk_ams_phase23_release_map_set_digest_v1,
+    zk_ams_phase23_release_maps_v1, zk_ams_t256_galois_key_schedule_v1,
+    zk_ams_t256_packed_subfield_conjugation_exponent_v1, zk_ams_t256_packing_layout_v1,
+    zk_ams_t256_release_packing_certificate_v1, zk_ams_t256_rotation_certificate_v1,
+    zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
+    zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
+};
+
 /// Exact number of public T256 scalars in one admission relation instance.
 pub const ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1: usize = 89;
 /// Hard cap checked before Norito decoding of a batch relation proof.
 pub const MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Exact canonical fixed PHC payload width.
 pub const ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1: usize = 161;
+/// Sole privacy-action index admitted by the first-release ZK-AMS profile.
+pub const ZK_AMS_ACTION_INDEX_V1: u32 = 0;
 
 const PROOF_VERSION_V1: u8 = 1;
 const MAX_CHAIN_ID_BYTES_V1: usize = 255;
@@ -377,6 +498,59 @@ struct ZkAmsAdmissionProofWireV1 {
     relation: MaskedRelaxedProofWireV1,
 }
 
+/// Encode the sole canonical admission-relation wire. Phase-III terminal
+/// producers use this helper so transaction proof bytes cannot drift into a
+/// second outer schema.
+pub(super) fn encode_zk_ams_admission_relation_wire_v1(
+    relation: MaskedRelaxedProofWireV1,
+) -> Result<Vec<u8>, ZkAmsAdmissionRelationErrorV1> {
+    let proof = ZkAmsAdmissionProofWireV1 {
+        version: PROOF_VERSION_V1,
+        relation,
+    };
+    let encoded = norito::codec::encode_adaptive(&proof);
+    if encoded.len() > MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 {
+        return Err(ZkAmsAdmissionRelationErrorV1::ProofTooLarge {
+            actual: encoded.len(),
+            max: MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+        });
+    }
+    Ok(encoded)
+}
+
+/// Decode and canonicalize the sole admission-relation wire under the exact
+/// expected strict-instance count.
+pub(super) fn decode_zk_ams_admission_relation_wire_v1(
+    expected_instances: usize,
+    proof_bytes: &[u8],
+) -> Result<MaskedRelaxedProofWireV1, ZkAmsAdmissionRelationErrorV1> {
+    if proof_bytes.len() > MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 {
+        return Err(ZkAmsAdmissionRelationErrorV1::ProofTooLarge {
+            actual: proof_bytes.len(),
+            max: MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+        });
+    }
+    let shape = canonical_shape()?;
+    let dimensions = MaskedRelaxedDimensionsV1::from_shape(&shape)
+        .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?;
+    let decode_limits = dimensions
+        .proof_decode_limits(
+            expected_instances,
+            proof_bytes.len(),
+            MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+        )
+        .map_err(map_composition_error)?;
+    let proof = norito::codec::decode_exact_from_slice_with_limits::<ZkAmsAdmissionProofWireV1>(
+        proof_bytes,
+        decode_limits,
+    )
+    .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidProofEncoding)?;
+    if proof.version != PROOF_VERSION_V1 || norito::codec::encode_adaptive(&proof) != proof_bytes {
+        return Err(ZkAmsAdmissionRelationErrorV1::InvalidProofEncoding);
+    }
+    Ok(proof.relation)
+}
+
 /// Return the exact compiled relation dimensions.
 pub fn zk_ams_admission_relation_dimensions_v1()
 -> Result<ZkAmsAdmissionRelationDimensionsV1, ZkAmsAdmissionRelationErrorV1> {
@@ -396,8 +570,35 @@ pub fn zk_ams_admission_relation_dimensions_v1()
 
 /// Return the digest of the exact circuit/composer profile admitted by
 /// governance.
-#[must_use]
-pub fn zk_ams_compiled_profile_digest_v1() -> [u8; 32] {
+pub fn zk_ams_compiled_profile_digest_v1() -> Result<[u8; 32], ZkAmsAdmissionRelationErrorV1> {
+    let readiness = zk_ams_mkhe_readiness_v1()
+        .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?;
+    compiled_profile_digest_for_readiness_v1(readiness)
+}
+
+/// Return the digest of the frozen, but not release-ready, candidate profile.
+///
+/// This function exists only for deterministic release-evidence builders and
+/// native negative-test fixtures that must bind the exact candidate while the
+/// readiness gates remain open. It must never be used to authorize production
+/// activation, admission proving, or verification; those paths must call
+/// [`zk_ams_compiled_profile_digest_v1`] and remain readiness-gated.
+pub fn zk_ams_release_candidate_profile_digest_v1()
+-> Result<[u8; 32], ZkAmsAdmissionRelationErrorV1> {
+    canonical_shape()?;
+    Ok(compiled_profile_digest_unchecked_v1())
+}
+
+fn compiled_profile_digest_for_readiness_v1(
+    readiness: ZkAmsMkheReadinessV1,
+) -> Result<[u8; 32], ZkAmsAdmissionRelationErrorV1> {
+    if !readiness.is_ready() {
+        return Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile);
+    }
+    Ok(compiled_profile_digest_unchecked_v1())
+}
+
+fn compiled_profile_digest_unchecked_v1() -> [u8; 32] {
     let shape = canonical_shape().expect("released ZK-AMS shape must synthesize");
     let dimensions =
         MaskedRelaxedDimensionsV1::from_shape(&shape).expect("released dimensions must be valid");
@@ -423,6 +624,17 @@ pub fn prove_zk_ams_admission_relation_v1<R: MaskedRelaxedRandomSourceV1>(
 ) -> Result<Vec<u8>, ZkAmsAdmissionRelationErrorV1> {
     validate_context(context)?;
     validate_batch(public_inputs, witnesses.len())?;
+    require_mkhe_release_ready_v1()?;
+    prove_zk_ams_admission_relation_inner_v1(context, public_inputs, witnesses, config, random)
+}
+
+fn prove_zk_ams_admission_relation_inner_v1<R: MaskedRelaxedRandomSourceV1>(
+    context: &ZkAmsProofContextV1<'_>,
+    public_inputs: &[ZkAmsAdmissionPublicInputV1],
+    witnesses: &[ZkAmsAdmissionRelationWitnessV1<'_>],
+    config: ZkAmsMaskedProverConfigV1,
+    random: &mut R,
+) -> Result<Vec<u8>, ZkAmsAdmissionRelationErrorV1> {
     let shape = canonical_shape()?;
     let mut assignments = Vec::with_capacity(public_inputs.len());
     for (public, witness) in public_inputs.iter().copied().zip(witnesses) {
@@ -443,18 +655,8 @@ pub fn prove_zk_ams_admission_relation_v1<R: MaskedRelaxedRandomSourceV1>(
         random,
     )
     .map_err(map_composition_error)?;
-    let proof = ZkAmsAdmissionProofWireV1 {
-        version: PROOF_VERSION_V1,
-        relation,
-    };
-    let encoded = norito::codec::encode_adaptive(&proof);
-    if encoded.len() > MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 {
-        return Err(ZkAmsAdmissionRelationErrorV1::ProofTooLarge {
-            actual: encoded.len(),
-            max: MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
-        });
-    }
-    verify_zk_ams_admission_relation_v1(context, public_inputs, &encoded)?;
+    let encoded = encode_zk_ams_admission_relation_wire_v1(relation)?;
+    verify_zk_ams_admission_relation_inner_v1(context, public_inputs, &encoded)?;
     Ok(encoded)
 }
 
@@ -466,30 +668,17 @@ pub fn verify_zk_ams_admission_relation_v1(
 ) -> Result<(), ZkAmsAdmissionRelationErrorV1> {
     validate_context(context)?;
     validate_batch(public_inputs, public_inputs.len())?;
-    if proof_bytes.len() > MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 {
-        return Err(ZkAmsAdmissionRelationErrorV1::ProofTooLarge {
-            actual: proof_bytes.len(),
-            max: MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
-        });
-    }
+    require_mkhe_release_ready_v1()?;
+    verify_zk_ams_admission_relation_inner_v1(context, public_inputs, proof_bytes)
+}
+
+fn verify_zk_ams_admission_relation_inner_v1(
+    context: &ZkAmsProofContextV1<'_>,
+    public_inputs: &[ZkAmsAdmissionPublicInputV1],
+    proof_bytes: &[u8],
+) -> Result<(), ZkAmsAdmissionRelationErrorV1> {
     let shape = canonical_shape()?;
-    let dimensions = MaskedRelaxedDimensionsV1::from_shape(&shape)
-        .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?;
-    let decode_limits = dimensions
-        .proof_decode_limits(
-            public_inputs.len(),
-            proof_bytes.len(),
-            MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
-        )
-        .map_err(map_composition_error)?;
-    let proof = norito::codec::decode_exact_from_slice_with_limits::<ZkAmsAdmissionProofWireV1>(
-        proof_bytes,
-        decode_limits,
-    )
-    .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidProofEncoding)?;
-    if proof.version != PROOF_VERSION_V1 || norito::codec::encode_adaptive(&proof) != proof_bytes {
-        return Err(ZkAmsAdmissionRelationErrorV1::InvalidProofEncoding);
-    }
+    let relation = decode_zk_ams_admission_relation_wire_v1(public_inputs.len(), proof_bytes)?;
     let strict_public_inputs = public_inputs
         .iter()
         .copied()
@@ -502,9 +691,14 @@ pub fn verify_zk_ams_admission_relation_v1(
         COMMITMENT_KEY_LABEL_V1,
         &shape,
         &strict_public_inputs,
-        &proof.relation,
+        &relation,
     )
     .map_err(map_composition_error)
+}
+
+fn require_mkhe_release_ready_v1() -> Result<(), ZkAmsAdmissionRelationErrorV1> {
+    mkhe::require_release_ready_v1()
+        .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)
 }
 
 fn synthesize_admission(
@@ -630,11 +824,14 @@ fn build_canonical_shape() -> Result<Shape, CircuitError> {
     synthesize_admission(public, &witness).map(|assignment| assignment.shape)
 }
 
-fn canonical_shape() -> Result<Shape, ZkAmsAdmissionRelationErrorV1> {
+fn canonical_shape_ref() -> Result<&'static Shape, ZkAmsAdmissionRelationErrorV1> {
     CANONICAL_SHAPE
         .as_ref()
-        .map(Clone::clone)
         .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)
+}
+
+fn canonical_shape() -> Result<Shape, ZkAmsAdmissionRelationErrorV1> {
+    canonical_shape_ref().cloned()
 }
 
 fn validate_batch(
@@ -708,7 +905,8 @@ fn same_batch_lineage(
 fn validate_context(
     context: &ZkAmsProofContextV1<'_>,
 ) -> Result<(), ZkAmsAdmissionRelationErrorV1> {
-    if context.chain_id.is_empty()
+    if context.action_index != ZK_AMS_ACTION_INDEX_V1
+        || context.chain_id.is_empty()
         || context.chain_id.len() > MAX_CHAIN_ID_BYTES_V1
         || [
             context.genesis_hash,
@@ -731,6 +929,7 @@ fn validate_context(
 fn context_frame(
     context: &ZkAmsProofContextV1<'_>,
 ) -> Result<Vec<u8>, ZkAmsAdmissionRelationErrorV1> {
+    validate_context(context)?;
     let mut frame = Vec::with_capacity(512 + context.chain_id.len());
     push_frame(&mut frame, 0, COMPOSITION_DOMAIN_V1)?;
     push_frame(&mut frame, 1, SOURCE_PROFILE_V1)?;
@@ -744,7 +943,7 @@ fn context_frame(
     push_frame(&mut frame, 9, &context.statement_schema_digest)?;
     push_frame(&mut frame, 10, &context.engine_manifest_digest)?;
     push_frame(&mut frame, 11, &context.generator_digest)?;
-    push_frame(&mut frame, 12, &zk_ams_compiled_profile_digest_v1())?;
+    push_frame(&mut frame, 12, &compiled_profile_digest_unchecked_v1())?;
     Ok(frame)
 }
 
@@ -778,6 +977,18 @@ fn profile_frame(
     ] {
         push_frame(&mut frame, tag, &value.to_be_bytes())?;
     }
+    push_frame(
+        &mut frame,
+        17,
+        &zk_ams_mkhe_manifest_digest_v1()
+            .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?,
+    )?;
+    push_frame(
+        &mut frame,
+        18,
+        &zk_ams_mkhe_readiness_digest_v1()
+            .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?,
+    )?;
     Ok(frame)
 }
 
@@ -937,7 +1148,32 @@ mod tests {
         masked_relaxed::{MASKED_RELAXED_COMMITMENT_COLUMNS_V1, MaskedRelaxedCommitmentWireV1},
     };
     use hex_literal::hex;
-    use norito::NoritoSerialize;
+
+    struct NeverRandom;
+
+    impl MaskedRelaxedRandomSourceV1 for NeverRandom {
+        fn fill_bytes(
+            &mut self,
+            _destination: &mut [u8],
+        ) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            panic!("invalid ZK-AMS context must fail before prover randomness")
+        }
+    }
+
+    fn proof_context() -> ZkAmsProofContextV1<'static> {
+        ZkAmsProofContextV1 {
+            chain_id: b"taira-zk-ams-test",
+            genesis_hash: [0x11; 32],
+            action_index: ZK_AMS_ACTION_INDEX_V1,
+            statement_digest: [0x12; 32],
+            parameter_id: [0x13; 32],
+            parameter_digest: [0x14; 32],
+            verifier_digest: [0x15; 32],
+            statement_schema_digest: [0x16; 32],
+            engine_manifest_digest: [0x17; 32],
+            generator_digest: [0x18; 32],
+        }
+    }
 
     #[derive(Clone)]
     struct AdmissionAssignmentFixture {
@@ -1107,6 +1343,105 @@ mod tests {
                 "mixed {label} lineage must fail before proof work"
             );
         }
+    }
+
+    #[test]
+    fn public_prover_and_verifier_reject_nonzero_action_index_before_work() {
+        let mut invalid = proof_context();
+        invalid.action_index = 1;
+        let fixture = admission_assignment_fixture();
+        let witness = fixture.witness();
+        assert_eq!(
+            prove_zk_ams_admission_relation_v1(
+                &invalid,
+                core::slice::from_ref(&fixture.public),
+                core::slice::from_ref(&witness),
+                ZkAmsMaskedProverConfigV1::new(1).expect("one worker"),
+                &mut NeverRandom,
+            ),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidContext),
+        );
+        assert_eq!(
+            verify_zk_ams_admission_relation_v1(
+                &invalid,
+                core::slice::from_ref(&fixture.public),
+                &[],
+            ),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidContext),
+        );
+    }
+
+    #[test]
+    fn every_mkhe_release_gate_fails_compilation_independently() {
+        let all_ready = ZkAmsMkheReadinessV1 {
+            parameter_gate: true,
+            security_gate: true,
+            noise_gate: true,
+            resource_gate: true,
+            wire_gate: true,
+            malicious_party_gate: true,
+            decryption_share_gate: true,
+            packing_gate: true,
+            phase23_gate: true,
+            release_kat_gate: true,
+        };
+        assert!(compiled_profile_digest_for_readiness_v1(all_ready).is_ok());
+
+        for gate in 0..10 {
+            let mut adversarial = all_ready;
+            match gate {
+                0 => adversarial.parameter_gate = false,
+                1 => adversarial.security_gate = false,
+                2 => adversarial.noise_gate = false,
+                3 => adversarial.resource_gate = false,
+                4 => adversarial.wire_gate = false,
+                5 => adversarial.malicious_party_gate = false,
+                6 => adversarial.decryption_share_gate = false,
+                7 => adversarial.packing_gate = false,
+                8 => adversarial.phase23_gate = false,
+                9 => adversarial.release_kat_gate = false,
+                _ => unreachable!("the release has exactly ten gates"),
+            }
+            assert_eq!(
+                compiled_profile_digest_for_readiness_v1(adversarial),
+                Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile),
+                "gate {gate} must independently prevent profile compilation"
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_mkhe_release_has_no_public_prove_or_verify_bypass() {
+        assert_ne!(
+            zk_ams_release_candidate_profile_digest_v1().expect("candidate digest"),
+            [0; 32]
+        );
+        assert_eq!(
+            zk_ams_compiled_profile_digest_v1(),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)
+        );
+
+        let context = proof_context();
+        let fixture = admission_assignment_fixture();
+        let witness = fixture.witness();
+        assert_eq!(
+            prove_zk_ams_admission_relation_v1(
+                &context,
+                core::slice::from_ref(&fixture.public),
+                core::slice::from_ref(&witness),
+                ZkAmsMaskedProverConfigV1::new(1).expect("one worker"),
+                &mut NeverRandom,
+            ),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)
+        );
+        assert_eq!(
+            verify_zk_ams_admission_relation_v1(
+                &context,
+                core::slice::from_ref(&fixture.public),
+                &[],
+            ),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)
+        );
     }
 
     #[test]

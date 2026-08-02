@@ -244,7 +244,7 @@ mod availability_tests {
     use crate::domain::DomainId;
 
     fn definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         )

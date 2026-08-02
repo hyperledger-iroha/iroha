@@ -2700,16 +2700,28 @@ mod tests {
         let bob_id = checked_projection_account(0x8A);
         let domain_id =
             DomainId::try_new("projection-catalog-assets", "universal").expect("domain");
-        let rose_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("name"));
-        let tulip_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "tulip".parse().expect("name"));
-        let rose_definition = AssetDefinition::numeric(rose_definition_id.clone())
-            .with_name("rose".to_owned())
-            .build(&authority_id);
-        let tulip_definition = AssetDefinition::numeric(tulip_definition_id.clone())
-            .with_name("tulip".to_owned())
-            .build(&authority_id);
+        let rose_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("name"),
+        );
+        let tulip_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "tulip".parse().expect("name"),
+        );
+        let rose_definition = AssetDefinition::numeric(
+            rose_definition_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority_id);
+        let tulip_definition = AssetDefinition::numeric(
+            tulip_definition_id.clone(),
+            "tulip".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority_id);
         let world = iroha_core::state::World::with_assets(
             [Domain::new(domain_id).build(&authority_id)],
             [
@@ -2837,11 +2849,17 @@ mod tests {
         let alice_id = checked_projection_account(0x8E);
         let bob_id = checked_projection_account(0x8F);
         let domain_id = DomainId::try_new("projection-holders", "universal").expect("domain");
-        let definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("name"));
-        let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("rose".to_owned())
-            .build(&authority_id);
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("name"),
+        );
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority_id);
         let world = iroha_core::state::World::with_assets(
             [Domain::new(domain_id).build(&authority_id)],
             [

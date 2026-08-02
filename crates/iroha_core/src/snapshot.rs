@@ -2,7 +2,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -17,7 +17,8 @@ use iroha_config::{
     snapshot::Mode,
 };
 use iroha_crypto::{
-    Algorithm, CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature,
+    Algorithm, CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, MerkleTreeCommitment,
+    PublicKey, Signature,
 };
 use iroha_data_model::{
     ChainId,
@@ -631,7 +632,12 @@ impl SnapshotMerkleMetadata {
         let Some(proof) = tree.get_proof(index) else {
             return Err(SnapshotMerkleError::ProofUnavailable { chunk_index });
         };
-        Ok(CompactMerkleProof::from_full(proof))
+        CompactMerkleProof::try_from_full(proof).map_err(|error| {
+            SnapshotMerkleError::ProofInvalid {
+                chunk_index,
+                reason: error.to_string(),
+            }
+        })
     }
 
     fn verify_chunk(
@@ -646,7 +652,15 @@ impl SnapshotMerkleMetadata {
         leaf.copy_from_slice(&digest);
         let leaf = HashOf::from_untyped_unchecked(Hash::prehashed(leaf));
         let root = self.parse_root()?;
-        if !proof.verify_sha256(&leaf, &root) {
+        let chunk_size = self.chunk_size()?;
+        let leaf_count = NonZeroU64::new(self.expected_leaf_count(chunk_size)?).ok_or(
+            SnapshotMerkleError::ProofInvalid {
+                chunk_index,
+                reason: "empty snapshot has no chunk membership proof".to_owned(),
+            },
+        )?;
+        let commitment = MerkleTreeCommitment::new(root, leaf_count);
+        if !proof.verify_sha256(&leaf, &commitment) {
             return Err(SnapshotMerkleError::ProofInvalid {
                 chunk_index,
                 reason: "failed to verify Merkle path".to_owned(),
@@ -3938,7 +3952,7 @@ mod tests {
             ManifestVersion, UniversalAccountId,
         },
         peer::PeerId,
-        smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress, ContractAlias},
+        smart_contract::{ContractAddress, ContractAlias},
         transaction::TransactionBuilder,
     };
     use nonzero_ext::nonzero;
@@ -5499,13 +5513,17 @@ mod tests {
             records.commit();
         }
 
-        let definition_id = AssetDefinitionId::new(
+        let definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
             "restart_asset".parse().expect("asset name"),
         );
-        let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("restart asset".to_owned())
-            .build(&owner);
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "restart asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner);
         let definition_alias: AssetDefinitionAlias =
             "restart_asset#universal".parse().expect("asset alias");
         let definition_binding = AssetDefinitionAliasBindingRecord {
@@ -5534,7 +5552,7 @@ mod tests {
         }
 
         let contract_address = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &owner,
             17,
             DataSpaceId::UNIVERSAL,
@@ -8308,6 +8326,129 @@ mod tests {
             panic!("corrupted chunk should fail verification");
         };
         assert!(matches!(err, SnapshotMerkleError::ProofInvalid { .. }));
+    }
+
+    #[test]
+    async fn merkle_last_chunk_proof_authenticates_ragged_five_leaf_geometry() {
+        let chunk_size = NonZeroUsize::new(4).expect("non-zero test chunk size");
+        let snapshot_bytes = (0_u8..20).collect::<Vec<_>>();
+        let metadata = SnapshotMerkleMetadata::from_bytes(&snapshot_bytes, chunk_size);
+
+        assert_eq!(
+            metadata
+                .expected_leaf_count(chunk_size)
+                .expect("five-leaf count"),
+            5
+        );
+        assert_eq!(metadata.leaf_hashes_hex.len(), 5);
+        metadata.verify_self().expect("valid five-leaf metadata");
+
+        let chunk_index = 4;
+        let last_chunk = &snapshot_bytes[chunk_index * chunk_size.get()..];
+        metadata
+            .verify_chunk(chunk_index, last_chunk)
+            .expect("last chunk proof should verify");
+
+        let proof = metadata
+            .proof_for_chunk(chunk_index)
+            .expect("last chunk proof");
+        assert_eq!(proof.depth(), 3);
+        assert_eq!(proof.dirs(), 0b100);
+        assert_eq!(proof.siblings().len(), 3);
+        assert!(proof.siblings()[0].is_none());
+        assert!(proof.siblings()[1].is_none());
+        assert!(proof.siblings()[2].is_some());
+
+        let digest = Sha256::digest(last_chunk);
+        let mut leaf_bytes = [0_u8; Hash::LENGTH];
+        leaf_bytes.copy_from_slice(&digest);
+        let leaf = HashOf::from_untyped_unchecked(Hash::prehashed(leaf_bytes));
+        let root = metadata.parse_root().expect("metadata root");
+        let commitment =
+            MerkleTreeCommitment::new(root, NonZeroU64::new(5).expect("non-zero leaf count"));
+        assert!(proof.verify_sha256(&leaf, &commitment));
+
+        let forged_sibling =
+            HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::new(b"forged snapshot sibling"));
+
+        let mut wrong_sibling_path = proof.siblings().to_vec();
+        wrong_sibling_path[2] = Some(forged_sibling);
+        let wrong_sibling =
+            CompactMerkleProof::from_parts(proof.depth(), proof.dirs(), wrong_sibling_path);
+        assert!(!wrong_sibling.verify_sha256(&leaf, &commitment));
+
+        let mut missing_sibling_path = proof.siblings().to_vec();
+        missing_sibling_path[2] = None;
+        let missing_sibling =
+            CompactMerkleProof::from_parts(proof.depth(), proof.dirs(), missing_sibling_path);
+        assert!(!missing_sibling.verify_sha256(&leaf, &commitment));
+
+        let mut unexpected_sibling_path = proof.siblings().to_vec();
+        unexpected_sibling_path[0] = Some(forged_sibling);
+        let unexpected_sibling =
+            CompactMerkleProof::from_parts(proof.depth(), proof.dirs(), unexpected_sibling_path);
+        assert!(!unexpected_sibling.verify_sha256(&leaf, &commitment));
+
+        let wrong_index =
+            CompactMerkleProof::from_parts(proof.depth(), 5, proof.siblings().to_vec());
+        assert!(!wrong_index.verify_sha256(&leaf, &commitment));
+
+        let wrong_count =
+            MerkleTreeCommitment::new(root, NonZeroU64::new(8).expect("non-zero leaf count"));
+        assert!(!proof.verify_sha256(&leaf, &wrong_count));
+
+        assert!(matches!(
+            metadata.verify_chunk(5, last_chunk),
+            Err(SnapshotMerkleError::ProofUnavailable { chunk_index: 5 })
+        ));
+    }
+
+    #[test]
+    async fn merkle_empty_snapshot_uses_one_leaf_commitment() {
+        let chunk_size = NonZeroUsize::new(4).expect("non-zero test chunk size");
+        let metadata = SnapshotMerkleMetadata::from_bytes(&[], chunk_size);
+
+        assert_eq!(metadata.total_len_bytes, 0);
+        assert_eq!(
+            metadata
+                .expected_leaf_count(chunk_size)
+                .expect("empty snapshot leaf count"),
+            1
+        );
+        assert_eq!(metadata.leaf_hashes_hex.len(), 1);
+        metadata
+            .verify_self()
+            .expect("valid empty snapshot metadata");
+        metadata
+            .verify_against_bytes(&[], chunk_size)
+            .expect("empty snapshot metadata should verify");
+        metadata
+            .verify_chunk(0, &[])
+            .expect("empty payload leaf proof should verify");
+
+        let proof = metadata
+            .proof_for_chunk(0)
+            .expect("empty payload leaf proof");
+        assert_eq!(proof.depth(), 0);
+        assert_eq!(proof.dirs(), 0);
+        assert!(proof.siblings().is_empty());
+
+        let digest = Sha256::digest([]);
+        let mut leaf_bytes = [0_u8; Hash::LENGTH];
+        leaf_bytes.copy_from_slice(&digest);
+        let leaf = HashOf::from_untyped_unchecked(Hash::prehashed(leaf_bytes));
+        let root = metadata.parse_root().expect("metadata root");
+        let commitment =
+            MerkleTreeCommitment::new(root, NonZeroU64::new(1).expect("non-zero leaf count"));
+        assert!(proof.verify_sha256(&leaf, &commitment));
+
+        let wrong_count =
+            MerkleTreeCommitment::new(root, NonZeroU64::new(2).expect("non-zero leaf count"));
+        assert!(!proof.verify_sha256(&leaf, &wrong_count));
+        assert!(matches!(
+            metadata.verify_chunk(1, &[]),
+            Err(SnapshotMerkleError::ProofUnavailable { chunk_index: 1 })
+        ));
     }
 
     #[test]

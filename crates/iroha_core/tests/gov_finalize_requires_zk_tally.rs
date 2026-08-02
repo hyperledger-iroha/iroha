@@ -43,7 +43,7 @@ fn finalize_referendum_rejects_unfinalized_zk_election() {
         mode: GovernanceReferendumMode::Zk,
     };
     let contract_address = ContractAddress::derive(
-        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &ALICE_ID,
         0,
         DataSpaceId::UNIVERSAL,

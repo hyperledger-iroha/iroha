@@ -46,13 +46,17 @@ fn multi_account_mint_returns_only_positive_holders() {
             .expect("register account");
     }
 
-    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "multi_coin".parse().unwrap(),
-    );
-    Register::asset_definition(
-        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
-    )
+    let definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "multi_coin".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        definition_id.clone(),
+        "multi_coin".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
 

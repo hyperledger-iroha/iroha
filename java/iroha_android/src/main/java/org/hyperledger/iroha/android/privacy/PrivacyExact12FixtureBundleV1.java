@@ -24,8 +24,8 @@ public final class PrivacyExact12FixtureBundleV1 {
               + PrivacyExact12FixtureCodecV1.ROW_COUNT
               + " rows");
     }
-    final PrivacyNativeBridge.ProtocolIdV1[] expected =
-        PrivacyNativeBridge.ProtocolIdV1.values();
+    final PrivacyProtocolIdV1[] expected =
+        PrivacyProtocolIdV1.values();
     if (expected.length != PrivacyExact12FixtureCodecV1.ROW_COUNT) {
       throw new IllegalStateException("privacy protocol registry must contain exactly 12 entries");
     }

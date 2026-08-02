@@ -247,12 +247,17 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let escrow = Account::new(escrow_id.clone()).build(&escrow_id);
 
     let domain = Domain::new(domain_id.clone()).build(&validator_id);
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("domain id"),
         "xor".parse().expect("asset definition name"),
     );
-    let asset_definition =
-        AssetDefinition::numeric(asset_definition_id.clone()).build(&validator_id);
+    let asset_definition = AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&validator_id);
 
     let validator_asset_id = AssetId::new(asset_definition_id.clone(), validator_id.clone());
     let delegator_asset_id = AssetId::new(asset_definition_id.clone(), delegator_id.clone());

@@ -10,7 +10,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::ToHex;
 use iroha_data_model::{
     events::data::sorafs::{SorafsGarPolicy, SorafsGarPolicyDetail, SorafsGarViolation},
-    sorafs::{capacity::ProviderId, gar::GarCdnPolicyV1, pin_registry::ManifestDigest},
+    sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
 use iroha_logger::debug;
 
@@ -19,8 +19,46 @@ use super::rate_limit::{
 };
 use crate::sorafs::AdmissionRegistry;
 
+/// Canonical, bounded HTTP authority host admitted to GAR event metadata.
+///
+/// The inner string is private so [`RequestContext`] cannot retain raw request
+/// header bytes by construction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CanonicalHost(String);
+
+impl CanonicalHost {
+    /// Parse and canonicalize an HTTP authority or `Host` header value.
+    pub(crate) fn parse_authority(raw: &str) -> Option<Self> {
+        crate::sorafs::site::normalize_host_header(raw).map(Self)
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Validated two-letter region code supplied by a trusted gateway boundary.
+///
+/// Construction is crate-private; the HTTP adapter additionally proves that
+/// the immediate peer is a configured trusted proxy before creating one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RegionCode(String);
+
+impl RegionCode {
+    /// Validate and canonicalize one trusted-proxy region header value.
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        let trimmed = raw.trim();
+        (trimmed.len() == 2 && trimmed.bytes().all(|byte| byte.is_ascii_alphabetic()))
+            .then(|| Self(trimmed.to_ascii_uppercase()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Policy configuration controlling the enforcement surface.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct GatewayPolicyConfig {
     /// Require manifests to ship the governance envelope before serving data.
     pub require_manifest_envelope: bool,
@@ -28,8 +66,6 @@ pub struct GatewayPolicyConfig {
     pub enforce_admission: bool,
     /// Rate limiting configuration applied to gateway clients.
     pub rate_limit: GatewayRateLimitConfig,
-    /// Optional CDN-facing GAR policy to enforce.
-    pub cdn_policy: Option<GarCdnPolicyV1>,
 }
 
 impl Default for GatewayPolicyConfig {
@@ -38,13 +74,12 @@ impl Default for GatewayPolicyConfig {
             require_manifest_envelope: true,
             enforce_admission: true,
             rate_limit: GatewayRateLimitConfig::default(),
-            cdn_policy: None,
         }
     }
 }
 
 /// Result returned after evaluating policy rules.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyDecision {
     /// Request is permitted to proceed.
     Allow,
@@ -53,7 +88,7 @@ pub enum PolicyDecision {
 }
 
 /// Detailed classification for policy denials.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyViolation {
     /// Manifest envelope was required but missing.
     ManifestEnvelopeMissing,
@@ -68,37 +103,6 @@ pub enum PolicyViolation {
     },
     /// Rate limiting rejected the client.
     RateLimited(RateLimitError),
-    /// Request TTL exceeds the GAR-configured override.
-    CdnTtlExceeded {
-        /// Allowed TTL in seconds.
-        allowed_secs: u64,
-        /// Observed TTL in seconds, when available.
-        observed_secs: Option<u64>,
-    },
-    /// Request must be served only after purge tags are present.
-    CdnPurgeRequired {
-        /// Tags that must accompany the request.
-        required_tags: Vec<String>,
-    },
-    /// Request is missing prerequisite moderation directives.
-    CdnModerationRequired {
-        /// Moderation slugs required by policy.
-        required_slugs: Vec<String>,
-    },
-    /// Request exceeded the CDN rate ceiling.
-    CdnRateCeilingExceeded {
-        /// Maximum requests per second allowed by policy.
-        ceiling_rps: u64,
-        /// Optional retry-after hint propagated from the limiter.
-        retry_after: Option<Duration>,
-    },
-    /// Request originated from a denied or unsupported region.
-    CdnGeofenceDenied {
-        /// Region label (header or derived), when available.
-        region: Option<String>,
-    },
-    /// Request blocked due to an active legal hold.
-    CdnLegalHoldActive,
 }
 
 /// Context supplied to the policy evaluator for each request.
@@ -112,11 +116,9 @@ pub struct RequestContext<'a> {
     wall_time: SystemTime,
     monotonic_now: Instant,
     remote_addr: Option<SocketAddr>,
-    canonical_host: Option<String>,
-    region: Option<String>,
+    canonical_host: Option<CanonicalHost>,
+    region: Option<RegionCode>,
     cache_ttl_secs: Option<u64>,
-    policy_tags: Vec<String>,
-    moderation_slugs: Vec<String>,
 }
 
 impl<'a> RequestContext<'a> {
@@ -139,8 +141,6 @@ impl<'a> RequestContext<'a> {
             canonical_host: None,
             region: None,
             cache_ttl_secs: None,
-            policy_tags: Vec::new(),
-            moderation_slugs: Vec::new(),
         }
     }
 
@@ -209,23 +209,17 @@ impl<'a> RequestContext<'a> {
         self
     }
 
-    /// Attach the canonical host associated with the request.
+    /// Attach the validated canonical host associated with the request.
     #[must_use]
-    pub fn with_canonical_host(mut self, host: impl Into<String>) -> Self {
-        let host = host.into();
-        if !host.is_empty() {
-            self.canonical_host = Some(host);
-        }
+    pub(crate) fn with_canonical_host(mut self, host: CanonicalHost) -> Self {
+        self.canonical_host = Some(host);
         self
     }
 
-    /// Attach the region associated with the request (e.g., ISO country or POP code).
+    /// Attach the validated region associated with the request.
     #[must_use]
-    pub fn with_region(mut self, region: impl Into<String>) -> Self {
-        let region = region.into();
-        if !region.is_empty() {
-            self.region = Some(region);
-        }
+    pub(crate) fn with_region(mut self, region: RegionCode) -> Self {
+        self.region = Some(region);
         self
     }
 
@@ -233,38 +227,6 @@ impl<'a> RequestContext<'a> {
     #[must_use]
     pub fn with_cache_ttl_secs(mut self, ttl: u64) -> Self {
         self.cache_ttl_secs = Some(ttl);
-        self
-    }
-
-    /// Attach policy tags supplied by the request (comma-separated header).
-    #[must_use]
-    pub fn with_policy_tags<I, S>(mut self, tags: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        for tag in tags {
-            let value = tag.into();
-            if !value.is_empty() {
-                self.policy_tags.push(value);
-            }
-        }
-        self
-    }
-
-    /// Attach moderation directive slugs that were already applied upstream.
-    #[must_use]
-    pub fn with_moderation_slugs<I, S>(mut self, slugs: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        for slug in slugs {
-            let value = slug.into();
-            if !value.is_empty() {
-                self.moderation_slugs.push(value);
-            }
-        }
         self
     }
 
@@ -289,31 +251,19 @@ impl<'a> RequestContext<'a> {
     /// Canonical host for the request, if supplied.
     #[must_use]
     pub fn canonical_host(&self) -> Option<&str> {
-        self.canonical_host.as_deref()
+        self.canonical_host.as_ref().map(CanonicalHost::as_str)
     }
 
     /// Optional region label associated with the request.
     #[must_use]
     pub fn region(&self) -> Option<&str> {
-        self.region.as_deref()
+        self.region.as_ref().map(RegionCode::as_str)
     }
 
     /// Optional cache TTL observed for the request (seconds).
     #[must_use]
     pub fn cache_ttl_secs(&self) -> Option<u64> {
         self.cache_ttl_secs
-    }
-
-    /// Policy tags supplied with the request.
-    #[must_use]
-    pub fn policy_tags(&self) -> &[String] {
-        &self.policy_tags
-    }
-
-    /// Moderation directive slugs supplied with the request.
-    #[must_use]
-    pub fn moderation_slugs(&self) -> &[String] {
-        &self.moderation_slugs
     }
 }
 
@@ -330,136 +280,8 @@ impl PolicyViolation {
                 RateLimitError::Limited { .. } => ("rate_limit", "limited"),
                 RateLimitError::Banned { .. } => ("rate_limit", "banned"),
             },
-            Self::CdnTtlExceeded { .. } => ("cdn", "ttl"),
-            Self::CdnPurgeRequired { .. } => ("cdn", "purge"),
-            Self::CdnModerationRequired { .. } => ("cdn", "moderation"),
-            Self::CdnRateCeilingExceeded { .. } => ("cdn", "rate_ceiling"),
-            Self::CdnGeofenceDenied { .. } => ("cdn", "geofence"),
-            Self::CdnLegalHoldActive => ("cdn", "legal_hold"),
         }
     }
-}
-
-fn normalized_label(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_ascii_uppercase())
-    }
-}
-
-fn tags_intersect(required: &[String], provided: &[String]) -> bool {
-    required.iter().any(|required_tag| {
-        provided
-            .iter()
-            .any(|candidate| required_tag.eq_ignore_ascii_case(candidate))
-    })
-}
-
-fn build_cdn_rate_limiter(
-    cdn_policy: Option<&GarCdnPolicyV1>,
-    fallback: &GatewayRateLimitConfig,
-) -> Option<GatewayRateLimiter> {
-    let ceiling = cdn_policy.and_then(|policy| policy.rate_ceiling_rps)?;
-    if ceiling == 0 {
-        return None;
-    }
-    let limit = ceiling.min(u32::MAX as u64) as u32;
-    let config = GatewayRateLimitConfig {
-        max_requests: Some(limit),
-        window: Duration::from_secs(1),
-        ban_duration: fallback.ban_duration,
-    };
-    Some(GatewayRateLimiter::new(config))
-}
-
-fn enforce_cdn_policy(
-    policy: &GarCdnPolicyV1,
-    limiter: Option<&GatewayRateLimiter>,
-    ctx: &RequestContext<'_>,
-) -> Option<PolicyViolation> {
-    if policy.legal_hold {
-        return Some(PolicyViolation::CdnLegalHoldActive);
-    }
-
-    let region = ctx.region().and_then(normalized_label);
-    if region.is_none() && (!policy.allow_regions.is_empty() || !policy.deny_regions.is_empty()) {
-        return Some(PolicyViolation::CdnGeofenceDenied { region: None });
-    }
-    if let Some(region_label) = &region {
-        if policy
-            .deny_regions
-            .iter()
-            .any(|entry| entry.eq_ignore_ascii_case(region_label))
-        {
-            return Some(PolicyViolation::CdnGeofenceDenied {
-                region: Some(region_label.clone()),
-            });
-        }
-    }
-
-    if !policy.allow_regions.is_empty() {
-        match region {
-            Some(region_label) => {
-                if !policy
-                    .allow_regions
-                    .iter()
-                    .any(|entry| entry.eq_ignore_ascii_case(&region_label))
-                {
-                    return Some(PolicyViolation::CdnGeofenceDenied {
-                        region: Some(region_label),
-                    });
-                }
-            }
-            None => {
-                return Some(PolicyViolation::CdnGeofenceDenied { region: None });
-            }
-        }
-    }
-
-    if let Some(ttl_override) = policy.ttl_override_secs {
-        if let Some(observed) = ctx.cache_ttl_secs() {
-            if observed > ttl_override {
-                return Some(PolicyViolation::CdnTtlExceeded {
-                    allowed_secs: ttl_override,
-                    observed_secs: Some(observed),
-                });
-            }
-        }
-    }
-
-    if !policy.purge_tags.is_empty() && !tags_intersect(&policy.purge_tags, ctx.policy_tags()) {
-        return Some(PolicyViolation::CdnPurgeRequired {
-            required_tags: policy.purge_tags.clone(),
-        });
-    }
-
-    if !policy.moderation_slugs.is_empty()
-        && !tags_intersect(&policy.moderation_slugs, ctx.moderation_slugs())
-    {
-        return Some(PolicyViolation::CdnModerationRequired {
-            required_slugs: policy.moderation_slugs.clone(),
-        });
-    }
-
-    if let (Some(limiter), Some(ceiling)) = (limiter, policy.rate_ceiling_rps) {
-        // This is a policy-wide edge ceiling. A request-controlled Host value must not create
-        // a fresh bucket and bypass the configured budget.
-        let fingerprint = ClientFingerprint::from_identifier("cdn|global");
-        if let Err(error) = limiter.check(&fingerprint, ctx.monotonic_now()) {
-            let retry_after = match error {
-                RateLimitError::Limited { retry_after } => Some(retry_after),
-                RateLimitError::Banned { retry_after } => retry_after,
-            };
-            return Some(PolicyViolation::CdnRateCeilingExceeded {
-                ceiling_rps: ceiling,
-                retry_after,
-            });
-        }
-    }
-
-    None
 }
 
 /// Policy orchestrator performing GAR and rate limiting checks.
@@ -468,7 +290,6 @@ pub struct GatewayPolicy {
     config: GatewayPolicyConfig,
     admission: Option<Arc<AdmissionRegistry>>,
     rate_limiter: GatewayRateLimiter,
-    cdn_rate_limiter: Option<GatewayRateLimiter>,
 }
 
 impl GatewayPolicy {
@@ -479,13 +300,10 @@ impl GatewayPolicy {
         admission: Option<Arc<AdmissionRegistry>>,
         rate_limiter: GatewayRateLimiter,
     ) -> Self {
-        let cdn_rate_limiter =
-            build_cdn_rate_limiter(config.cdn_policy.as_ref(), &config.rate_limit);
         Self {
             config,
             admission,
             rate_limiter,
-            cdn_rate_limiter,
         }
     }
 
@@ -493,7 +311,7 @@ impl GatewayPolicy {
     #[must_use]
     pub fn new_default(admission: Option<Arc<AdmissionRegistry>>) -> Self {
         let config = GatewayPolicyConfig::default();
-        let rate_limiter = GatewayRateLimiter::new(config.rate_limit.clone());
+        let rate_limiter = GatewayRateLimiter::new(config.rate_limit);
         Self::new(config, admission, rate_limiter)
     }
 
@@ -526,13 +344,6 @@ impl GatewayPolicy {
             }
         }
 
-        if let Some(policy) = &self.config.cdn_policy {
-            if let Some(violation) = enforce_cdn_policy(policy, self.cdn_rate_limiter.as_ref(), ctx)
-            {
-                return PolicyDecision::Deny(violation);
-            }
-        }
-
         if let Err(err) = self.rate_limiter.check(ctx.client(), ctx.monotonic_now()) {
             return PolicyDecision::Deny(PolicyViolation::RateLimited(err));
         }
@@ -558,11 +369,11 @@ pub fn build_gar_violation_event(
         .map(|digest| ManifestDigest::new(*digest));
     let manifest_cid_b64 = ctx.content_cid().map(|cid| BASE64_STD.encode(cid));
     let mut retry_after_seconds: Option<u64> = None;
-    let mut region = ctx.region().map(ToOwned::to_owned);
+    let region = ctx.region().map(ToOwned::to_owned);
     let host = ctx.canonical_host().map(ToOwned::to_owned);
     let mut policy_labels: Vec<String> = Vec::new();
-    let mut observed_ttl_seconds = ctx.cache_ttl_secs();
-    let mut rate_ceiling_rps: Option<u64> = None;
+    let observed_ttl_seconds = ctx.cache_ttl_secs();
+    let rate_ceiling_rps: Option<u64> = None;
 
     let (policy, detail) = match violation {
         PolicyViolation::ManifestEnvelopeMissing => (
@@ -597,57 +408,6 @@ pub fn build_gar_violation_event(
             };
             (SorafsGarPolicy::RateLimit, detail)
         }
-        PolicyViolation::CdnTtlExceeded {
-            allowed_secs,
-            observed_secs,
-        } => {
-            if observed_ttl_seconds.is_none() {
-                observed_ttl_seconds = *observed_secs;
-            }
-            policy_labels.push(format!("ttl<= {allowed_secs}s"));
-            if let Some(observed) = observed_secs {
-                policy_labels.push(format!("ttl_observed={observed}s"));
-            }
-            (SorafsGarPolicy::Cdn, SorafsGarPolicyDetail::CdnTtlExceeded)
-        }
-        PolicyViolation::CdnPurgeRequired { required_tags } => {
-            policy_labels.extend(required_tags.clone());
-            (
-                SorafsGarPolicy::Cdn,
-                SorafsGarPolicyDetail::CdnPurgeRequired,
-            )
-        }
-        PolicyViolation::CdnModerationRequired { required_slugs } => {
-            policy_labels.extend(required_slugs.clone());
-            (
-                SorafsGarPolicy::Cdn,
-                SorafsGarPolicyDetail::CdnModerationBlocked,
-            )
-        }
-        PolicyViolation::CdnRateCeilingExceeded {
-            ceiling_rps,
-            retry_after,
-        } => {
-            rate_ceiling_rps = Some(*ceiling_rps);
-            retry_after_seconds = retry_after.map(|duration| duration.as_secs());
-            (
-                SorafsGarPolicy::Cdn,
-                SorafsGarPolicyDetail::CdnRateCeilingExceeded,
-            )
-        }
-        PolicyViolation::CdnGeofenceDenied { region: geo } => {
-            if region.is_none() {
-                region.clone_from(geo);
-            }
-            (
-                SorafsGarPolicy::Cdn,
-                SorafsGarPolicyDetail::CdnGeofenceDenied,
-            )
-        }
-        PolicyViolation::CdnLegalHoldActive => (
-            SorafsGarPolicy::Cdn,
-            SorafsGarPolicyDetail::CdnLegalHoldActive,
-        ),
     };
 
     let (reason_label, detail_label) = violation.telemetry_labels();
@@ -766,7 +526,7 @@ mod tests {
             ..GatewayPolicyConfig::default()
         };
         let policy = GatewayPolicy::new(
-            config.clone(),
+            config,
             admission,
             GatewayRateLimiter::new(config.rate_limit),
         );
@@ -838,112 +598,24 @@ mod tests {
         );
     }
 
-    fn policy_with_cdn(cdn: GarCdnPolicyV1) -> GatewayPolicy {
-        let config = GatewayPolicyConfig {
-            enforce_admission: false,
-            require_manifest_envelope: false,
-            cdn_policy: Some(cdn.clone()),
-            ..GatewayPolicyConfig::default()
-        };
-        GatewayPolicy::new(
-            config.clone(),
-            None,
-            GatewayRateLimiter::new(config.rate_limit),
-        )
-    }
-
     fn base_context(client: &ClientFingerprint) -> RequestContext<'_> {
         RequestContext::new(client, SystemTime::now(), Instant::now()).with_manifest_envelope(true)
     }
 
     #[test]
-    fn cdn_policy_blocks_legal_hold() {
+    fn request_context_host_and_region_are_canonical_by_construction() {
         let client = ClientFingerprint::from_identifier("client");
-        let policy = policy_with_cdn(GarCdnPolicyV1 {
-            legal_hold: true,
-            ..GarCdnPolicyV1::default()
-        });
-        let decision = policy.evaluate(&base_context(&client));
-        assert!(matches!(
-            decision,
-            PolicyDecision::Deny(PolicyViolation::CdnLegalHoldActive)
-        ));
-    }
+        let host = CanonicalHost::parse_authority(" CDN.Example.:443 ").expect("canonical host");
+        let region = RegionCode::parse(" us ").expect("region");
+        let ctx = base_context(&client)
+            .with_canonical_host(host)
+            .with_region(region);
 
-    #[test]
-    fn cdn_policy_rejects_geofence_miss() {
-        let client = ClientFingerprint::from_identifier("client");
-        let policy = policy_with_cdn(GarCdnPolicyV1 {
-            allow_regions: vec!["EU".to_string()],
-            deny_regions: vec!["US".to_string()],
-            ..GarCdnPolicyV1::default()
-        });
-        let ctx = base_context(&client).with_region("us");
-        let decision = policy.evaluate(&ctx);
-        assert!(matches!(
-            decision,
-            PolicyDecision::Deny(PolicyViolation::CdnGeofenceDenied { .. })
-        ));
-    }
-
-    #[test]
-    fn cdn_policy_fails_closed_without_authoritative_region_metadata() {
-        let client = ClientFingerprint::from_identifier("client");
-        let policy = policy_with_cdn(GarCdnPolicyV1 {
-            deny_regions: vec!["US".to_string()],
-            ..GarCdnPolicyV1::default()
-        });
-        let decision = policy.evaluate(&base_context(&client));
-        assert!(matches!(
-            decision,
-            PolicyDecision::Deny(PolicyViolation::CdnGeofenceDenied { region: None })
-        ));
-    }
-
-    #[test]
-    fn cdn_policy_enforces_ttl_override() {
-        let client = ClientFingerprint::from_identifier("client");
-        let policy = policy_with_cdn(GarCdnPolicyV1 {
-            ttl_override_secs: Some(60),
-            ..GarCdnPolicyV1::default()
-        });
-        let ctx = base_context(&client).with_cache_ttl_secs(120);
-        let decision = policy.evaluate(&ctx);
-        assert!(matches!(
-            decision,
-            PolicyDecision::Deny(PolicyViolation::CdnTtlExceeded { .. })
-        ));
-    }
-
-    #[test]
-    fn cdn_policy_requires_purge_tags() {
-        let client = ClientFingerprint::from_identifier("client");
-        let policy = policy_with_cdn(GarCdnPolicyV1 {
-            purge_tags: vec!["hotfix".to_string()],
-            ..GarCdnPolicyV1::default()
-        });
-        let ctx = base_context(&client);
-        let decision = policy.evaluate(&ctx);
-        assert!(matches!(
-            decision,
-            PolicyDecision::Deny(PolicyViolation::CdnPurgeRequired { .. })
-        ));
-    }
-
-    #[test]
-    fn cdn_policy_rate_ceiling_trips() {
-        let client = ClientFingerprint::from_identifier("client");
-        let policy = policy_with_cdn(GarCdnPolicyV1 {
-            rate_ceiling_rps: Some(1),
-            ..GarCdnPolicyV1::default()
-        });
-        let ctx = base_context(&client).with_canonical_host("cdn.example");
-        assert!(matches!(policy.evaluate(&ctx), PolicyDecision::Allow));
-        let rotated_host = base_context(&client).with_canonical_host("attacker.example");
-        let denied = policy.evaluate(&rotated_host);
-        assert!(matches!(
-            denied,
-            PolicyDecision::Deny(PolicyViolation::CdnRateCeilingExceeded { .. })
-        ));
+        assert_eq!(ctx.canonical_host(), Some("cdn.example"));
+        assert_eq!(ctx.region(), Some("US"));
+        assert!(CanonicalHost::parse_authority("").is_none());
+        assert!(CanonicalHost::parse_authority(&format!("{}.example", "a".repeat(254))).is_none());
+        assert!(RegionCode::parse("USA").is_none());
+        assert!(RegionCode::parse("U1").is_none());
     }
 }

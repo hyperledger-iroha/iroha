@@ -1,0 +1,254 @@
+{
+  "$schema": "https://grafana.com/docs/grafana/latest/dashboards/reference/json-model/",
+  "title": "Musubi V1 Registry and Publication",
+  "uid": "musubi-registry-v1",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": [
+    "musubi",
+    "registry-v1",
+    "sorafs"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "pluginId": "prometheus",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Oldest Publication by Phase",
+      "id": 1,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "max by (phase) (musubi_publication_phase_age_seconds)",
+          "legendFormat": "{{phase}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Releases Below Quorum",
+      "id": 2,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "max(musubi_replication_shortfall_releases)",
+          "legendFormat": "shortfall",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Seed-Ingress Deadletters (10m)",
+      "id": 3,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(musubi_ingest_deadletters_total[10m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Integrity Failures (10m)",
+      "id": 4,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (surface) (increase(musubi_integrity_failures_total[10m]))",
+          "legendFormat": "{{surface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache Corruption (15m)",
+      "id": 5,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (operation) (increase(musubi_cache_corruption_total[15m]))",
+          "legendFormat": "{{operation}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cursor Failures (10m)",
+      "id": 6,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(musubi_cursor_failures_total[10m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Governance Rejections (10m)",
+      "id": 7,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (action, reason) (increase(musubi_governance_rejections_total[10m]))",
+          "legendFormat": "{{action}} / {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Musubi Storage Utilization",
+      "id": 8,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "musubi_storage_bytes_used / clamp_min(musubi_storage_bytes_capacity, 1)",
+          "legendFormat": "utilization",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.85
+              },
+              {
+                "color": "red",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Current Alert Inputs",
+      "id": 9,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "max by (phase) (musubi_publication_phase_age_seconds)",
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (reason) (increase(musubi_ingest_deadletters_total[1h]))",
+          "format": "table",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (surface) (increase(musubi_integrity_failures_total[1h]))",
+          "format": "table",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    }
+  ]
+}

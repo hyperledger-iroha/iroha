@@ -16,6 +16,11 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
 };
+use iroha_data_model::{
+    isi::musubi::SetMusubiReleaseYankV1,
+    musubi::{MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1},
+    nexus::DataSpaceId,
+};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use norito::json::Value;
 use tower::ServiceExt as _;
@@ -1968,7 +1973,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             10320,
             "iroha.gov.contract.get",
             norito::json!({
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             }),
         ),
         (
@@ -2824,38 +2829,39 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.domains.query"),
         "expected agent-friendly domains query MCP tool"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.musubi.search"),
-        "expected agent-friendly Musubi search MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.musubi.release.get"),
-        "expected agent-friendly Musubi release detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.musubi.package.releases"),
-        "expected agent-friendly Musubi package releases MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.musubi.package.versions"),
-        "expected agent-friendly Musubi package versions MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.musubi.alias.resolve"),
-        "expected agent-friendly Musubi alias resolve MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.musubi.instructions.yank_release"),
-        "expected agent-friendly Musubi yank instruction MCP tool"
-    );
+    for expected in [
+        "iroha.musubi.queries.exact_package",
+        "iroha.musubi.queries.exact_release",
+        "iroha.musubi.queries.resolver_index",
+        "iroha.musubi.queries.versions",
+        "iroha.musubi.queries.maintainers",
+        "iroha.musubi.queries.archive_locations",
+        "iroha.musubi.queries.alias",
+        "iroha.musubi.queries.alias_history",
+        "iroha.musubi.queries.ordered_prefix",
+        "iroha.musubi.instructions.namespace_binding_register",
+        "iroha.musubi.instructions.archive_register",
+        "iroha.musubi.instructions.archive_location_add",
+        "iroha.musubi.instructions.archive_location_retire",
+        "iroha.musubi.instructions.release_publish",
+        "iroha.musubi.instructions.release_yank_set",
+        "iroha.musubi.instructions.package_metadata_set",
+        "iroha.musubi.instructions.package_member_invite",
+        "iroha.musubi.instructions.package_member_accept",
+        "iroha.musubi.instructions.package_member_set_role",
+        "iroha.musubi.instructions.package_member_remove",
+        "iroha.musubi.instructions.alias_register",
+        "iroha.musubi.instructions.package_recover",
+        "iroha.musubi.instructions.alias_retarget",
+        "iroha.musubi.instructions.artifact_takedown",
+        "iroha.musubi.instructions.registry_policy_set",
+        "iroha.musubi.instructions.release_digest_assert",
+    ] {
+        assert!(
+            names.iter().any(|name| name == expected),
+            "expected first-release Musubi MCP tool `{expected}`"
+        );
+    }
     assert!(
         names
             .iter()
@@ -4588,7 +4594,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_musubi_search_accepts_flat_query_fields() {
+async fn mcp_jsonrpc_tools_call_musubi_v1_query_requires_typed_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -4601,12 +4607,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_search_accepts_flat_query_fie
             "id": 10622301,
             "method": "tools/call",
             "params": {
-                "name": "iroha.musubi.search",
-                "arguments": {
-                    "query": "swap",
-                    "namespace": "dex.universal",
-                    "limit": 10
-                }
+                "name": "iroha.musubi.queries.exact_package",
+                "arguments": {}
             }
         }),
     )
@@ -4614,22 +4616,20 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_search_accepts_flat_query_fie
 
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !tool_is_error(&call),
-        "Musubi search alias with flat query fields should dispatch successfully"
+        tool_is_error(&call),
+        "Musubi V1 queries must reject the retired flat-field envelope"
     );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
     assert!(
-        structured
-            .get("body")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty),
-        "empty registry should return an empty package list"
+        structured_content(&call)
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("body")),
+        "missing typed request body should produce a focused error"
     );
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_musubi_yank_instruction_builds_unsigned_payload() {
+async fn mcp_jsonrpc_tools_call_musubi_v1_rejects_signing_fields() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -4639,13 +4639,66 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_yank_instruction_builds_unsig
         &app,
         norito::json!({
             "jsonrpc": "2.0",
+            "id": 106223011,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.musubi.instructions.release_yank_set",
+                "arguments": {
+                    "body": {},
+                    "private_key": "must-not-be-accepted"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(tool_is_error(&call));
+    assert!(
+        structured_content(&call)
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("private_key")),
+        "Musubi V1 MCP tools must reject signing material before dispatch"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_payload() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let instruction = SetMusubiReleaseYankV1::new(
+        MusubiReleaseIdV1::new(
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(7),
+                MusubiPackageScopeV1::DataspaceRoot,
+                "swap-core".parse().expect("package name"),
+            ),
+            "1.2.3".parse().expect("version"),
+        ),
+        true,
+        "bad archive".parse().expect("reason"),
+        1,
+    );
+    let body = norito::json!({
+        "release": norito::json::to_value(&instruction.release).expect("release JSON"),
+        "yanked": instruction.yanked,
+        "reason": norito::json::to_value(&instruction.reason).expect("reason JSON"),
+        "expected_yank_revision": instruction.expected_yank_revision,
+    });
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
             "id": 10622302,
             "method": "tools/call",
             "params": {
-                "name": "iroha.musubi.instructions.yank_release",
+                "name": "iroha.musubi.instructions.release_yank_set",
                 "arguments": {
-                    "package": "dex.universal/swap-core@1.2.3",
-                    "reason": "bad archive"
+                    "body": body
                 }
             }
         }),
@@ -4665,13 +4718,24 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_yank_instruction_builds_unsig
         .expect("instruction response body");
     assert_eq!(
         body.get("wire_id").and_then(Value::as_str),
-        Some("iroha.musubi.release.yank")
+        Some(SetMusubiReleaseYankV1::WIRE_ID)
     );
     assert!(
         body.get("instruction_base64")
             .and_then(Value::as_str)
             .is_some_and(|value| !value.is_empty()),
         "instruction base64 should be present"
+    );
+    assert_eq!(
+        body.pointer("/instruction_json/payload/yanked")
+            .and_then(Value::as_bool),
+        Some(true),
+        "instruction preview should expose the exact typed payload"
+    );
+    assert_eq!(
+        body.pointer("/instruction_json/payload/expected_yank_revision")
+            .and_then(Value::as_u64),
+        Some(1)
     );
     assert!(
         !body.contains_key("private_key"),
@@ -4688,10 +4752,23 @@ async fn mcp_musubi_instruction_schemas_do_not_publish_private_key_fields() {
 
     let app = build_router(cfg);
     for tool_name in [
-        "iroha.musubi.instructions.publish_release",
-        "iroha.musubi.instructions.yank_release",
-        "iroha.musubi.instructions.set_alias",
-        "iroha.musubi.instructions.assert_release_exists",
+        "iroha.musubi.instructions.namespace_binding_register",
+        "iroha.musubi.instructions.archive_register",
+        "iroha.musubi.instructions.archive_location_add",
+        "iroha.musubi.instructions.archive_location_retire",
+        "iroha.musubi.instructions.release_publish",
+        "iroha.musubi.instructions.release_yank_set",
+        "iroha.musubi.instructions.package_metadata_set",
+        "iroha.musubi.instructions.package_member_invite",
+        "iroha.musubi.instructions.package_member_accept",
+        "iroha.musubi.instructions.package_member_set_role",
+        "iroha.musubi.instructions.package_member_remove",
+        "iroha.musubi.instructions.alias_register",
+        "iroha.musubi.instructions.package_recover",
+        "iroha.musubi.instructions.alias_retarget",
+        "iroha.musubi.instructions.artifact_takedown",
+        "iroha.musubi.instructions.registry_policy_set",
+        "iroha.musubi.instructions.release_digest_assert",
     ] {
         let tool = find_tool(&app, tool_name).await;
         let schema = tool.get("inputSchema").expect("input schema");

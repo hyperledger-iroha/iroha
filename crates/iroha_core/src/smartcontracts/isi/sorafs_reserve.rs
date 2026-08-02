@@ -2610,7 +2610,7 @@ mod tests {
     }
 
     fn asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("reserve", "universal").expect("reserve domain"),
             "xor".parse().expect("reserve asset"),
         )
@@ -2674,10 +2674,16 @@ mod tests {
         provider_balance: Quantity,
     ) -> State {
         let definition_id = asset_definition();
-        let domain = Domain::new(definition_id.domain().clone()).build(governance);
-        let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("XOR".to_owned())
-            .build(governance);
+        let domain =
+            Domain::new(DomainId::try_new("reserve", "universal").expect("reserve domain"))
+                .build(governance);
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(governance);
         let provider_asset = Asset::new(
             AssetId::of(definition_id.clone(), provider.clone()),
             provider_balance,

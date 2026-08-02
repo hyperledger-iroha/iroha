@@ -1371,6 +1371,7 @@ mod tests {
 
         let entry = GuardDirectoryEntry {
             bundle: bundle.clone(),
+            snapshot_valid_until_unix: initial_bundle.snapshot.valid_until_unix,
             directory_hash: certificate.directory_hash,
             validation_phase: CertificateValidationPhase::Phase3RequireDual,
         };
@@ -1467,6 +1468,7 @@ mod tests {
 
         let entry = GuardDirectoryEntry {
             bundle,
+            snapshot_valid_until_unix: snapshot_bundle.snapshot.valid_until_unix,
             directory_hash: certificate.directory_hash,
             validation_phase: CertificateValidationPhase::Phase3RequireDual,
         };
@@ -1554,6 +1556,7 @@ mod tests {
 
         let entry = GuardDirectoryEntry {
             bundle,
+            snapshot_valid_until_unix: snapshot_bundle.snapshot.valid_until_unix,
             directory_hash: certificate.directory_hash,
             validation_phase: CertificateValidationPhase::Phase3RequireDual,
         };
@@ -1767,7 +1770,9 @@ mod tests {
             bandwidth_bytes_per_sec: 2_500_000,
             reputation_weight: 90,
             endpoints: vec![RelayEndpointV2 {
-                url: "soranet://relay.example:443".to_string(),
+                quic_multiaddr: "/dns/relay.example/udp/443/quic".to_string(),
+                tls_server_name: "relay.example".to_string(),
+                tls_spki_sha256: [0xA5; 32],
                 priority: 0,
                 tags: vec!["norito_stream".to_string()],
             }],

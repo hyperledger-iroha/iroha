@@ -11,6 +11,7 @@
     clippy::unnecessary_wraps
 )]
 
+mod authenticated_block_proofs;
 mod secure_private_fs;
 
 macro_rules! norito_json {
@@ -236,7 +237,8 @@ use sorafs_manifest::{
     OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
     OrderbookValidationPayloadKindV1, XorQuantity,
     alias_cache::{
-        AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof, unix_now_secs,
+        AliasCachePolicy, AliasProofEvaluation, AliasProofState,
+        decode_alias_proof_untrusted_signers, unix_now_secs,
     },
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -2115,22 +2117,30 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
     header.set_da_commitments_hash(Some(da_hash));
+    let mut envelope = LaneRelayEnvelope::new(header, None, Some(da_hash), settlement, 64)
+        .map_err(norito_to_napi)?
+        .with_lane_block_descriptor_hash(Some(Hash::new(
+            b"iroha-js-lane-relay-fixture-descriptor-v1",
+        )))
+        .with_manifest_root(Some([0x42; 32]));
     let validator_key = KeyPair::try_from_seed(
         b"iroha-js-lane-relay-fixture-validator-v1".to_vec(),
         Algorithm::BlsNormal,
     )
     .map_err(norito_to_napi)?;
     let validator_set = vec![PeerId::from(validator_key.public_key().clone())];
-    let mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, PERMISSIONED_TAG);
+    let mode_tag = envelope
+        .lane_finality_qc_mode_tag(PERMISSIONED_TAG)
+        .map_err(norito_to_napi)?;
     let parent_state_root = Hash::new([0xBA; 4]);
     let post_state_root = Hash::new([0xBB; 4]);
-    let view = header.view_change_index();
+    let view = envelope.block_header.view_change_index();
     let vote = QcVote {
         phase: CertPhase::Commit,
-        block_hash: header.hash(),
+        block_hash: envelope.block_header.hash(),
         parent_state_root,
         post_state_root,
-        height: header.height().get(),
+        height: envelope.block_header.height().get(),
         view,
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
@@ -2152,10 +2162,10 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
             .map_err(norito_to_napi)?;
     let qc = Qc {
         phase: CertPhase::Commit,
-        subject_block_hash: header.hash(),
+        subject_block_hash: envelope.block_header.hash(),
         parent_state_root,
         post_state_root,
-        height: header.height().get(),
+        height: envelope.block_header.height().get(),
         view,
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
@@ -2170,8 +2180,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
             bls_aggregate_signature: aggregate_signature,
         },
     };
-    let envelope = LaneRelayEnvelope::new(header, Some(qc), Some(da_hash), settlement, 64)
-        .map_err(norito_to_napi)?;
+    envelope.qc = Some(qc);
     let valid =
         Buffer::from(norito::to_bytes(&envelope).map_err(|err| norito_to_napi(format!("{err}")))?);
 
@@ -3006,7 +3015,7 @@ pub fn sorafs_evaluate_alias_proof(
             format!("failed to decode base64 proof: {err}"),
         )
     })?;
-    let bundle = decode_alias_proof(&proof_bytes).map_err(norito_to_napi)?;
+    let bundle = decode_alias_proof_untrusted_signers(&proof_bytes).map_err(norito_to_napi)?;
     let evaluation = policy.evaluate(&bundle, now);
     alias_evaluation_to_js(evaluation)
 }
@@ -13613,6 +13622,7 @@ pub fn build_time_trigger_action(
         authority,
         TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
     )
+    .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?
     .with_metadata(metadata);
     encode_trigger_action(&action)
 }
@@ -13648,6 +13658,7 @@ pub fn build_precommit_trigger_action(
         authority,
         TimeEventFilter::new(ExecutionTime::PreCommit),
     )
+    .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?
     .with_metadata(metadata);
     encode_trigger_action(&action)
 }
@@ -14431,7 +14442,8 @@ mod tests {
                 Repeats::Indefinitely,
                 authority,
                 TimeEventFilter::new(ExecutionTime::PreCommit),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let register =
             InstructionBox::from(RegisterBox::Trigger(Register::<Trigger>::trigger(trigger)));
@@ -14522,6 +14534,7 @@ mod tests {
                 period_ms: None,
             })),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(metadata);
         let encoded_billing = json::to_value(&billing_action)
             .expect("billing action JSON")
@@ -14557,7 +14570,8 @@ mod tests {
             ExecuteTriggerEventFilter::new()
                 .for_trigger(usage_trigger_id.clone())
                 .under_authority(authority),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let encoded_usage = json::to_value(&usage_action)
             .expect("usage action JSON")
             .as_str()
@@ -15355,7 +15369,8 @@ seiyaku Privacy {
         let proof_bytes = BASE64
             .decode(fixture.proof_b64.as_bytes())
             .expect("decode proof fixture");
-        let bundle = decode_alias_proof(&proof_bytes).expect("decode alias proof");
+        let bundle = decode_alias_proof_untrusted_signers(&proof_bytes)
+            .expect("decode alias proof integrity");
         let keypair = KeyPair::from_private_key(
             PrivateKey::from_bytes(Algorithm::Ed25519, &[0x55; 32]).expect("seeded key"),
         )
@@ -16000,7 +16015,7 @@ seiyaku Privacy {
     #[test]
     fn mint_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -16027,7 +16042,7 @@ seiyaku Privacy {
     fn transfer_asset_batch_instruction_json_roundtrip() {
         let source = sample_account("wonderland");
         let destination = sample_account("looking_glass");
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain"),
             "rose".parse().expect("valid asset name"),
         );
@@ -16082,7 +16097,7 @@ seiyaku Privacy {
     #[test]
     fn burn_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -16905,7 +16920,7 @@ seiyaku Privacy {
     fn transfer_asset_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -17597,7 +17612,7 @@ seiyaku Privacy {
     #[test]
     fn governance_propose_deploy_contract_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(ProposeDeployContract {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
             code_hash_hex: "aa".repeat(32),
@@ -17633,7 +17648,7 @@ seiyaku Privacy {
     }
 
     fn validation_fee_asset(domain: &str, name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("validation-fee fixture domain"),
             name.parse().expect("validation-fee fixture asset name"),
         )
@@ -17664,7 +17679,7 @@ seiyaku Privacy {
 
     fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBindingV1 {
         let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("validation-fee payout contract address");
         ValidationFeeTreasuryPayoutBindingV1 {
@@ -18800,7 +18815,7 @@ seiyaku Privacy {
         .expect("unsigned transaction draft");
         let mut expected: TransactionPayload =
             json::from_json(&draft.payload_json).expect("decode exact draft JSON");
-        let fee_asset = AssetDefinitionId::new(
+        let fee_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "universal").expect("fee domain"),
             "xor".parse().expect("asset name"),
         );
@@ -19119,7 +19134,7 @@ seiyaku Privacy {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -19150,7 +19165,7 @@ seiyaku Privacy {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "fee-intent-preservation".parse().expect("valid chain id");
-        let fee_asset = AssetDefinitionId::new(
+        let fee_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "universal").expect("fee domain"),
             "xor".parse().expect("fee asset name"),
         );
@@ -19215,7 +19230,7 @@ seiyaku Privacy {
     fn activate_contract_instance_instruction_json_roundtrip() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -19332,7 +19347,7 @@ seiyaku Privacy {
         let authority = AccountId::new(keypair.public_key().clone());
         let expected_code_hash = Hash::new(b"js-decoder-contract-code");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             3,
             DataSpaceId::UNIVERSAL,
@@ -19377,7 +19392,7 @@ seiyaku Privacy {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -19432,8 +19447,13 @@ seiyaku Privacy {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let contract_address = ContractAddress::derive(0, &authority, 9, DataSpaceId::UNIVERSAL)
-            .expect("contract address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            9,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let expected_code_hash = Hash::new(b"js-host-mixed-batch-code");
         let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
             DomainId::try_new("mixed-batch", "universal").expect("domain id"),
@@ -19495,7 +19515,7 @@ seiyaku Privacy {
         let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
         let error = checked_batch_executable(
             vec![ExecutableBatchItem::ContractCall(ContractInvocation {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                     .parse()
                     .expect("contract address"),
                 expected_code_hash: Hash::new(b"js-host-missing-gas"),
@@ -19561,7 +19581,7 @@ seiyaku Privacy {
         let quoted = FeePaymentIntent::authority(
             vec![iroha_data_model::transaction::FeeChargeLimit::new(
                 iroha_data_model::transaction::FeeChargeKind::PipelineGas,
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("fees", "universal").expect("fee domain"),
                     "xor".parse().expect("asset name"),
                 ),
@@ -19736,7 +19756,7 @@ seiyaku Privacy {
             .to_i105_for_discriminant(369)
             .expect("taira i105");
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -19996,11 +20016,11 @@ seiyaku Privacy {
         let settle = SettleFxCorridor {
             policy_id: "aed_pkr".parse().expect("policy name"),
             expected_policy_revision: 3,
-            source_asset_definition_id: AssetDefinitionId::new(
+            source_asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cbuae", "universal").expect("source asset domain"),
                 "aed".parse().expect("source asset name"),
             ),
-            destination_asset_definition_id: AssetDefinitionId::new(
+            destination_asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sbp", "universal").expect("destination asset domain"),
                 "pkr".parse().expect("destination asset name"),
             ),

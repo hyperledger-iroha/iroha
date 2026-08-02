@@ -4,28 +4,30 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import tarfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import pytest
 
 from scripts import build_taira_rollout_candidate as candidate_builder
 from scripts import release_artifact_contract as contract
 from scripts import release_manifest_signing as signing
+from scripts import seal_taira_release_controllers as controller_seal
 from scripts import taira_release_authority as linux_authority
 from scripts import taira_rollout_admission as admission
-
 
 ROOT = Path(__file__).resolve().parents[2]
 EXACT12 = ROOT / "fixtures" / "privacy" / "exact12_v1.tsv"
 COMMIT = "1" * 40
+DPN_COMMIT = "d" * 40
 WORKSPACE_SHA = "2" * 64
 CARGO_LOCK = b"first-release-lock\n"
 CARGO_LOCK_SHA = hashlib.sha256(CARGO_LOCK).hexdigest()
-SOURCE = admission.SourceIdentity(COMMIT, CARGO_LOCK_SHA, WORKSPACE_SHA)
+SOURCE = admission.SourceIdentity(COMMIT, DPN_COMMIT, CARGO_LOCK_SHA, WORKSPACE_SHA)
 TEST_PUBLIC_KEY = bytes.fromhex(
     "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
 )
@@ -177,6 +179,22 @@ def _evidence_root(root: Path) -> Path:
         else:
             payload = f"native-evidence-{index}\n".encode()
         path.write_bytes(payload)
+    provenance = {
+        "dpn_validator_release_commit": DPN_COMMIT,
+        "iroha_git_head": COMMIT,
+        "iroha_source_attested": True,
+        "iroha_source_bundle_provenance_sha256": "a" * 64,
+        "iroha_source_tree_sha256": "b" * 64,
+        "iroha_tracked_patch_sha256": "c" * 64,
+        "iroha_worktree_clean": False,
+        "schema_version": 1,
+        "validator_lock_sha256": CARGO_LOCK_SHA,
+        "workspace_source_manifest_sha256": WORKSPACE_SHA,
+    }
+    (
+        evidence
+        / linux_authority.EVIDENCE_PATHS["dpn_validator_build_provenance"]
+    ).write_bytes(contract.canonical_json_bytes(provenance))
     return evidence
 
 
@@ -202,6 +220,7 @@ def _authority_payload(
         argparse.Namespace(
             archive=str(archive),
             commit=COMMIT,
+            dpn_validator_release_commit=DPN_COMMIT,
             evidence_root=str(evidence),
             image_id=None,
             image_manifest_digest=None,
@@ -225,6 +244,7 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
     start_hash = "4" * 64
     end_hash = "5" * 64
     body: dict[str, object] = {
+        "artifact_handoff_sha256": "2" * 64,
         "end": {"block_hash": end_hash, "height": 102},
         "expires_at_unix": now_unix + 900,
         "issued_at_unix": now_unix - 30,
@@ -301,6 +321,7 @@ def _build_candidate(
     admission_mutation: ManifestMutation | None = None,
     nested_authority_mutation: ManifestMutation | None = None,
     nested_manifest_mutation: ManifestMutation | None = None,
+    controller_manifest_mutation: ManifestMutation | None = None,
     outer_manifest_mutation: ManifestMutation | None = None,
     outer_key: bytes = TEST_PUBLIC_KEY,
     nested_key: bytes = TEST_PUBLIC_KEY,
@@ -320,7 +341,23 @@ def _build_candidate(
     if nested_authority_mutation is not None:
         nested_authority_mutation(authority_payload)
 
+    linux_controller_manifest = contract.canonical_json_bytes(
+        {
+            "files": [
+                {
+                    "path": "scripts/linux-controller.py",
+                    "sha256": hashlib.sha256(b"linux-controller").hexdigest(),
+                    "size": len(b"linux-controller"),
+                }
+            ],
+            "platform": "linux",
+            "schema": "iroha.taira.release_controller_closure",
+            "schema_version": 1,
+            "source_commit": COMMIT,
+        }
+    )
     nested_artifacts: dict[str, bytes] = {
+        "authority-controller-v1.json": linux_controller_manifest,
         "release_artifact_contract.py": b"trusted contract helper\n",
         "sorafs-validate": verifier.read_bytes(),
         "taira-exact12-release-authority-v1.json": (
@@ -364,6 +401,31 @@ def _build_candidate(
         receipt["receipt_id"] = receipt_id_override
     receipt_payload = contract.canonical_json_bytes(receipt)
     receipt_id = str(receipt["receipt_id"])
+    macos_controller_rows = []
+    for relative in admission.MACOS_CONTROLLER_FILES:
+        reviewed_payload = f"reviewed controller: {relative}\n".encode("ascii")
+        macos_controller_rows.append(
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(reviewed_payload).hexdigest(),
+                "size": len(reviewed_payload),
+            }
+        )
+    macos_controller_manifest_object: dict[str, object] = {
+        "files": macos_controller_rows,
+        "platform": "macos",
+        "schema": "iroha.taira.release_controller_closure",
+        "schema_version": 1,
+        "source_commit": COMMIT,
+    }
+    if controller_manifest_mutation is not None:
+        controller_manifest_mutation(macos_controller_manifest_object)
+    macos_controller_manifest = contract.canonical_json_bytes(
+        macos_controller_manifest_object
+    )
+    macos_controller_digest = hashlib.sha256(
+        b"iroha.taira.release-controller-closure.v1\0" + macos_controller_manifest
+    ).hexdigest()
     outer_files: dict[str, bytes] = {
         "linux/authority/artifacts/SHA256SUMS": nested_checksums,
         **{
@@ -375,6 +437,7 @@ def _build_candidate(
         "linux/authority/release_manifest.json.sig": nested_signature,
         f"linux/{linux_archive.name}": linux_archive.read_bytes(),
         admission.MACOS_RECEIPT_PATH: receipt_payload,
+        admission.CONTROLLER_MANIFEST_PATH: macos_controller_manifest,
     }
     if add_extra_file:
         outer_files["unexpected.txt"] = b"unexpected\n"
@@ -387,6 +450,12 @@ def _build_candidate(
         for path, payload in sorted(outer_files.items())
     ]
     admission_manifest: dict[str, object] = {
+        "controller": {
+            "digest": macos_controller_digest,
+            "manifest_path": admission.CONTROLLER_MANIFEST_PATH,
+            "platform": "macos",
+            "source_commit": COMMIT,
+        },
         "inventory": inventory,
         "linux_arm64": {
             "arch": "aarch64",
@@ -477,10 +546,11 @@ def _verify(candidate: Candidate) -> dict[str, object]:
     )
 
 
-def _assembler_inputs(base: Candidate, root: Path) -> tuple[Path, Path, Path]:
+def _assembler_inputs(base: Candidate, root: Path) -> tuple[Path, Path, Path, Path]:
     linux_authority_dir = root / "linux-authority"
     linux_authority_dir.mkdir(parents=True, mode=0o700)
     receipt_path = root / "macos-receipt.json"
+    controller_manifest = root / "authority-controller-v1.json"
     with tarfile.open(base.archive, mode="r:gz") as archive:
         prefix = base.archive.name.removesuffix(".tar.gz")
         members = {member.name: member for member in archive.getmembers()}
@@ -507,7 +577,12 @@ def _assembler_inputs(base: Candidate, root: Path) -> tuple[Path, Path, Path]:
         )
         assert receipt_member is not None
         receipt_path.write_bytes(receipt_member.read())
-    return linux_archive, linux_authority_dir, receipt_path
+        controller_member = archive.extractfile(
+            members[f"{prefix}/{admission.CONTROLLER_MANIFEST_PATH}"]
+        )
+        assert controller_member is not None
+        controller_manifest.write_bytes(controller_member.read())
+    return linux_archive, linux_authority_dir, receipt_path, controller_manifest
 
 
 def test_valid_dual_target_archive_is_verified_without_deployment(
@@ -530,15 +605,80 @@ def test_valid_dual_target_archive_is_verified_without_deployment(
     }
 
 
+def test_admission_controller_closure_matches_the_root_sealer() -> None:
+    assert admission.MACOS_CONTROLLER_FILES == tuple(
+        sorted(controller_seal.MACOS_FILES)
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda manifest: manifest["files"].pop(),
+        lambda manifest: manifest["files"].append(
+            {
+                "path": "zz-unreviewed-controller.py",
+                "sha256": "9" * 64,
+                "size": 1,
+            }
+        ),
+    ),
+    ids=("missing-controller", "extra-controller"),
+)
+def test_controller_manifest_rejects_a_digest_consistent_noncanonical_closure(
+    tmp_path: Path,
+    mutation: ManifestMutation,
+) -> None:
+    candidate = _build_candidate(
+        tmp_path,
+        controller_manifest_mutation=mutation,
+    )
+
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="exact release closure",
+    ):
+        _verify(candidate)
+
+
+def test_controller_digest_substitution_is_rejected_even_when_candidate_is_resigned(
+    tmp_path: Path,
+) -> None:
+    candidate = _build_candidate(
+        tmp_path,
+        admission_mutation=lambda manifest: manifest["controller"].__setitem__(
+            "digest", "0" * 64
+        ),
+    )
+
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="differs from its bound digest",
+    ):
+        _verify(candidate)
+
+
 def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministically(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_root = tmp_path / "base"
     base_root.mkdir()
     base = _build_candidate(base_root)
     input_root = tmp_path / "assembler-inputs"
     input_root.mkdir()
-    linux_archive, linux_authority_dir, receipt = _assembler_inputs(base, input_root)
+    linux_archive, linux_authority_dir, receipt, controller_manifest = (
+        _assembler_inputs(base, input_root)
+    )
+    controller_digest = hashlib.sha256(
+        b"iroha.taira.release-controller-closure.v1\0"
+        + controller_manifest.read_bytes()
+    ).hexdigest()
+    monkeypatch.setattr(
+        candidate_builder,
+        "_sealed_controller_manifest_path",
+        lambda: controller_manifest,
+    )
     public_key = input_root / "release.pub"
     public_key.write_bytes(TEST_PUBLIC_KEY)
     signer = input_root / "external-signer"
@@ -546,6 +686,9 @@ def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministica
 
     common = {
         "cargo_lock_sha256": CARGO_LOCK_SHA,
+        "controller_digest": controller_digest,
+        "controller_manifest": controller_manifest,
+        "dpn_validator_release_commit": DPN_COMMIT,
         "expected_receipt_id": base.receipt_id,
         "external_signer": signer,
         "linux_archive": linux_archive,
@@ -621,7 +764,21 @@ def test_admission_manifest_rejects_extra_field(tmp_path: Path) -> None:
             "exactly four peers",
         ),
         (
+            lambda receipt: receipt.__setitem__("peer_count", 5),
+            "exactly four peers",
+        ),
+        (
             lambda receipt: receipt["peers"].pop(),
+            "exactly four peer rows",
+        ),
+        (
+            lambda receipt: receipt["peers"].append(
+                {
+                    **receipt["peers"][-1],
+                    "number": 5,
+                    "slug": "taira-validator-5",
+                }
+            ),
             "exactly four peer rows",
         ),
         (
@@ -631,6 +788,12 @@ def test_admission_manifest_rejects_extra_field(tmp_path: Path) -> None:
         (
             lambda receipt: receipt["source"].__setitem__(
                 "cargo_lock_sha256", "9" * 64
+            ),
+            "source identity differs",
+        ),
+        (
+            lambda receipt: receipt["source"].__setitem__(
+                "dpn_validator_release_commit", "e" * 40
             ),
             "source identity differs",
         ),
@@ -656,9 +819,12 @@ def test_admission_manifest_rejects_extra_field(tmp_path: Path) -> None:
     ids=(
         "wrong-arch",
         "declared-three",
+        "declared-five",
         "three-rows",
+        "five-rows",
         "extra-field",
         "source-drift",
+        "dpn-source-drift",
         "missing-reset-manifest-binding",
         "missing-config-binding",
         "peer-config-substitution",
@@ -696,6 +862,30 @@ def test_receipt_id_must_be_derived_from_the_exact_body(tmp_path: Path) -> None:
         _verify(candidate)
 
 
+def test_receipt_id_cannot_be_replayed_across_a_dpn_only_change() -> None:
+    receipt = _receipt(1_000, None)
+    original_receipt_id = str(receipt["receipt_id"])
+    receipt["source"]["dpn_validator_release_commit"] = "e" * 40
+    changed_source = admission.SourceIdentity(
+        COMMIT,
+        "e" * 40,
+        CARGO_LOCK_SHA,
+        WORKSPACE_SHA,
+    )
+
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="canonical receipt body",
+    ):
+        admission._validate_macos_receipt(
+            contract.canonical_json_bytes(receipt),
+            expected_source=changed_source,
+            expected_receipt_id=original_receipt_id,
+            consumed_receipt_ids=set(),
+            now_unix=1_000,
+        )
+
+
 def test_boolean_receipt_schema_version_is_not_integer_one(tmp_path: Path) -> None:
     candidate = _build_candidate(
         tmp_path,
@@ -717,6 +907,57 @@ def test_replayed_receipt_is_rejected_from_read_only_ledger(tmp_path: Path) -> N
     ):
         _verify(candidate)
     assert candidate.replay_ledger.read_bytes() == before
+
+
+def test_empty_replay_ledger_initializer_is_create_new_and_canonical(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "empty-replay-ledger.json"
+
+    result = admission.initialize_empty_replay_ledger(output)
+
+    assert output.read_bytes() == admission.canonical_replay_ledger_bytes([])
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert result["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    with pytest.raises(contract.ReleaseArtifactError):
+        admission.initialize_empty_replay_ledger(output)
+
+
+def test_empty_replay_ledger_initializer_rejects_symlink_output(
+    tmp_path: Path,
+) -> None:
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"unchanged")
+    output = tmp_path / "empty-replay-ledger.json"
+    output.symlink_to(victim.name)
+
+    with pytest.raises(contract.ReleaseArtifactError):
+        admission.initialize_empty_replay_ledger(output)
+
+    assert victim.read_bytes() == b"unchanged"
+
+
+def test_replay_ledger_inode_swap_during_verification_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = _build_candidate(tmp_path)
+    original = admission._verify_closed_linux_authority
+
+    def swap_ledger(*args, **kwargs):
+        result = original(*args, **kwargs)
+        replacement = candidate.replay_ledger.with_suffix(".replacement")
+        replacement.write_bytes(admission.canonical_replay_ledger_bytes([]))
+        os.replace(replacement, candidate.replay_ledger)
+        return result
+
+    monkeypatch.setattr(admission, "_verify_closed_linux_authority", swap_ledger)
+
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="replay ledger changed during admission verification",
+    ):
+        _verify(candidate)
 
 
 @pytest.mark.parametrize(
@@ -748,6 +989,26 @@ def test_signer_key_substitution_is_rejected(tmp_path: Path, which: str) -> None
         match="public key does not match the reviewed fingerprint",
     ):
         _verify(candidate)
+
+
+def test_reviewed_signer_fingerprint_substitution_is_rejected(tmp_path: Path) -> None:
+    candidate = _build_candidate(tmp_path)
+
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="public key does not match the reviewed fingerprint",
+    ):
+        admission.verify_admission(
+            archive_path=candidate.archive,
+            authority_dir=candidate.authority_dir,
+            expected_source=SOURCE,
+            expected_receipt_id=candidate.receipt_id,
+            replay_ledger_path=candidate.replay_ledger,
+            trusted_signing_fingerprint="0" * 64,
+            release_manifest_verifier_path=candidate.verifier,
+            trusted_release_manifest_verifier_sha256=candidate.verifier_sha256,
+            now_unix=candidate.now_unix,
+        )
 
 
 def test_wrong_native_verifier_pin_is_rejected(tmp_path: Path) -> None:
@@ -886,6 +1147,8 @@ def test_cli_emits_only_verification_summary(tmp_path: Path, capsys) -> None:
             str(candidate.authority_dir),
             "--expected-source-commit",
             COMMIT,
+            "--expected-dpn-validator-release-commit",
+            DPN_COMMIT,
             "--expected-cargo-lock-sha256",
             CARGO_LOCK_SHA,
             "--expected-workspace-source-manifest-sha256",

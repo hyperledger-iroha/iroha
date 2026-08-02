@@ -62,7 +62,7 @@ fn fixed_private_key() -> PrivateKey {
 
 fn sample_asset_definition_id() -> AssetDefinitionId {
     let domain = DomainId::try_new("bench", "universal").expect("bench domain id");
-    AssetDefinitionId::new(domain, "xor".parse().expect("asset name"))
+    AssetDefinitionId::derive_from_components(domain, "xor".parse().expect("asset name"))
 }
 
 fn sample_instruction_box(kind: usize) -> InstructionBox {

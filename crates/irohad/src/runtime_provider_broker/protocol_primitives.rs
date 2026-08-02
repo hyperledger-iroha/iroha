@@ -94,6 +94,10 @@ pub(super) const OPERATION_MODERATION_CHECKPOINT_LOAD_V1: u16 = 104;
 pub(super) const OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 105;
 pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1: u16 = 106;
 pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1: u16 = 107;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1: u16 = 108;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1: u16 = 109;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1: u16 = 110;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 111;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -274,6 +278,8 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) handle: String,
     pub(super) revision: Option<u64>,
     pub(super) policy_digest: Option<[u8; 32]>,
+    pub(super) bootle_lantern_issuance_bindings:
+        Option<BootleLanternIssuanceBindingsWireV1>,
     pub(super) stream_token_signer_public_key: Option<[u8; 32]>,
     pub(super) appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>,
     pub(super) appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>,
@@ -297,6 +303,13 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) evidence_viewer_archive_id: Option<[u8; 32]>,
     pub(super) evidence_viewer_archive_public_key: Option<[u8; 32]>,
     pub(super) evidence_viewer_archive_max_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct BootleLanternIssuanceBindingsWireV1 {
+    pub(super) issuer_id: [u8; 32],
+    pub(super) policy_id: [u8; 32],
+    pub(super) authorization_lifetime_blocks: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]

@@ -378,6 +378,12 @@ pub(crate) enum HandlerAuthentication {
     /// enforce freshness and replay protection, and then apply account-scoped
     /// permissions before returning protected data.
     CanonicalAccountSignature,
+    /// Manifest-selected content authentication performed by the handler.
+    ///
+    /// The handler permits anonymous reads only for a ledger-authenticated
+    /// `Public` manifest. Protected manifest modes verify the canonical request
+    /// and authorize its account against current state before reading content.
+    ManifestConditionalContent,
     /// WebAuthn/bootstrap credential exchange performed by the handler.
     OperatorCredentialExchange,
     /// Authentication performed as part of a protocol-native handshake.
@@ -388,6 +394,7 @@ impl HandlerAuthentication {
     const fn catalog_policy(self) -> AuthenticationPolicy {
         match self {
             Self::CanonicalAccountSignature => AuthenticationPolicy::CanonicalAccountSignature,
+            Self::ManifestConditionalContent => AuthenticationPolicy::ManifestConditionalContent,
             Self::OperatorCredentialExchange => AuthenticationPolicy::OperatorCredentialExchange,
             Self::ProtocolHandshake => AuthenticationPolicy::ProtocolHandshake,
         }
@@ -837,6 +844,14 @@ mod tests {
         Listener::Torii,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+    const MANIFEST_CONDITIONAL_CONTENT: RouteDescriptor = RouteDescriptor::new(
+        "test.manifest_conditional_content",
+        HttpMethod::Get,
+        "/v1/tests/manifest-conditional-content",
+        ApiSurface::Public,
+        Listener::Torii,
+    )
+    .with_authentication(AuthenticationPolicy::ManifestConditionalContent);
     const API_TOKEN_REQUIRED: RouteDescriptor = RouteDescriptor::new(
         "test.api_token_required",
         HttpMethod::Post,
@@ -1149,6 +1164,26 @@ mod tests {
             .finish()
             .expect("canonical account witness must mount");
         assert_eq!(manifest.explicit_routes(), &[ACCOUNT_AUTHENTICATED]);
+    }
+
+    #[test]
+    fn manifest_conditional_content_witness_matches_only_its_catalog_policy() {
+        let mut builder = RouterBuilder::new(
+            (),
+            RouteCatalog::new(&[MANIFEST_CONDITIONAL_CONTENT]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid catalog");
+        builder.route(
+            &MANIFEST_CONDITIONAL_CONTENT,
+            catalog_get(|| async {})
+                .authenticated_in_handler(HandlerAuthentication::ManifestConditionalContent),
+        );
+
+        let (_, manifest) = builder
+            .finish()
+            .expect("manifest-conditional content witness must mount");
+        assert_eq!(manifest.explicit_routes(), &[MANIFEST_CONDITIONAL_CONTENT]);
     }
 
     #[cfg(feature = "app_api")]

@@ -10,11 +10,13 @@
 
 use std::{
     convert::{TryFrom, TryInto},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     time::Duration,
 };
 
 use blake3::Hasher as Blake3;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use sha2::{Digest as _, Sha256};
 use soranet_pq::{MlDsaSuite, MlKemSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
@@ -33,8 +35,10 @@ pub const SRC_V2_MAX_CERTIFICATE_BYTES: usize = 56 * 1024;
 pub const SRC_V2_MAX_BUNDLE_BYTES: usize = 64 * 1024;
 /// Maximum number of transport endpoints in one certificate.
 pub const SRC_V2_MAX_ENDPOINTS: usize = 16;
-/// Maximum UTF-8 byte length of one endpoint URL.
-pub const SRC_V2_MAX_ENDPOINT_URL_BYTES: usize = 2_048;
+/// Maximum UTF-8 byte length of one canonical QUIC multiaddr.
+pub const SRC_V2_MAX_ENDPOINT_MULTIADDR_BYTES: usize = 2_048;
+/// Maximum UTF-8 byte length of a TLS server name.
+pub const SRC_V2_MAX_TLS_SERVER_NAME_BYTES: usize = 253;
 /// Maximum number of tags attached to one endpoint.
 pub const SRC_V2_MAX_ENDPOINT_TAGS: usize = 8;
 /// Maximum UTF-8 byte length of one endpoint tag.
@@ -45,7 +49,7 @@ pub const SRC_V2_MAX_HANDSHAKE_SUITES: usize = 2;
 const SRC_V2_CERTIFICATE_FIELDS: u64 = 19;
 const SRC_V2_BUNDLE_FIELDS: u64 = 2;
 const SRC_V2_SIGNATURE_FIELDS: u64 = 2;
-const SRC_V2_ENDPOINT_FIELDS: u64 = 3;
+const SRC_V2_ENDPOINT_FIELDS: u64 = 5;
 const SRC_V2_KEM_FIELDS: u64 = 5;
 
 /// `SRCv2` map field identifiers.
@@ -107,9 +111,11 @@ enum SignatureField {
 /// Endpoint map field identifiers.
 #[repr(u8)]
 enum EndpointField {
-    Url = 0,
+    QuicMultiaddr = 0,
     Priority = 1,
     Tags = 2,
+    TlsServerName = 3,
+    TlsSpkiSha256 = 4,
 }
 
 /// Capability flag bit positions.
@@ -355,8 +361,12 @@ impl KemRotationPolicyV1 {
 /// Relay endpoint entry embedded in the SRC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayEndpointV2 {
-    /// Scheme-qualified endpoint URL.
-    pub url: String,
+    /// Canonical IP/DNS + UDP + QUIC multiaddr.
+    pub quic_multiaddr: String,
+    /// Canonical DNS name supplied to TLS certificate verification.
+    pub tls_server_name: String,
+    /// SHA-256 digest of the exact leaf-certificate SubjectPublicKeyInfo DER.
+    pub tls_spki_sha256: [u8; 32],
     /// Priority (lower numbers are preferred).
     pub priority: u8,
     /// Stream tags advertised by the endpoint.
@@ -366,14 +376,23 @@ pub struct RelayEndpointV2 {
 impl RelayEndpointV2 {
     fn encode(&self, encoder: &mut CborEncoder) -> Result<(), CertificateError> {
         validate_encoded_len(
-            self.url.len(),
-            SRC_V2_MAX_ENDPOINT_URL_BYTES,
-            "endpoint.url",
+            self.quic_multiaddr.len(),
+            SRC_V2_MAX_ENDPOINT_MULTIADDR_BYTES,
+            "endpoint.quic_multiaddr",
         )?;
+        validate_encoded_len(
+            self.tls_server_name.len(),
+            SRC_V2_MAX_TLS_SERVER_NAME_BYTES,
+            "endpoint.tls_server_name",
+        )?;
+        validate_quic_multiaddr(&self.quic_multiaddr)?;
+        validate_tls_server_name(&self.tls_server_name)?;
+        validate_tls_spki_sha256(&self.tls_spki_sha256)?;
+        validate_endpoint_tags(&self.tags)?;
         validate_encoded_count(self.tags.len(), SRC_V2_MAX_ENDPOINT_TAGS, "endpoint.tags")?;
-        encoder.write_map_header(3);
-        encoder.write_unsigned(EndpointField::Url as u64);
-        encoder.write_text(&self.url, "endpoint.url")?;
+        encoder.write_map_header(SRC_V2_ENDPOINT_FIELDS);
+        encoder.write_unsigned(EndpointField::QuicMultiaddr as u64);
+        encoder.write_text(&self.quic_multiaddr, "endpoint.quic_multiaddr")?;
         encoder.write_unsigned(EndpointField::Priority as u64);
         encoder.write_unsigned(self.priority.into());
         encoder.write_unsigned(EndpointField::Tags as u64);
@@ -382,6 +401,10 @@ impl RelayEndpointV2 {
             validate_encoded_len(tag.len(), SRC_V2_MAX_ENDPOINT_TAG_BYTES, "endpoint.tags")?;
             encoder.write_text(tag, "endpoint.tags")?;
         }
+        encoder.write_unsigned(EndpointField::TlsServerName as u64);
+        encoder.write_text(&self.tls_server_name, "endpoint.tls_server_name")?;
+        encoder.write_unsigned(EndpointField::TlsSpkiSha256 as u64);
+        encoder.write_bytes(&self.tls_spki_sha256, "endpoint.tls_spki_sha256")?;
         Ok(())
     }
 
@@ -393,9 +416,11 @@ impl RelayEndpointV2 {
             decoder.remaining_len(),
             "endpoint",
         )?;
-        let mut url = None;
+        let mut quic_multiaddr = None;
         let mut priority = None;
         let mut tags: Option<Vec<String>> = None;
+        let mut tls_server_name = None;
+        let mut tls_spki_sha256 = None;
 
         for _ in 0..map_len {
             let raw_key = decoder.read_unsigned()?;
@@ -406,11 +431,14 @@ impl RelayEndpointV2 {
                     reason: format!("field key {raw_key} exceeds u8::MAX"),
                 })?;
             match key {
-                x if x == EndpointField::Url as u8 => {
+                x if x == EndpointField::QuicMultiaddr as u8 => {
                     set_decoded_once(
-                        &mut url,
-                        decoder.read_text_bounded(SRC_V2_MAX_ENDPOINT_URL_BYTES, "endpoint.url")?,
-                        "endpoint.url",
+                        &mut quic_multiaddr,
+                        decoder.read_text_bounded(
+                            SRC_V2_MAX_ENDPOINT_MULTIADDR_BYTES,
+                            "endpoint.quic_multiaddr",
+                        )?,
+                        "endpoint.quic_multiaddr",
                     )?;
                 }
                 x if x == EndpointField::Priority as u8 => {
@@ -442,6 +470,23 @@ impl RelayEndpointV2 {
                     }
                     set_decoded_once(&mut tags, values, "endpoint.tags")?;
                 }
+                x if x == EndpointField::TlsServerName as u8 => {
+                    set_decoded_once(
+                        &mut tls_server_name,
+                        decoder.read_text_bounded(
+                            SRC_V2_MAX_TLS_SERVER_NAME_BYTES,
+                            "endpoint.tls_server_name",
+                        )?,
+                        "endpoint.tls_server_name",
+                    )?;
+                }
+                x if x == EndpointField::TlsSpkiSha256 as u8 => {
+                    set_decoded_once(
+                        &mut tls_spki_sha256,
+                        decoder.read_array32()?,
+                        "endpoint.tls_spki_sha256",
+                    )?;
+                }
                 other => {
                     return Err(CertificateError::UnknownField {
                         field: format!("endpoint.{other}"),
@@ -450,10 +495,18 @@ impl RelayEndpointV2 {
             }
         }
 
-        let url = url.ok_or(CertificateError::MissingField {
-            field: "endpoint.url",
+        let quic_multiaddr = quic_multiaddr.ok_or(CertificateError::MissingField {
+            field: "endpoint.quic_multiaddr",
         })?;
-        validate_endpoint_url(&url)?;
+        validate_quic_multiaddr(&quic_multiaddr)?;
+        let tls_server_name = tls_server_name.ok_or(CertificateError::MissingField {
+            field: "endpoint.tls_server_name",
+        })?;
+        validate_tls_server_name(&tls_server_name)?;
+        let tls_spki_sha256 = tls_spki_sha256.ok_or(CertificateError::MissingField {
+            field: "endpoint.tls_spki_sha256",
+        })?;
+        validate_tls_spki_sha256(&tls_spki_sha256)?;
         let priority = priority.ok_or(CertificateError::MissingField {
             field: "endpoint.priority",
         })?;
@@ -461,38 +514,176 @@ impl RelayEndpointV2 {
         validate_endpoint_tags(&tags)?;
 
         Ok(Self {
-            url,
+            quic_multiaddr,
+            tls_server_name,
+            tls_spki_sha256,
             priority,
             tags,
         })
     }
 }
 
-fn validate_endpoint_url(url: &str) -> Result<(), CertificateError> {
-    if url.is_empty() {
-        return Err(CertificateError::InvalidFieldValue {
-            field: "endpoint.url",
-            reason: "must not be empty".to_owned(),
-        });
+fn invalid_endpoint(field: &'static str, reason: impl Into<String>) -> CertificateError {
+    CertificateError::InvalidFieldValue {
+        field,
+        reason: reason.into(),
     }
-    if url.chars().any(char::is_control) {
-        return Err(CertificateError::InvalidFieldValue {
-            field: "endpoint.url",
-            reason: "must not contain control characters".to_owned(),
-        });
+}
+
+fn validate_dns_name(name: &str, field: &'static str) -> Result<(), CertificateError> {
+    if name.is_empty() || name.len() > SRC_V2_MAX_TLS_SERVER_NAME_BYTES {
+        return Err(invalid_endpoint(field, "must be between 1 and 253 bytes"));
     }
-    if url.chars().any(char::is_whitespace) {
+    if !name.is_ascii() || name != name.to_ascii_lowercase() || name.ends_with('.') {
+        return Err(invalid_endpoint(
+            field,
+            "must be a lowercase ASCII DNS name without a trailing dot",
+        ));
+    }
+    if name.parse::<IpAddr>().is_ok() {
+        return Err(invalid_endpoint(
+            field,
+            "must be a DNS name, not an IP address literal",
+        ));
+    }
+    for label in name.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(invalid_endpoint(field, "contains an invalid DNS label"));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the canonical QUIC multi-address grammar used by signed relay endpoints.
+///
+/// # Errors
+/// Returns an error when the address is not canonical
+/// `/{ip4|ip6|dns|dns4|dns6}/host/udp/nonzero-port/quic`.
+pub fn validate_quic_multiaddr(addr: &str) -> Result<(), CertificateError> {
+    let parts = addr.split('/').collect::<Vec<_>>();
+    if parts.len() != 6 || !parts[0].is_empty() {
+        return Err(invalid_endpoint(
+            "endpoint.quic_multiaddr",
+            "must be /{ip4|ip6|dns|dns4|dns6}/host/udp/port/quic",
+        ));
+    }
+    match parts[1] {
+        "ip4" => {
+            let parsed = parts[2].parse::<Ipv4Addr>().map_err(|_| {
+                invalid_endpoint(
+                    "endpoint.quic_multiaddr",
+                    "contains an invalid IPv4 address",
+                )
+            })?;
+            if parsed.to_string() != parts[2] {
+                return Err(invalid_endpoint(
+                    "endpoint.quic_multiaddr",
+                    "IPv4 address is not canonical",
+                ));
+            }
+        }
+        "ip6" => {
+            let parsed = parts[2].parse::<Ipv6Addr>().map_err(|_| {
+                invalid_endpoint(
+                    "endpoint.quic_multiaddr",
+                    "contains an invalid IPv6 address",
+                )
+            })?;
+            if parsed.to_string() != parts[2] {
+                return Err(invalid_endpoint(
+                    "endpoint.quic_multiaddr",
+                    "IPv6 address is not canonical",
+                ));
+            }
+        }
+        "dns" | "dns4" | "dns6" => {
+            validate_dns_name(parts[2], "endpoint.quic_multiaddr")?;
+        }
+        _ => {
+            return Err(invalid_endpoint(
+                "endpoint.quic_multiaddr",
+                "host protocol must be ip4, ip6, dns, dns4, or dns6",
+            ));
+        }
+    }
+    if parts[3] != "udp" || parts[5] != "quic" {
+        return Err(invalid_endpoint(
+            "endpoint.quic_multiaddr",
+            "transport must be canonical /udp/port/quic",
+        ));
+    }
+    let port = parts[4]
+        .parse::<u16>()
+        .map_err(|_| invalid_endpoint("endpoint.quic_multiaddr", "contains an invalid UDP port"))?;
+    if port == 0 || port.to_string() != parts[4] {
+        return Err(invalid_endpoint(
+            "endpoint.quic_multiaddr",
+            "UDP port must be a canonical nonzero u16",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the canonical DNS name used for relay TLS authentication.
+///
+/// # Errors
+/// Returns an error when the name is empty, non-ASCII, non-lowercase, or not a valid DNS name.
+pub fn validate_tls_server_name(name: &str) -> Result<(), CertificateError> {
+    validate_dns_name(name, "endpoint.tls_server_name")
+}
+
+/// Select the canonical VPN endpoint from a validated relay certificate.
+///
+/// Selection is deterministic across peers: the lowest numeric priority wins,
+/// followed by canonical multiaddr, TLS name, and SPKI bytes.
+///
+/// # Errors
+/// Returns an error when the certificate advertises no endpoint tagged for VPN.
+pub fn select_vpn_endpoint(
+    endpoints: &[RelayEndpointV2],
+) -> Result<&RelayEndpointV2, CertificateError> {
+    endpoints
+        .iter()
+        .filter(|endpoint| endpoint.tags.iter().any(|tag| tag == "vpn"))
+        .min_by(|left, right| {
+            (
+                left.priority,
+                left.quic_multiaddr.as_str(),
+                left.tls_server_name.as_str(),
+                left.tls_spki_sha256,
+            )
+                .cmp(&(
+                    right.priority,
+                    right.quic_multiaddr.as_str(),
+                    right.tls_server_name.as_str(),
+                    right.tls_spki_sha256,
+                ))
+        })
+        .ok_or_else(|| CertificateError::InvalidFieldValue {
+            field: "certificate.endpoints",
+            reason: "must advertise at least one endpoint tagged for VPN".to_owned(),
+        })
+}
+
+fn validate_tls_spki_sha256(digest: &[u8; 32]) -> Result<(), CertificateError> {
+    if digest.iter().all(|byte| *byte == 0) {
         return Err(CertificateError::InvalidFieldValue {
-            field: "endpoint.url",
-            reason: "must not contain whitespace characters".to_owned(),
+            field: "endpoint.tls_spki_sha256",
+            reason: "must not be all zero".to_owned(),
         });
     }
     Ok(())
 }
 
 fn validate_endpoint_tags(tags: &[String]) -> Result<(), CertificateError> {
-    let mut seen = Vec::with_capacity(tags.len());
-    for tag in tags {
+    for (index, tag) in tags.iter().enumerate() {
         if tag.is_empty() {
             return Err(CertificateError::InvalidFieldValue {
                 field: "endpoint.tags",
@@ -511,13 +702,12 @@ fn validate_endpoint_tags(tags: &[String]) -> Result<(), CertificateError> {
                 reason: "tag must not contain whitespace characters".to_owned(),
             });
         }
-        if seen.contains(&tag.as_str()) {
+        if index > 0 && tags[index - 1].as_str() >= tag.as_str() {
             return Err(CertificateError::InvalidFieldValue {
                 field: "endpoint.tags",
-                reason: format!("duplicate endpoint tag `{tag}`"),
+                reason: "tags must be unique and in strict lexical order".to_owned(),
             });
         }
-        seen.push(tag.as_str());
     }
     Ok(())
 }
@@ -653,7 +843,7 @@ impl RelayRolesV2 {
 /// Core `SRCv2` payload describing a relay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayCertificateV2 {
-    /// Stable relay identifier (BLAKE3 digest).
+    /// Stable relay identifier: the exact raw Ed25519 identity public key.
     pub relay_id: [u8; 32],
     /// Ed25519 identity key.
     pub identity_ed25519: [u8; 32],
@@ -1344,6 +1534,12 @@ impl CertificateFieldAccumulator {
             &identity_mldsa65,
         )?;
         validate_ed25519_identity_key(&identity_ed25519)?;
+        if relay_id != identity_ed25519 {
+            return Err(CertificateError::InvalidFieldValue {
+                field: "certificate.relay_id",
+                reason: "must equal the raw Ed25519 identity public key".to_owned(),
+            });
+        }
         let preferred_suite =
             MlKemSuite::from_kem_id(kem_policy.preferred_suite).ok_or_else(|| {
                 CertificateError::InvalidFieldValue {
@@ -1555,11 +1751,11 @@ fn decode_endpoints(
         let endpoint = RelayEndpointV2::decode(decoder)?;
         if values
             .iter()
-            .any(|prior: &RelayEndpointV2| prior.url == endpoint.url)
+            .any(|prior: &RelayEndpointV2| prior.quic_multiaddr == endpoint.quic_multiaddr)
         {
             return Err(CertificateError::InvalidFieldValue {
                 field: "certificate.endpoints",
-                reason: format!("duplicate endpoint URL `{}`", endpoint.url),
+                reason: format!("duplicate QUIC endpoint `{}`", endpoint.quic_multiaddr),
             });
         }
         values.push(endpoint);
@@ -1673,6 +1869,154 @@ fn compute_signing_digest(domain: &[u8], payload: &[u8]) -> [u8; 32] {
     hasher.update(domain);
     hasher.update(payload);
     hasher.finalize().into()
+}
+
+/// Compute the SHA-256 digest of the exact SubjectPublicKeyInfo DER served by
+/// an X.509 leaf certificate.
+///
+/// The parser accepts only definite, minimally encoded DER lengths and an
+/// exact top-level certificate element. Keeping this extraction here ensures
+/// directory issuance, relay startup, and VPN clients hash identical bytes.
+///
+/// # Errors
+/// Returns an error when the certificate is truncated, non-canonical, or does
+/// not contain the mandatory RFC 5280 TBSCertificate fields through SPKI.
+pub fn leaf_certificate_spki_sha256(certificate_der: &[u8]) -> Result<[u8; 32], CertificateError> {
+    let certificate = read_der_element(certificate_der, 0, 0x30)?;
+    if certificate.element.end != certificate_der.len() {
+        return Err(invalid_leaf_certificate(
+            "trailing bytes after the certificate element",
+        ));
+    }
+    let tbs = read_der_element(certificate_der, certificate.content.start, 0x30)?;
+    if tbs.element.end > certificate.content.end {
+        return Err(invalid_leaf_certificate(
+            "TBSCertificate exceeds the certificate element",
+        ));
+    }
+    let signature_algorithm = read_der_element(certificate_der, tbs.element.end, 0x30)?;
+    let signature_value = read_der_element(certificate_der, signature_algorithm.element.end, 0x03)?;
+    if signature_value.element.end != certificate.content.end {
+        return Err(invalid_leaf_certificate(
+            "certificate sequence must contain exactly TBS, signature algorithm, and signature",
+        ));
+    }
+
+    let mut cursor = tbs.content.start;
+    if certificate_der.get(cursor) == Some(&0xA0) {
+        cursor = read_der_element(certificate_der, cursor, 0xA0)?.element.end;
+    }
+    // serialNumber, signature, issuer, validity, subject
+    for expected_tag in [0x02, 0x30, 0x30, 0x30, 0x30] {
+        let field = read_der_element(certificate_der, cursor, expected_tag)?;
+        if field.element.end > tbs.content.end {
+            return Err(invalid_leaf_certificate(
+                "TBSCertificate field exceeds its enclosing sequence",
+            ));
+        }
+        cursor = field.element.end;
+    }
+    let spki = read_der_element(certificate_der, cursor, 0x30)?;
+    if spki.element.end > tbs.content.end {
+        return Err(invalid_leaf_certificate(
+            "SubjectPublicKeyInfo exceeds TBSCertificate",
+        ));
+    }
+    Ok(Sha256::digest(&certificate_der[spki.element]).into())
+}
+
+#[derive(Debug)]
+struct DerElement {
+    element: std::ops::Range<usize>,
+    content: std::ops::Range<usize>,
+}
+
+fn invalid_leaf_certificate(reason: impl Into<String>) -> CertificateError {
+    CertificateError::InvalidFieldValue {
+        field: "tls.leaf_certificate_der",
+        reason: reason.into(),
+    }
+}
+
+fn read_der_element(
+    bytes: &[u8],
+    start: usize,
+    expected_tag: u8,
+) -> Result<DerElement, CertificateError> {
+    let element = read_der_element_any(bytes, start)?;
+    let tag = bytes[start];
+    if tag != expected_tag {
+        return Err(invalid_leaf_certificate(format!(
+            "unexpected DER tag {tag:#04x}; expected {expected_tag:#04x}"
+        )));
+    }
+    Ok(element)
+}
+
+fn read_der_element_any(bytes: &[u8], start: usize) -> Result<DerElement, CertificateError> {
+    let _tag = *bytes
+        .get(start)
+        .ok_or_else(|| invalid_leaf_certificate("truncated DER tag"))?;
+    let length_offset = start
+        .checked_add(1)
+        .ok_or_else(|| invalid_leaf_certificate("DER offset overflow"))?;
+    let first = *bytes
+        .get(length_offset)
+        .ok_or_else(|| invalid_leaf_certificate("truncated DER length"))?;
+    let (length, content_start) = if first & 0x80 == 0 {
+        (
+            usize::from(first),
+            length_offset
+                .checked_add(1)
+                .ok_or_else(|| invalid_leaf_certificate("DER offset overflow"))?,
+        )
+    } else {
+        let width = usize::from(first & 0x7F);
+        if width == 0 || width > std::mem::size_of::<usize>() {
+            return Err(invalid_leaf_certificate(
+                "indefinite or oversized DER length",
+            ));
+        }
+        let digits_start = length_offset
+            .checked_add(1)
+            .ok_or_else(|| invalid_leaf_certificate("DER offset overflow"))?;
+        let digits_end = digits_start
+            .checked_add(width)
+            .ok_or_else(|| invalid_leaf_certificate("DER offset overflow"))?;
+        let digits = bytes
+            .get(digits_start..digits_end)
+            .ok_or_else(|| invalid_leaf_certificate("truncated DER length"))?;
+        if digits.first() == Some(&0) {
+            return Err(invalid_leaf_certificate(
+                "DER length contains a leading zero",
+            ));
+        }
+        let mut length = 0usize;
+        for digit in digits {
+            length = length
+                .checked_mul(256)
+                .and_then(|value| value.checked_add(usize::from(*digit)))
+                .ok_or_else(|| invalid_leaf_certificate("DER length overflow"))?;
+        }
+        if length < 128 {
+            return Err(invalid_leaf_certificate(
+                "DER length uses a non-minimal long form",
+            ));
+        }
+        (length, digits_end)
+    };
+    let content_end = content_start
+        .checked_add(length)
+        .ok_or_else(|| invalid_leaf_certificate("DER element length overflow"))?;
+    if content_end > bytes.len() {
+        return Err(invalid_leaf_certificate(
+            "DER element length exceeds the certificate",
+        ));
+    }
+    Ok(DerElement {
+        element: start..content_end,
+        content: content_start..content_end,
+    })
 }
 
 /// Errors surfaced while encoding, decoding, or verifying `SRCv2` bundles.
@@ -2223,11 +2567,12 @@ mod tests {
     ];
 
     fn sample_certificate() -> RelayCertificateV2 {
+        let identity_ed25519 = SigningKey::from_bytes(&[0x22; SECRET_KEY_LENGTH])
+            .verifying_key()
+            .to_bytes();
         RelayCertificateV2 {
-            relay_id: [0x11; 32],
-            identity_ed25519: SigningKey::from_bytes(&[0x22; SECRET_KEY_LENGTH])
-                .verifying_key()
-                .to_bytes(),
+            relay_id: identity_ed25519,
+            identity_ed25519,
             identity_mldsa65: vec![0x33; MlDsaSuite::MlDsa65.public_key_len()],
             descriptor_commit: [0x44; 32],
             roles: RelayRolesV2 {
@@ -2239,7 +2584,9 @@ mod tests {
             bandwidth_bytes_per_sec: 1_000_000,
             reputation_weight: 80,
             endpoints: vec![RelayEndpointV2 {
-                url: "soranet://relay.example:443".to_string(),
+                quic_multiaddr: "/dns/relay.example/udp/443/quic".to_string(),
+                tls_server_name: "relay.example".to_string(),
+                tls_spki_sha256: [0xA5; 32],
                 priority: 1,
                 tags: vec!["norito-stream".into()],
             }],
@@ -2439,11 +2786,12 @@ mod tests {
     #[test]
     fn encoder_enforces_schema_specific_collection_and_text_caps() {
         let mut certificate = sample_certificate();
-        certificate.endpoints[0].url = "a".repeat(SRC_V2_MAX_ENDPOINT_URL_BYTES + 1);
+        certificate.endpoints[0].quic_multiaddr =
+            "a".repeat(SRC_V2_MAX_ENDPOINT_MULTIADDR_BYTES + 1);
         let err = certificate
             .try_to_cbor()
-            .expect_err("oversized endpoint URL must not encode");
-        assert!(err.to_string().contains("endpoint.url"));
+            .expect_err("oversized endpoint multiaddr must not encode");
+        assert!(err.to_string().contains("endpoint.quic_multiaddr"));
 
         let mut certificate = sample_certificate();
         certificate.endpoints = vec![certificate.endpoints[0].clone(); SRC_V2_MAX_ENDPOINTS + 1];
@@ -2653,21 +3001,24 @@ mod tests {
 
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
-        encoder.write_unsigned(EndpointField::Url as u64);
+        encoder.write_unsigned(EndpointField::QuicMultiaddr as u64);
         encoder
-            .write_text("soranet://first.example", "endpoint.url")
-            .expect("test endpoint URL encodes");
-        encoder.write_unsigned(EndpointField::Url as u64);
+            .write_text("/dns/first.example/udp/443/quic", "endpoint.quic_multiaddr")
+            .expect("test endpoint multiaddr encodes");
+        encoder.write_unsigned(EndpointField::QuicMultiaddr as u64);
         encoder
-            .write_text("soranet://second.example", "endpoint.url")
-            .expect("test endpoint URL encodes");
+            .write_text(
+                "/dns/second.example/udp/443/quic",
+                "endpoint.quic_multiaddr",
+            )
+            .expect("test endpoint multiaddr encodes");
         let bytes = encoder.finish();
         let mut decoder = CborDecoder::new(&bytes);
         let err =
             RelayEndpointV2::decode(&mut decoder).expect_err("duplicate endpoint fields must fail");
         match err {
             CertificateError::DuplicateField { field } => {
-                assert_eq!(field, "endpoint.url");
+                assert_eq!(field, "endpoint.quic_multiaddr");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -2859,7 +3210,7 @@ mod tests {
         let mut certificate = sample_certificate();
         certificate.endpoints.push(certificate.endpoints[0].clone());
         let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("duplicate endpoint URLs must fail");
+            .expect_err("duplicate endpoint multiaddrs must fail");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.endpoints");
@@ -2869,24 +3220,102 @@ mod tests {
     }
 
     #[test]
-    fn parse_certificate_payload_rejects_invalid_endpoint_urls() {
-        for url in [
+    fn certificate_encoding_rejects_invalid_quic_multiaddrs() {
+        for multiaddr in [
             "",
-            " soranet://relay.example:443",
-            "soranet://relay.example:443 ",
-            "soranet://relay.example:\n443",
+            "/dns/relay.example/tcp/443/quic",
+            "/dns/Relay.example/udp/443/quic",
+            "/dns/relay.example/udp/0443/quic",
+            "/dns/relay.example/udp/443/quic-v1",
         ] {
             let mut certificate = sample_certificate();
-            certificate.endpoints[0].url = url.to_owned();
-            let err = parse_certificate_payload(&certificate.to_cbor())
-                .expect_err("ambiguous endpoint URLs must fail");
+            certificate.endpoints[0].quic_multiaddr = multiaddr.to_owned();
+            let err = certificate
+                .try_to_cbor()
+                .expect_err("non-canonical QUIC multiaddrs must fail");
             match err {
                 CertificateError::InvalidFieldValue { field, .. } => {
-                    assert_eq!(field, "endpoint.url");
+                    assert_eq!(field, "endpoint.quic_multiaddr");
                 }
                 other => panic!("unexpected error: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn certificate_encoding_rejects_invalid_tls_endpoint_identity() {
+        for server_name in ["Relay.example", "127.0.0.1"] {
+            let mut certificate = sample_certificate();
+            certificate.endpoints[0].tls_server_name = server_name.to_owned();
+            let error = certificate
+                .try_to_cbor()
+                .expect_err("non-canonical TLS DNS identity must fail");
+            assert!(matches!(
+                error,
+                CertificateError::InvalidFieldValue {
+                    field: "endpoint.tls_server_name",
+                    ..
+                }
+            ));
+        }
+
+        let mut certificate = sample_certificate();
+        certificate.endpoints[0].tls_spki_sha256 = [0; 32];
+        let error = certificate
+            .try_to_cbor()
+            .expect_err("an all-zero TLS SPKI pin must fail");
+        assert!(matches!(
+            error,
+            CertificateError::InvalidFieldValue {
+                field: "endpoint.tls_spki_sha256",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn vpn_endpoint_selection_is_deterministic() {
+        let mut certificate = sample_certificate();
+        certificate.endpoints[0].tags = vec!["vpn".to_owned()];
+        certificate.endpoints[0].priority = 10;
+        let mut preferred = certificate.endpoints[0].clone();
+        preferred.priority = 1;
+        preferred.quic_multiaddr = "/dns/preferred.example/udp/443/quic".to_owned();
+        preferred.tls_server_name = "preferred.example".to_owned();
+        certificate.endpoints.push(preferred.clone());
+
+        assert_eq!(
+            select_vpn_endpoint(&certificate.endpoints).expect("VPN endpoint"),
+            &preferred
+        );
+
+        certificate.endpoints.reverse();
+        assert_eq!(
+            select_vpn_endpoint(&certificate.endpoints).expect("order-independent VPN endpoint"),
+            &preferred
+        );
+    }
+
+    #[test]
+    fn leaf_certificate_spki_hashes_exact_der_element() {
+        let spki = [0x30, 0x07, 0x30, 0x00, 0x03, 0x03, 0x00, 0xAA, 0xBB];
+        let certificate = [
+            0x30, 0x1C, 0x30, 0x14, 0x02, 0x01, 0x01, 0x30, 0x00, 0x30, 0x00, 0x30, 0x00, 0x30,
+            0x00, 0x30, 0x07, 0x30, 0x00, 0x03, 0x03, 0x00, 0xAA, 0xBB, 0x30, 0x00, 0x03, 0x02,
+            0x00, 0x00,
+        ];
+
+        assert_eq!(
+            leaf_certificate_spki_sha256(&certificate).expect("minimal DER certificate"),
+            Sha256::digest(spki).into()
+        );
+
+        let mut with_trailing_data = certificate.to_vec();
+        with_trailing_data.push(0);
+        assert!(
+            leaf_certificate_spki_sha256(&with_trailing_data).is_err(),
+            "trailing data must not alter the pinned element interpretation"
+        );
     }
 
     #[test]
@@ -3123,6 +3552,21 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_certificate_payload_rejects_relay_id_aliasing() {
+        let mut certificate = sample_certificate();
+        certificate.relay_id[0] ^= 0x01;
+        let error = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("relay id must be the exact Ed25519 identity");
+        assert!(matches!(
+            error,
+            CertificateError::InvalidFieldValue {
+                field: "certificate.relay_id",
+                ..
+            }
+        ));
     }
 
     #[test]

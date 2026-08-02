@@ -28,7 +28,7 @@ use std::{
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Bytes};
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey,
+    Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, RamLfeSecret,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
     },
@@ -65,6 +65,7 @@ use iroha_data_model::{
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
+    privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -547,15 +548,24 @@ impl Default for SoracloudRuntimeHuggingFace {
 pub struct FromTomlSourceError;
 
 impl Root {
-    /// A shorthand to read config from a single provided TOML.
-    /// For testing purposes.
+    /// Read config from exactly one provided TOML source.
+    ///
+    /// Ambient process environment variables are deliberately ignored. This
+    /// constructor is used by offline signing, bundle admission, and tests,
+    /// where allowing the caller's shell to rewrite the supplied artifact
+    /// would make validation non-reproducible. Runtime startup uses
+    /// [`ConfigReader`] directly and retains its normal environment overlay.
     /// # Errors
     /// If config reading/parsing fails.
     pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
-        user::Root::read_and_complete(ConfigReader::new().with_toml_source(src))
-            .change_context(FromTomlSourceError)?
-            .parse()
-            .change_context(FromTomlSourceError)
+        user::Root::read_and_complete(
+            ConfigReader::new()
+                .with_env(iroha_config_base::env::MockEnv::new())
+                .with_toml_source(src),
+        )
+        .change_context(FromTomlSourceError)?
+        .parse()
+        .change_context(FromTomlSourceError)
     }
 
     /// Check whether the configuration already enables Sora/Nexus-only features.
@@ -651,6 +661,10 @@ impl Root {
         &mut self,
         filesystem_budgets: &[NexusStorageFilesystemBudget],
     ) -> core::result::Result<NonZeroU64, NexusStorageBudgetApplicationError> {
+        validate_filesystem_storage_budgets(
+            filesystem_budgets,
+            self.nexus.storage.disk_budget_weights,
+        )?;
         let aggregate_budget_bytes =
             filesystem_budgets
                 .iter()
@@ -737,23 +751,34 @@ struct NexusStorageComponentCaps {
 
 impl NexusStorageComponentCaps {
     fn add_budget(&mut self, component: NexusStorageBudgetComponent, budget_bytes: u64) {
+        let target = match component {
+            NexusStorageBudgetComponent::Kura => &mut self.kura_bytes,
+            NexusStorageBudgetComponent::WsvCold => &mut self.wsv_cold_bytes,
+            NexusStorageBudgetComponent::Sorafs => &mut self.sorafs_bytes,
+            NexusStorageBudgetComponent::SoranetSpool => &mut self.soranet_spool_bytes,
+            NexusStorageBudgetComponent::SoravpnSpool => &mut self.soravpn_spool_bytes,
+        };
+        *target = target
+            .checked_add(budget_bytes)
+            .expect("validated storage component budgets cannot overflow");
+    }
+
+    fn budget_for(self, component: NexusStorageBudgetComponent) -> u64 {
         match component {
-            NexusStorageBudgetComponent::Kura => {
-                self.kura_bytes = self.kura_bytes.saturating_add(budget_bytes);
-            }
-            NexusStorageBudgetComponent::WsvCold => {
-                self.wsv_cold_bytes = self.wsv_cold_bytes.saturating_add(budget_bytes);
-            }
-            NexusStorageBudgetComponent::Sorafs => {
-                self.sorafs_bytes = self.sorafs_bytes.saturating_add(budget_bytes);
-            }
-            NexusStorageBudgetComponent::SoranetSpool => {
-                self.soranet_spool_bytes = self.soranet_spool_bytes.saturating_add(budget_bytes);
-            }
-            NexusStorageBudgetComponent::SoravpnSpool => {
-                self.soravpn_spool_bytes = self.soravpn_spool_bytes.saturating_add(budget_bytes);
-            }
+            NexusStorageBudgetComponent::Kura => self.kura_bytes,
+            NexusStorageBudgetComponent::WsvCold => self.wsv_cold_bytes,
+            NexusStorageBudgetComponent::Sorafs => self.sorafs_bytes,
+            NexusStorageBudgetComponent::SoranetSpool => self.soranet_spool_bytes,
+            NexusStorageBudgetComponent::SoravpnSpool => self.soravpn_spool_bytes,
         }
+    }
+
+    fn total(self) -> u64 {
+        NexusStorageBudgetComponent::ORDER
+            .into_iter()
+            .map(|component| self.budget_for(component))
+            .try_fold(0_u64, u64::checked_add)
+            .expect("proportional component shares cannot exceed their source budget")
     }
 }
 
@@ -783,7 +808,7 @@ fn derive_global_nexus_storage_component_caps(
     weights: NexusStorageWeights,
 ) -> NexusStorageComponentCaps {
     let total_bps = u64::from(weights.total_bps().max(1));
-    let budget = |bps: u16| max_disk_bytes.saturating_mul(u64::from(bps)) / total_bps;
+    let budget = |bps: u16| proportional_budget_bytes(max_disk_bytes, bps, total_bps);
 
     let mut caps = NexusStorageComponentCaps {
         kura_bytes: budget(weights.kura_blocks_bps),
@@ -792,16 +817,22 @@ fn derive_global_nexus_storage_component_caps(
         soranet_spool_bytes: budget(weights.soranet_spool_bps),
         soravpn_spool_bytes: budget(weights.soravpn_spool_bps),
     };
-    let allocated = caps
-        .kura_bytes
-        .saturating_add(caps.wsv_cold_bytes)
-        .saturating_add(caps.sorafs_bytes)
-        .saturating_add(caps.soranet_spool_bytes)
-        .saturating_add(caps.soravpn_spool_bytes);
-    caps.kura_bytes = caps
-        .kura_bytes
-        .saturating_add(max_disk_bytes.saturating_sub(allocated));
+    let allocated = caps.total();
+    caps.add_budget(
+        NexusStorageBudgetComponent::Kura,
+        max_disk_bytes
+            .checked_sub(allocated)
+            .expect("proportional component shares cannot exceed the source budget"),
+    );
     caps
+}
+
+fn proportional_budget_bytes(total_bytes: u64, weight: u16, total_weight: u64) -> u64 {
+    if total_weight == 0 {
+        return 0;
+    }
+    let share = u128::from(total_bytes) * u128::from(weight) / u128::from(total_weight);
+    u64::try_from(share).expect("a proportional share cannot exceed its u64 source budget")
 }
 
 fn derive_filesystem_nexus_storage_component_caps(
@@ -815,17 +846,9 @@ fn derive_filesystem_nexus_storage_component_caps(
             &filesystem_group.components,
             weights,
         );
-        caps.kura_bytes = caps.kura_bytes.saturating_add(group_caps.kura_bytes);
-        caps.wsv_cold_bytes = caps
-            .wsv_cold_bytes
-            .saturating_add(group_caps.wsv_cold_bytes);
-        caps.sorafs_bytes = caps.sorafs_bytes.saturating_add(group_caps.sorafs_bytes);
-        caps.soranet_spool_bytes = caps
-            .soranet_spool_bytes
-            .saturating_add(group_caps.soranet_spool_bytes);
-        caps.soravpn_spool_bytes = caps
-            .soravpn_spool_bytes
-            .saturating_add(group_caps.soravpn_spool_bytes);
+        for component in NexusStorageBudgetComponent::ORDER {
+            caps.add_budget(component, group_caps.budget_for(component));
+        }
     }
     caps
 }
@@ -845,12 +868,16 @@ fn split_filesystem_budget_across_components(
     let mut allocated = 0_u64;
     for component in components {
         let budget =
-            budget_bytes.saturating_mul(u64::from(component.weight_bps(weights))) / divisor;
+            proportional_budget_bytes(budget_bytes, component.weight_bps(weights), divisor);
         caps.add_budget(*component, budget);
-        allocated = allocated.saturating_add(budget);
+        allocated = allocated
+            .checked_add(budget)
+            .expect("proportional component shares cannot exceed their source budget");
     }
 
-    let remainder = budget_bytes.saturating_sub(allocated);
+    let remainder = budget_bytes
+        .checked_sub(allocated)
+        .expect("proportional component shares cannot exceed their source budget");
     if remainder == 0 {
         return caps;
     }
@@ -862,6 +889,71 @@ fn split_filesystem_budget_across_components(
         caps.add_budget(first_component, remainder);
     }
     caps
+}
+
+fn validate_filesystem_storage_budgets(
+    filesystem_budgets: &[NexusStorageFilesystemBudget],
+    weights: NexusStorageWeights,
+) -> core::result::Result<(), NexusStorageBudgetApplicationError> {
+    if filesystem_budgets.is_empty() {
+        return Err(NexusStorageBudgetApplicationError::NoFilesystemBudgets);
+    }
+
+    let mut seen_components = BTreeSet::new();
+    for (group_index, filesystem_group) in filesystem_budgets.iter().enumerate() {
+        if filesystem_group.components.is_empty() {
+            return Err(NexusStorageBudgetApplicationError::EmptyComponentSet { group_index });
+        }
+        if let Some(window) = filesystem_group
+            .components
+            .windows(2)
+            .find(|window| window[0] == window[1])
+        {
+            return Err(NexusStorageBudgetApplicationError::DuplicateComponent {
+                component: window[0],
+            });
+        }
+        if let Some(window) = filesystem_group
+            .components
+            .windows(2)
+            .find(|window| window[0] > window[1])
+        {
+            return Err(
+                NexusStorageBudgetApplicationError::NonCanonicalComponentOrder {
+                    group_index,
+                    previous: window[0],
+                    current: window[1],
+                },
+            );
+        }
+        for component in &filesystem_group.components {
+            if !seen_components.insert(*component) {
+                return Err(NexusStorageBudgetApplicationError::DuplicateComponent {
+                    component: *component,
+                });
+            }
+        }
+
+        let caps = split_filesystem_budget_across_components(
+            filesystem_group.budget_bytes.get(),
+            &filesystem_group.components,
+            weights,
+        );
+        if let Some(component) = filesystem_group
+            .components
+            .iter()
+            .copied()
+            .find(|component| caps.budget_for(*component) == 0)
+        {
+            return Err(
+                NexusStorageBudgetApplicationError::ZeroComponentAllocation {
+                    group_index,
+                    component,
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 fn min_nonzero_bytes(current: Bytes<u64>, limit: u64) -> Bytes<u64> {
@@ -1004,6 +1096,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -1321,13 +1414,19 @@ signature_threshold = 1
     fn derived_storage_budget_rejects_an_overflowing_internal_aggregate() {
         let mut root = minimal_root();
         root.nexus.enabled = true;
-        let budget = |bytes| NexusStorageFilesystemBudget {
-            budget_bytes: NonZeroU64::new(bytes).expect("non-zero budget"),
-            components: vec![NexusStorageBudgetComponent::Kura],
-        };
+        let filesystem_budgets = [
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(u64::MAX).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::WsvCold],
+            },
+        ];
 
         let error = root
-            .apply_derived_storage_budget(&[budget(u64::MAX), budget(1)])
+            .apply_derived_storage_budget(&filesystem_budgets)
             .expect_err("the aggregate must use checked arithmetic");
 
         assert_eq!(error, NexusStorageBudgetApplicationError::AggregateOverflow);
@@ -1335,6 +1434,117 @@ signature_threshold = 1
             root.nexus.storage.effective_local_budget_bytes.is_none(),
             "an invalid aggregate must be rejected before mutating effective configuration"
         );
+    }
+
+    #[test]
+    fn derived_storage_budget_rejects_inconsistent_component_metadata_before_mutation() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+
+        let empty = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: Vec::new(),
+        };
+        assert_eq!(
+            root.apply_derived_storage_budget(&[empty])
+                .expect_err("empty component sets must be rejected"),
+            NexusStorageBudgetApplicationError::EmptyComponentSet { group_index: 0 }
+        );
+
+        let noncanonical = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Sorafs,
+                NexusStorageBudgetComponent::Kura,
+            ],
+        };
+        assert!(matches!(
+            root.apply_derived_storage_budget(&[noncanonical]),
+            Err(
+                NexusStorageBudgetApplicationError::NonCanonicalComponentOrder {
+                    group_index: 0,
+                    ..
+                }
+            )
+        ));
+
+        let duplicate_within_group = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Kura,
+                NexusStorageBudgetComponent::Kura,
+            ],
+        };
+        assert_eq!(
+            root.apply_derived_storage_budget(&[duplicate_within_group])
+                .expect_err("within-group duplicates must be rejected"),
+            NexusStorageBudgetApplicationError::DuplicateComponent {
+                component: NexusStorageBudgetComponent::Kura,
+            }
+        );
+
+        let duplicate = [
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+        ];
+        assert_eq!(
+            root.apply_derived_storage_budget(&duplicate)
+                .expect_err("cross-group duplicates must be rejected"),
+            NexusStorageBudgetApplicationError::DuplicateComponent {
+                component: NexusStorageBudgetComponent::Kura,
+            }
+        );
+
+        assert!(
+            root.nexus.storage.effective_local_budget_bytes.is_none(),
+            "invalid filesystem metadata must not mutate effective configuration"
+        );
+    }
+
+    #[test]
+    fn derived_storage_budget_rejects_zero_component_caps() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        let budget = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Kura,
+                NexusStorageBudgetComponent::Sorafs,
+            ],
+        };
+
+        assert_eq!(
+            root.apply_derived_storage_budget(&[budget])
+                .expect_err("zero means unlimited to component cap consumers"),
+            NexusStorageBudgetApplicationError::ZeroComponentAllocation {
+                group_index: 0,
+                component: NexusStorageBudgetComponent::Sorafs,
+            }
+        );
+        assert!(root.nexus.storage.effective_local_budget_bytes.is_none());
+    }
+
+    #[test]
+    fn storage_budget_splitting_is_exact_at_u64_max() {
+        let weights = NexusStorageWeights::default();
+        let global = derive_global_nexus_storage_component_caps(u64::MAX, weights);
+        assert_eq!(global.total(), u64::MAX);
+
+        let filesystem = split_filesystem_budget_across_components(
+            u64::MAX,
+            &NexusStorageBudgetComponent::ORDER,
+            weights,
+        );
+        assert_eq!(filesystem.total(), u64::MAX);
+        for component in NexusStorageBudgetComponent::ORDER {
+            assert!(filesystem.budget_for(component) > 0);
+        }
     }
 
     #[test]
@@ -1351,14 +1561,13 @@ signature_threshold = 1
     }
 
     #[test]
-    fn soranet_vpn_defaults_construct_with_canonical_accounts() {
+    fn soranet_vpn_defaults_construct_with_canonical_operator_account() {
         let config = SoranetVpn::default();
         assert!(!config.enabled);
         assert_eq!(
-            config.escrow_account_id,
+            config.operator_account_id,
             defaults::governance::bond_escrow_account_id()
         );
-        assert_eq!(config.operator_account_id, config.escrow_account_id);
     }
 }
 
@@ -1373,8 +1582,6 @@ pub struct Common {
     pub peer: Peer,
     /// Trusted peers including self.
     pub trusted_peers: WithOrigin<TrustedPeers>,
-    /// Default domain label used only when encoding/compressing `AccountAddress` selectors.
-    pub default_account_domain_label: WithOrigin<String>,
     /// I105 chain discriminant / network prefix applied when encoding addresses.
     pub chain_discriminant: WithOrigin<u16>,
 }
@@ -1560,10 +1767,6 @@ pub struct SoranetVpn {
     pub meter_family: String,
     /// Optional 32-byte shared secret used to mint helper-authenticated VPN tickets.
     pub helper_ticket_secret: Option<[u8; 32]>,
-    /// XOR asset definition used for escrowed VPN fees.
-    pub fee_asset_id: String,
-    /// Account that receives escrowed VPN lease fees.
-    pub escrow_account_id: AccountId,
     /// Relay operator account eligible for receipt settlement.
     pub operator_account_id: AccountId,
     /// Fixed prepaid XOR lease fee.
@@ -1576,8 +1779,12 @@ pub struct SoranetVpn {
     pub excluded_routes: Vec<String>,
     /// DNS servers pushed to VPN clients.
     pub dns_servers: Vec<String>,
-    /// Optional SHA-256 SPKI pin for the relay TLS certificate.
-    pub relay_tls_spki_sha256_hex: Option<String>,
+    /// Relay Ed25519 identity selected from the authenticated guard directory.
+    pub relay_id: Option<[u8; 32]>,
+    /// Path to the exact Norito guard-directory snapshot used for VPN trust.
+    pub guard_directory_path: Option<PathBuf>,
+    /// Externally provisioned digest authenticating the exact snapshot bytes.
+    pub guard_directory_digest: Option<[u8; 32]>,
 }
 
 impl Default for SoranetVpn {
@@ -1597,12 +1804,6 @@ impl Default for SoranetVpn {
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
             helper_ticket_secret: None,
-            fee_asset_id: defaults::soranet::vpn::fee_asset_id(),
-            escrow_account_id: AccountId::parse_encoded(
-                &defaults::soranet::vpn::escrow_account_id(),
-            )
-            .expect("default vpn escrow account id")
-            .into_account_id(),
             operator_account_id: AccountId::parse_encoded(
                 &defaults::soranet::vpn::operator_account_id(),
             )
@@ -1613,7 +1814,9 @@ impl Default for SoranetVpn {
             route_pushes: defaults::soranet::vpn::route_pushes(),
             excluded_routes: defaults::soranet::vpn::excluded_routes(),
             dns_servers: defaults::soranet::vpn::dns_servers(),
-            relay_tls_spki_sha256_hex: None,
+            relay_id: None,
+            guard_directory_path: None,
+            guard_directory_digest: None,
         }
     }
 }
@@ -2712,10 +2915,6 @@ pub struct Concurrency {
     pub prover_stack_bytes: usize,
     /// Stack size (bytes) for Sumeragi helper threads.
     pub sumeragi_stack_bytes: usize,
-    /// Guest stack size (bytes) for IVM instances.
-    pub guest_stack_bytes: u64,
-    /// Gas→stack multiplier (bytes of stack available per unit of gas).
-    pub gas_to_stack_multiplier: u64,
 }
 
 impl Concurrency {
@@ -2730,22 +2929,11 @@ impl Concurrency {
             scheduler_stack_bytes: defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: defaults::concurrency::PROVER_STACK_BYTES,
             sumeragi_stack_bytes: defaults::concurrency::SUMERAGI_STACK_BYTES,
-            guest_stack_bytes: defaults::concurrency::GUEST_STACK_BYTES,
-            gas_to_stack_multiplier: defaults::concurrency::GAS_TO_STACK_MULTIPLIER,
         }
     }
 
     /// Validate stack sizes to ensure they are non-zero and within sane bounds.
     pub fn validate(&self) -> core::result::Result<(), Report<ParseError>> {
-        let max_guest = defaults::concurrency::GUEST_STACK_BYTES_MAX;
-        if self.guest_stack_bytes == 0 || self.guest_stack_bytes > max_guest {
-            return Err(
-                Report::new(ParseError::InvalidConcurrencyConfig).attach(format!(
-                    "guest_stack_bytes must be in [1, {}], got {}",
-                    max_guest, self.guest_stack_bytes
-                )),
-            );
-        }
         if self.tokio_stack_bytes < defaults::concurrency::TOKIO_STACK_BYTES_MIN
             || self.tokio_stack_bytes > defaults::concurrency::TOKIO_STACK_BYTES_MAX
         {
@@ -2774,10 +2962,6 @@ impl Concurrency {
                 )),
             );
         }
-        if self.gas_to_stack_multiplier == 0 {
-            return Err(Report::new(ParseError::InvalidConcurrencyConfig)
-                .attach("gas_to_stack_multiplier must be non-zero"));
-        }
         Ok(())
     }
 }
@@ -2789,17 +2973,13 @@ pub struct Genesis {
     /// Genesis account public key
     pub public_key: PublicKey,
     /// Path to the operator-provisioned signed `GenesisBlock`.
-    ///
-    /// Normal startup derives the exact genesis-instance trust anchor from this artifact when it
-    /// is present. A restart without the artifact must configure [`Self::expected_hash`].
     pub file: Option<WithOrigin<PathBuf>>,
     /// Optional path to genesis manifest JSON for validation at startup.
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Exact genesis consensus-header hash used as a normal-startup trust anchor.
+    /// Exact genesis consensus-header hash used as the startup trust anchor.
     ///
-    /// This may be omitted when a local signed genesis file is configured. When both are present,
-    /// they must identify the same signed genesis instance.
-    pub expected_hash: Option<HashOf<BlockHeader>>,
+    /// Configuration normalization requires this value independently of the signed artifact.
+    pub expected_hash: HashOf<BlockHeader>,
 }
 
 /// Transaction queue settings.
@@ -3151,6 +3331,12 @@ impl NexusStorageBudgetComponent {
     }
 }
 
+impl fmt::Display for NexusStorageBudgetComponent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// One runtime-derived filesystem group inside the Nexus storage budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NexusStorageFilesystemBudget {
@@ -3169,6 +3355,40 @@ pub enum NexusStorageBudgetApplicationError {
     /// The checked sum of per-filesystem budgets exceeded `u64`.
     #[error("aggregate runtime Nexus storage budget overflowed u64")]
     AggregateOverflow,
+    /// A filesystem group contains no managed storage components.
+    #[error("runtime Nexus storage filesystem group {group_index} has no components")]
+    EmptyComponentSet {
+        /// Zero-based filesystem group index.
+        group_index: usize,
+    },
+    /// Components within one filesystem group are not in strict canonical order.
+    #[error(
+        "runtime Nexus storage filesystem group {group_index} is not canonically ordered: {previous} precedes {current}"
+    )]
+    NonCanonicalComponentOrder {
+        /// Zero-based filesystem group index.
+        group_index: usize,
+        /// Component immediately before the ordering violation.
+        previous: NexusStorageBudgetComponent,
+        /// Component at the ordering violation.
+        current: NexusStorageBudgetComponent,
+    },
+    /// A component appears in more than one filesystem budget group.
+    #[error("runtime Nexus storage component {component} appears in multiple filesystem groups")]
+    DuplicateComponent {
+        /// Repeated storage component.
+        component: NexusStorageBudgetComponent,
+    },
+    /// A non-zero filesystem budget is too small to constrain one of its components.
+    #[error(
+        "runtime Nexus storage filesystem group {group_index} allocates zero bytes to {component}"
+    )]
+    ZeroComponentAllocation {
+        /// Zero-based filesystem group index.
+        group_index: usize,
+        /// Component whose weighted cap would be zero (which means unlimited downstream).
+        component: NexusStorageBudgetComponent,
+    },
 }
 
 /// Storage budget configuration for Nexus-enabled nodes.
@@ -4728,8 +4948,8 @@ pub struct Confidential {
     pub policy_transition_delay_blocks: u64,
     /// Grace window around policy activation.
     pub policy_transition_window_blocks: u64,
-    /// Commitment tree root history length.
-    pub tree_roots_history_len: u64,
+    /// Non-zero commitment tree root history length.
+    pub tree_roots_history_len: NonZeroUsize,
     /// Frontier checkpoint interval.
     pub tree_frontier_checkpoint_interval: u64,
     /// Maximum verifier entries allowed in registry.
@@ -8048,8 +8268,12 @@ pub struct Torii {
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
-    /// CIDR allowlist for bypassing API rate limits (IPv4/IPv6).
-    pub api_allow_cidrs: Vec<String>,
+    /// Optional authenticated native Bootle/Lantern blind-issuance service.
+    pub privacy_bootle_lantern_issuer: Option<ToriiBootleLanternIssuer>,
+    /// CIDRs whose effective transport sources bypass API rate limits only.
+    pub api_rate_limit_bypass_cidrs: Vec<String>,
+    /// Exact effective transport source hosts trusted for internal API reads and routing.
+    pub internal_api_trusted_cidrs: Vec<String>,
     /// Optional Torii base URLs used to fetch peer telemetry metadata.
     pub peer_telemetry_urls: Vec<Url>,
     /// Peer telemetry geo lookup configuration.
@@ -8070,6 +8294,8 @@ pub struct Torii {
     pub preauth_burst_per_ip: Option<NonZeroU32>,
     /// Optional temporary ban duration applied on repeated violations.
     pub preauth_temp_ban: Option<Duration>,
+    /// Maximum number of temporary pre-auth bans retained in memory.
+    pub preauth_ban_capacity: NonZeroUsize,
     /// Explicit source hosts allowed to bypass pre-auth limits.
     pub preauth_allow_cidrs: Vec<String>,
     /// Optional per-scheme pre-auth concurrency caps.
@@ -8199,6 +8425,36 @@ pub struct Torii {
     pub webhook_security: WebhookSecurity,
     /// Push notification delivery configuration.
     pub push: Push,
+}
+
+/// Non-secret production policy for native Bootle/Lantern blind issuance.
+///
+/// Issuer trapdoors, authentication credentials, and provider implementations
+/// are runtime-injected and are deliberately absent from configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToriiBootleLanternIssuer {
+    /// Durable one-shot authorization store directory.
+    pub state_dir: PathBuf,
+    /// Exact non-zero bound on concurrent native issuance operations.
+    pub max_inflight: NonZeroUsize,
+    /// Exact governed issuer identity resolved from committed state.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Exact governed policy identity resolved from committed state.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Number of committed blocks for which a fresh authorization is valid.
+    pub authorization_lifetime_blocks: u64,
+    /// Maximum retained authorization records.
+    pub max_records: usize,
+    /// Maximum reserved canonical authorization-store bytes.
+    pub max_total_bytes: u64,
+    /// Terminal records retained after their authoritative horizon.
+    pub terminal_retention_blocks: u64,
+    /// Deployment-owned provider-registry handle.
+    pub runtime_provider_registry_handle: String,
+    /// Exact non-zero provider-registry policy revision.
+    pub runtime_provider_registry_revision: u64,
+    /// Exact non-zero provider-registry public-policy digest.
+    pub runtime_provider_registry_policy_digest: [u8; 32],
 }
 
 /// Transaction-history visibility/auth configuration for Torii app API.
@@ -8917,18 +9173,31 @@ pub struct ToriiRamLfe {
 }
 
 /// Per-program secret/signer material for the Torii RAM-LFE runtime.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToriiRamLfeProgram {
     /// On-chain RAM-LFE program handled by this runtime entry.
     pub program_id: iroha_data_model::ram_lfe::RamLfeProgramId,
     /// Hidden derivation secret committed by the on-chain program policy.
-    pub secret: Vec<u8>,
+    pub secret: RamLfeSecret,
     /// Hidden BFV RAM-FHE program executed by this runtime entry.
     pub hidden_program: iroha_crypto::HiddenRamFheProgram,
     /// Private key used to sign receipts for this program.
-    pub signer_private_key: ExposedPrivateKey,
+    pub signer_private_key: PrivateKey,
     /// Optional receipt TTL enforced by the runtime.
     pub receipt_ttl: Option<Duration>,
+}
+
+impl fmt::Debug for ToriiRamLfeProgram {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToriiRamLfeProgram")
+            .field("program_id", &self.program_id)
+            .field("secret", &self.secret)
+            .field("hidden_program", &"[REDACTED hidden RAM-FHE program]")
+            .field("signer_private_key", &"[REDACTED RAM-LFE signer]")
+            .field("receipt_ttl", &self.receipt_ttl)
+            .finish()
+    }
 }
 
 /// Per-scheme cap applied by the Torii pre-auth gate.
@@ -11334,8 +11603,6 @@ pub struct SorafsGateway {
     pub salt_schedule_dir: Option<PathBuf>,
     /// Named static-site bindings loaded and cached when Torii starts.
     pub site_bindings: SorafsGatewaySiteBindings,
-    /// Optional CDN policy payload (GarCdnPolicyV1) loaded from disk.
-    pub cdn_policy_path: Option<PathBuf>,
     /// Client-facing rate limit configuration.
     pub rate_limit: SorafsGatewayRateLimit,
     /// High-level rollout phase controlling default anonymity policy.
@@ -11360,7 +11627,6 @@ impl Default for SorafsGateway {
             enforce_capabilities: defaults::sorafs::gateway::ENFORCE_CAPABILITIES,
             salt_schedule_dir: None,
             site_bindings: SorafsGatewaySiteBindings::default(),
-            cdn_policy_path: None,
             rate_limit: SorafsGatewayRateLimit::default(),
             rollout_phase: SorafsRolloutPhase::default(),
             anonymity_policy: Some(
@@ -11937,14 +12203,8 @@ pub struct Zk {
     pub stark: Stark,
     /// SCCP proof-admission and deterministic verifier-work limits.
     pub sccp: Sccp,
-    /// Cap on the number of recent shielded Merkle roots kept per asset.
-    pub root_history_cap: usize,
     /// Cap on the number of recent ballot ciphertexts kept per election.
     pub ballot_history_cap: usize,
-    /// When an asset has no commitments, include an explicit empty-tree root in read APIs.
-    pub empty_root_on_empty: bool,
-    /// Depth to use when computing the explicit empty-tree root.
-    pub merkle_depth: u8,
     /// Maximum accepted proof size for stateless pre-verification (bytes).
     pub preverify_max_bytes: usize,
     /// Soft byte-budget for stateless pre-verification (0 = unlimited).
@@ -11997,8 +12257,8 @@ pub struct Zk {
     pub policy_transition_delay_blocks: u64,
     /// Grace window (in blocks) around policy activation for conversions.
     pub policy_transition_window_blocks: u64,
-    /// Commitment tree root history length to retain.
-    pub tree_roots_history_len: u64,
+    /// Non-zero commitment tree root history length to retain.
+    pub tree_roots_history_len: NonZeroUsize,
     /// Interval (in blocks) between frontier checkpoints.
     pub tree_frontier_checkpoint_interval: u64,
     /// Maximum active verifier entries allowed in registry.
@@ -12876,20 +13136,6 @@ mod tests_npos_timeouts {
     }
 
     #[test]
-    fn concurrency_validate_rejects_zero_gas_stack_multiplier() {
-        let mut cfg = Concurrency::from_defaults();
-        cfg.gas_to_stack_multiplier = 0;
-
-        let err = cfg
-            .validate()
-            .expect_err("zero multiplier should be invalid");
-        assert!(matches!(
-            err.current_context(),
-            ParseError::InvalidConcurrencyConfig
-        ));
-    }
-
-    #[test]
     fn concurrency_validate_rejects_too_small_sumeragi_stack() {
         let mut cfg = Concurrency::from_defaults();
         cfg.sumeragi_stack_bytes = defaults::concurrency::SUMERAGI_STACK_BYTES_MIN - 1;
@@ -12925,20 +13171,6 @@ mod tests_npos_timeouts {
         let err = cfg
             .validate()
             .expect_err("Sumeragi stack above maximum must fail");
-        assert!(matches!(
-            err.current_context(),
-            ParseError::InvalidConcurrencyConfig
-        ));
-    }
-
-    #[test]
-    fn concurrency_validate_rejects_excessive_guest_stack() {
-        let mut cfg = Concurrency::from_defaults();
-        cfg.guest_stack_bytes = defaults::concurrency::GUEST_STACK_BYTES_MAX + 1;
-
-        let err = cfg
-            .validate()
-            .expect_err("guest stack beyond max must fail");
         assert!(matches!(
             err.current_context(),
             ParseError::InvalidConcurrencyConfig
@@ -13369,11 +13601,9 @@ mod tests_npos_timeouts {
     }
 }
 
-/// IVM/runtime presentation toggles.
-#[derive(Debug, Clone)]
+/// IVM runtime presentation toggles.
+#[derive(Debug, Clone, Copy)]
 pub struct Ivm {
-    /// Compute resource profile name used to cap IVM guest stack budgets.
-    pub memory_budget_profile: Name,
     /// Banner/presentation toggles surfaced during startup.
     pub banner: Banner,
 }
@@ -13383,7 +13613,6 @@ impl Ivm {
     #[must_use]
     pub fn from_defaults() -> Self {
         Self {
-            memory_budget_profile: defaults::ivm::memory_budget_profile(),
             banner: Banner::from_defaults(),
         }
     }

@@ -26,18 +26,25 @@ import stat
 import subprocess
 import sys
 import tempfile
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 CI fallback.
+    import tomli as tomllib
 from dataclasses import dataclass
 from typing import Any, Iterator, Mapping
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_PARENT = REPOSITORY_ROOT / "artifacts/kagemusha-candidate-evidence"
-REPORT_SCHEMA = "iroha.kagemusha.recursive_spend.candidate_validation.v1"
-REPORT_NAME = "candidate-validation-v1.json"
+REPORT_SCHEMA = "iroha.kagemusha.recursive_spend.candidate_validation.v2"
+REPORT_NAME = "candidate-validation-v2.json"
 VALIDATED_MANIFEST_NAME = "manifest-v4.norito"
-STAGE_MANIFEST_NAME = "candidate-stage-manifest-v1.json"
-STAGE_MANIFEST_SCHEMA = "iroha.kagemusha.android_candidate_stage_manifest.v1"
+QUALIFICATION_RECEIPT_NAME = "recursive-step-two-qualification-v4.norito"
+QUALIFIED_CANDIDATE_DOMAIN = b"iroha:kagemusha:recursive-spend-qualified-candidate:v4"
+GENERATION_MEMORY_ENFORCEMENT_PROFILE = "self-physical-footprint-v1"
+MAX_GENERATION_MEMORY_BYTES = 64 * 1024 * 1024 * 1024
+STAGE_MANIFEST_NAME = "candidate-stage-manifest-v2.json"
+STAGE_MANIFEST_SCHEMA = "iroha.kagemusha.android_candidate_stage_manifest.v2"
 VALIDATOR_SCHEMA = "iroha.kagemusha.android_candidate_validator.v1"
 SCENARIO_VALIDATION_SCHEMA = (
     "iroha.kagemusha.android_candidate_scenario_validation.v1"
@@ -52,6 +59,7 @@ ROSTER_NAME = "topup-finality-roster-v4.norito"
 SCENARIO_ROSTER_NAME = "init-top-up-finality-roster-artifact-v2.norito"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 PORTABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PUBLIC_TAIRA_CHAIN_DISCRIMINANT = 369
 AUTHORITY_BUILD_FEATURES = (
@@ -73,7 +81,14 @@ ARTIFACTS = (
 )
 ARTIFACT_NAMES = tuple(name for _, name in ARTIFACTS)
 CANDIDATE_INVENTORY = frozenset(
-    (*ARTIFACT_NAMES, CANDIDATE_RECORD_NAME, CANDIDATE_JSON_NAME, CANDIDATE_SHA_NAME, ROSTER_NAME)
+    (
+        *ARTIFACT_NAMES,
+        CANDIDATE_RECORD_NAME,
+        CANDIDATE_JSON_NAME,
+        CANDIDATE_SHA_NAME,
+        QUALIFICATION_RECEIPT_NAME,
+        ROSTER_NAME,
+    )
 )
 
 SCENARIO_FILES = (
@@ -118,12 +133,13 @@ STAGED_NON_SELF_PATHS = frozenset(
         "evidence/candidate/candidate-v4.norito",
         f"evidence/candidate/{VALIDATED_MANIFEST_NAME}",
         f"evidence/candidate/{REPORT_NAME}",
+        f"evidence/candidate/{QUALIFICATION_RECEIPT_NAME}",
         *(f"evidence/candidate/artifacts/{name}" for name in ARTIFACT_NAMES),
         *(f"scenario/{name}" for name in SCENARIO_FILES),
     }
 )
-if len(STAGED_NON_SELF_PATHS) != 44:
-    raise RuntimeError("candidate stage contract must contain exactly 44 non-self files")
+if len(STAGED_NON_SELF_PATHS) != 45:
+    raise RuntimeError("candidate stage contract must contain exactly 45 non-self files")
 
 DIGEST_SEEDS = frozenset(name for name in SCENARIO_FILES if name.endswith(".bin"))
 POSITIVE_DECIMAL_SEEDS = frozenset(
@@ -139,6 +155,10 @@ MAX_SCENARIO_BYTES = 16 * 1024 * 1024
 
 class StageError(RuntimeError):
     """An input or current-source invariant failed closed."""
+
+
+class StagePublicationUncertain(StageError):
+    """The stage was renamed, but its durable publication cannot be confirmed."""
 
 
 @dataclass(frozen=True)
@@ -353,7 +373,20 @@ def _safe_system_environment(temporary: Path | None = None) -> dict[str, str]:
 
 
 SOURCE_IDENTITY_KEYS = frozenset(
-    {"schema", "source_commit", "source_repo_dirty", "source_tree_sha256"}
+    {
+        "schema",
+        "base_commit",
+        "source_commit",
+        "source_repo_dirty",
+        "source_tree_sha256",
+        "tracked_binary_diff_sha256",
+        "untracked_file_count",
+        "untracked_path_mode_blob_oid_manifest",
+        "untracked_path_mode_blob_oid_manifest_sha256",
+        "ignored_cargo_lock_size_bytes",
+        "ignored_cargo_lock_sha256",
+        "combined_source_fingerprint_sha256",
+    }
 )
 
 
@@ -370,7 +403,7 @@ def _source_identity() -> SourceIdentity:
                 sys.executable,
                 "-I",
                 str(REPOSITORY_ROOT / "scripts/kagemusha_source_tree_seal.py"),
-                "identity",
+                "descriptor",
                 "--root",
                 str(REPOSITORY_ROOT),
             ],
@@ -382,7 +415,7 @@ def _source_identity() -> SourceIdentity:
     except (OSError, subprocess.CalledProcessError) as exc:
         raise StageError("current Iroha source-tree identity failed") from exc
     payload = completed.stdout
-    if len(payload) > 1024 or not payload.endswith(b"\n"):
+    if len(payload) > MAX_CANDIDATE_METADATA_BYTES or not payload.endswith(b"\n"):
         raise StageError("current Iroha source-tree identity is oversized or non-canonical")
     try:
         parsed = _exact_object(
@@ -399,15 +432,20 @@ def _source_identity() -> SourceIdentity:
     if payload != _canonical_json(parsed):
         raise StageError("current Iroha source-tree identity is not canonical JSON")
     if (
-        parsed["schema"] != "iroha.kagemusha.full_source_tree_identity.v1"
-        or parsed["source_repo_dirty"] is not True
+        parsed["schema"] != "iroha.reviewed-source-closure.v1"
+        or parsed["base_commit"] != parsed["source_commit"]
+        or parsed["source_repo_dirty"] is not False
+        or parsed["tracked_binary_diff_sha256"] != EMPTY_SHA256
+        or parsed["untracked_file_count"] != 0
+        or parsed["untracked_path_mode_blob_oid_manifest"] != []
+        or parsed["untracked_path_mode_blob_oid_manifest_sha256"] != EMPTY_SHA256
         or not isinstance(parsed["source_commit"], str)
         or not COMMIT_RE.fullmatch(parsed["source_commit"])
         or not isinstance(parsed["source_tree_sha256"], str)
         or not SHA256_RE.fullmatch(parsed["source_tree_sha256"])
         or parsed["source_tree_sha256"] == "0" * 64
     ):
-        raise StageError("current Iroha source-tree identity is malformed or dirty")
+        raise StageError("current Iroha source-tree identity is malformed or not clean")
     return SourceIdentity(
         commit=parsed["source_commit"], tree_sha256=parsed["source_tree_sha256"]
     )
@@ -418,19 +456,9 @@ def verify_current_source() -> SourceIdentity:
     if discovered != REPOSITORY_ROOT:
         raise StageError("stager is not running from its exact Iroha source repository")
     first = _source_identity()
-    try:
-        subprocess.run(
-            ["git", "-C", str(REPOSITORY_ROOT), "verify-commit", first.commit],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=_safe_system_environment(),
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise StageError("current Iroha HEAD must carry a locally verifiable signature") from exc
     second = _source_identity()
     if second != first:
-        raise StageError("Iroha source commit/tree pair changed during signature verification")
+        raise StageError("Iroha signed source commit/tree pair changed during verification")
     return first
 
 
@@ -788,6 +816,24 @@ def _positive_int(value: Any, label: str) -> int:
     return value
 
 
+def qualified_candidate_sha256(
+    candidate_record_sha256: str,
+    qualification_receipt_sha256: str,
+) -> str:
+    """Derive the domain-separated identity of one qualified candidate."""
+
+    candidate_digest = bytes.fromhex(_digest(candidate_record_sha256, "candidate record digest"))
+    receipt_digest = bytes.fromhex(
+        _digest(qualification_receipt_sha256, "qualification receipt digest")
+    )
+    digest = hashlib.sha256()
+    digest.update(QUALIFIED_CANDIDATE_DOMAIN)
+    digest.update(b"\0")
+    digest.update(candidate_digest)
+    digest.update(receipt_digest)
+    return digest.hexdigest()
+
+
 def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -806,10 +852,15 @@ REPORT_KEYS = frozenset(
         "schema",
         "candidate_record_sha256",
         "candidate_manifest_sha256",
+        "qualification_receipt_file_name",
+        "qualification_receipt_sha256",
+        "qualified_candidate_sha256",
         "source_commit",
         "source_tree_sha256",
         "source_repo_dirty",
         "generation",
+        "generation_memory_limit_bytes",
+        "generation_memory_enforcement_profile",
         "bridge_abi_version",
         "artifact_count",
         "artifacts",
@@ -883,20 +934,45 @@ def parse_validation_report(payload: bytes) -> dict[str, Any]:
     _digest(report["candidate_manifest_sha256"], "candidate manifest digest")
     if report["candidate_record_sha256"] == report["candidate_manifest_sha256"]:
         raise StageError("candidate record and embedded manifest must have distinct identities")
+    if report["qualification_receipt_file_name"] != QUALIFICATION_RECEIPT_NAME:
+        raise StageError("candidate report names a non-canonical qualification receipt")
+    receipt_sha256 = _digest(
+        report["qualification_receipt_sha256"],
+        "qualification receipt digest",
+    )
+    qualified_sha256 = _digest(
+        report["qualified_candidate_sha256"],
+        "qualified candidate digest",
+    )
+    if qualified_sha256 != qualified_candidate_sha256(
+        report["candidate_record_sha256"], receipt_sha256
+    ):
+        raise StageError("candidate report has an invalid qualified-candidate identity")
     if not isinstance(report["source_commit"], str) or not COMMIT_RE.fullmatch(report["source_commit"]):
         raise StageError("candidate source commit is not canonical")
     _digest(report["source_tree_sha256"], "candidate source-tree digest")
-    if report["source_repo_dirty"] is not True:
-        raise StageError("candidate reports a dirty source repository")
+    if report["source_repo_dirty"] is not False:
+        raise StageError("candidate does not report a clean source repository")
     if not isinstance(report["generation"], str) or not PORTABLE_ID_RE.fullmatch(report["generation"]):
         raise StageError("candidate generation is not portable")
+    memory_limit = _positive_int(
+        report["generation_memory_limit_bytes"],
+        "candidate generation memory limit",
+    )
+    if memory_limit > MAX_GENERATION_MEMORY_BYTES:
+        raise StageError("candidate generation memory limit exceeds the 64 GiB ceiling")
+    if (
+        report["generation_memory_enforcement_profile"]
+        != GENERATION_MEMORY_ENFORCEMENT_PROFILE
+    ):
+        raise StageError("candidate generation memory enforcement profile is unsupported")
     if report["bridge_abi_version"] != 21 or report["artifact_count"] != len(ARTIFACTS):
         raise StageError("candidate is not the exact ABI-21 eight-artifact profile")
     artifacts = report["artifacts"]
     if not isinstance(artifacts, list) or len(artifacts) != len(ARTIFACTS):
         raise StageError("candidate validation report has the wrong artifact count")
     seen_digests: set[str] = set()
-    for index, ((expected_role, expected_name), raw) in enumerate(zip(ARTIFACTS, artifacts, strict=True)):
+    for index, ((expected_role, expected_name), raw) in enumerate(zip(ARTIFACTS, artifacts)):
         artifact = _exact_object(raw, ARTIFACT_REPORT_KEYS, f"artifact report {index}")
         if artifact["role"] != expected_role or artifact["file_name"] != expected_name:
             raise StageError("candidate validation artifact order or role is non-canonical")
@@ -1028,7 +1104,7 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _ensure_output_parent() -> None:
+def _ensure_output_parent() -> int:
     OUTPUT_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
     metadata = os.stat(OUTPUT_PARENT, follow_symlinks=False)
     if (
@@ -1038,30 +1114,104 @@ def _ensure_output_parent() -> None:
         or OUTPUT_PARENT.is_symlink()
     ):
         raise StageError(f"candidate output parent is not trusted: {OUTPUT_PARENT}")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(OUTPUT_PARENT, flags)
+    if _identity(os.fstat(descriptor))[:2] != _identity(metadata)[:2]:
+        os.close(descriptor)
+        raise StageError("candidate output parent changed while being pinned")
+    return descriptor
 
 
-def _publish_noreplace(staging: Path, destination: Path) -> None:
+def _publish_noreplace(
+    parent_fd: int,
+    parent_path: Path,
+    source_name: str,
+    destination_name: str,
+) -> None:
+    opened_parent = os.fstat(parent_fd)
+    named_parent = os.stat(parent_path, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(opened_parent.st_mode)
+        or opened_parent.st_uid != os.geteuid()
+        or stat.S_IMODE(opened_parent.st_mode) != 0o700
+        or _identity(opened_parent)[:2] != _identity(named_parent)[:2]
+    ):
+        raise StageError("candidate publication parent changed after it was pinned")
+    source_metadata = os.stat(source_name, dir_fd=parent_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(source_metadata.st_mode)
+        or source_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(source_metadata.st_mode) != 0o700
+    ):
+        raise StageError("candidate staging source is not one trusted private directory")
+    try:
+        os.stat(destination_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise StageError(
+            f"candidate evidence root already exists: {parent_path / destination_name}"
+        )
+
     libc = ctypes.CDLL(None, use_errno=True)
-    source = os.fsencode(staging)
-    target = os.fsencode(destination)
+    source = os.fsencode(source_name)
+    target = os.fsencode(destination_name)
     result: int
-    if sys.platform == "darwin" and hasattr(libc, "renamex_np"):
-        renamex_np = libc.renamex_np
-        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-        renamex_np.restype = ctypes.c_int
-        result = renamex_np(source, target, 0x00000004)  # RENAME_EXCL
+    if sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
+        renameatx_np = libc.renameatx_np
+        renameatx_np.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameatx_np.restype = ctypes.c_int
+        result = renameatx_np(
+            parent_fd,
+            source,
+            parent_fd,
+            target,
+            0x00000004,
+        )  # RENAME_EXCL
     elif hasattr(libc, "renameat2"):
         renameat2 = libc.renameat2
         renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
         renameat2.restype = ctypes.c_int
-        result = renameat2(-100, source, -100, target, 0x00000001)  # RENAME_NOREPLACE
+        result = renameat2(
+            parent_fd,
+            source,
+            parent_fd,
+            target,
+            0x00000001,
+        )  # RENAME_NOREPLACE
     else:
         raise StageError("exclusive atomic directory publication is unsupported on this platform")
     if result != 0:
         error = ctypes.get_errno()
         if error in (errno.EEXIST, errno.ENOTEMPTY):
-            raise StageError(f"candidate evidence root already exists: {destination}")
+            raise StageError(
+                f"candidate evidence root already exists: {parent_path / destination_name}"
+            )
         raise StageError(f"exclusive candidate publication failed: {os.strerror(error)}")
+    try:
+        published = os.stat(destination_name, dir_fd=parent_fd, follow_symlinks=False)
+        if _identity(published)[:2] != _identity(source_metadata)[:2]:
+            raise StageError("published candidate has the wrong directory identity")
+        os.fsync(parent_fd)
+        named_parent = os.stat(parent_path, follow_symlinks=False)
+        if _identity(os.fstat(parent_fd))[:2] != _identity(named_parent)[:2]:
+            raise StageError("candidate publication parent pathname changed after rename")
+    except (OSError, StageError) as exc:
+        raise StagePublicationUncertain(
+            "candidate stage reached its final name but publication durability or path continuity "
+            f"is uncertain: {parent_path / destination_name}: {exc}"
+        ) from exc
 
 
 STAGE_MANIFEST_KEYS = frozenset(
@@ -1074,6 +1224,8 @@ STAGE_MANIFEST_KEYS = frozenset(
         "candidate_record_sha256",
         "candidate_manifest_sha256",
         "candidate_validation_report_sha256",
+        "qualification_receipt_sha256",
+        "qualified_candidate_sha256",
         "scenario_inventory_sha256",
         "source_commit",
         "source_tree_sha256",
@@ -1153,17 +1305,19 @@ def build_stage_manifest(
     entries = [_stage_file_entry(root, path) for path in sorted(STAGED_NON_SELF_PATHS)]
     manifest: dict[str, Any] = {
         "schema": STAGE_MANIFEST_SCHEMA,
-        "version": 1,
+        "version": 2,
         "stage_manifest_path": STAGE_MANIFEST_NAME,
         "stage_manifest_mode": "0600",
         "stage_manifest_size_bytes": 0,
         "candidate_record_sha256": report["candidate_record_sha256"],
         "candidate_manifest_sha256": report["candidate_manifest_sha256"],
         "candidate_validation_report_sha256": hashlib.sha256(report_bytes).hexdigest(),
+        "qualification_receipt_sha256": report["qualification_receipt_sha256"],
+        "qualified_candidate_sha256": report["qualified_candidate_sha256"],
         "scenario_inventory_sha256": scenario_inventory,
         "source_commit": source.commit,
         "source_tree_sha256": source.tree_sha256,
-        "source_repo_dirty": True,
+        "source_repo_dirty": False,
         "validator": validate_validator_identity(dict(validator)),
         "entry_count": len(entries),
         "scenario_entry_count": len(SCENARIO_FILES),
@@ -1202,11 +1356,11 @@ def parse_stage_manifest(
         raise StageError("candidate stage manifest is not canonical JSON")
     if (
         manifest["schema"] != STAGE_MANIFEST_SCHEMA
-        or manifest["version"] != 1
+        or manifest["version"] != 2
         or manifest["stage_manifest_path"] != STAGE_MANIFEST_NAME
         or manifest["stage_manifest_mode"] != "0600"
         or manifest["stage_manifest_size_bytes"] != len(payload)
-        or manifest["source_repo_dirty"] is not True
+        or manifest["source_repo_dirty"] is not False
         or manifest["entry_count"] != len(STAGED_NON_SELF_PATHS)
         or manifest["scenario_entry_count"] != len(SCENARIO_FILES)
     ):
@@ -1219,10 +1373,17 @@ def parse_stage_manifest(
         "candidate_record_sha256",
         "candidate_manifest_sha256",
         "candidate_validation_report_sha256",
+        "qualification_receipt_sha256",
+        "qualified_candidate_sha256",
         "scenario_inventory_sha256",
         "source_tree_sha256",
     ):
         _digest(manifest[key], key)
+    if manifest["qualified_candidate_sha256"] != qualified_candidate_sha256(
+        manifest["candidate_record_sha256"],
+        manifest["qualification_receipt_sha256"],
+    ):
+        raise StageError("candidate stage qualified-candidate identity is invalid")
     validate_validator_identity(manifest["validator"])
     raw_entries = manifest["entries"]
     if not isinstance(raw_entries, list) or len(raw_entries) != len(STAGED_NON_SELF_PATHS):
@@ -1264,27 +1425,72 @@ def parse_stage_manifest(
             != hashlib.sha256(payload).hexdigest()
         ):
             raise StageError("candidate stage manifest self metadata is invalid")
-        for expected, actual_entry in zip(entries, (_stage_file_entry(root, p) for p in paths), strict=True):
+        for expected, actual_entry in zip(entries, (_stage_file_entry(root, p) for p in paths)):
             if actual_entry != expected:
                 raise StageError(f"staged entry changed: {expected['path']}")
+        entry_by_path = {entry["path"]: entry for entry in entries}
+        receipt_path = f"evidence/candidate/{QUALIFICATION_RECEIPT_NAME}"
+        if (
+            entry_by_path[receipt_path]["sha256"]
+            != manifest["qualification_receipt_sha256"]
+        ):
+            raise StageError("candidate stage manifest does not bind its qualification receipt")
+        candidate_directory = root / "evidence/candidate"
+        directory_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        candidate_directory_fd = os.open(candidate_directory, directory_flags)
+        try:
+            with OpenedRegular(
+                candidate_directory_fd,
+                candidate_directory,
+                REPORT_NAME,
+                MAX_CANDIDATE_METADATA_BYTES,
+            ) as report_file:
+                report = parse_validation_report(report_file.bytes())
+        finally:
+            os.close(candidate_directory_fd)
+        if (
+            report["candidate_record_sha256"] != manifest["candidate_record_sha256"]
+            or report["candidate_manifest_sha256"]
+            != manifest["candidate_manifest_sha256"]
+            or report["qualification_receipt_sha256"]
+            != manifest["qualification_receipt_sha256"]
+            or report["qualified_candidate_sha256"]
+            != manifest["qualified_candidate_sha256"]
+        ):
+            raise StageError("candidate validation report is not bound to the stage manifest")
     return manifest
 
 
-def _ensure_candidate_parent(candidate_sha256: str) -> Path:
+def _ensure_candidate_parent(candidate_sha256: str, output_parent_fd: int) -> tuple[Path, int]:
     parent = OUTPUT_PARENT / candidate_sha256
     try:
-        parent.mkdir(mode=0o700)
+        os.mkdir(candidate_sha256, mode=0o700, dir_fd=output_parent_fd)
+        os.fsync(output_parent_fd)
     except FileExistsError:
         pass
-    metadata = os.stat(parent, follow_symlinks=False)
+    metadata = os.stat(candidate_sha256, dir_fd=output_parent_fd, follow_symlinks=False)
     if (
         not stat.S_ISDIR(metadata.st_mode)
-        or parent.is_symlink()
         or metadata.st_uid != os.geteuid()
         or stat.S_IMODE(metadata.st_mode) != 0o700
     ):
         raise StageError(f"candidate identity parent is not trusted: {parent}")
-    return parent
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(candidate_sha256, flags, dir_fd=output_parent_fd)
+    if _identity(os.fstat(descriptor))[:2] != _identity(metadata)[:2]:
+        os.close(descriptor)
+        raise StageError("candidate identity parent changed while being pinned")
+    return parent, descriptor
 
 
 def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
@@ -1308,6 +1514,8 @@ def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
                 if name in ARTIFACT_NAMES
                 else MAX_ROSTER_BYTES
                 if name == ROSTER_NAME
+                else MAX_CANDIDATE_METADATA_BYTES
+                if name == QUALIFICATION_RECEIPT_NAME
                 else 65
                 if name == CANDIDATE_SHA_NAME
                 else MAX_CANDIDATE_METADATA_BYTES
@@ -1366,6 +1574,17 @@ def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
                 raise StageError(
                     "candidate record differs from the authoritative validation report"
                 )
+            receipt_digest = candidate_files[QUALIFICATION_RECEIPT_NAME].sha256()
+            if receipt_digest != report["qualification_receipt_sha256"]:
+                raise StageError(
+                    "qualification receipt differs from the authoritative validation report"
+                )
+            if report["qualified_candidate_sha256"] != qualified_candidate_sha256(
+                record_digest, receipt_digest
+            ):
+                raise StageError(
+                    "qualified candidate identity differs from the authoritative validation report"
+                )
             digest_text = candidate_files[CANDIDATE_SHA_NAME].bytes()
             if digest_text != f"{record_digest}\n".encode("ascii"):
                 raise StageError("candidate digest sidecar is not exact")
@@ -1382,7 +1601,7 @@ def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
                 raise StageError(
                     "typed scenario authority did not bind the candidate/staged seed inventory"
                 )
-            for artifact, raw in zip(ARTIFACTS, report["artifacts"], strict=True):
+            for artifact, raw in zip(ARTIFACTS, report["artifacts"]):
                 _, name = artifact
                 opened = candidate_files[name]
                 if (
@@ -1399,8 +1618,13 @@ def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
                 != report["topup_finality_roster_sha256"]
             ):
                 raise StageError("candidate roster differs from authoritative validation")
-            _ensure_output_parent()
-            candidate_parent = _ensure_candidate_parent(record_digest)
+            output_parent_fd = _ensure_output_parent()
+            stack.callback(os.close, output_parent_fd)
+            candidate_parent, candidate_parent_fd = _ensure_candidate_parent(
+                record_digest,
+                output_parent_fd,
+            )
+            stack.callback(os.close, candidate_parent_fd)
             staging = Path(
                 tempfile.mkdtemp(prefix=".candidate-stage-staging-", dir=candidate_parent)
             )
@@ -1418,6 +1642,10 @@ def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
                 )
                 _write_bytes(staged_candidate / VALIDATED_MANIFEST_NAME, manifest_bytes)
                 _write_bytes(staged_candidate / REPORT_NAME, report_bytes)
+                candidate_files[QUALIFICATION_RECEIPT_NAME].copy_to(
+                    staged_candidate / QUALIFICATION_RECEIPT_NAME,
+                    receipt_digest,
+                )
                 for _, name in ARTIFACTS:
                     expected = next(
                         item["framed_sha256"]
@@ -1473,20 +1701,37 @@ def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
                         "Iroha source identity changed while staging the candidate"
                     )
                 final_root = candidate_parent / stage_sha256
-                if os.path.lexists(final_root):
-                    raise StageError(f"candidate evidence root already exists: {final_root}")
-                _publish_noreplace(staging, final_root)
+                _publish_noreplace(
+                    candidate_parent_fd,
+                    candidate_parent,
+                    staging.name,
+                    stage_sha256,
+                )
                 published = True
                 parse_stage_manifest(
                     stage_manifest_bytes,
                     root=final_root,
                     expected_sha256=stage_sha256,
                 )
-                _fsync_directory(candidate_parent)
-                _fsync_directory(OUTPUT_PARENT)
             finally:
-                if not published and staging.exists():
-                    shutil.rmtree(staging)
+                if not published:
+                    try:
+                        opened_parent = os.fstat(candidate_parent_fd)
+                        named_parent = os.stat(candidate_parent, follow_symlinks=False)
+                        staged_at = os.stat(
+                            staging.name,
+                            dir_fd=candidate_parent_fd,
+                            follow_symlinks=False,
+                        )
+                        staged_by_path = os.stat(staging, follow_symlinks=False)
+                    except (FileNotFoundError, OSError):
+                        pass
+                    else:
+                        if (
+                            _identity(opened_parent)[:2] == _identity(named_parent)[:2]
+                            and _identity(staged_at)[:2] == _identity(staged_by_path)[:2]
+                        ):
+                            shutil.rmtree(staging)
             return final_root
 
 
@@ -1509,6 +1754,9 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except StagePublicationUncertain as exc:
+        print(f"Kagemusha Android candidate publication is uncertain: {exc}", file=sys.stderr)
+        raise SystemExit(75) from exc
     except (OSError, StageError) as exc:
         print(f"Kagemusha Android candidate staging failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

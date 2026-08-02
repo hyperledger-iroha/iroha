@@ -121,7 +121,7 @@ class Fixture:
     def _populate_structured_artifacts(self) -> None:
         source_commit = "a" * 40
         source_tree = nonzero_digest("source-tree")
-        tracked_diff = nonzero_digest("reviewed-tracked-diff")
+        tracked_diff = sha256(b"")
         untracked_manifest_digest = sha256(b"")
         combined = hashlib.sha256()
         combined.update(evidence_lib.SOURCE_DIFF_DOMAIN)
@@ -135,7 +135,7 @@ class Fixture:
                 "schema": evidence_lib.REVIEWED_SOURCE_CLOSURE_SCHEMA,
                 "base_commit": source_commit,
                 "source_commit": source_commit,
-                "source_repo_dirty": True,
+                "source_repo_dirty": False,
                 "source_tree_sha256": source_tree,
                 "tracked_binary_diff_sha256": tracked_diff,
                 "untracked_file_count": 0,
@@ -180,7 +180,7 @@ class Fixture:
             ),
             "source_commit": source_commit,
             "source_tree_sha256": source_tree,
-            "source_repo_dirty": True,
+            "source_repo_dirty": False,
             "reviewed_source_closure_descriptor_sha256": reviewed_closure,
             "iphoneos_sdk_version": "26.0",
             "xcode_version": "Xcode 26.0\nBuild version 17A1",
@@ -224,7 +224,7 @@ class Fixture:
             "native_library_sha256": library_digest,
             "source_commit": source_commit,
             "source_tree_sha256": source_tree,
-            "source_repo_dirty": True,
+            "source_repo_dirty": False,
             "reviewed_source_closure_descriptor_sha256": reviewed_closure,
             "device_udid_sha256": nonzero_digest("udid"),
             "device_ecid_sha256": nonzero_digest("ecid"),
@@ -256,7 +256,7 @@ class Fixture:
             "native_library_sha256": session["native_library_sha256"],
             "source_commit": session["source_commit"],
             "source_tree_sha256": session["source_tree_sha256"],
-            "source_repo_dirty": True,
+            "source_repo_dirty": False,
             "reviewed_source_closure_descriptor_sha256": session[
                 "reviewed_source_closure_descriptor_sha256"
             ],
@@ -336,7 +336,7 @@ class Fixture:
             "platform": "ios",
             "physical_device_required": True,
             "simulator_accepted": False,
-            "source_repo_dirty": True,
+            "source_repo_dirty": False,
             "production_capability_observed": False,
             "process_restart_observed": True,
             "init_succeeded": True,
@@ -769,16 +769,16 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             fixture.resign_without_semantic_preflight()
             self.assert_error_contains(fixture, "simulator must be false")
 
-    def test_dirty_false_is_rejected_with_valid_signature(self) -> None:
+    def test_dirty_true_is_rejected_with_valid_signature(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.fixture(temporary)
             fixture.sign()
             fixture.mutate_json(
                 "output/native-transcript-v1.json",
-                lambda value: value.__setitem__("source_repo_dirty", False),
+                lambda value: value.__setitem__("source_repo_dirty", True),
             )
             fixture.resign_without_semantic_preflight()
-            self.assert_error_contains(fixture, "source_repo_dirty must be true")
+            self.assert_error_contains(fixture, "source_repo_dirty must be false")
 
     def test_satisfied_network_sample_is_rejected_with_valid_signature(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -793,6 +793,18 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             self.assert_error_contains(fixture, "status must be unsatisfied")
 
     def test_host_measurements_results_and_reviewed_closure_are_bound(self) -> None:
+        def add_tracked_source_diff(value: dict[str, Any]) -> None:
+            tracked = nonzero_digest("unexpected-tracked-source-diff")
+            manifest = value["untracked_path_mode_blob_oid_manifest_sha256"]
+            combined = hashlib.sha256()
+            combined.update(evidence_lib.SOURCE_DIFF_DOMAIN)
+            combined.update(evidence_lib.TRACKED_DIFF_DOMAIN)
+            combined.update(bytes.fromhex(tracked))
+            combined.update(evidence_lib.UNTRACKED_MANIFEST_DOMAIN)
+            combined.update(bytes.fromhex(manifest))
+            value["tracked_binary_diff_sha256"] = tracked
+            value["combined_source_fingerprint_sha256"] = combined.hexdigest()
+
         cases: tuple[
             tuple[str, str, Callable[[dict[str, Any]], None], str], ...
         ] = (
@@ -841,8 +853,14 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             (
                 "reviewed-closure",
                 "input/reviewed-source-closure-v1.json",
-                lambda value: value.__setitem__("source_repo_dirty", False),
-                "reviewed source closure source_repo_dirty must be true",
+                lambda value: value.__setitem__("source_repo_dirty", True),
+                "reviewed source closure source_repo_dirty must be false",
+            ),
+            (
+                "reviewed-closure-tracked-diff",
+                "input/reviewed-source-closure-v1.json",
+                add_tracked_source_diff,
+                "tracked_binary_diff_sha256 must identify an empty diff",
             ),
         )
         for label, relative, mutator, expected in cases:
@@ -950,7 +968,7 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             valid_transcript = transcript_path.read_bytes()
             fixture.mutate_json(
                 "output/native-transcript-v1.json",
-                lambda value: value.__setitem__("source_repo_dirty", False),
+                lambda value: value.__setitem__("source_repo_dirty", True),
             )
             fixture.rebind_transcript()
             fixture.resign_without_semantic_preflight()
@@ -972,7 +990,7 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             ):
                 errors = fixture.errors()
             self.assertTrue(
-                any("source_repo_dirty must be true" in error for error in errors),
+                any("source_repo_dirty must be false" in error for error in errors),
                 errors,
             )
             self.assertTrue(

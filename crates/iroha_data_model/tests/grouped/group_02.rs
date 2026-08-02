@@ -4,6 +4,10 @@
 
 #[path = "../model_parser.rs"]
 mod model_parser;
+#[path = "../musubi_instruction_fixture.rs"]
+mod musubi_instruction_fixture;
+#[path = "../musubi_sdk_fixture.rs"]
+mod musubi_sdk_fixture;
 #[path = "../mutators.rs"]
 mod mutators;
 #[path = "../norito_chain_layout.rs"]

@@ -600,7 +600,7 @@ mod tests {
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("sora", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),
         )
@@ -774,7 +774,7 @@ mod tests {
     fn exit_minimum_passes_when_bond_sufficient() {
         let policy = RelayBondPolicyV1 {
             minimum_exit_bond: quantity(1_000),
-            bond_asset_id: AssetDefinitionId::new(
+            bond_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -785,7 +785,7 @@ mod tests {
         let entry = RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
             bonded_amount: quantity(5_000),
-            bond_asset_id: AssetDefinitionId::new(
+            bond_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -799,7 +799,7 @@ mod tests {
     fn exit_minimum_fails_when_asset_mismatch() {
         let policy = RelayBondPolicyV1 {
             minimum_exit_bond: quantity(1_000),
-            bond_asset_id: AssetDefinitionId::new(
+            bond_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -810,7 +810,7 @@ mod tests {
         let entry = RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
             bonded_amount: quantity(5_000),
-            bond_asset_id: AssetDefinitionId::new(
+            bond_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
@@ -824,7 +824,7 @@ mod tests {
     fn uptime_floor_detects_strict_threshold() {
         let policy = RelayBondPolicyV1 {
             minimum_exit_bond: quantity(500),
-            bond_asset_id: AssetDefinitionId::new(
+            bond_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -963,7 +963,7 @@ mod tests {
     fn meets_uptime_floor_tracks_policy() {
         let policy = RelayBondPolicyV1 {
             minimum_exit_bond: quantity(1_000),
-            bond_asset_id: AssetDefinitionId::new(
+            bond_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -992,7 +992,7 @@ mod tests {
             relay_id: [0_u8; 32],
             epoch: 7,
             beneficiary: sample_account(2),
-            payout_asset_id: AssetDefinitionId::new(
+            payout_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -1010,7 +1010,7 @@ mod tests {
             relay_id: [0xAB; 32],
             epoch: 5,
             beneficiary: sample_account(3),
-            payout_asset_id: AssetDefinitionId::new(
+            payout_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -1040,7 +1040,7 @@ mod tests {
             relay_id: [0x01; 32],
             epoch: 12,
             beneficiary: sample_account(1),
-            payout_asset_id: AssetDefinitionId::new(
+            payout_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),

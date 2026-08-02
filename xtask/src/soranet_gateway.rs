@@ -124,7 +124,7 @@ gateway:\n\
         sustained_rps: 200\n\
       waf_policy: \"../gateway_waf_policy.yaml\"\n\
   observability:\n\
-    prometheus_listener: 0.0.0.0:19092\n\
+    prometheus_listener: 127.0.0.1:19092\n\
     trace_sample: 0.10\n\
   rollout_notes:\n\
     - \"Use `gateway_m0_summary.json` in governance packets for evidence links.\"\n\

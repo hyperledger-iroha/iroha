@@ -11,13 +11,16 @@ use std::{
     any::Any,
     boxed::Box,
     format,
+    num::NonZeroU64,
     string::String,
     sync::OnceLock,
     vec::{self, Vec},
 };
 
 use derive_more::Constructor;
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, PublicKey, SignatureOf};
+use iroha_crypto::{
+    Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey, SignatureOf,
+};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -1192,16 +1195,26 @@ mod model {
         FindSorafsModerationEvents(sorafs::prelude::FindSorafsModerationEvents),
         /// Fetch the active SNS owner for a dataspace alias.
         FindDataspaceNameOwnerById(sns::prelude::FindDataspaceNameOwnerById),
-        /// Fetch a Musubi release by exact package reference.
-        FindMusubiReleaseByRef(musubi::prelude::FindMusubiReleaseByRef),
-        /// Fetch all registered versions for a Musubi package id.
-        FindMusubiPackageVersions(musubi::prelude::FindMusubiPackageVersions),
-        /// Fetch release summaries for a Musubi package id.
-        FindMusubiPackageReleases(musubi::prelude::FindMusubiPackageReleases),
-        /// Search Musubi packages.
-        SearchMusubiPackages(musubi::prelude::SearchMusubiPackages),
-        /// Fetch a Musubi short alias target package id.
-        FindMusubiShortAliasByName(musubi::prelude::FindMusubiShortAliasByName),
+        /// Fetch one exact Musubi V1 package record.
+        FindMusubiExactPackageV1(musubi::prelude::FindMusubiExactPackageV1),
+        /// Fetch one exact Musubi V1 release record.
+        FindMusubiExactReleaseV1(musubi::prelude::FindMusubiExactReleaseV1),
+        /// Fetch a finalized page from the universal Musubi V1 resolver index.
+        FindMusubiResolverIndexV1(musubi::prelude::FindMusubiResolverIndexV1),
+        /// Fetch a finalized page of structured Musubi V1 versions.
+        FindMusubiVersionsV1(musubi::prelude::FindMusubiVersionsV1),
+        /// Fetch a finalized page of accepted Musubi V1 package members.
+        FindMusubiMaintainersV1(musubi::prelude::FindMusubiMaintainersV1),
+        /// Fetch a finalized page of renewable Musubi V1 archive locations.
+        FindMusubiArchiveLocationsV1(musubi::prelude::FindMusubiArchiveLocationsV1),
+        /// Fetch bounded exact finalized Musubi V1 cache-retention decisions.
+        FindMusubiArchiveRetentionV1(musubi::prelude::FindMusubiArchiveRetentionV1),
+        /// Fetch one permanent Musubi V1 global alias record.
+        FindMusubiAliasV1(musubi::prelude::FindMusubiAliasV1),
+        /// Fetch a finalized page of permanent Musubi V1 alias history.
+        FindMusubiAliasHistoryV1(musubi::prelude::FindMusubiAliasHistoryV1),
+        /// Fetch a finalized ordered-prefix page from the Musubi V1 directory.
+        FindMusubiOrderedPrefixV1(musubi::prelude::FindMusubiOrderedPrefixV1),
         /// Fetch an account by stable alias.
         FindAccountByAlias(account::prelude::FindAccountByAlias),
         /// Fetch a domain by identifier.
@@ -1390,16 +1403,26 @@ mod model {
         FxCorridorPolicyRegistry(crate::isi::settlement::FxCorridorPolicyRegistry),
         /// Native FX corridor policy payload.
         FxCorridorPolicy(crate::isi::settlement::FxCorridorPolicy),
-        /// Musubi release payload.
-        MusubiRelease(crate::musubi::MusubiRelease),
-        /// Musubi version list payload.
-        MusubiVersions(Vec<crate::musubi::MusubiVersion>),
-        /// Musubi release summary list payload.
-        MusubiReleaseSummaries(Vec<crate::musubi::MusubiReleaseSummary>),
-        /// Musubi package summary list payload.
-        MusubiPackageSummaries(Vec<crate::musubi::MusubiPackageSummary>),
-        /// Musubi package id payload.
-        MusubiPackageId(crate::musubi::MusubiPackageId),
+        /// Exact authoritative Musubi V1 package payload.
+        MusubiPackage(crate::musubi::MusubiPackageRecordV1),
+        /// Exact immutable Musubi V1 release payload.
+        MusubiRelease(crate::musubi::MusubiReleaseRecordV1),
+        /// Finalized universal resolver-index page.
+        MusubiResolverIndexPage(crate::musubi::MusubiResolverIndexPageV1),
+        /// Finalized structured-version page.
+        MusubiVersionPage(crate::musubi::MusubiVersionPageV1),
+        /// Finalized accepted-maintainer page.
+        MusubiMaintainerPage(crate::musubi::MusubiMaintainerPageV1),
+        /// Finalized renewable archive-location page.
+        MusubiArchiveLocationPage(crate::musubi::MusubiArchiveLocationPageV1),
+        /// Exact bounded finalized cache-retention decisions.
+        MusubiArchiveRetentionPage(crate::musubi::MusubiArchiveRetentionPageV1),
+        /// Exact permanent global-alias payload.
+        MusubiAlias(crate::musubi::MusubiAliasRecordV1),
+        /// Finalized permanent alias-history page.
+        MusubiAliasHistoryPage(crate::musubi::MusubiAliasHistoryPageV1),
+        /// Finalized ordered package-directory page.
+        MusubiOrderedPackagePage(crate::musubi::MusubiOrderedPackagePageV1),
         /// Account identifier payload.
         AccountId(AccountId),
         /// Domain payload.
@@ -2096,7 +2119,7 @@ impl CommittedTransaction {
     /// committed by the carrier block's execution context.
     #[must_use]
     pub fn verify_inclusion_in_block(&self, block: &SignedBlock) -> bool {
-        const MAX_MERKLE_HEIGHT: usize = 32;
+        const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
 
         if self.merge_inclusion.is_some() {
             return self.verify_certified_merge_inclusion_in_block(block);
@@ -2119,6 +2142,15 @@ impl CommittedTransaction {
         {
             return false;
         }
+        let Some(leaf_count) = u64::try_from(entrypoint_count)
+            .ok()
+            .and_then(NonZeroU64::new)
+        else {
+            return false;
+        };
+        if leaf_count.get() > MAX_MERKLE_LEAF_COUNT {
+            return false;
+        }
 
         let Some(entrypoint_root) = block.full_entry_merkle_root() else {
             return false;
@@ -2126,15 +2158,14 @@ impl CommittedTransaction {
         let Some(result_root) = block.header().result_merkle_root() else {
             return false;
         };
+        let entrypoint_commitment = MerkleTreeCommitment::new(entrypoint_root, leaf_count);
+        let result_commitment = MerkleTreeCommitment::new(result_root, leaf_count);
 
-        self.entrypoint_proof.clone().verify(
-            &self.entrypoint_hash,
-            &entrypoint_root,
-            MAX_MERKLE_HEIGHT,
-        ) && self
-            .result_proof
-            .clone()
-            .verify(&self.result_hash, &result_root, MAX_MERKLE_HEIGHT)
+        self.entrypoint_proof
+            .verify(&self.entrypoint_hash, &entrypoint_commitment)
+            && self
+                .result_proof
+                .verify(&self.result_hash, &result_commitment)
     }
 
     /// Verify this transaction's merge proofs against a compact reference from its carrier block.
@@ -2146,24 +2177,17 @@ impl CommittedTransaction {
         &self,
         reference: &CertifiedMergeLedgerReference,
     ) -> bool {
-        const MAX_MERKLE_HEIGHT: usize = 32;
+        const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
 
         let Some(inclusion) = self.merge_inclusion.as_ref() else {
             return false;
         };
-        let expected_merkle_height =
-            inclusion
-                .entrypoint_count
-                .checked_sub(1)
-                .map_or(0, |highest_index| {
-                    usize::try_from(u64::BITS - highest_index.leading_zeros()).unwrap_or(usize::MAX)
-                });
+        let Some(leaf_count) = NonZeroU64::new(inclusion.entrypoint_count) else {
+            return false;
+        };
         if reference.version != 1
             || inclusion.version != 1
-            || inclusion.entrypoint_count == 0
-            || expected_merkle_height > MAX_MERKLE_HEIGHT
-            || self.entrypoint_proof.audit_path().len() != expected_merkle_height
-            || self.result_proof.audit_path().len() != expected_merkle_height
+            || leaf_count.get() > MAX_MERKLE_LEAF_COUNT
             || u64::from(self.entrypoint_proof.leaf_index()) >= inclusion.entrypoint_count
             || u64::from(self.result_proof.leaf_index()) >= inclusion.entrypoint_count
             || self.entrypoint_proof.leaf_index() != self.result_proof.leaf_index()
@@ -2178,15 +2202,14 @@ impl CommittedTransaction {
         {
             return false;
         }
-        self.entrypoint_proof.clone().verify(
-            &self.entrypoint_hash,
-            &inclusion.entrypoint_merkle_root,
-            MAX_MERKLE_HEIGHT,
-        ) && self.result_proof.clone().verify(
-            &self.result_hash,
-            &inclusion.result_merkle_root,
-            MAX_MERKLE_HEIGHT,
-        )
+        let entrypoint_commitment =
+            MerkleTreeCommitment::new(inclusion.entrypoint_merkle_root, leaf_count);
+        let result_commitment = MerkleTreeCommitment::new(inclusion.result_merkle_root, leaf_count);
+        self.entrypoint_proof
+            .verify(&self.entrypoint_hash, &entrypoint_commitment)
+            && self
+                .result_proof
+                .verify(&self.result_hash, &result_commitment)
     }
 
     /// Verify this transaction against the exact signed carrier block.
@@ -4285,11 +4308,16 @@ impl_singular_queries! {
     settlement::prelude::FindFxCorridorPolicyRegistry => crate::isi::settlement::FxCorridorPolicyRegistry,
     settlement::prelude::FindFxCorridorPolicyById => crate::isi::settlement::FxCorridorPolicy,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
-    musubi::prelude::FindMusubiReleaseByRef => crate::musubi::MusubiRelease,
-    musubi::prelude::FindMusubiPackageVersions => Vec<crate::musubi::MusubiVersion>,
-    musubi::prelude::FindMusubiPackageReleases => Vec<crate::musubi::MusubiReleaseSummary>,
-    musubi::prelude::SearchMusubiPackages => Vec<crate::musubi::MusubiPackageSummary>,
-    musubi::prelude::FindMusubiShortAliasByName => crate::musubi::MusubiPackageId,
+    musubi::prelude::FindMusubiExactPackageV1 => crate::musubi::MusubiPackageRecordV1,
+    musubi::prelude::FindMusubiExactReleaseV1 => crate::musubi::MusubiReleaseRecordV1,
+    musubi::prelude::FindMusubiResolverIndexV1 => crate::musubi::MusubiResolverIndexPageV1,
+    musubi::prelude::FindMusubiVersionsV1 => crate::musubi::MusubiVersionPageV1,
+    musubi::prelude::FindMusubiMaintainersV1 => crate::musubi::MusubiMaintainerPageV1,
+    musubi::prelude::FindMusubiArchiveLocationsV1 => crate::musubi::MusubiArchiveLocationPageV1,
+    musubi::prelude::FindMusubiArchiveRetentionV1 => crate::musubi::MusubiArchiveRetentionPageV1,
+    musubi::prelude::FindMusubiAliasV1 => crate::musubi::MusubiAliasRecordV1,
+    musubi::prelude::FindMusubiAliasHistoryV1 => crate::musubi::MusubiAliasHistoryPageV1,
+    musubi::prelude::FindMusubiOrderedPrefixV1 => crate::musubi::MusubiOrderedPackagePageV1,
     account::prelude::FindAccountByAlias => crate::account::Account,
     domain::prelude::FindDomainById => crate::domain::Domain,
     nft::prelude::FindNftById => crate::nft::Nft,
@@ -6781,96 +6809,428 @@ pub mod sns {
 }
 
 pub mod musubi {
-    //! Musubi package registry query definitions.
+    //! First-release Musubi registry query definitions.
 
     use std::fmt;
 
-    use crate::{
-        musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
-        name::Name,
+    use crate::musubi::{
+        MusubiAliasQueryV1, MusubiArchiveLocationQueryV1, MusubiArchiveRetentionQueryV1,
+        MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1, MusubiOrderedPrefixQueryV1,
+        MusubiPackagePageQueryV1, MusubiResolverIndexQueryV1,
     };
 
-    queries! {
-        /// Fetch a Musubi release by exact package reference.
+    pub use self::model::*;
+
+    #[iroha_data_model_derive::model]
+    mod model {
+        use super::*;
+        use norito::codec::{Decode, Encode};
+
+        /// Fetch one exact authoritative Musubi V1 package record.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
-        pub struct FindMusubiReleaseByRef {
-            /// Exact release reference.
-            pub package: MusubiPackageRef,
+        pub struct FindMusubiExactPackageV1 {
+            /// Exact structural package request.
+            pub request: MusubiExactPackageQueryV1,
         }
 
-        /// Fetch all registered versions for a Musubi package id.
+        /// Fetch one exact immutable Musubi V1 release record.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
-        pub struct FindMusubiPackageVersions {
-            /// Canonical package identifier.
-            pub package: MusubiPackageId,
+        pub struct FindMusubiExactReleaseV1 {
+            /// Exact structural release request.
+            pub request: MusubiExactReleaseQueryV1,
         }
 
-        /// Fetch release summaries for a Musubi package id.
-        pub struct FindMusubiPackageReleases {
-            /// Canonical package identifier.
-            pub package: MusubiPackageId,
-            /// Include yanked releases in the output.
-            pub include_yanked: bool,
-        }
-
-        /// Search Musubi packages by namespace and text prefix.
-        pub struct SearchMusubiPackages {
-            /// Optional namespace filter.
-            pub namespace: Option<MusubiNamespace>,
-            /// Case-sensitive substring query over `namespace/package`.
-            pub query: String,
-            /// Include packages with only yanked releases.
-            pub include_yanked: bool,
-            /// Deterministic offset into the sorted result set.
-            pub offset: u32,
-            /// Maximum number of package summaries to return.
-            pub limit: u32,
-        }
-
-        /// Fetch the canonical target for a curated Musubi short alias.
+        /// Fetch a finalized page from the universal Musubi V1 resolver index.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
-        pub struct FindMusubiShortAliasByName {
-            /// Curated short alias.
-            pub alias: Name,
+        pub struct FindMusubiResolverIndexV1 {
+            /// Package, optional requirement, and finalized page controls.
+            pub request: MusubiResolverIndexQueryV1,
+        }
+
+        /// Fetch a finalized page of structured Musubi V1 package versions.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiVersionsV1 {
+            /// Package-scoped finalized page request.
+            pub request: MusubiPackagePageQueryV1,
+        }
+
+        /// Fetch a finalized page of accepted Musubi V1 package members.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiMaintainersV1 {
+            /// Package-scoped finalized page request.
+            pub request: MusubiPackagePageQueryV1,
+        }
+
+        /// Fetch a finalized page of renewable Musubi V1 archive locations.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiArchiveLocationsV1 {
+            /// Archive-scoped finalized page request.
+            pub request: MusubiArchiveLocationQueryV1,
+        }
+
+        /// Fetch exact finalized cache-retention decisions for a bounded archive batch.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiArchiveRetentionV1 {
+            /// Exact archive identities and optional finalized-snapshot binding.
+            pub request: MusubiArchiveRetentionQueryV1,
+        }
+
+        /// Fetch one exact permanent Musubi V1 global alias record.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiAliasV1 {
+            /// Exact alias request; page controls are ignored for this lookup.
+            pub request: MusubiAliasQueryV1,
+        }
+
+        /// Fetch a finalized page of permanent Musubi V1 alias history.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiAliasHistoryV1 {
+            /// Alias-scoped finalized page request.
+            pub request: MusubiAliasQueryV1,
+        }
+
+        /// Fetch a finalized byte-ordered prefix page from the Musubi V1 directory.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiOrderedPrefixV1 {
+            /// Ordered structural prefix and finalized page controls.
+            pub request: MusubiOrderedPrefixQueryV1,
         }
     }
 
-    impl fmt::Display for FindMusubiReleaseByRef {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "Find Musubi release `{}`", self.package)
+    impl fmt::Display for FindMusubiExactPackageV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find exact Musubi V1 package `{}`",
+                self.request.package
+            )
         }
     }
 
-    impl fmt::Display for FindMusubiPackageVersions {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "Find Musubi versions for `{}`", self.package)
+    impl fmt::Display for FindMusubiExactReleaseV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find exact Musubi V1 release `{}`",
+                self.request.release
+            )
         }
     }
 
-    impl fmt::Display for FindMusubiPackageReleases {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "Find Musubi releases for `{}`", self.package)
+    impl fmt::Display for FindMusubiResolverIndexV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find Musubi V1 resolver rows for `{}`",
+                self.request.package
+            )
         }
     }
 
-    impl fmt::Display for SearchMusubiPackages {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "Search Musubi packages matching `{}`", self.query)
+    impl fmt::Display for FindMusubiVersionsV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find Musubi V1 versions for `{}`",
+                self.request.package
+            )
         }
     }
 
-    impl fmt::Display for FindMusubiShortAliasByName {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "Find Musubi short alias `{}`", self.alias)
+    impl fmt::Display for FindMusubiMaintainersV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find Musubi V1 maintainers for `{}`",
+                self.request.package
+            )
         }
     }
 
-    /// Prelude re-exports for Musubi queries.
+    impl fmt::Display for FindMusubiArchiveLocationsV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find Musubi V1 archive locations for `{:?}`",
+                self.request.archive_id
+            )
+        }
+    }
+
+    impl fmt::Display for FindMusubiArchiveRetentionV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find Musubi V1 retention for {} exact archive(s)",
+                self.request.archive_ids.len()
+            )
+        }
+    }
+
+    impl fmt::Display for FindMusubiAliasV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find exact Musubi V1 alias `{}`",
+                self.request.alias
+            )
+        }
+    }
+
+    impl fmt::Display for FindMusubiAliasHistoryV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find Musubi V1 alias history for `{}`",
+                self.request.alias
+            )
+        }
+    }
+
+    impl fmt::Display for FindMusubiOrderedPrefixV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find Musubi V1 packages with prefix `{}`",
+                self.request.prefix.as_str()
+            )
+        }
+    }
+
+    /// Prelude re-exports for the complete Musubi V1 query surface.
     pub mod prelude {
         pub use super::{
-            FindMusubiPackageReleases, FindMusubiPackageVersions, FindMusubiReleaseByRef,
-            FindMusubiShortAliasByName, SearchMusubiPackages,
+            FindMusubiAliasHistoryV1, FindMusubiAliasV1, FindMusubiArchiveLocationsV1,
+            FindMusubiArchiveRetentionV1, FindMusubiExactPackageV1, FindMusubiExactReleaseV1,
+            FindMusubiMaintainersV1, FindMusubiOrderedPrefixV1, FindMusubiResolverIndexV1,
+            FindMusubiVersionsV1,
         };
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use norito::codec::{Decode, Encode};
+
+        use super::prelude::*;
+        use crate::{
+            musubi::{
+                ArchiveId, MusubiAliasNameV1, MusubiAliasQueryV1, MusubiArchiveLocationPageV1,
+                MusubiArchiveLocationQueryV1, MusubiArchiveRetentionPageV1,
+                MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1,
+                MusubiExactReleaseQueryV1, MusubiMaintainerPageV1, MusubiOrderedPackagePageV1,
+                MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1, MusubiPackageIdV1,
+                MusubiPackageNameV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
+                MusubiPackageScopeV1, MusubiPageRequestV1, MusubiReleaseIdV1,
+                MusubiReleaseRecordV1, MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1,
+                MusubiVersionPageV1, MusubiVersionV1,
+            },
+            nexus::DataSpaceId,
+            query::{SingularQuery, SingularQueryBox, SingularQueryOutputBox},
+        };
+
+        fn package() -> MusubiPackageIdV1 {
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(7),
+                MusubiPackageScopeV1::DataspaceRoot,
+                MusubiPackageNameV1::new("ledger-tools").expect("package name"),
+            )
+        }
+
+        fn page() -> MusubiPageRequestV1 {
+            MusubiPageRequestV1 {
+                limit: 50,
+                cursor: None,
+            }
+        }
+
+        #[test]
+        fn v1_singular_query_payloads_roundtrip_in_registry_order() {
+            let package = package();
+            let release = MusubiReleaseIdV1::new(
+                package.clone(),
+                "1.2.3".parse::<MusubiVersionV1>().expect("version"),
+            );
+            let alias = "ledger".parse::<MusubiAliasNameV1>().expect("alias");
+            let queries: Vec<SingularQueryBox> = vec![
+                FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
+                    package: package.clone(),
+                })
+                .into(),
+                FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 { release }).into(),
+                FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
+                    package: package.clone(),
+                    requirement: None,
+                    page: page(),
+                })
+                .into(),
+                FindMusubiVersionsV1::new(MusubiPackagePageQueryV1 {
+                    package: package.clone(),
+                    page: page(),
+                })
+                .into(),
+                FindMusubiMaintainersV1::new(MusubiPackagePageQueryV1 {
+                    package,
+                    page: page(),
+                })
+                .into(),
+                FindMusubiArchiveLocationsV1::new(MusubiArchiveLocationQueryV1 {
+                    archive_id: ArchiveId::new([0xA5; 32]),
+                    page: page(),
+                })
+                .into(),
+                FindMusubiArchiveRetentionV1::new(MusubiArchiveRetentionQueryV1 {
+                    archive_ids: vec![ArchiveId::new([0xA5; 32])],
+                    expected_snapshot: None,
+                })
+                .into(),
+                FindMusubiAliasV1::new(MusubiAliasQueryV1 {
+                    alias: alias.clone(),
+                    page: page(),
+                })
+                .into(),
+                FindMusubiAliasHistoryV1::new(MusubiAliasQueryV1 {
+                    alias,
+                    page: page(),
+                })
+                .into(),
+                FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
+                    prefix: MusubiOrderedPrefixV1::new("sora/").expect("ordered prefix"),
+                    page: page(),
+                })
+                .into(),
+            ];
+
+            for query in queries {
+                let encoded = query.encode();
+                let mut bytes = encoded.as_slice();
+                let decoded = SingularQueryBox::decode(&mut bytes).expect("decode Musubi query");
+                assert!(bytes.is_empty(), "decoder must consume the whole query");
+                assert_eq!(decoded, query);
+            }
+        }
+
+        #[test]
+        fn v1_queries_bind_their_exact_response_records_and_output_variants() {
+            fn assert_query_output<Q, O>()
+            where
+                Q: SingularQuery<Output = O>,
+            {
+            }
+
+            fn assert_output_variant<O: Into<SingularQueryOutputBox>>() {}
+
+            assert_query_output::<FindMusubiExactPackageV1, MusubiPackageRecordV1>();
+            assert_query_output::<FindMusubiExactReleaseV1, MusubiReleaseRecordV1>();
+            assert_query_output::<FindMusubiResolverIndexV1, MusubiResolverIndexPageV1>();
+            assert_query_output::<FindMusubiVersionsV1, MusubiVersionPageV1>();
+            assert_query_output::<FindMusubiMaintainersV1, MusubiMaintainerPageV1>();
+            assert_query_output::<FindMusubiArchiveLocationsV1, MusubiArchiveLocationPageV1>();
+            assert_query_output::<FindMusubiArchiveRetentionV1, MusubiArchiveRetentionPageV1>();
+            assert_query_output::<FindMusubiAliasV1, crate::musubi::MusubiAliasRecordV1>();
+            assert_query_output::<FindMusubiAliasHistoryV1, crate::musubi::MusubiAliasHistoryPageV1>(
+            );
+            assert_query_output::<FindMusubiOrderedPrefixV1, MusubiOrderedPackagePageV1>();
+
+            assert_output_variant::<MusubiPackageRecordV1>();
+            assert_output_variant::<MusubiReleaseRecordV1>();
+            assert_output_variant::<MusubiResolverIndexPageV1>();
+            assert_output_variant::<MusubiVersionPageV1>();
+            assert_output_variant::<MusubiMaintainerPageV1>();
+            assert_output_variant::<MusubiArchiveLocationPageV1>();
+            assert_output_variant::<MusubiArchiveRetentionPageV1>();
+            assert_output_variant::<crate::musubi::MusubiAliasRecordV1>();
+            assert_output_variant::<crate::musubi::MusubiAliasHistoryPageV1>();
+            assert_output_variant::<MusubiOrderedPackagePageV1>();
+        }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn v1_query_wrapper_json_rejects_unknown_fields() {
+            let query =
+                FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 { package: package() });
+            let canonical = norito::json::to_json(&query)
+                .expect("canonical Musubi V1 query wrapper JSON encodes");
+            assert_eq!(
+                norito::json::from_json::<FindMusubiExactPackageV1>(&canonical)
+                    .expect("canonical Musubi V1 query wrapper JSON decodes"),
+                query
+            );
+            let hostile = canonical.replacen('{', "{\"private_key\":\"must-not-be-accepted\",", 1);
+            assert!(
+                norito::json::from_json::<FindMusubiExactPackageV1>(&hostile).is_err(),
+                "Musubi V1 query wrapper JSON must reject unknown secret-bearing fields"
+            );
+        }
     }
 }
 
@@ -7231,10 +7591,10 @@ pub mod prelude {
         CertifiedMergeTransactionInclusion, CommittedTransaction, QueryBox, QueryRequest,
         SingularQueryBox, account::prelude::*, asset::prelude::*, block::prelude::*,
         builder::prelude::*, da::prelude::*, domain::prelude::*, dsl::prelude::*,
-        endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, nft::prelude::*,
-        oracle::prelude::*, parameters::prelude::*, peer::prelude::*, permission::prelude::*,
-        role::prelude::*, rwa::prelude::*, settlement::prelude::*, sorafs::prelude::*,
-        transaction::prelude::*, trigger::prelude::*,
+        endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, musubi::prelude::*,
+        nft::prelude::*, oracle::prelude::*, parameters::prelude::*, peer::prelude::*,
+        permission::prelude::*, role::prelude::*, rwa::prelude::*, settlement::prelude::*,
+        sorafs::prelude::*, transaction::prelude::*, trigger::prelude::*,
     };
 }
 
@@ -7408,6 +7768,20 @@ mod certified_merge_inclusion_tests {
             "a one-leaf proof must not be rebound to a two-leaf certified count"
         );
 
+        let oversized_leaf_count = (1_u64 << u32::BITS) + 1;
+        let mut oversized_reference = reference.clone();
+        oversized_reference.entrypoint_count = Some(oversized_leaf_count);
+        let mut oversized = committed.clone();
+        oversized
+            .merge_inclusion
+            .as_mut()
+            .expect("merge inclusion")
+            .entrypoint_count = oversized_leaf_count;
+        assert!(
+            !oversized.verify_certified_merge_inclusion(&oversized_reference),
+            "certified merge proofs must reject counts outside the u32 block-proof index space"
+        );
+
         let mut wrong_version = reference.clone();
         wrong_version.version = 2;
         assert!(!committed.verify_certified_merge_inclusion(&wrong_version));
@@ -7562,7 +7936,7 @@ mod fault_injection_tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
@@ -7657,7 +8031,7 @@ mod fault_injection_tests {
             leg_index: 0,
             leg_id: "fault-injection-leg".to_owned(),
             asset: AssetId::new(
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("rose").expect("asset name"),
                 ),
@@ -7748,7 +8122,7 @@ mod tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),

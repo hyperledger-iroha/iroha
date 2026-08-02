@@ -523,7 +523,7 @@ class HttpClientTransportTest {
                   "items": [
                     {
                       "policy_id": "phone#retail",
-                      "owner": "sorau1NpOwner",
+                      "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
                       "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
@@ -565,8 +565,8 @@ class HttpClientTransportTest {
 
         val cases = listOf(
             "identifier policy list.items[0].owner" to canonical.replace(
-                "\"owner\": \"sorau1NpOwner\"",
-                "\"owner\": \" sorau1NpOwner\"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
+                "\"owner\": \" sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
             ),
             "identifier policy list.items[0].normalization" to canonical.replace(
                 "\"normalization\": \"phone_e164\"",
@@ -987,7 +987,7 @@ class HttpClientTransportTest {
                   "code_hash_hex": "${"44".repeat(32)}",
                   "abi_hash_hex": "${"55".repeat(32)}",
                   "creation_time_ms": 1712345678901,
-                  "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                  "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                   "entrypoint": "contribute",
                   "transaction_ttl_ms": 60000,
                   "entrypoint_hash_hex": "${"77".repeat(32)}",
@@ -1000,7 +1000,7 @@ class HttpClientTransportTest {
                     "transport": "torii",
                     "dataspace": "router",
                     "contract_alias": "router::universal",
-                    "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                    "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                     "code_hash_hex": "${"44".repeat(32)}",
                     "abi_hash_hex": "${"55".repeat(32)}",
                     "entrypoint": "contribute",
@@ -1467,7 +1467,7 @@ class HttpClientTransportTest {
             transport.prepareContractCall(
                 authority = "alice",
                 feePayment = testFeePayment(5_000L),
-                contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 contractAlias = "router::universal",
                 entrypoint = "contribute",
             )
@@ -1521,7 +1521,7 @@ class HttpClientTransportTest {
 
     @Test
     fun getGovernanceContractParsesResponse() {
-        val contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -1574,7 +1574,7 @@ class HttpClientTransportTest {
         assertEquals(1, response.items.size)
         val item = response.items.first()
         assertEquals("identifier_lookup_retail", item.programId)
-        assertEquals("sorau1NpOwner", item.owner)
+        assertEquals("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", item.owner)
         assertTrue(item.active)
         assertEquals(item.resolverPublicKey, item.outputOpeningPublicKey)
         assertEquals("signed", item.verificationMode)
@@ -1600,8 +1600,8 @@ class HttpClientTransportTest {
                 "\"program_id\": \" identifier_lookup_retail\"",
             ),
             "ram-lfe program policy list.items[0].owner" to canonical.replace(
-                "\"owner\": \"sorau1NpOwner\"",
-                "\"owner\": \"sorau1NpOwner \"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV \"",
             ),
             "ram-lfe program policy list.items[0].resolver_public_key" to canonical.replace(
                 "\"resolver_public_key\": \"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"",
@@ -1658,7 +1658,7 @@ class HttpClientTransportTest {
               "items": [
                 {
                   "program_id": "identifier_lookup_retail",
-                  "owner": "sorau1NpOwner",
+                  "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "active": true,
                   "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                   "backend": "bfv-programmed-sha3-256-v1",
@@ -1919,14 +1919,17 @@ class HttpClientTransportTest {
                   "tunnel_addresses": ["10.208.0.2/32"],
                   "mtu_bytes": 1280,
                   "display_billing_label": "standard XOR",
-                  "fee_asset_id": "xor#universal.universal",
-                  "escrow_account_id": "sorauEscrow",
-                  "operator_account_id": "sorauOperator",
+                  "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
                   "lease_fee": "1000000.25",
                   "settlement_grace_secs": 120,
                   "flow_label_bits": 24,
                   "padding_budget_ms": 15,
-                  "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+                  "relay_id_hex": "$validEd25519PublicKeyHex",
+                  "descriptor_commit_hex": "${"cd".repeat(32)}",
+                  "tls_server_name": "relay.example",
+                  "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+                  "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+                  "directory_snapshot_digest_hex": "${"42".repeat(32)}"
                 }
             """.trimIndent()
         val executor = StubResponseExecutor(
@@ -1941,13 +1944,16 @@ class HttpClientTransportTest {
         val profile = transport.getVpnProfile().join()
 
         assertTrue(profile.available)
-        assertEquals("xor#universal.universal", profile.feeAssetId)
-        assertEquals("sorauEscrow", profile.escrowAccountId)
-        assertEquals("sorauOperator", profile.operatorAccountId)
+        assertEquals("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", profile.operatorAccountId)
         assertEquals("1000000.25", profile.leaseFee)
         assertEquals(60L, profile.dnsPushIntervalSecs)
         assertEquals(120L, profile.settlementGraceSecs)
+        assertEquals(validEd25519PublicKeyHex, profile.relayIdHex)
+        assertEquals("cd".repeat(32), profile.descriptorCommitHex)
+        assertEquals("relay.example", profile.tlsServerName)
         assertEquals("ab".repeat(32), profile.relayTlsSpkiSha256Hex)
+        assertEquals("ef".repeat(32), profile.relayCertificateSha256Hex)
+        assertEquals("42".repeat(32), profile.directorySnapshotDigestHex)
         assertEquals("GET", executor.lastRequest.method)
         assertEquals("https://torii.example/v1/vpn/profile", executor.lastRequest.uri.toString())
 
@@ -1968,6 +1974,58 @@ class HttpClientTransportTest {
         val uppercaseTlsPin = responseJson.replace("ab".repeat(32), "AB".repeat(32))
         assertFailsWith<IllegalStateException> {
             VpnJsonParser.parseProfile(uppercaseTlsPin.toByteArray(StandardCharsets.UTF_8))
+        }
+    }
+
+    @Test
+    fun vpnProfileRequiresHttpsAndValidatesTheAvailabilityBoundTrustTuple() {
+        val insecureExecutor = StubResponseExecutor(
+            statusCode = 200,
+            body = vpnProfileJson().toByteArray(StandardCharsets.UTF_8),
+        )
+        val insecureTransport = HttpClientTransport.withExecutor(
+            executor = insecureExecutor,
+            config = ClientConfig.builder().setBaseUri(URI.create("http://torii.example")).build(),
+        )
+        assertFailsWith<IllegalArgumentException> { insecureTransport.getVpnProfile() }
+
+        @Suppress("UNCHECKED_CAST")
+        fun profileObject(): MutableMap<String, Any?> =
+            (JsonParser.parse(vpnProfileJson()) as Map<String, Any?>).toMutableMap()
+
+        fun parse(payload: Map<String, Any?>): VpnProfile =
+            VpnJsonParser.parseProfile(
+                JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8),
+            )
+
+        val unavailable = profileObject().apply {
+            this["available"] = false
+            listOf(
+                "relay_endpoint",
+                "relay_id_hex",
+                "descriptor_commit_hex",
+                "tls_server_name",
+                "relay_tls_spki_sha256_hex",
+                "relay_certificate_sha256_hex",
+                "directory_snapshot_digest_hex",
+            ).forEach { this[it] = "" }
+        }
+        assertEquals("", parse(unavailable).relayIdHex)
+
+        val invalidValues = listOf(
+            "relay_id_hex" to "00".repeat(32),
+            "descriptor_commit_hex" to "00".repeat(32),
+            "descriptor_commit_hex" to "0x${"cd".repeat(32)}",
+            "tls_server_name" to "Relay.Example",
+            "tls_server_name" to "-relay.example",
+            "relay_endpoint" to "/dns4/Relay.Example/udp/443/quic",
+            "relay_endpoint" to "/dns4/relay.example/udp/0443/quic",
+            "relay_endpoint" to "/dns4/relay.example/tcp/443/quic",
+        )
+        invalidValues.forEach { (field, value) ->
+            assertFailsWith<IllegalStateException>(field) {
+                parse(profileObject().apply { this[field] = value })
+            }
         }
     }
 
@@ -1994,9 +2052,7 @@ class HttpClientTransportTest {
         assertEquals(quoteId, quote.quoteId)
         assertEquals(quoteId, quote.leaseIdHex)
         assertEquals(meteringKey, quote.meteringPublicKeyHex)
-        assertEquals("iroha_data_model::isi::vpn::OpenVpnLeaseEscrow", quote.openLeaseInstruction?.wireId)
-        assertEquals(1, quote.txInstructions.size)
-        assertEquals(quote.openLeaseInstruction?.payloadHex, quote.txInstructions.first().payloadHex)
+        assertEquals("iroha_data_model::isi::vpn::OpenVpnLeaseEscrow", quote.openLeaseInstruction.wireId)
 
         val request = executor.lastRequest
         assertEquals("POST", request.method)
@@ -2384,7 +2440,6 @@ class HttpClientTransportTest {
         val missingCases = listOf(
             { VpnJsonParser.parseProfile(missing(profile, "relay_tls_spki_sha256_hex")) },
             { VpnJsonParser.parseQuote(missing(quote, "open_lease_instruction")) },
-            { VpnJsonParser.parseQuote(missing(quote, "tx_instructions")) },
             { VpnJsonParser.parseSession(missing(session, "route_pushes")) },
             { VpnJsonParser.parseReceipt(missing(receipt, "settle_lease_instruction")) },
             { VpnJsonParser.parseReceiptList(missing(receiptList, "items")) },
@@ -2411,11 +2466,8 @@ class HttpClientTransportTest {
             }
         }
 
-        val instruction = jsonObject(quote)["open_lease_instruction"]
-        listOf(emptyList<Any>(), listOf(instruction, instruction)).forEach { instructions ->
-            assertFailsWith<IllegalStateException> {
-                VpnJsonParser.parseQuote(mutated(quote, "tx_instructions", instructions))
-            }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseQuote(mutated(quote, "tx_instructions", emptyList<Any>()))
         }
         assertFailsWith<IllegalStateException> {
             VpnJsonParser.parseSession(mutated(session, "status", "settled"))
@@ -2425,11 +2477,8 @@ class HttpClientTransportTest {
                 VpnJsonParser.parseReceipt(mutated(receipt, field, value))
             }
         }
-        val receiptInstruction = mapOf("wire_id" to "SettleVpnLease", "payload_hex" to "abcd")
         assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceipt(
-                mutated(receipt, "tx_instructions", listOf(receiptInstruction, receiptInstruction)),
-            )
+            VpnJsonParser.parseReceipt(mutated(receipt, "tx_instructions", emptyList<Any>()))
         }
 
         val receiptObject = jsonObject(receipt)
@@ -3664,14 +3713,17 @@ class HttpClientTransportTest {
               "tunnel_addresses": ["10.208.0.2/32"],
               "mtu_bytes": 1280,
               "display_billing_label": "standard XOR",
-              "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "settlement_grace_secs": 120,
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
-              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
+              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}"
             }
         """.trimIndent()
 
@@ -3688,8 +3740,8 @@ class HttpClientTransportTest {
               "lease_secs": 600,
               "quote_expires_at_ms": 1700000600000,
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "route_pushes": ["0.0.0.0/0"],
               "excluded_routes": [],
@@ -3699,18 +3751,17 @@ class HttpClientTransportTest {
               "meter_family": "soranet.vpn.standard",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
+              "relay_id_hex": "$meteringKey",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "metering_public_key_hex": "$meteringKey",
               "open_lease_instruction": {
                 "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
                 "payload_hex": "cafe"
-              },
-              "tx_instructions": [
-                {
-                  "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
-                  "payload_hex": "cafe"
-                }
-              ]
+              }
             }
         """.trimIndent()
 
@@ -3731,12 +3782,17 @@ class HttpClientTransportTest {
               "payment_reference": "$sessionId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "route_pushes": ["0.0.0.0/0"],
               "excluded_routes": [],
               "dns_servers": ["1.1.1.1"],
@@ -3759,17 +3815,10 @@ class HttpClientTransportTest {
               "settle_lease_instruction": {
                 "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
                 "payload_hex": "f00d"
-              },
-              "tx_instructions": [
-                {
-                  "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
-                  "payload_hex": "f00d"
-                }
-              ]"""
+              }"""
         } else {
             """,
-              "settle_lease_instruction": null,
-              "tx_instructions": []"""
+              "settle_lease_instruction": null"""
         }
         return """
             {
@@ -3788,8 +3837,8 @@ class HttpClientTransportTest {
               "quote_id": "$sessionId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "earned_fee": "$earned",
               "refunded_fee": "$refunded",

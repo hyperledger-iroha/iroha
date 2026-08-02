@@ -1673,7 +1673,7 @@ class SccpClientExactTest {
             ),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_account_id" to "sorau-test-account",
+                "custody_account_id" to "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
             ),
         )
@@ -1971,7 +1971,7 @@ class SccpClientExactTest {
             "asset_home_domain" to 0,
             "asset_id" to canonicalProjectionText("xor"),
             "amount" to 1000,
-            "sender" to canonicalProjectionText("sorau-test-account"),
+            "sender" to canonicalProjectionText("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "recipient" to linkedMapOf(
                 "EvmAddress20" to linkedMapOf("bytes" to "0x${"11".repeat(20)}"),
             ),

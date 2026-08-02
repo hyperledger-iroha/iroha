@@ -1706,10 +1706,11 @@ mod tests {
 
         let potr_key = checked_seed_keypair(6);
         let potr_bonus = AccountId::new(potr_key.public_key().clone());
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_definition: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
 
         let accounts = DaRentLedgerAccounts {
             payer: &payer,

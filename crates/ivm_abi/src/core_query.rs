@@ -644,7 +644,10 @@ mod tests {
     }
 
     fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(domain_id(), "rose".parse::<Name>().expect("valid name"))
+        AssetDefinitionId::derive_from_components(
+            domain_id(),
+            "rose".parse::<Name>().expect("valid name"),
+        )
     }
 
     fn account_view(seed: u8) -> AccountView {
@@ -868,9 +871,13 @@ mod tests {
     fn declared_projection_is_smaller_than_a_full_entity_fixture() {
         let owner = account_id(6);
         let id = asset_definition_id();
-        let full = AssetDefinition::numeric(id.clone())
-            .with_name("Rose".to_owned())
-            .build(&owner);
+        let full = AssetDefinition::numeric(
+            id.clone(),
+            "Rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner);
         let projection = AssetDefinitionView {
             id,
             name: full.name.clone(),

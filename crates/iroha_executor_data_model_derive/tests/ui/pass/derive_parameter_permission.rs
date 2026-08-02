@@ -6,14 +6,7 @@ use iroha_executor_data_model::json_macros::{JsonDeserialize, JsonSerialize};
 use iroha_executor_data_model_derive::{Parameter, Permission};
 use iroha_schema::IntoSchema;
 
-#[derive(
-    Default,
-    Clone,
-    JsonSerialize,
-    JsonDeserialize,
-    IntoSchema,
-    Parameter,
-)]
+#[derive(Default, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Parameter)]
 struct CustomParameter {
     value: String,
 }
@@ -37,7 +30,10 @@ fn main() {
         value: "demo".to_owned(),
     };
     let perm = CustomPermission {
-        asset: iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(), "xor".parse().unwrap()),
+        asset: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        ),
     };
     conversions(param, perm);
 }

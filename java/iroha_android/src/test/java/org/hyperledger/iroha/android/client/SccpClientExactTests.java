@@ -1569,7 +1569,7 @@ public final class SccpClientExactTests {
     destination.put("deployment", deployment);
     final Map<String, Object> settlement = map();
     settlement.put("asset_definition_id", "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
-    settlement.put("custody_account_id", "sorau-test-account");
+    settlement.put("custody_account_id", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
     settlement.put("payload_amount_scale", 9);
     final Map<String, Object> route = map();
     route.put("lane_id", lane());
@@ -1928,7 +1928,7 @@ public final class SccpClientExactTests {
     transfer.put("asset_home_domain", 0);
     transfer.put("asset_id", canonicalProjectionText("xor"));
     transfer.put("amount", 1000);
-    transfer.put("sender", canonicalProjectionText("sorau-test-account"));
+    transfer.put("sender", canonicalProjectionText("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"));
     transfer.put("recipient", Map.of("EvmAddress20", Map.of("bytes", "0x" + "11".repeat(20))));
     transfer.put("route_id", canonicalProjectionText("taira_bsc_xor"));
     return new LinkedHashMap<>(Map.of("Transfer", transfer));

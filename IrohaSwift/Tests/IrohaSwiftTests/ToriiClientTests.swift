@@ -321,7 +321,7 @@ final class ToriiContractAPITests: XCTestCase {
     }
     private let merchantAccount = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     private let contractAlias = "bisp::hbl.sbp"
-    private let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+    private let contractAddress = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
     private let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let codeHash = String(repeating: "a", count: 64)
     private let abiHash = String(repeating: "b", count: 64)
@@ -1341,6 +1341,8 @@ final class ToriiClientTests: XCTestCase {
     private let onboardingToken = String(repeating: "T", count: 32)
     private let encodedRoseAssetID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let roseAssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+    private let vpnRelayIdHex =
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
 
     private var authority: String {
         try! Keypair(privateKeyBytes: canonicalSigningSeed)
@@ -6678,7 +6680,7 @@ final class ToriiClientTests: XCTestCase {
             "available": true,
             "supported_exit_classes": ["standard", "low-latency", "high-security"],
             "default_exit_class": "standard",
-            "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+            "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
             "lease_secs": 900,
             "dns_push_interval_secs": 60,
             "route_pushes": ["0.0.0.0/0"],
@@ -6688,14 +6690,17 @@ final class ToriiClientTests: XCTestCase {
             "mtu_bytes": 1280,
             "meter_family": "vpn-standard",
             "display_billing_label": "standard vpn",
-            "fee_asset_id": "xor#universal.universal",
-            "escrow_account_id": "vpn_escrow",
             "operator_account_id": "vpn_operator",
             "lease_fee": "1000000.25",
             "settlement_grace_secs": 60,
             "flow_label_bits": 24,
             "padding_budget_ms": 15,
-            "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32)
+            "relay_id_hex": vpnRelayIdHex,
+            "descriptor_commit_hex": String(repeating: "cd", count: 32),
+            "tls_server_name": "vpn.sora.org",
+            "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32),
+            "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
+            "directory_snapshot_digest_hex": String(repeating: "42", count: 32)
         ]
     }
 
@@ -6709,7 +6714,7 @@ final class ToriiClientTests: XCTestCase {
             "payment_reference": quoteId,
             "account_id": "alice",
             "exit_class": "standard",
-            "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+            "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
             "lease_secs": 900,
             "quote_expires_at_ms": 1_700_000_900_000,
             "fee_asset_id": "xor#universal.universal",
@@ -6724,10 +6729,14 @@ final class ToriiClientTests: XCTestCase {
             "meter_family": "vpn-standard",
             "flow_label_bits": 24,
             "padding_budget_ms": 15,
-            "relay_tls_spki_sha256_hex": String(repeating: "33", count: 32),
+            "relay_id_hex": vpnRelayIdHex,
+            "descriptor_commit_hex": String(repeating: "cd", count: 32),
+            "tls_server_name": "vpn.sora.org",
+            "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32),
+            "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
+            "directory_snapshot_digest_hex": String(repeating: "42", count: 32),
             "metering_public_key_hex": String(repeating: "44", count: 32),
-            "open_lease_instruction": instruction,
-            "tx_instructions": [instruction]
+            "open_lease_instruction": instruction
         ]
     }
 
@@ -6737,7 +6746,7 @@ final class ToriiClientTests: XCTestCase {
             "session_id": sessionId,
             "account_id": "alice",
             "exit_class": "standard",
-            "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+            "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
             "lease_secs": 900,
             "expires_at_ms": 1_700_000_900_000,
             "connected_at_ms": 1_700_000_000_000,
@@ -6751,7 +6760,12 @@ final class ToriiClientTests: XCTestCase {
             "lease_fee": "1000000.25",
             "flow_label_bits": 24,
             "padding_budget_ms": 15,
-            "relay_tls_spki_sha256_hex": NSNull(),
+            "relay_id_hex": vpnRelayIdHex,
+            "descriptor_commit_hex": String(repeating: "cd", count: 32),
+            "tls_server_name": "vpn.sora.org",
+            "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32),
+            "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
+            "directory_snapshot_digest_hex": String(repeating: "42", count: 32),
             "route_pushes": [],
             "excluded_routes": [],
             "dns_servers": [],
@@ -6788,8 +6802,7 @@ final class ToriiClientTests: XCTestCase {
             "earned_fee": "700000.125",
             "refunded_fee": "300000.125",
             "lease_id_hex": sessionId,
-            "settle_lease_instruction": NSNull(),
-            "tx_instructions": []
+            "settle_lease_instruction": NSNull()
         ]
     }
 
@@ -6893,9 +6906,6 @@ final class ToriiClientTests: XCTestCase {
             ("nullable quote instruction", vpnQuoteResponsePayload(), "open_lease_instruction", {
                 _ = try decoder.decode(ToriiVpnQuote.self, from: $0)
             }),
-            ("required quote instruction list", vpnQuoteResponsePayload(), "tx_instructions", {
-                _ = try decoder.decode(ToriiVpnQuote.self, from: $0)
-            }),
             ("required session route list", vpnSessionResponsePayload(), "route_pushes", {
                 _ = try decoder.decode(ToriiVpnSession.self, from: $0)
             }),
@@ -6952,23 +6962,14 @@ final class ToriiClientTests: XCTestCase {
             )
         }
 
-        let instruction = try XCTUnwrap(
-            vpnQuoteResponsePayload()["open_lease_instruction"] as? [String: Any]
-        )
-        let invalidQuoteInstructionLists: [[[String: Any]]] = [
-            [],
-            [instruction, instruction]
-        ]
-        for instructions in invalidQuoteInstructionLists {
-            var quote = vpnQuoteResponsePayload()
-            quote["tx_instructions"] = instructions
-            XCTAssertThrowsError(
-                try decoder.decode(
-                    ToriiVpnQuote.self,
-                    from: JSONSerialization.data(withJSONObject: quote)
-                )
+        var quoteWithRetiredInstructions = vpnQuoteResponsePayload()
+        quoteWithRetiredInstructions["tx_instructions"] = []
+        XCTAssertThrowsError(
+            try decoder.decode(
+                ToriiVpnQuote.self,
+                from: JSONSerialization.data(withJSONObject: quoteWithRetiredInstructions)
             )
-        }
+        )
 
         for (field, value) in [("exit_class", "unsupported"), ("status", "settled")] {
             var session = vpnSessionResponsePayload()
@@ -6982,14 +6983,10 @@ final class ToriiClientTests: XCTestCase {
             )
         }
 
-        let receiptInstruction: [String: Any] = [
-            "wire_id": "SettleVpnLease",
-            "payload_hex": "abcd"
-        ]
         let invalidReceipts: [(String, Any)] = [
             ("status", "active"),
             ("receipt_source", "operator"),
-            ("tx_instructions", [receiptInstruction, receiptInstruction])
+            ("tx_instructions", [])
         ]
         for (field, value) in invalidReceipts {
             var receipt = vpnReceiptResponsePayload()
@@ -7030,7 +7027,7 @@ final class ToriiClientTests: XCTestCase {
                 "available": true,
                 "supported_exit_classes": ["standard", "low-latency", "high-security"],
                 "default_exit_class": "standard",
-                "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                 "lease_secs": 900,
                 "dns_push_interval_secs": 60,
                 "route_pushes": ["0.0.0.0/0"],
@@ -7040,14 +7037,17 @@ final class ToriiClientTests: XCTestCase {
                 "mtu_bytes": 1280,
                 "meter_family": "vpn-standard",
                 "display_billing_label": "standard vpn",
-                "fee_asset_id": "xor#universal.universal",
-                "escrow_account_id": "vpn_escrow",
                 "operator_account_id": "vpn_operator",
                 "lease_fee": "1000000.25",
                 "settlement_grace_secs": 60,
                 "flow_label_bits": 24,
                 "padding_budget_ms": 15,
-                "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32)
+                "relay_id_hex": self.vpnRelayIdHex,
+                "descriptor_commit_hex": String(repeating: "cd", count: 32),
+                "tls_server_name": "vpn.sora.org",
+                "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32),
+                "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
+                "directory_snapshot_digest_hex": String(repeating: "42", count: 32)
             ]
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
@@ -7055,7 +7055,6 @@ final class ToriiClientTests: XCTestCase {
         }
         let profile = try await makeClient().getVpnProfile()
         XCTAssertTrue(profile.available)
-        XCTAssertEqual(profile.feeAssetId, "xor#universal.universal")
         XCTAssertEqual(profile.leaseFee, "1000000.25")
         XCTAssertEqual(profile.dnsPushIntervalSecs, 60)
         XCTAssertEqual(profile.flowLabelBits, 24)
@@ -7066,7 +7065,7 @@ final class ToriiClientTests: XCTestCase {
             "available": true,
             "supported_exit_classes": ["standard", "low-latency", "high-security"],
             "default_exit_class": "standard",
-            "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+            "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
             "lease_secs": 900,
             "dns_push_interval_secs": 60,
             "route_pushes": ["0.0.0.0/0"],
@@ -7076,14 +7075,17 @@ final class ToriiClientTests: XCTestCase {
             "mtu_bytes": 1280,
             "meter_family": "vpn-standard",
             "display_billing_label": "standard vpn",
-            "fee_asset_id": "xor#universal.universal",
-            "escrow_account_id": "vpn_escrow",
             "operator_account_id": "vpn_operator",
             "lease_fee": "1000000.25",
             "settlement_grace_secs": 60,
             "flow_label_bits": 24,
             "padding_budget_ms": 15,
-            "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32)
+            "relay_id_hex": vpnRelayIdHex,
+            "descriptor_commit_hex": String(repeating: "cd", count: 32),
+            "tls_server_name": "vpn.sora.org",
+            "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32),
+            "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
+            "directory_snapshot_digest_hex": String(repeating: "42", count: 32)
         ]
         var missing = validPayload
         missing.removeValue(forKey: "dns_push_interval_secs")
@@ -7167,7 +7169,7 @@ final class ToriiClientTests: XCTestCase {
                 "payment_reference": quoteId,
                 "account_id": "alice",
                 "exit_class": "standard",
-                "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                 "lease_secs": 900,
                 "quote_expires_at_ms": 1_700_000_900_000,
                 "fee_asset_id": "xor#universal.universal",
@@ -7182,14 +7184,16 @@ final class ToriiClientTests: XCTestCase {
                 "meter_family": "vpn-standard",
                 "flow_label_bits": 24,
                 "padding_budget_ms": 15,
-                "relay_tls_spki_sha256_hex": String(repeating: "12", count: 32),
+                "relay_id_hex": self.vpnRelayIdHex,
+                "descriptor_commit_hex": String(repeating: "cd", count: 32),
+                "tls_server_name": "vpn.sora.org",
+                "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32),
+                "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
+                "directory_snapshot_digest_hex": String(repeating: "42", count: 32),
                 "metering_public_key_hex": meteringKey,
                 "open_lease_instruction": [
                     "wire_id": "OpenVpnLeaseEscrow",
                     "payload_hex": "abcd"
-                ],
-                "tx_instructions": [
-                    ["wire_id": "OpenVpnLeaseEscrow", "payload_hex": "abcd"]
                 ]
             ]
             let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil,
@@ -7202,8 +7206,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(quote.quoteId, quoteId)
         XCTAssertEqual(quote.leaseFee, "1000000.25")
-        XCTAssertEqual(quote.openLeaseInstruction?.wireId, "OpenVpnLeaseEscrow")
-        XCTAssertEqual(quote.txInstructions.count, 1)
+        XCTAssertEqual(quote.openLeaseInstruction.wireId, "OpenVpnLeaseEscrow")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -7278,7 +7281,7 @@ final class ToriiClientTests: XCTestCase {
                 "session_id": quoteId,
                 "account_id": "alice",
                 "exit_class": "standard",
-                "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                 "lease_secs": 900,
                 "expires_at_ms": 1_700_000_900_000,
                 "connected_at_ms": 1_700_000_000_000,
@@ -7292,7 +7295,12 @@ final class ToriiClientTests: XCTestCase {
                 "lease_fee": "1000000.25",
                 "flow_label_bits": 24,
                 "padding_budget_ms": 15,
-                "relay_tls_spki_sha256_hex": NSNull(),
+                "relay_id_hex": self.vpnRelayIdHex,
+                "descriptor_commit_hex": String(repeating: "cd", count: 32),
+                "tls_server_name": "vpn.sora.org",
+                "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32),
+                "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
+                "directory_snapshot_digest_hex": String(repeating: "42", count: 32),
                 "route_pushes": [],
                 "excluded_routes": [],
                 "dns_servers": [],
@@ -7332,7 +7340,7 @@ final class ToriiClientTests: XCTestCase {
                 "session_id": sessionId,
                 "account_id": "alice",
                 "exit_class": "standard",
-                "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                 "lease_secs": 900,
                 "expires_at_ms": 1_700_000_900_000,
                 "connected_at_ms": 1_700_000_000_000,
@@ -7346,7 +7354,12 @@ final class ToriiClientTests: XCTestCase {
                 "lease_fee": "1000000.25",
                 "flow_label_bits": 24,
                 "padding_budget_ms": 15,
-                "relay_tls_spki_sha256_hex": NSNull(),
+                "relay_id_hex": vpnRelayIdHex,
+                "descriptor_commit_hex": String(repeating: "cd", count: 32),
+                "tls_server_name": "vpn.sora.org",
+                "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32),
+                "relay_certificate_sha256_hex": String(repeating: "ef", count: 32),
+                "directory_snapshot_digest_hex": String(repeating: "42", count: 32),
                 "route_pushes": [],
                 "excluded_routes": [],
                 "dns_servers": [],
@@ -7408,8 +7421,7 @@ final class ToriiClientTests: XCTestCase {
             "earned_fee": "700000.125",
             "refunded_fee": "300000.125",
             "lease_id_hex": quoteId,
-            "settle_lease_instruction": settle,
-            "tx_instructions": [settle]
+            "settle_lease_instruction": settle
         ]
         var callCount = 0
         StubURLProtocol.handler = { request in
@@ -7447,7 +7459,7 @@ final class ToriiClientTests: XCTestCase {
         let deleted = try await client.deleteVpnSession(sessionId: quoteId, canonicalAuth: auth)
         XCTAssertEqual(submitted.settleLeaseInstruction?.wireId, "SettleVpnLease")
         XCTAssertEqual(list.items.first?.earnedFee, "700000.125")
-        XCTAssertEqual(deleted?.txInstructions.first?.payloadHex, "cafe")
+        XCTAssertEqual(deleted?.settleLeaseInstruction?.payloadHex, "cafe")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9424,15 +9436,183 @@ final class ToriiClientTests: XCTestCase {
         waitForExpectations(timeout: 2.0)
     }
 
-    func testExplorerRwasParamsQueryItemsEncodePaginationAndDomain() throws {
-        let params = ToriiExplorerRwasParams(page: 2,
-                                             perPage: 25,
+    func testExplorerRwasParamsQueryItemsEncodeCursorAndDomain() throws {
+        let params = ToriiExplorerRwasParams(cursor: "Y3Vyc29y",
+                                             limit: 25,
                                              domain: "commodities.sora")
         let queryItems = try XCTUnwrap(params.queryItems())
         let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-        XCTAssertEqual(query["page"], "2")
-        XCTAssertEqual(query["per_page"], "25")
+        XCTAssertEqual(query["cursor"], "Y3Vyc29y")
+        XCTAssertEqual(query["limit"], "25")
         XCTAssertEqual(query["domain"], "commodities.sora")
+        XCTAssertNil(query["page"])
+        XCTAssertNil(query["per_page"])
+    }
+
+    func testExplorerRwasParamsRejectInvalidCursorAndLimit() {
+        for cursor in ["", "padded=", "a", "contains space"] {
+            XCTAssertThrowsError(try ToriiExplorerRwasParams(cursor: cursor).queryItems())
+        }
+        for limit: UInt32 in [0, 101] {
+            XCTAssertThrowsError(try ToriiExplorerRwasParams(limit: limit).queryItems())
+        }
+    }
+
+    func testExplorerRwaCursorPageDecodesExactContract() throws {
+        let json = """
+        {
+          "pagination":{"limit":2,"next_cursor":"Y3Vyc29y","has_more":true},
+          "items":[]
+        }
+        """
+        let page = try JSONDecoder().decode(ToriiExplorerRwasPage.self, from: Data(json.utf8))
+        XCTAssertEqual(page.pagination.limit, 2)
+        XCTAssertEqual(page.pagination.nextCursor, "Y3Vyc29y")
+        XCTAssertTrue(page.pagination.hasMore)
+    }
+
+    func testExplorerRwaCursorPageRejectsRetiredUnknownAndInconsistentFields() {
+        let retired = """
+        {"page":1,"per_page":25,"total_pages":1,"total_items":0}
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerCursorMeta.self, from: Data(retired.utf8))
+        )
+
+        let inconsistent = """
+        {"limit":25,"next_cursor":null,"has_more":true}
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerCursorMeta.self, from: Data(inconsistent.utf8))
+        )
+
+        let unknownOuter = """
+        {
+          "pagination":{"limit":25,"next_cursor":null,"has_more":false},
+          "items":[],
+          "total_items":0
+        }
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerRwasPage.self, from: Data(unknownOuter.utf8))
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateExplorerRwasFollowsCursorAcrossEmptyScanPage() async throws {
+        var observedCursors: [String?] = []
+        var observedLimits: [String?] = []
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(
+                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+            )
+            observedCursors.append(query["cursor"])
+            observedLimits.append(query["limit"])
+            XCTAssertEqual(query["domain"], "commodities")
+
+            let body: String
+            switch query["cursor"] {
+            case nil:
+                body = """
+                {
+                  "pagination":{"limit":2,"next_cursor":"Y3Vyc29yLTE","has_more":true},
+                  "items":[]
+                }
+                """
+            case "Y3Vyc29yLTE":
+                body = """
+                {
+                  "pagination":{"limit":2,"next_cursor":"Y3Vyc29yLTI","has_more":true},
+                  "items":[{
+                    "id":"lot-001$commodities.sora",
+                    "owned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    "quantity":"1",
+                    "held_quantity":"0",
+                    "primary_reference":"vault://receipts/1",
+                    "status":null,
+                    "is_frozen":false,
+                    "metadata":{}
+                  }]
+                }
+                """
+            case "Y3Vyc29yLTI":
+                body = """
+                {
+                  "pagination":{"limit":2,"next_cursor":null,"has_more":false},
+                  "items":[{
+                    "id":"lot-002$commodities.sora",
+                    "owned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    "quantity":"2",
+                    "held_quantity":"0",
+                    "primary_reference":"vault://receipts/2",
+                    "status":null,
+                    "is_frozen":false,
+                    "metadata":{}
+                  }]
+                }
+                """
+            default:
+                XCTFail("Unexpected cursor")
+                body = """
+                {"pagination":{"limit":2,"next_cursor":null,"has_more":false},"items":[]}
+                """
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+
+        let stream = makeClient().iterateExplorerRwas(
+            params: ToriiExplorerRwasParams(domain: "commodities")
+        )
+        var identifiers: [String] = []
+        for try await item in stream {
+            identifiers.append(item.id)
+        }
+
+        XCTAssertEqual(identifiers, ["lot-001$commodities.sora", "lot-002$commodities.sora"])
+        XCTAssertEqual(observedCursors, [nil, "Y3Vyc29yLTE", "Y3Vyc29yLTI"])
+        XCTAssertEqual(observedLimits, [nil, "2", "2"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateExplorerRwasRejectsRepeatedCursor() async throws {
+        StubURLProtocol.handler = { request in
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(
+                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+            )
+            let cursor = query["cursor"]
+            let body = """
+            {
+              "pagination":{"limit":1,"next_cursor":"Y3Vyc29yLTE","has_more":true},
+              "items":[]
+            }
+            """
+            if cursor != nil {
+                XCTAssertEqual(cursor, "Y3Vyc29yLTE")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+
+        do {
+            for try await _ in makeClient().iterateExplorerRwas() {}
+            XCTFail("Expected a repeated-cursor error")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("repeated a cursor"))
+        }
     }
 
     func testExplorerRwaRecordDecodesNullStatusAndMetadataDefaults() throws {
@@ -17161,51 +17341,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testRegisterContractCodePostsJSON() {
-        let expectation = expectation(description: "register contract")
-        let codeHash = String(repeating: "b", count: 64)
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/code")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            guard let body = self.bodyData(from: request),
-                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-                XCTFail("missing JSON body")
-                throw NSError(domain: "stub", code: -1)
-            }
-            XCTAssertEqual(json["authority"] as? String, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-            XCTAssertEqual(json["private_key"] as? String, "ed25519:secret")
-            let manifest = json["manifest"] as? [String: Any]
-            XCTAssertEqual(
-                manifest?["code_hash"] as? String,
-                "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"
-            )
-            let hints = manifest?["access_set_hints"] as? [String: Any]
-            XCTAssertEqual(hints?["read_keys"] as? [String], ["account:alice#wonderland"])
-            XCTAssertEqual(hints?["write_keys"] as? [String], ["asset:coin#wonderland"])
-            let response = HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: nil)!
-            return (response, Data())
-        }
-
-        let manifest = ToriiRegisterContractCodeRequest.Manifest(
-            codeHash: codeHash,
-            accessSetHints: ToriiContractAccessSetHints(
-                readKeys: ["account:alice#wonderland"],
-                writeKeys: ["asset:coin#wonderland"]
-            )
-        )
-        let requestBody = ToriiRegisterContractCodeRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                           privateKey: "ed25519:secret",
-                                                           manifest: manifest)
-        makeClient().registerContractCode(requestBody) { result in
-            if case .failure(let error) = result {
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
     func testGetAttachmentEncodesId() {
         let expectation = expectation(description: "get attachment")
         let attachmentId = "abc/def"
@@ -17250,18 +17385,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
-    }
-
-    func testRegisterContractCodeRejectsInvalidCodeHash() {
-        let manifest = ToriiRegisterContractCodeRequest.Manifest(codeHash: "abc")
-        let requestBody = ToriiRegisterContractCodeRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                           privateKey: "ed25519:secret",
-                                                           manifest: manifest)
-        XCTAssertThrowsError(try JSONEncoder().encode(requestBody)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
     }
 
     func testFetchContractManifestParsesResponse() {
@@ -18492,7 +18615,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18513,7 +18636,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertTrue(response.ok)
                 XCTAssertTrue(response.submitted)
                 XCTAssertEqual(response.dataspace, "universal")
-                XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
+                XCTAssertEqual(response.contractAddress, "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh")
                 XCTAssertEqual(response.codeHashHex, codeHash)
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
@@ -18557,7 +18680,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testCallContractRejectsAmbiguousContractTarget() {
         let request = ToriiContractCallRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "mint::universal",
             entrypoint: "create",
             feePayment: testFeePayment(gasLimit: 7)
@@ -19589,7 +19712,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
     func testGovernanceDeployContractProposalRejectsAmbiguousTarget() throws {
         let request = ToriiGovernanceDeployContractProposalRequest(
-            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "demo::universal",
             codeHashHex: String(repeating: "4", count: 64),
             abiHashHex: String(repeating: "5", count: 64)
@@ -19845,7 +19968,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let proposalId = String(repeating: "6", count: 64)
         let codeHash = String(repeating: "7", count: 64)
         let abiHash = String(repeating: "8", count: 64)
-        let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+        let contractAddress = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/\(proposalId)")
             let response = HTTPURLResponse(url: request.url!,

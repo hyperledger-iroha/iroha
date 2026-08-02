@@ -1,18 +1,17 @@
 //! Dashboard data aggregation for the Mochi desktop shell.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     SigningAuthority,
     torii::{
         ExplorerAccountRecord, ExplorerAccountsQuery, ExplorerAssetRecord, ExplorerAssetsQuery,
-        ExplorerBlockRecord, ExplorerBlocksQuery, ToriiClient, ToriiErrorInfo,
+        ExplorerBlockRecord, ExplorerBlocksQuery, ToriiClient, ToriiError, ToriiErrorInfo,
     },
 };
 
 const DASHBOARD_BLOCK_LIMIT: u32 = 6;
-const DASHBOARD_ACCOUNT_PAGE_SIZE: u64 = 200;
-const DASHBOARD_ASSET_PAGE_SIZE: u64 = 64;
+const DASHBOARD_EXPLORER_PAGE_SIZE: u32 = 100;
 
 /// An individual balance displayed under a dev account card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,39 +81,85 @@ pub async fn fetch_dashboard_snapshot(
         })
         .await
         .map_err(|err| err.summarize())?;
-    let accounts = client
-        .fetch_explorer_accounts_page(ExplorerAccountsQuery {
-            page: Some(1),
-            per_page: Some(DASHBOARD_ACCOUNT_PAGE_SIZE),
-            domain: None,
-            with_asset: None,
-        })
-        .await
-        .map_err(|err| err.summarize())?;
-
-    let accounts_by_id = accounts
-        .items
-        .into_iter()
-        .map(|record| (record.id.clone(), record))
-        .collect::<BTreeMap<_, _>>();
+    let signer_ids = signers
+        .iter()
+        .map(|signer| signer.account_id().to_string())
+        .collect::<BTreeSet<_>>();
+    let mut accounts_by_id = BTreeMap::new();
+    let mut account_cursor = None;
+    let mut seen_account_cursors = BTreeSet::new();
+    loop {
+        let accounts = client
+            .fetch_explorer_accounts_page(ExplorerAccountsQuery {
+                cursor: account_cursor,
+                limit: Some(DASHBOARD_EXPLORER_PAGE_SIZE),
+                domain: None,
+                with_asset: None,
+            })
+            .await
+            .map_err(|err| err.summarize())?;
+        for record in accounts.items {
+            if signer_ids.contains(&record.id) {
+                accounts_by_id.insert(record.id.clone(), record);
+            }
+        }
+        if accounts_by_id.len() == signer_ids.len() || !accounts.pagination.has_more {
+            break;
+        }
+        let Some(next) = accounts.pagination.next_cursor else {
+            return Err(ToriiError::Decode(
+                "explorer accounts response omitted its continuation cursor".to_owned(),
+            )
+            .summarize());
+        };
+        if !seen_account_cursors.insert(next.clone()) {
+            return Err(ToriiError::Decode(
+                "explorer accounts response repeated a cursor".to_owned(),
+            )
+            .summarize());
+        }
+        account_cursor = Some(next);
+    }
 
     let mut cards = Vec::with_capacity(signers.len());
     for signer in signers {
         let account_id = signer.account_id().to_string();
-        let balances = client
-            .fetch_explorer_assets_page(ExplorerAssetsQuery {
-                page: Some(1),
-                per_page: Some(DASHBOARD_ASSET_PAGE_SIZE),
-                owned_by: Some(account_id.clone()),
-                definition: None,
-            })
-            .await
-            .map_err(|err| err.summarize())?;
+        let mut balances = Vec::new();
+        let mut asset_cursor = None;
+        let mut seen_asset_cursors = BTreeSet::new();
+        loop {
+            let page = client
+                .fetch_explorer_assets_page(ExplorerAssetsQuery {
+                    cursor: asset_cursor,
+                    limit: Some(DASHBOARD_EXPLORER_PAGE_SIZE),
+                    owned_by: Some(account_id.clone()),
+                    definition: None,
+                })
+                .await
+                .map_err(|err| err.summarize())?;
+            balances.extend(page.items);
+            if !page.pagination.has_more {
+                break;
+            }
+            let Some(next) = page.pagination.next_cursor else {
+                return Err(ToriiError::Decode(
+                    "explorer assets response omitted its continuation cursor".to_owned(),
+                )
+                .summarize());
+            };
+            if !seen_asset_cursors.insert(next.clone()) {
+                return Err(ToriiError::Decode(
+                    "explorer assets response repeated a cursor".to_owned(),
+                )
+                .summarize());
+            }
+            asset_cursor = Some(next);
+        }
         cards.push(map_account_card(
             signer.label(),
             &account_id,
             accounts_by_id.get(&account_id),
-            balances.items,
+            balances,
         ));
     }
 
@@ -191,17 +236,15 @@ mod tests {
         server.mock(|when, then| {
             when.method(GET)
                 .path("/v1/explorer/accounts")
-                .query_param("page", "1")
-                .query_param("per_page", "200");
+                .query_param("limit", "100");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
                     json::to_string(&json!({
                         "pagination": {
-                            "page": 1,
-                            "per_page": 200,
-                            "total_pages": 1,
-                            "total_items": 1
+                            "limit": 100,
+                            "next_cursor": null,
+                            "has_more": false
                         },
                         "items": [{
                             "id": alice_id,
@@ -220,18 +263,16 @@ mod tests {
         server.mock(move |when, then| {
             when.method(GET)
                 .path("/v1/explorer/assets")
-                .query_param("page", "1")
-                .query_param("per_page", "64")
+                .query_param("limit", "100")
                 .query_param("owned_by", &owned_by);
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
                     json::to_string(&json!({
                         "pagination": {
-                            "page": 1,
-                            "per_page": 64,
-                            "total_pages": 1,
-                            "total_items": 1
+                            "limit": 100,
+                            "next_cursor": null,
+                            "has_more": false
                         },
                         "items": [{
                             "id": "rose##1",

@@ -2,8 +2,9 @@ use core::marker::PhantomData;
 use std::{
     borrow::ToOwned as _,
     cell::RefCell,
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     string::ToString as _,
+    sync::Arc,
     vec,
     vec::Vec,
 };
@@ -28,6 +29,7 @@ pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 
 const PREPARED_PK_CACHE_LIMIT: usize = 128;
 const VERIFY_OK_CACHE_LIMIT: usize = 4096;
+const VERIFY_OK_CACHE_INPUT_BYTES_LIMIT: usize = 2 * 1024 * 1024;
 #[cfg(feature = "rand")]
 const BLS_RNG_SEED_LEN: usize = 32;
 
@@ -66,31 +68,131 @@ impl<E: EngineBLS> PreparedPublicKeyCache<E> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct VerifyOkCacheEntry {
+    public_key: Vec<u8>,
+    message: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+impl VerifyOkCacheEntry {
+    fn matches(&self, public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
+        self.public_key.as_slice() == public_key
+            && self.message.as_slice() == message
+            && self.signature.as_slice() == signature
+    }
+
+    fn input_bytes(&self) -> usize {
+        self.public_key
+            .len()
+            .saturating_add(self.message.len())
+            .saturating_add(self.signature.len())
+    }
+}
+
+/// Bounded cache of successfully verified BLS triples.
+///
+/// The digest is only an index. Every hit is confirmed against the exact
+/// public-key, message, and signature bytes in its collision bucket, so a
+/// digest collision can never reuse another verification verdict. Entry count
+/// and retained input bytes are both bounded per thread and BLS orientation.
 #[doc(hidden)]
 pub struct VerifyOkCache {
-    map: HashSet<[u8; 32]>,
+    entries: BTreeMap<[u8; 32], Vec<Arc<VerifyOkCacheEntry>>>,
+    insertion_order: VecDeque<([u8; 32], Arc<VerifyOkCacheEntry>)>,
+    retained_input_bytes: usize,
 }
 
 impl VerifyOkCache {
     fn new() -> Self {
         Self {
-            map: HashSet::new(),
+            entries: BTreeMap::new(),
+            insertion_order: VecDeque::new(),
+            retained_input_bytes: 0,
         }
     }
 
-    fn contains(&self, key: &[u8; 32]) -> bool {
-        self.map.contains(key)
+    fn contains_at_digest(
+        &self,
+        digest: [u8; 32],
+        public_key: &[u8],
+        message: &[u8],
+        signature: &[u8],
+    ) -> bool {
+        self.entries.get(&digest).is_some_and(|bucket| {
+            bucket
+                .iter()
+                .any(|entry| entry.matches(public_key, message, signature))
+        })
     }
 
-    fn insert(&mut self, key: [u8; 32]) {
-        if self.map.len() >= VERIFY_OK_CACHE_LIMIT {
-            self.map.clear();
+    fn remember_at_digest(
+        &mut self,
+        digest: [u8; 32],
+        public_key: &[u8],
+        message: &[u8],
+        signature: &[u8],
+    ) {
+        if self.contains_at_digest(digest, public_key, message, signature) {
+            return;
         }
-        self.map.insert(key);
+
+        let input_bytes = public_key
+            .len()
+            .saturating_add(message.len())
+            .saturating_add(signature.len());
+        if input_bytes > VERIFY_OK_CACHE_INPUT_BYTES_LIMIT {
+            return;
+        }
+        let entry = Arc::new(VerifyOkCacheEntry {
+            public_key: public_key.to_vec(),
+            message: message.to_vec(),
+            signature: signature.to_vec(),
+        });
+        debug_assert_eq!(entry.input_bytes(), input_bytes);
+        while self.insertion_order.len() >= VERIFY_OK_CACHE_LIMIT
+            || self.retained_input_bytes.saturating_add(input_bytes)
+                > VERIFY_OK_CACHE_INPUT_BYTES_LIMIT
+        {
+            if !self.evict_oldest() {
+                return;
+            }
+        }
+
+        self.retained_input_bytes = self.retained_input_bytes.saturating_add(input_bytes);
+        self.entries
+            .entry(digest)
+            .or_default()
+            .push(Arc::clone(&entry));
+        self.insertion_order.push_back((digest, entry));
+    }
+
+    fn evict_oldest(&mut self) -> bool {
+        let Some((digest, entry)) = self.insertion_order.pop_front() else {
+            return false;
+        };
+        self.retained_input_bytes = self
+            .retained_input_bytes
+            .saturating_sub(entry.input_bytes());
+        let remove_bucket = self.entries.get_mut(&digest).is_some_and(|bucket| {
+            if let Some(position) = bucket
+                .iter()
+                .position(|candidate| Arc::ptr_eq(candidate, &entry))
+            {
+                bucket.remove(position);
+            }
+            bucket.is_empty()
+        });
+        if remove_bucket {
+            self.entries.remove(&digest);
+        }
+        true
     }
 }
 
-fn verify_ok_cache_key(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> [u8; 32] {
+fn verify_ok_cache_digest(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> [u8; 32] {
+    // Framing makes the index unambiguous; exact collision-bucket matching is
+    // still the authority for a positive cache verdict.
     let mut h = Blake2b::<U32>::new();
     h.update(b"iroha:bls:verify_ok_cache:v2");
     h.update(
@@ -450,15 +552,17 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         // subgroup-checked material, this prevents malformed signatures from
         // borrowing a cached verdict through variable-length tuple splicing.
         let signature = parse_canonical_bls_signature::<C::Engine>(signature_bytes)?;
-        let cache_key = verify_ok_cache_key(&pk_bytes, message, signature_bytes);
-        if C::with_verify_ok_cache(|cache| cache.contains(&cache_key)) {
+        let cache_digest = verify_ok_cache_digest(&pk_bytes, message, signature_bytes);
+        if C::with_verify_ok_cache(|cache| {
+            cache.contains_at_digest(cache_digest, &pk_bytes, message, signature_bytes)
+        }) {
             return Ok(());
         }
 
-        let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+        let domain_message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         let prepared_pk = C::with_cache(|cache| cache.get_or_insert(pk, &pk_bytes));
         let prepared_message = <C::Engine as EngineBLS>::prepare_signature(
-            message.hash_to_signature_curve::<C::Engine>(),
+            domain_message.hash_to_signature_curve::<C::Engine>(),
         );
         let prepared_signature = <C::Engine as EngineBLS>::prepare_signature(signature.0);
 
@@ -469,14 +573,15 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             return Err(Error::BadSignature);
         }
 
-        C::with_verify_ok_cache(|cache| cache.insert(cache_key));
+        C::with_verify_ok_cache(|cache| {
+            cache.remember_at_digest(cache_digest, &pk_bytes, message, signature_bytes);
+        });
         Ok(())
     }
 
     /// Aggregate-style verification for the case where all signers signed the same message.
-    /// Performs deterministic aggregate verification for the case where all signers share the
-    /// same message. When the optimized multi-pairing backend is unavailable this falls back to
-    /// w3f's POP-aware aggregator, so callers still pay only a single pairing check.
+    /// Performs one deterministic aggregate check after the public wrappers have validated a
+    /// proof of possession for every signer.
     /// Rejects aggregates whose combined signature or public key is the identity element.
     pub(crate) fn verify_aggregate_same_message(
         message: &[u8],
@@ -672,6 +777,83 @@ mod tests {
     use rand_core::{TryCryptoRng, TryRngCore};
 
     const SEEDED_KEYGEN_COMPAT_SEED: &[u8] = b"iroha-bls-seeded-keygen-compat";
+
+    #[test]
+    fn verify_ok_cache_confirms_exact_triple_inside_collision_bucket() {
+        let mut cache = VerifyOkCache::new();
+        let forced_digest = [0xA5; 32];
+        let public_key = b"public-key";
+        let message = b"m";
+        let signature = b"signature";
+        let spliced_message = b"ms";
+        let spliced_signature = b"ignature";
+
+        cache.remember_at_digest(forced_digest, public_key, message, signature);
+        assert!(cache.contains_at_digest(forced_digest, public_key, message, signature));
+        assert!(
+            !cache.contains_at_digest(
+                forced_digest,
+                public_key,
+                spliced_message,
+                spliced_signature,
+            ),
+            "a shared digest must not make a different byte triple a cache hit"
+        );
+        assert!(
+            !cache.contains_at_digest(forced_digest, b"other-key", message, signature),
+            "the exact public key is part of every cached verdict"
+        );
+
+        cache.remember_at_digest(
+            forced_digest,
+            public_key,
+            spliced_message,
+            spliced_signature,
+        );
+        assert!(cache.contains_at_digest(
+            forced_digest,
+            public_key,
+            spliced_message,
+            spliced_signature,
+        ));
+        assert_eq!(cache.insertion_order.len(), 2);
+    }
+
+    #[test]
+    fn verify_ok_cache_digest_frames_variable_length_fields() {
+        let public_key = b"public-key";
+        assert_ne!(
+            verify_ok_cache_digest(public_key, b"m", b"signature"),
+            verify_ok_cache_digest(public_key, b"ms", b"ignature"),
+            "moving bytes across message/signature boundaries must change the digest"
+        );
+    }
+
+    #[test]
+    fn verify_ok_cache_does_not_retain_oversized_triples() {
+        let mut cache = VerifyOkCache::new();
+        let oversized_message = vec![0x42; VERIFY_OK_CACHE_INPUT_BYTES_LIMIT];
+        cache.remember_at_digest([0x5A; 32], b"pk", &oversized_message, b"signature");
+
+        assert!(cache.entries.is_empty());
+        assert!(cache.insertion_order.is_empty());
+        assert_eq!(cache.retained_input_bytes, 0);
+    }
+
+    #[test]
+    fn verify_ok_cache_evicts_the_exact_oldest_entry() {
+        let mut cache = VerifyOkCache::new();
+        let first_digest = [0x11; 32];
+        let second_digest = [0x22; 32];
+        cache.remember_at_digest(first_digest, b"pk-1", b"message-1", b"signature-1");
+        cache.remember_at_digest(second_digest, b"pk-2", b"message-2", b"signature-2");
+        let retained_before = cache.retained_input_bytes;
+
+        assert!(cache.evict_oldest());
+        assert!(!cache.contains_at_digest(first_digest, b"pk-1", b"message-1", b"signature-1"));
+        assert!(cache.contains_at_digest(second_digest, b"pk-2", b"message-2", b"signature-2"));
+        assert!(cache.retained_input_bytes < retained_before);
+    }
 
     #[cfg(feature = "rand")]
     struct FillSequenceTryRng {

@@ -14,7 +14,7 @@ use super::{DEGREE, LOG_DEGREE, Preimage, Trapdoor, comm};
 use zeroize::Zeroizing;
 
 pub(super) const PREIMAGE_COEFFICIENT_SAMPLES: u32 = 2 * DEGREE as u32;
-pub(super) const MAX_PROPOSALS_PER_COEFFICIENT: u32 = 256;
+pub(super) const MAX_PROPOSALS_PER_COEFFICIENT: u32 = sampler::MAX_PROPOSALS_PER_COEFFICIENT;
 pub(super) const TOTAL_GAUSSIAN_PROPOSAL_BUDGET: u32 =
     PREIMAGE_COEFFICIENT_SAMPLES * MAX_PROPOSALS_PER_COEFFICIENT;
 
@@ -26,6 +26,18 @@ pub(super) fn sample_preimage_from_seed(
     target: &[u16; DEGREE],
     seed: &[u8; 56],
 ) -> Option<Preimage> {
+    if [
+        trapdoor.f.len(),
+        trapdoor.g.len(),
+        trapdoor.capital_f.len(),
+        trapdoor.capital_g.len(),
+        trapdoor.h.len(),
+    ]
+    .into_iter()
+    .any(|length| length != DEGREE)
+    {
+        return None;
+    }
     if target
         .iter()
         .any(|coefficient| *coefficient >= super::MODULUS)
@@ -140,8 +152,8 @@ pub(super) fn sample_preimage_from_seed(
         poly::iFFT(LOG_DEGREE, target_one);
     }
 
-    let mut first = Box::new(Zeroizing::new([0_i16; DEGREE]));
-    let mut second = Box::new(Zeroizing::new([0_i16; DEGREE]));
+    let mut first = Zeroizing::new(vec![0_i16; DEGREE].into_boxed_slice());
+    let mut second = Zeroizing::new(vec![0_i16; DEGREE].into_boxed_slice());
     let target_zero = &work[4 * DEGREE..5 * DEGREE];
     let target_one = &work[5 * DEGREE..6 * DEGREE];
     let mut norm_squared = 0_u64;
@@ -171,14 +183,17 @@ pub(super) fn sample_preimage_from_seed(
     })
 }
 
-fn preimage_equation_holds(
+pub(super) fn preimage_equation_holds(
     target: &[u16; DEGREE],
-    public_key: &[u16; DEGREE],
-    first: &[i16; DEGREE],
-    second: &[i16; DEGREE],
+    public_key: &[u16],
+    first: &[i16],
+    second: &[i16],
 ) -> bool {
+    if public_key.len() != DEGREE || first.len() != DEGREE || second.len() != DEGREE {
+        return false;
+    }
     let modulus = i64::from(super::MODULUS);
-    let mut product = Box::new(Zeroizing::new([0_i64; DEGREE]));
+    let mut product = Zeroizing::new(vec![0_i64; DEGREE].into_boxed_slice());
     for (index, coefficient) in first.iter().copied().enumerate() {
         product[index] = i64::from(coefficient);
     }
@@ -200,13 +215,7 @@ fn preimage_equation_holds(
         .all(|(actual, expected)| actual.rem_euclid(modulus) == i64::from(expected))
 }
 
-fn compute_basis(
-    f: &[i8; DEGREE],
-    g: &[i8; DEGREE],
-    capital_f: &[i8; DEGREE],
-    capital_g: &[i8; DEGREE],
-    basis: &mut [flr::FLR],
-) {
+fn compute_basis(f: &[i8], g: &[i8], capital_f: &[i8], capital_g: &[i8], basis: &mut [flr::FLR]) {
     let (b00, rest) = basis.split_at_mut(DEGREE);
     let (b01, rest) = rest.split_at_mut(DEGREE);
     let (b10, rest) = rest.split_at_mut(DEGREE);

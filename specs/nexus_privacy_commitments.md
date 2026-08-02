@@ -156,7 +156,9 @@ and maximum depth. SDK decoders reject any other lane-privacy scheme.
 ## Operational checklist
 
 - Build roots with the versioned lane leaf and node domains above.
-- Never publish a root from the generic untagged `MerkleTree` helper.
+- Never substitute the generic application `MerkleTree` domains for the
+  lane-privacy-specific domains above; both are tagged but intentionally
+  protocol-distinct.
 - Include at least one real sibling in every proof; do not use sparse
   `None`/`null` path entries.
 - Keep the manifest root and proof generator on the same canonical Iroha hash

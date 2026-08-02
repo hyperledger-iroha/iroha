@@ -21,7 +21,7 @@ use iroha_data_model::{
         AccountAdmissionPolicy, AccountId, admission::ImplicitAccountFeeDestination,
     },
     asset::{
-        definition::{AssetDefinition, Mintable, NewAssetDefinition},
+        definition::{AssetDefinition, Mintable, NewAssetDefinition, validate_asset_name},
         id::{AssetDefinitionId, AssetId},
     },
     domain::DomainId,
@@ -202,6 +202,14 @@ pub enum ComposeError {
     InvalidAssetDefinitionId {
         /// String representation of the asset definition identifier that failed to parse.
         definition: String,
+        /// Human readable failure reason.
+        reason: String,
+    },
+    /// The provided human-readable asset definition name was invalid.
+    #[error("invalid asset definition name `{name}`: {reason}")]
+    InvalidAssetDefinitionName {
+        /// Human-readable name that failed validation.
+        name: String,
         /// Human readable failure reason.
         reason: String,
     },
@@ -683,6 +691,8 @@ pub enum InstructionDraft {
     RegisterAssetDefinition {
         /// Identifier of the asset definition.
         definition: AssetDefinitionId,
+        /// Human-readable name of the asset definition.
+        name: String,
         /// Mintability policy for the asset.
         mintable: Mintable,
     },
@@ -788,11 +798,18 @@ impl InstructionDraft {
     /// Returns a [`ComposeError`] if any field fails to parse.
     pub fn register_asset_definition_from_input(
         definition: &str,
+        name: &str,
         mintable: Mintable,
     ) -> Result<Self, ComposeError> {
         let definition = parse_asset_definition_id(definition)?;
+        let name = name.trim();
+        validate_asset_name(name).map_err(|err| ComposeError::InvalidAssetDefinitionName {
+            name: name.to_owned(),
+            reason: err.to_string(),
+        })?;
         Ok(Self::RegisterAssetDefinition {
             definition,
+            name: name.to_owned(),
             mintable,
         })
     }
@@ -940,8 +957,9 @@ impl InstructionDraft {
             }
             InstructionDraft::RegisterAssetDefinition {
                 definition,
+                name,
                 mintable,
-            } => format!("Register asset definition {definition} ({mintable})"),
+            } => format!("Register asset definition {name} [{definition}] ({mintable})"),
             InstructionDraft::PublishSpaceDirectoryManifest { manifest } => format!(
                 "Publish Space Directory manifest for {} (dataspace {}, {} entr{})",
                 manifest.uaid,
@@ -1001,10 +1019,18 @@ impl InstructionDraft {
             }
             InstructionDraft::RegisterAssetDefinition {
                 definition,
+                name,
                 mintable,
             } => {
-                let builder =
-                    apply_mintable(AssetDefinition::numeric(definition.clone()), *mintable);
+                let builder = apply_mintable(
+                    AssetDefinition::numeric(
+                        definition.clone(),
+                        name.clone(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    ),
+                    *mintable,
+                );
                 Register::asset_definition(builder).into()
             }
             InstructionDraft::PublishSpaceDirectoryManifest { manifest } => {
@@ -1085,6 +1111,7 @@ impl InstructionDraft {
             }
             InstructionDraft::RegisterAssetDefinition {
                 definition,
+                name,
                 mintable,
             } => {
                 object.insert(
@@ -1095,6 +1122,7 @@ impl InstructionDraft {
                     "definition".to_owned(),
                     Value::String(definition.to_string()),
                 );
+                object.insert("name".to_owned(), Value::String(name.clone()));
                 object.insert(
                     "mintable".to_owned(),
                     Value::String(format_mintable(*mintable)),
@@ -1204,6 +1232,7 @@ impl InstructionDraft {
             }
             "register_asset_definition" => {
                 let definition = extract_string(map, "definition")?;
+                let name = extract_string(map, "name")?;
                 let mintable = match map.get("mintable") {
                     Some(value) => {
                         let label = match value {
@@ -1218,7 +1247,7 @@ impl InstructionDraft {
                     }
                     None => Mintable::Infinitely,
                 };
-                InstructionDraft::register_asset_definition_from_input(&definition, mintable)
+                InstructionDraft::register_asset_definition_from_input(&definition, &name, mintable)
             }
             "publish_space_directory_manifest" => {
                 let Some(manifest_value) = map.get("manifest") else {
@@ -1709,7 +1738,7 @@ mod tests {
         )
         .into();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &ALICE_ID,
             1,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -1794,6 +1823,7 @@ mod tests {
             InstructionDraft::register_account_from_input(&account).expect("account draft");
         let register_definition = InstructionDraft::register_asset_definition_from_input(
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            "rose",
             Mintable::Once,
         )
         .expect("definition draft");

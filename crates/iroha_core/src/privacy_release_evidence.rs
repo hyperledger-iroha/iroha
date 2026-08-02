@@ -38,8 +38,8 @@ use vega::{
     vega_release_transaction_context_v1, verify_vega_release_production_envelope_v1,
 };
 use vega::{
-    VEGA_RELEASE_COMBINED_SUMCHECK_ROUNDS_V1, VEGA_RELEASE_CONSTRAINT_COUNT_V1,
-    VEGA_RELEASE_VARIABLE_COUNT_V1, run_vega_stage_v1,
+    VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1, VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1,
+    VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1, run_vega_stage_v1,
 };
 use zk_x509::run_zk_x509_stage_v1;
 pub use zk_x509::{
@@ -66,7 +66,7 @@ use core::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use incrementalmerkletree::{Hashable as _, Level};
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 pub use iroha_data_model::privacy::{
     PrivacyExact12FixtureErrorV1, PrivacyExact12TypedEnvelopeRowV1,
     privacy_exact12_matrix_bytes_v1, privacy_exact12_typed_envelope_rows_v1,
@@ -79,25 +79,24 @@ use iroha_data_model::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1,
         BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1, BootleLanternAllowedAttributeValuesV1,
         BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
-        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1,
-        IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1,
-        PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyChallengeV1,
-        PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
-        PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-        PrivacyNativeConsensusBindingV1, PrivacyNullifierV1, PrivacyOrchardActionV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
-        PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolActivationLimitsV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        PrivacyRootV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVegaIssuerRecordLifecycleV1,
-        PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
-        PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsActionV1,
-        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
-        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1, IrohaZkAmsStatementV1,
+        IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1, PrivacyActiveLifecycleV1,
+        PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1,
+        PrivacyEngineIdV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1,
+        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyNullifierV1,
+        PrivacyOrchardActionV1, PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterIdV1,
+        PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1,
+        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1,
+        PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLifecycleV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
+        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
+        PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
+        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
         PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
         PrivacyZkAmsSubjectCommitmentV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
         VegaExistingCredentialStatementV1, ZK_AMS_PHC_VERSION_V1,
@@ -144,9 +143,12 @@ use crate::privacy_engines::{
     bootle_lantern::{
         codec::PROOF_BYTES_V1 as BOOTLE_PROOF_BYTES_V1,
         issuer::{
+            BootleLanternBlindIssuanceResponseV1, BootleLanternFileIssuanceStoreV1,
+            BootleLanternIssuanceAuthorizationV1, BootleLanternIssuanceStoreConfigV1,
             BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
             holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
-            issuer_blind_issue_with_rng_v1,
+            issuer_authorize_blind_issuance_with_rng_v1,
+            issuer_blind_issue_once_encoded_with_rng_v1,
         },
         prove_bound_presentation_v1, verify_bound_presentation_encoded_v1,
     },
@@ -202,13 +204,16 @@ use crate::privacy_engines::{
         MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1, MAX_ZK_AMS_LSAG_PROOF_BYTES_V1,
         ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1, ZK_AMS_MIN_RING_SIZE_V1,
         ZK_AMS_PRIVACY_ACTION_INDEX_V1, ZkAmsBatchCredentialWitnessV1,
-        ZkAmsPrivacyActionGovernanceV1, ZkAmsPrivacyActionTransactionContextV1, ZkAmsSeedSecretV1,
-        prepare_zk_ams_batch_admission_transaction_intent_v1,
-        prepare_zk_ams_provision_account_transaction_intent_v1, prove_zk_ams_batch_admission_v1,
-        sign_zk_ams_provision_statement_v1, validate_zk_ams_privacy_action_transaction_intent_v1,
-        verify_zk_ams_batch_admission_v1, verify_zk_ams_provision_statement_v1,
-        zk_ams_batch_admission_adversarial_wires_v1, zk_ams_generator_digest_v1,
-        zk_ams_key_image_v1, zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
+        ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionEffectV1, ZkAmsPrivacyActionGovernanceV1,
+        ZkAmsPrivacyActionTransactionContextV1, ZkAmsSeedSecretV1,
+        prepare_zk_ams_batch_admission_privacy_action_with_rng_v1,
+        prepare_zk_ams_provision_account_transaction_intent_v1,
+        prepare_zk_ams_provision_privacy_action_with_rng_v1,
+        sign_prepared_zk_ams_privacy_action_v1,
+        validate_zk_ams_privacy_action_transaction_intent_v1, verify_zk_ams_batch_admission_v1,
+        verify_zk_ams_provision_statement_v1, zk_ams_batch_admission_adversarial_wires_v1,
+        zk_ams_generator_digest_v1, zk_ams_key_image_v1, zk_ams_registry_transition_root_v1,
+        zk_ams_seed_public_key_v1,
     },
     zk_x509::{
         engine::{prove_zk_x509_credential_proof_v1_with_rng, verify_zk_x509_credential_proof_v1},
@@ -834,12 +839,12 @@ pub fn privacy_release_resource_facts_v1(
             }
         }
         PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => PrivacyReleaseResourceFactsV1 {
-            primary_units: VEGA_RELEASE_CONSTRAINT_COUNT_V1,
-            primary_ceiling: VEGA_RELEASE_CONSTRAINT_COUNT_V1,
-            secondary_units: VEGA_RELEASE_VARIABLE_COUNT_V1,
-            secondary_ceiling: VEGA_RELEASE_VARIABLE_COUNT_V1,
-            relation_depth: VEGA_RELEASE_COMBINED_SUMCHECK_ROUNDS_V1,
-            relation_depth_ceiling: VEGA_RELEASE_COMBINED_SUMCHECK_ROUNDS_V1,
+            primary_units: VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1,
+            primary_ceiling: VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1,
+            secondary_units: VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1,
+            secondary_ceiling: VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1,
+            relation_depth: VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1,
+            relation_depth_ceiling: VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1,
         },
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => PrivacyReleaseResourceFactsV1 {
             primary_units: if maximum {
@@ -864,11 +869,7 @@ pub fn privacy_release_resource_facts_v1(
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
             let ring_degree = u64::try_from(JINDO_RING_DEGREE_V1).ok()?;
             PrivacyReleaseResourceFactsV1 {
-                primary_units: if maximum {
-                    u64::try_from(JINDO_MAX_BATCH_SIZE_V1).ok()?
-                } else {
-                    1
-                },
+                primary_units: u64::try_from(JINDO_MAX_BATCH_SIZE_V1).ok()?,
                 primary_ceiling: u64::try_from(JINDO_MAX_BATCH_SIZE_V1).ok()?,
                 secondary_units: if maximum {
                     u64::try_from(JINDO_MAX_COEFFICIENTS_V1).ok()?
@@ -1707,7 +1708,7 @@ fn zk_ace_fixture_v1()
         policy_digest: PrivacyPolicyDigestV1::new([0x9B; 32]),
         source: privacy_release_account_v1(0x9C)?,
         destination: privacy_release_account_v1(0x9D)?,
-        asset_definition_id: AssetDefinitionId::new(domain_id, asset_name),
+        asset_definition_id: AssetDefinitionId::derive_from_components(domain_id, asset_name),
         amount: 19,
         authorization_epoch: 7,
         replay_nullifier: PrivacyNullifierV1::new([0; 32]),
@@ -2648,6 +2649,39 @@ fn run_bootle_lantern_stage_v1(
             allowed_values,
         })
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let issuance_store_directory = tempfile::tempdir()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let issuance_store_root = issuance_store_directory
+        .path()
+        .join("bootle-issuance-store");
+    let issuance_store = BootleLanternFileIssuanceStoreV1::open(
+        &issuance_store_root,
+        BootleLanternIssuanceStoreConfigV1::default(),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let mut authorization_rng = EvidenceRng06::new(stage_purpose_seed_v1(
+        protocol_id,
+        case_kind,
+        b"bootle-issuer-authorization",
+    )?);
+    let authorization = issuer_authorize_blind_issuance_with_rng_v1(
+        &issuer_key_pair,
+        &context,
+        GENESIS_HASH,
+        &policy,
+        [0xA1; 32],
+        10,
+        20,
+        &issuance_store,
+        &mut authorization_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let authorization = BootleLanternIssuanceAuthorizationV1::decode_exact(
+        &authorization
+            .encode()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     if maximum
         && (policy.allowed_values.len() != BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1
             || policy
@@ -2667,45 +2701,72 @@ fn run_bootle_lantern_stage_v1(
             value: BootleLanternAttributeValueV1::new(attribute),
         })
         .collect::<Vec<_>>();
-    let mut holder_mask_rng = EvidenceRng06::new(stage_purpose_seed_v1(
+    let mut holder_issuance_rng = EvidenceRng06::new(stage_purpose_seed_v1(
         protocol_id,
         case_kind,
-        b"bootle-holder-mask",
-    )?);
-    let mut holder_request_proof_rng = EvidenceRng06::new(stage_purpose_seed_v1(
-        protocol_id,
-        case_kind,
-        b"bootle-holder-request-proof",
+        b"bootle-holder-issuance-master",
     )?);
     let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
         &context,
         GENESIS_HASH,
         &policy,
+        &authorization,
         attributes,
-        &mut holder_mask_rng,
-        &mut holder_request_proof_rng,
+        &mut holder_issuance_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
-    let mut issuer_tag_rng = EvidenceRng06::new(stage_purpose_seed_v1(
+    let issuance_request_wire = issuance_request
+        .encode()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let mut issuer_issuance_rng = EvidenceRng06::new(stage_purpose_seed_v1(
         protocol_id,
         case_kind,
-        b"bootle-issuer-tag",
+        b"bootle-issuer-issuance-master",
     )?);
-    let mut issuer_preimage_rng = EvidenceRng06::new(stage_purpose_seed_v1(
-        protocol_id,
-        case_kind,
-        b"bootle-issuer-preimage",
-    )?);
-    let issuance_response = issuer_blind_issue_with_rng_v1(
+    let issuance_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
         &context,
         GENESIS_HASH,
         &policy,
-        &issuance_request,
-        &mut issuer_tag_rng,
-        &mut issuer_preimage_rng,
+        &authorization,
+        &issuance_request_wire,
+        10,
+        &issuance_store,
+        &mut issuer_issuance_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let issuance_response_wire = issuance_response
+        .encode()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    drop(issuance_store);
+    let issuance_store = BootleLanternFileIssuanceStoreV1::open(
+        &issuance_store_root,
+        BootleLanternIssuanceStoreConfigV1::default(),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let mut unavailable_issuance_rng = UnavailableIssuanceRngV1;
+    let cached_response = issuer_blind_issue_once_encoded_with_rng_v1(
+        &issuer_key_pair,
+        &context,
+        GENESIS_HASH,
+        &policy,
+        &authorization,
+        &issuance_request_wire,
+        21,
+        &issuance_store,
+        &mut unavailable_issuance_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if cached_response
+        .encode()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+        != issuance_response_wire
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let issuance_response =
+        BootleLanternBlindIssuanceResponseV1::decode_exact(&issuance_response_wire)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let credential = holder_finalize_blind_issuance_v1(
         issuance_state,
         &context,
@@ -2886,36 +2947,60 @@ fn run_zk_ams_stage_v1(
         .1;
     let key_image = zk_ams_key_image_v1(signer_secret)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let statement = zk_ams_provision_statement_v1(
+    let expected_statement = zk_ams_provision_statement_v1(
         &ring,
         key_image,
         admission.next_root,
         admission.next_epoch,
         admission.next_registry_record_digest,
     )?;
+    let governance = ZkAmsPrivacyActionGovernanceV1 {
+        issuer_id: expected_statement.issuer_id,
+        issuer_public_key: expected_statement.issuer_public_key,
+        issuer_policy_record_digest: expected_statement.issuer_policy_record_digest,
+        registry_id: expected_statement.registry_id,
+        registry_record_digest: expected_statement.registry_record_digest,
+        policy_id: expected_statement.policy_id,
+        policy_digest: expected_statement.policy_digest,
+    };
+    let PrivacyZkAmsActionV1::ProvisionAccount(provision_action) =
+        expected_statement.action.clone()
+    else {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    };
+    let provision_context = zk_ams_provision_transaction_context_v1()?;
     let admission_intent = validate_zk_ams_privacy_action_transaction_intent_v1(
         &zk_ams_admission_transaction_context_v1()?,
         &admission.statement,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let provision_intent = validate_zk_ams_privacy_action_transaction_intent_v1(
-        &zk_ams_provision_transaction_context_v1()?,
-        &statement,
+        &provision_context,
+        &expected_statement,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     if admission_intent == provision_intent {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let binding = zk_ams_binding_v1(&statement)?;
     let mut rng = EvidenceRng06::new(stage_seed_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, case_kind));
-    let provision_proof_bytes = sign_zk_ams_provision_statement_v1(
-        &statement,
-        &binding,
+    let prepared = prepare_zk_ams_provision_privacy_action_with_rng_v1(
+        provision_context,
+        governance,
+        provision_action,
         signer_index,
         signer_secret,
+        ZK_AMS_RELEASE_GENESIS_HASH_V1,
         &mut rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let (statement, provision_proof_bytes) = zk_ams_prepared_release_material_v1(
+        prepared,
+        ZkAmsPrivacyActionEffectV1::ProvisionAccount,
+    )?;
+    if statement != expected_statement {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let binding = zk_ams_binding_v1(&statement)?;
     let provision_effect =
         verify_zk_ams_provision_statement_v1(&statement, &binding, &provision_proof_bytes)
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
@@ -3367,6 +3452,153 @@ fn zk_ams_release_proof_artifacts_v1(
     ]
 }
 
+fn zk_ams_prepared_release_material_v1(
+    prepared: ZkAmsPreparedPrivacyActionV1,
+    expected_effect: ZkAmsPrivacyActionEffectV1,
+) -> Result<(IrohaZkAmsStatementV1, Vec<u8>), PrivacyReleaseEvidenceErrorClassV1> {
+    if prepared.effect() != expected_effect {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let expected_intent = prepared.transaction_intent_digest();
+    let expected_statement_digest = prepared.statement_digest();
+    let expected_envelope_hash = prepared.proof_envelope_hash();
+    let expected_statement_bytes = prepared.statement_bytes();
+    let expected_proof_bytes = prepared.proof_bytes();
+    let expected_envelope_bytes = prepared.encoded_proof_envelope_bytes();
+    let (statement, proof) = {
+        let (intent, submission) = prepared
+            .release_evidence_payload_v1()
+            .privacy_transaction_intent_binding_if_present_v1()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+            .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+        if intent.as_bytes() != &expected_intent
+            || submission.envelope.statement_digest.as_bytes() != &expected_statement_digest
+        {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        }
+        let PrivacyStatementV1::IrohaZkAmsV1(statement) = &submission.envelope.statement else {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        };
+        let proof = match (
+            &statement.action,
+            &submission.envelope.proof,
+            expected_effect,
+        ) {
+            (
+                PrivacyZkAmsActionV1::BatchAdmission(_),
+                PrivacyProofV1::IrohaZkAmsV1(
+                    IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(proof),
+                ),
+                ZkAmsPrivacyActionEffectV1::BatchAdmission,
+            )
+            | (
+                PrivacyZkAmsActionV1::ProvisionAccount(_),
+                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
+                    proof,
+                )),
+                ZkAmsPrivacyActionEffectV1::ProvisionAccount,
+            ) => proof.as_bytes(),
+            _ => return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+        };
+        if u32::try_from(proof.len())
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+            != expected_proof_bytes
+            || u32::try_from(
+                norito::to_bytes(&submission.envelope.statement)
+                    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+                    .len(),
+            )
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+                != expected_statement_bytes
+        {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        }
+        let encoded_envelope = norito::to_bytes(&submission.envelope)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+        if u32::try_from(encoded_envelope.len())
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+            != expected_envelope_bytes
+            || *Hash::new(&encoded_envelope).as_ref() != expected_envelope_hash
+        {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        }
+        (statement.clone(), proof.to_vec())
+    };
+
+    let signer = KeyPair::try_from_seed(vec![39; 32], Algorithm::Ed25519)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let signed = sign_prepared_zk_ams_privacy_action_v1(prepared, signer.private_key())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    signed
+        .signed_transaction()
+        .verify_signature()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
+    let signed_transaction_bytes =
+        u32::try_from(norito::codec::encode_adaptive(signed.signed_transaction()).len())
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if signed.effect() != expected_effect
+        || signed.transaction_intent_digest() != expected_intent
+        || signed.statement_digest() != expected_statement_digest
+        || signed.proof_envelope_hash() != expected_envelope_hash
+        || signed.statement_bytes() != expected_statement_bytes
+        || signed.proof_bytes() != expected_proof_bytes
+        || signed.encoded_proof_envelope_bytes() != expected_envelope_bytes
+        || signed.transaction_hash() != *signed.signed_transaction().hash().as_ref()
+        || signed.adaptive_signed_transaction_bytes() != signed_transaction_bytes
+        || signed.signed_transaction().attachments().is_some()
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let (signed_intent, signed_submission) = signed
+        .signed_transaction()
+        .payload()
+        .privacy_transaction_intent_binding_if_present_v1()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let PrivacyStatementV1::IrohaZkAmsV1(signed_statement) = &signed_submission.envelope.statement
+    else {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    };
+    if signed_intent.as_bytes() != &expected_intent
+        || signed_submission.envelope.statement_digest.as_bytes() != &expected_statement_digest
+        || signed_statement != &statement
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let signed_proof = match (
+        &signed_statement.action,
+        &signed_submission.envelope.proof,
+        expected_effect,
+    ) {
+        (
+            PrivacyZkAmsActionV1::BatchAdmission(_),
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
+                proof,
+            )),
+            ZkAmsPrivacyActionEffectV1::BatchAdmission,
+        )
+        | (
+            PrivacyZkAmsActionV1::ProvisionAccount(_),
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
+                proof,
+            )),
+            ZkAmsPrivacyActionEffectV1::ProvisionAccount,
+        ) => proof.as_bytes(),
+        _ => return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+    };
+    let signed_envelope = norito::to_bytes(&signed_submission.envelope)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if signed_proof != proof.as_slice()
+        || u32::try_from(signed_envelope.len())
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+            != expected_envelope_bytes
+        || *Hash::new(&signed_envelope).as_ref() != expected_envelope_hash
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    Ok((statement, proof))
+}
+
 struct ZkAmsAdmissionLineageMaterialV1 {
     statement: IrohaZkAmsStatementV1,
     public_statement_material: Vec<u8>,
@@ -3522,13 +3754,6 @@ fn zk_ams_admission_lineage_material_v1(
         next_account_registry_root_epoch: next_epoch,
         anchors: anchors.to_vec(),
     };
-    let statement = prepare_zk_ams_batch_admission_transaction_intent_v1(
-        &zk_ams_admission_transaction_context_v1()?,
-        governance,
-        action,
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let binding = zk_ams_binding_v1(&statement)?;
     let witnesses = credentials[batch_start..]
         .iter()
         .zip(&signatures)
@@ -3553,8 +3778,19 @@ fn zk_ams_admission_lineage_material_v1(
         case_kind,
         &proof_purpose,
     )?);
-    let proof = prove_zk_ams_batch_admission_v1(&statement, &binding, &witnesses, config, &mut rng)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let prepared = prepare_zk_ams_batch_admission_privacy_action_with_rng_v1(
+        zk_ams_admission_transaction_context_v1()?,
+        governance,
+        action,
+        &witnesses,
+        config,
+        ZK_AMS_RELEASE_GENESIS_HASH_V1,
+        &mut rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let (statement, proof) =
+        zk_ams_prepared_release_material_v1(prepared, ZkAmsPrivacyActionEffectV1::BatchAdmission)?;
+    let binding = zk_ams_binding_v1(&statement)?;
     let effect = verify_zk_ams_batch_admission_v1(&statement, &binding, &proof)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
     let authoritative_chain_id = ChainId::from(ZK_AMS_RELEASE_CHAIN_ID_V1);
@@ -3895,12 +4131,17 @@ fn run_jindo_stage_v1(
             })
             .collect::<Vec<_>>()
     } else {
-        vec![vec![
-            jindo_field_v1(3),
-            jindo_field_v1(5),
-            jindo_field_v1(7),
-            jindo_field_v1(11),
-        ]]
+        vec![
+            vec![
+                jindo_field_v1(3),
+                jindo_field_v1(5),
+                jindo_field_v1(7),
+                jindo_field_v1(11),
+            ],
+            vec![jindo_field_v1(13), jindo_field_v1(17)],
+            vec![jindo_field_v1(19), jindo_field_v1(23)],
+            vec![jindo_field_v1(29), jindo_field_v1(31)],
+        ]
     };
     let witness = JindoPrivacyActionWitnessV1::try_new(polynomials, jindo_field_v1(13))
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
@@ -4237,7 +4478,7 @@ fn orchard_release_statement_v1(
     };
     Ok(OrchardHalo2ActionsStatementV1 {
         context,
-        asset_definition_id: AssetDefinitionId::new(domain_id, asset_name),
+        asset_definition_id: AssetDefinitionId::derive_from_components(domain_id, asset_name),
         pool_id: PrivacyPoolIdV1::new([0x4e; 32]),
         anchor: PrivacyRootV1::new(draft.anchor),
         anchor_epoch: 1,
@@ -4917,16 +5158,16 @@ pub const fn privacy_release_protocol_descriptor_v1(
             "iroha-zk-ams-v1; prover=zk_ams::prove_zk_ams_batch_admission_v1+zk_ams::sign_zk_ams_provision_statement_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; native-verifier=zk_ams::verify_zk_ams_batch_admission_v1+zk_ams::verify_zk_ams_provision_statement_v1; batch-wire=independent-version+exact-count+fixed-eight-slots+canonical-zero-unused-tail; batch-relation=homogeneous-issuer-policy-registry-epoch-lineage+unique-credential-digests+unique-seed-public-keys+ordered-root-chain; all-case-artifact-order=batch8-admission,successor-root-provisioning; lineage=two-sequential-single-action-transactions+distinct-intent-digests+authoritative-prestate-record-digest-to-batch-successor-record-digest-to-full-admitted-ring; max-primary=64 admitted ring members; max-secondary=8 ordered admission anchors; max-depth=64 LSAG cyclic responses; artifact-caps=MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,MAX_ZK_AMS_LSAG_PROOF_BYTES_V1"
         }
         PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
-            "vega-existing-credential-zk-v0; prover=vega::prove_mdl_figure9_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; verifier-state=privacy_verifier::validate_vega_authoritative_issuer_binding_v1+vega::verify_mdl_figure9_v1; signature-preflight=P1363-nonzero-scalars+low-S-required+reject-high-S-without-normalization+verify-prehash-before-inverse; fixed-primary=1048576 padded R1CS constraints; fixed-secondary=524288 padded private variables; fixed-public-inputs=14; fixed-depth=40 combined outer+inner sumcheck rounds; proof-cap=524288 canonical bytes; issuer-state=current active self-digested append-only revision+permanent-global-p256-key-ownership+retired-p256-key-never-reactivated"
+            "vega-existing-credential-zk-v0; prover=vega::prove_mdl_figure9_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; verifier-state=privacy_verifier::validate_vega_authoritative_issuer_binding_v1+vega::verify_mdl_figure9_v1; canonical-profile=Microsoft-Vega_MC-Figure9@c0ee259053cd12eaf43ed71b5cde375452b3ee4d; wire=canonical-mc-2-plus-6-sha256-steps; signature-preflight=P1363-nonzero-scalars+low-S-required+reject-high-S-without-normalization+verify-prehash-before-inverse; fixed-primary=2359296 total application constraints; fixed-secondary=1048576 maximum circuit variables; fixed-public-inputs=14; fixed-depth=21 relaxed sumcheck rounds; proof-cap=524288 canonical bytes; issuer-state=current active self-digested append-only revision+permanent-global-p256-key-ownership+retired-p256-key-never-reactivated"
         }
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
             "iroha-zk-x509-stark-p256-v0; prover=zk_x509::engine::prove_zk_x509_credential_proof_v1_with_rng; verifier=privacy_verifier::verify_privacy_envelope_v1; native-verifier=zk_x509::engine::verify_zk_x509_credential_proof_v1; wire=X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-compact-ca-no-legacy; trusted-state=active-trust-anchor+active-certificate-policy+current-complete-signed-crl+current-retained-ca-root+certificate-nullifier-replay; max-primary=3 certificate-chain members; max-secondary=4 disclosed subject attributes; max-depth=64 complete-CRL entries; fixed-main=49 logical registrations across six trace groups; proof-artifact-cap=8212538 exact X5S1 bytes; outer-action-proof-cap=9437184 bytes; process-cap=300000ms+12884901888-byte-peak-rss+34359738368-byte-address-space"
         }
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
-            "iroha-jindo-polynomial-commitment-v0; prover-state=jindo::prepare_jindo_privacy_action_with_rng_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; native-verifier=jindo::verify_batched_evaluation_v1; max-primary=4 polynomials; max-secondary=256 coefficients each; max-depth=256 ring degree; proof-cap=JINDO_NATIVE_PROOF_BYTES_V1"
+            "iroha-jindo-polynomial-commitment-v0; prover-state=jindo::prepare_jindo_privacy_action_with_rng_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; native-verifier=jindo::verify_batched_evaluation_v1; exact-primary=4 polynomials; max-secondary=256 coefficients each; fixed-depth=1024 ring degree; phases=PiSplit+PiAgg+PiQuad; challenge=complete-uniform-S35-cardinality-4237250353474513005583342210963717757744597392123051014751100017656012472320; extraction=difference-invertibility-via-heuristic-well-spreadness; split-challenge=uniform-nonzero-Fp-star; wire=IJP2-no-IJP1; proof-cap=JINDO_NATIVE_PROOF_BYTES_V1"
         }
         PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
-            "iroha-bootle-lantern-anoncred-v1; prover-state=bootle_lantern::prove_bound_presentation_v1; verifier-state=bootle_lantern::verify_bound_presentation_encoded_v1; max-primary=8 disclosed attributes; max-secondary=32 governed allowed values per required attribute; max-depth=8 module rank; proof-cap=bootle_lantern::codec::PROOF_BYTES_V1"
+            "iroha-bootle-lantern-anoncred-v1; native-lifecycle=bootle_lantern::issuer::BootleLanternIssuerKeyPairV1::generate_with_rng_v1+issuer_authorize_blind_issuance_with_rng_v1+holder_prepare_blind_issuance_with_rng_v1+issuer_blind_issue_once_encoded_with_rng_v1+holder_finalize_blind_issuance_v1+bootle_lantern::prove_bound_presentation_v1; issuance-wires=ILA1-320-byte-authorization+ILQ1-71576-byte-complete-request-with-ILB1-70344-byte-P1+ILR1-3176-byte-response; issuance-store=ILS1-strict-file-store+canonical-directory-process-lease+held-unix-exclusive-flock+bounded-worst-case-record-reservation+explicit-height-pruning+nonmutating-preflight-before-P1+atomic-Fresh-to-Processing-before-issuer-rng+durable-Completed-exact-ILR1-cache+terminal-Failed-no-reset+same-request-completed-retry-after-process-reopen-and-expiry-with-zero-rng; issuance-rng=one-health-checked-master64-per-holder-or-issuer-operation+closed-context-bound-purpose-substreams; presentation-wire=ILN1-70344-byte-P2; verifier-state=bootle_lantern::verify_bound_presentation_encoded_v1; exact-caps=ILQ1-request-bytes71576+keygen-candidates4096+keygen-parity-attempts128+authorization-id-attempts4+authorization-lifetime-blocks4096+holder-vector-attempts64+holder-coefficient-proposals256+scope-coefficient-attempts4096+issuer-preimage-attempts64+falcon-preimage-proposals-per-coefficient256+falcon-preimage-total-proposals-per-attempt262144; max-primary=8 disclosed attributes; max-secondary=32 governed allowed values per required attribute; max-depth=8 module rank; proof-cap=70344 exact ILN1 bytes; no-direct-or-trusted-issuance"
         }
         PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
             "orchard-halo2-actions-v1; prover=orchard::prepare_orchard_bundle_v1_with_rng+orchard::authorize_orchard_bundle_v1; verifier=orchard::verify_orchard_bundle_v1; authorization=consuming-two-phase+native-consensus-binding; max-primary=2 actions; max-secondary=2 spends; max-depth=32 note-tree levels; proof-cap=orchard::orchard_authorization_wire_size_v1(2)"
@@ -4976,6 +5217,30 @@ fn stage_purpose_seed_v1(
 fn sha256_v1(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
+
+struct UnavailableIssuanceRngV1;
+
+impl RngCore for UnavailableIssuanceRngV1 {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+
+    fn fill_bytes(&mut self, destination: &mut [u8]) {
+        destination.fill(0);
+    }
+
+    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError06> {
+        Err(RngError06::new(
+            "cached Bootle/Lantern issuance must not read randomness",
+        ))
+    }
+}
+
+impl CryptoRng for UnavailableIssuanceRngV1 {}
 
 struct EvidenceRng06 {
     seed: [u8; 32],

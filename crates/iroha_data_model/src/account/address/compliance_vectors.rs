@@ -65,7 +65,7 @@ const MULTISIG_FIXTURES: &[MultisigFixture] = &[
     },
     MultisigFixture {
         case_id: "addr-multisig-default-quorum3",
-        note: "Implicit-default domain multisig with four members (weight 1 each) requiring weight ≥3.",
+        note: "Domainless multisig fixture with four members (weight 1 each) requiring weight ≥3.",
         domain: "default",
         members: &[(0xA0, 1), (0xA1, 1), (0xA2, 1), (0xA3, 1)],
         threshold: 3,
@@ -402,13 +402,13 @@ pub fn compliance_vectors_json() -> Value {
         "addr-single-default-ed25519",
         0x0C,
         "default",
-        "Implicit default-domain address using deterministic Ed25519 key derived from seed byte 0x0c.",
+        "Domainless address using a deterministic Ed25519 key derived from seed byte 0x0c.",
     );
     let single_treasury = build_single_case(
         "addr-single-treasury-ed25519",
         0x01,
         "treasury",
-        "Non-default domain address (treasury) using deterministic Ed25519 key derived from seed byte 0x01.",
+        "Domainless address with treasury fixture context, using a deterministic Ed25519 key derived from seed byte 0x01.",
     );
     let multisig_cases = build_multisig_cases();
 
@@ -450,7 +450,7 @@ pub fn compliance_vectors_json() -> Value {
         json_obj!({
             "case_id": "i105-checksum-mismatch",
             "format": "i105",
-            "note": "Checksum tampering on I105 alias for the default-domain vector.",
+            "note": "Checksum tampering on the I105 alias for the first domainless vector.",
             "input": i105_checksum,
             "expected_prefix": NETWORK_PREFIX,
             "expected_error": error_to_json(&err_checksum),

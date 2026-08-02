@@ -48,6 +48,128 @@ pub const GOVERNANCE_DAG_CID_BYTES_V1: usize = blake3::OUT_LEN;
 /// Maximum byte length of a first-release Governance DAG publisher peer ID.
 pub const GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1: usize = 128;
 
+/// Maximum number of scalar labels attached to one filesystem publication.
+pub const GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1: usize = 64;
+
+/// Maximum UTF-8 byte length of one filesystem publication label key.
+pub const GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1: usize = 128;
+
+/// Maximum UTF-8 byte length of one string-valued filesystem publication label.
+pub const GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1: usize = 4 * 1024;
+
+/// Maximum compact-JSON bytes occupied by one filesystem publication label map.
+pub const GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1: usize = 64 * 1024;
+
+/// Maximum byte length of one retained filesystem CAR-segment manifest.
+pub const GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1: usize = 128 * 1024;
+
+/// Exact byte length of the authenticated account digest committed by a
+/// first-release Governance DAG node.
+pub const GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1: usize = blake3::OUT_LEN;
+
+/// Authenticated ingress that admitted a caller-supplied Governance DAG payload.
+#[derive(
+    Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[repr(u8)]
+pub enum GovernanceDagSubmissionOriginV1 {
+    /// Canonical Torii proof-token issuance ingress.
+    TransparencyTokenIssuance = 0,
+    /// Canonical Torii privacy-aggregate source-event ingress.
+    PrivacyAggregateSourceEvent = 1,
+    /// Canonical Torii due-cycle publication ingress.
+    PrivacyAggregatePublishDue = 2,
+    /// Canonical Torii appeal-finance report ingress.
+    AppealFinanceReport = 3,
+    /// Canonical Torii appeal-finance weekly-rollup ingress.
+    AppealFinanceWeeklyRollup = 4,
+}
+
+impl GovernanceDagSubmissionOriginV1 {
+    /// Return the stable public label for this authenticated ingress.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::TransparencyTokenIssuance => "transparency_token_issuance",
+            Self::PrivacyAggregateSourceEvent => "privacy_aggregate_source_event",
+            Self::PrivacyAggregatePublishDue => "privacy_aggregate_publish_due",
+            Self::AppealFinanceReport => "appeal_finance_report",
+            Self::AppealFinanceWeeklyRollup => "appeal_finance_weekly_rollup",
+        }
+    }
+}
+
+const GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.governance_dag.submission_account.digest.v1";
+const GOVERNANCE_PUBLICATION_SOURCE_PAIR_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.governance.publication_source_pair.id.v1";
+
+/// Derive the authenticated-account commitment stored in signed DAG provenance.
+///
+/// `canonical_account_bytes` must be the canonical Norito encoding of the
+/// authenticated `AccountId`. Keeping
+/// that dependency at the producer boundary lets this wire-format crate commit
+/// the identity without embedding an unbounded or presentation-dependent
+/// account string.
+#[must_use]
+pub fn governance_dag_submission_account_digest_v1(
+    canonical_account_bytes: &[u8],
+) -> [u8; GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1] {
+    let mut hasher = Hasher::new();
+    hasher.update(GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(canonical_account_bytes.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(canonical_account_bytes);
+    *hasher.finalize().as_bytes()
+}
+
+/// Derive the content identity for one filesystem publication source pair.
+///
+/// The identity binds the internal payload kind plus the exact encoded and JSON
+/// byte lengths and BLAKE3 digests. Filesystem publishers use it as the only
+/// variable path component, so presentation labels and model identifiers never
+/// become path authority.
+#[must_use]
+pub fn governance_publication_source_pair_id_v1(
+    payload_kind: &str,
+    encoded_len: u64,
+    encoded_blake3: [u8; blake3::OUT_LEN],
+    json_len: u64,
+    json_blake3: [u8; blake3::OUT_LEN],
+) -> [u8; blake3::OUT_LEN] {
+    let mut hasher = Hasher::new();
+    hasher.update(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ID_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(payload_kind.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(payload_kind.as_bytes());
+    hasher.update(&encoded_len.to_le_bytes());
+    hasher.update(&encoded_blake3);
+    hasher.update(&json_len.to_le_bytes());
+    hasher.update(&json_blake3);
+    *hasher.finalize().as_bytes()
+}
+
+/// Server-derived caller identity commitment in a signed Governance DAG node.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct GovernanceDagSubmissionProvenanceV1 {
+    /// Domain-separated digest of the authenticated account's canonical Norito bytes.
+    pub publisher_account_digest: [u8; GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1],
+    /// Exact authenticated ingress that admitted the payload.
+    pub origin: GovernanceDagSubmissionOriginV1,
+}
+
+impl GovernanceDagSubmissionProvenanceV1 {
+    fn validate(&self) -> Result<(), GovernanceLogValidationError> {
+        Ok(())
+    }
+}
+
 /// Maximum canonical bytes for one source payload admitted by the V1
 /// filesystem Governance DAG producer.
 ///
@@ -2544,6 +2666,78 @@ pub enum GovernanceLogPayloadV1 {
 }
 
 impl GovernanceLogPayloadV1 {
+    fn required_submission_origin(&self) -> Option<GovernanceDagSubmissionOriginV1> {
+        match self {
+            Self::AppealFinanceReport(_) => {
+                Some(GovernanceDagSubmissionOriginV1::AppealFinanceReport)
+            }
+            Self::AppealFinanceWeeklyRollup(_) => {
+                Some(GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup)
+            }
+            _ => None,
+        }
+    }
+
+    fn optional_submission_origin(&self) -> Option<GovernanceDagSubmissionOriginV1> {
+        match self {
+            Self::ExternalPayload(payload)
+                if payload.payload_kind == GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1 =>
+            {
+                Some(GovernanceDagSubmissionOriginV1::TransparencyTokenIssuance)
+            }
+            Self::ExternalPayload(payload)
+                if payload.payload_kind
+                    == GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1 =>
+            {
+                Some(GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue)
+            }
+            _ => None,
+        }
+    }
+
+    /// Validate the server-derived provenance required by this payload kind.
+    ///
+    /// Caller-supplied finance payloads must retain their authenticated ingress
+    /// identity. Proof-token and transparency-ledger payloads may be produced
+    /// by a trusted in-process producer; when they instead enter through an
+    /// authenticated route, the signed node must retain the matching identity.
+    /// All other internally produced payloads reject provenance so a node
+    /// cannot misleadingly label them as caller submissions.
+    pub fn validate_submission_provenance(
+        &self,
+        provenance: Option<&GovernanceDagSubmissionProvenanceV1>,
+    ) -> Result<(), GovernanceLogValidationError> {
+        if let Some(expected) = self.required_submission_origin() {
+            let provenance = provenance
+                .ok_or(GovernanceLogValidationError::MissingSubmissionProvenance { expected })?;
+            if provenance.origin != expected {
+                return Err(GovernanceLogValidationError::SubmissionOriginMismatch {
+                    expected,
+                    found: provenance.origin,
+                });
+            }
+            return provenance.validate();
+        }
+
+        let Some(provenance) = provenance else {
+            return Ok(());
+        };
+        let Some(expected) = self.optional_submission_origin() else {
+            return Err(
+                GovernanceLogValidationError::UnexpectedSubmissionProvenance {
+                    found: provenance.origin,
+                },
+            );
+        };
+        if provenance.origin != expected {
+            return Err(GovernanceLogValidationError::SubmissionOriginMismatch {
+                expected,
+                found: provenance.origin,
+            });
+        }
+        provenance.validate()
+    }
+
     fn validate(&self, timestamp: u64) -> Result<(), GovernanceLogValidationError> {
         preflight_governance_source_payload_len(
             self,
@@ -2898,6 +3092,47 @@ mod borrowed_norito {
         }
     }
 
+    /// Borrowed optional value with the exact owned `Option<T>` wire representation.
+    pub(super) struct ValueOption<'a, T>(pub(super) std::option::Option<&'a T>);
+
+    impl<T: NoritoSerialize> NoritoSerialize for ValueOption<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            <std::option::Option<T>>::schema_hash()
+        }
+
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            match self.0 {
+                Some(value) => {
+                    writer.write_all(&[1])?;
+                    let value = Value(value);
+                    let mut temporary = norito::core::DeriveSmallBuf::new();
+                    norito::core::write_len_prefixed_exact(writer, &value, &mut temporary)?;
+                }
+                None => writer.write_all(&[0])?,
+            }
+            Ok(())
+        }
+
+        fn encoded_len_hint(&self) -> std::option::Option<usize> {
+            self.encoded_len_exact()
+        }
+
+        fn encoded_len_exact(&self) -> std::option::Option<usize> {
+            match self.0 {
+                Some(value) => {
+                    let payload = value.encoded_len_exact()?;
+                    1_usize
+                        .checked_add(norito::core::len_prefix_len(payload))?
+                        .checked_add(payload)
+                }
+                None => Some(1),
+            }
+        }
+    }
+
     /// Borrowed byte slice with the exact owned `Vec<u8>` wire representation.
     pub(super) struct Vec<'a>(pub(super) &'a [u8]);
 
@@ -2977,6 +3212,7 @@ struct GovernanceLogNodeCidPayloadV1 {
     prev_cid: Option<Vec<u8>>,
     timestamp: u64,
     publisher_peer_id: Vec<u8>,
+    submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     payload: GovernanceLogPayloadV1,
 }
 
@@ -2986,6 +3222,7 @@ struct GovernanceLogNodeCidPayloadViewWireV1<'a> {
     prev_cid: borrowed_norito::Option<'a>,
     timestamp: u64,
     publisher_peer_id: borrowed_norito::Vec<'a>,
+    submission_provenance: borrowed_norito::ValueOption<'a, GovernanceDagSubmissionProvenanceV1>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
 
@@ -3555,6 +3792,7 @@ struct GovernanceLogSignaturePayloadV1 {
     prev_cid: Option<Vec<u8>>,
     timestamp: u64,
     publisher_peer_id: Vec<u8>,
+    submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     payload: GovernanceLogPayloadV1,
 }
 
@@ -3565,6 +3803,7 @@ struct GovernanceLogSignaturePayloadViewWireV1<'a> {
     prev_cid: borrowed_norito::Option<'a>,
     timestamp: u64,
     publisher_peer_id: borrowed_norito::Vec<'a>,
+    submission_provenance: borrowed_norito::Value<'a, Option<GovernanceDagSubmissionProvenanceV1>>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
 
@@ -3578,6 +3817,7 @@ impl<'a> From<&'a GovernanceLogNodeV1> for GovernanceLogSignaturePayloadViewV1<'
             prev_cid: borrowed_norito::Option(node.prev_cid.as_deref()),
             timestamp: node.timestamp,
             publisher_peer_id: borrowed_norito::Vec(&node.publisher_peer_id),
+            submission_provenance: borrowed_norito::Value(&node.submission_provenance),
             payload: borrowed_norito::Value(&node.payload),
         })
     }
@@ -3610,6 +3850,7 @@ impl From<&GovernanceLogNodeV1> for GovernanceLogSignaturePayloadV1 {
             prev_cid: node.prev_cid.clone(),
             timestamp: node.timestamp,
             publisher_peer_id: node.publisher_peer_id.clone(),
+            submission_provenance: node.submission_provenance.clone(),
             payload: node.payload.clone(),
         }
     }
@@ -3639,6 +3880,8 @@ pub struct GovernanceLogNodeV1 {
     pub timestamp: u64,
     /// Publisher peer identifier (e.g., libp2p peer ID), bounded to 128 bytes.
     pub publisher_peer_id: Vec<u8>,
+    /// Authenticated caller identity for payloads admitted through Torii.
+    pub submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     /// Payload carried by this node.
     pub payload: GovernanceLogPayloadV1,
     /// Publisher signature covering the canonical node signing payload.
@@ -3675,6 +3918,8 @@ impl GovernanceLogNodeV1 {
         }
         self.publisher_signature.validate()?;
         self.payload.validate(self.timestamp)?;
+        self.payload
+            .validate_submission_provenance(self.submission_provenance.as_ref())?;
         let expected_cid =
             self.recompute_node_cid()
                 .map_err(|err| GovernanceLogValidationError::CidEncoding {
@@ -3700,6 +3945,7 @@ impl GovernanceLogNodeV1 {
             self.prev_cid.as_deref(),
             self.timestamp,
             &self.publisher_peer_id,
+            self.submission_provenance.as_ref(),
             &self.payload,
         )
     }
@@ -3736,6 +3982,7 @@ pub fn governance_log_node_cid_v1(
     prev_cid: Option<&[u8]>,
     timestamp: u64,
     publisher_peer_id: &[u8],
+    submission_provenance: Option<&GovernanceDagSubmissionProvenanceV1>,
     payload: &GovernanceLogPayloadV1,
 ) -> Result<Vec<u8>, norito::core::Error> {
     let payload = GovernanceLogNodeCidPayloadViewV1(GovernanceLogNodeCidPayloadViewWireV1 {
@@ -3743,6 +3990,7 @@ pub fn governance_log_node_cid_v1(
         prev_cid: borrowed_norito::Option(prev_cid),
         timestamp,
         publisher_peer_id: borrowed_norito::Vec(publisher_peer_id),
+        submission_provenance: borrowed_norito::ValueOption(submission_provenance),
         payload: borrowed_norito::Value(payload),
     });
     let payload_bytes = encode_governance_dag_signing_payload(&payload)?;
@@ -3864,6 +4112,23 @@ pub enum GovernanceLogValidationError {
     MissingPublisherPeerId,
     #[error("publisher peer ID is {length} bytes, maximum is {maximum}")]
     PublisherPeerIdTooLong { length: usize, maximum: usize },
+    #[error("governance payload requires authenticated submission provenance from {expected:?}")]
+    MissingSubmissionProvenance {
+        expected: GovernanceDagSubmissionOriginV1,
+    },
+    #[error(
+        "internally produced governance payload must not carry {found:?} submission provenance"
+    )]
+    UnexpectedSubmissionProvenance {
+        found: GovernanceDagSubmissionOriginV1,
+    },
+    #[error(
+        "governance submission provenance origin mismatch: expected {expected:?}, found {found:?}"
+    )]
+    SubmissionOriginMismatch {
+        expected: GovernanceDagSubmissionOriginV1,
+        found: GovernanceDagSubmissionOriginV1,
+    },
     #[error("publisher signature missing key or signature bytes")]
     InvalidSignature,
     #[error("governance {algorithm:?} public key has {found} bytes; expected {expected}")]
@@ -5168,6 +5433,27 @@ mod tests {
         0xff, 0x7f,
     ];
 
+    #[test]
+    fn governance_publication_source_pair_identity_binds_every_field() {
+        let baseline =
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 9, [0x22; 32]);
+        for changed in [
+            governance_publication_source_pair_id_v1(
+                "reputation_snapshot",
+                7,
+                [0x11; 32],
+                9,
+                [0x22; 32],
+            ),
+            governance_publication_source_pair_id_v1("repair_audit", 8, [0x11; 32], 9, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x12; 32], 9, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 10, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 9, [0x23; 32]),
+        ] {
+            assert_ne!(changed, baseline);
+        }
+    }
+
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();
@@ -5287,6 +5573,7 @@ mod tests {
             prev_cid: Some([0x31; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
             timestamp: 1_700_000_300,
             publisher_peer_id: b"12D3KooWGovernancePeer".to_vec(),
+            submission_provenance: None,
             payload: signed_por_proof_payload(),
             publisher_signature: GovernanceLogSignatureV1 {
                 algorithm: GovernanceSignatureAlgorithm::Dilithium3,
@@ -5309,6 +5596,7 @@ mod tests {
             Some(prev_cid.as_slice()),
             1_700_000_300,
             publisher_peer_id,
+            None,
             &payload,
         )
         .expect("derive governance log node CID");
@@ -5316,6 +5604,7 @@ mod tests {
             Some(prev_cid.as_slice()),
             1_700_000_300,
             publisher_peer_id,
+            None,
             &payload,
         )
         .expect("derive governance log node CID again");
@@ -5323,6 +5612,7 @@ mod tests {
             Some(prev_cid.as_slice()),
             1_700_000_301,
             publisher_peer_id,
+            None,
             &payload,
         )
         .expect("derive changed governance log node CID");
@@ -5596,14 +5886,42 @@ mod tests {
             1,
             1_700_000_500,
         );
+        let mut attributed = signed_governance_block(
+            Some(child.block_cid.clone()),
+            Some(child.node.node_cid.clone()),
+            2,
+            1_700_000_600,
+        );
+        attributed.node.payload =
+            GovernanceLogPayloadV1::AppealFinanceReport(sample_appeal_finance_report());
+        attributed.node.submission_provenance = Some(GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: governance_dag_submission_account_digest_v1(
+                b"canonical-norito-account",
+            ),
+            origin: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        });
+        attributed.node.node_cid = attributed
+            .node
+            .recompute_node_cid()
+            .expect("derive provenance-bearing node CID");
+        sign_governance_node(&mut attributed.node, &[0xC7; 32]);
+        attributed.block_cid = attributed
+            .recompute_block_cid()
+            .expect("derive provenance-bearing block CID");
+        sign_governance_block(&mut attributed, &[0xC7; 32]);
 
-        for (label, block) in [("root", &root), ("child", &child)] {
+        for (label, block) in [
+            ("root", &root),
+            ("child", &child),
+            ("attributed", &attributed),
+        ] {
             let node = &block.node;
             let owned_node_cid = GovernanceLogNodeCidPayloadV1 {
                 version: GOVERNANCE_LOG_VERSION_V1,
                 prev_cid: node.prev_cid.clone(),
                 timestamp: node.timestamp,
                 publisher_peer_id: node.publisher_peer_id.clone(),
+                submission_provenance: node.submission_provenance.clone(),
                 payload: node.payload.clone(),
             };
             let borrowed_node_cid =
@@ -5612,6 +5930,9 @@ mod tests {
                     prev_cid: borrowed_norito::Option(node.prev_cid.as_deref()),
                     timestamp: node.timestamp,
                     publisher_peer_id: borrowed_norito::Vec(&node.publisher_peer_id),
+                    submission_provenance: borrowed_norito::ValueOption(
+                        node.submission_provenance.as_ref(),
+                    ),
                     payload: borrowed_norito::Value(&node.payload),
                 });
             assert_borrowed_wire_exact(
@@ -5908,6 +6229,7 @@ mod tests {
             prev_cid: Some([0x32; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
             timestamp: 1_700_000_100,
             publisher_peer_id: b"12D3KooWGovernancePeer".to_vec(),
+            submission_provenance: None,
             payload: GovernanceLogPayloadV1::ProviderAdvert(advert),
             publisher_signature: GovernanceLogSignatureV1 {
                 algorithm: GovernanceSignatureAlgorithm::Dilithium3,
@@ -7059,6 +7381,109 @@ mod tests {
         payload
             .validate(1_800_000_031)
             .expect("valid appeal finance report");
+    }
+
+    #[test]
+    fn governance_submission_provenance_is_required_origin_checked_and_cid_bound() {
+        let payload = GovernanceLogPayloadV1::AppealFinanceReport(sample_appeal_finance_report());
+        assert!(matches!(
+            payload.validate_submission_provenance(None),
+            Err(GovernanceLogValidationError::MissingSubmissionProvenance {
+                expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+            })
+        ));
+
+        let provenance = GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: governance_dag_submission_account_digest_v1(
+                b"canonical-norito-publisher-account",
+            ),
+            origin: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        };
+        payload
+            .validate_submission_provenance(Some(&provenance))
+            .expect("matching authenticated provenance");
+
+        let mut wrong_origin = provenance.clone();
+        wrong_origin.origin = GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup;
+        assert!(matches!(
+            payload.validate_submission_provenance(Some(&wrong_origin)),
+            Err(GovernanceLogValidationError::SubmissionOriginMismatch {
+                expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+                found: GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup,
+            })
+        ));
+
+        let cid = governance_log_node_cid_v1(
+            None,
+            1_800_000_031,
+            b"12D3KooWGovernancePeer",
+            Some(&provenance),
+            &payload,
+        )
+        .expect("derive provenance-bound node CID");
+        let mut other_publisher = provenance.clone();
+        other_publisher.publisher_account_digest = governance_dag_submission_account_digest_v1(
+            b"canonical-norito-other-publisher-account",
+        );
+        let other_cid = governance_log_node_cid_v1(
+            None,
+            1_800_000_031,
+            b"12D3KooWGovernancePeer",
+            Some(&other_publisher),
+            &payload,
+        )
+        .expect("derive changed provenance-bound node CID");
+        assert_ne!(cid, other_cid);
+
+        let internal_payload = signed_por_proof_payload();
+        internal_payload
+            .validate_submission_provenance(None)
+            .expect("internal payload needs only its node signer attestation");
+        assert!(matches!(
+            internal_payload.validate_submission_provenance(Some(&provenance)),
+            Err(
+                GovernanceLogValidationError::UnexpectedSubmissionProvenance {
+                    found: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+                }
+            )
+        ));
+
+        let external_payload = GovernanceLogPayloadV1::ExternalPayload(sample_external_payload());
+        external_payload
+            .validate_submission_provenance(None)
+            .expect("trusted in-process transparency producer may omit caller provenance");
+        let external_provenance = GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: provenance.publisher_account_digest,
+            origin: GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue,
+        };
+        external_payload
+            .validate_submission_provenance(Some(&external_provenance))
+            .expect("authenticated transparency ingress retains matching provenance");
+        assert!(matches!(
+            external_payload.validate_submission_provenance(Some(&provenance)),
+            Err(GovernanceLogValidationError::SubmissionOriginMismatch {
+                expected: GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue,
+                found: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+            })
+        ));
+    }
+
+    #[test]
+    fn governance_submission_account_digest_is_fixed_and_identity_bound() {
+        let publisher =
+            governance_dag_submission_account_digest_v1(b"canonical-norito-publisher-account");
+        let same_publisher =
+            governance_dag_submission_account_digest_v1(b"canonical-norito-publisher-account");
+        let other_publisher = governance_dag_submission_account_digest_v1(
+            b"canonical-norito-other-publisher-account",
+        );
+
+        assert_eq!(
+            publisher.len(),
+            GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1
+        );
+        assert_eq!(publisher, same_publisher);
+        assert_ne!(publisher, other_publisher);
     }
 
     #[test]

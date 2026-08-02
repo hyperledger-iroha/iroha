@@ -12,7 +12,6 @@
 # chain =
 # public_key =
 # private_key =
-# default_account_domain_label = "default.universal"  # Used only for AccountAddress selector encoding/compression; AccountId parsing stays domainless.
 # chain_discriminant = 0x02F1              # I105 prefix / chain discriminant; override for dev/test networks.
 
 telemetry_enabled = true
@@ -36,11 +35,11 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # and transaction.max_decompressed_bytes. Adjust those values inside
 # the genesis file when tightening admission limits.
 # public_key =
-# Normal startup resolves the exact genesis hash from this operator-provisioned signed artifact.
+# A fresh node also needs this operator-provisioned signed artifact.
 # file =
-# A restart without the local artifact must pin the exact signed consensus-header hash. When both
-# values are present they must agree. Iroha does not retrieve genesis from peers.
-# expected_hash = "<exact signed genesis block hash>"
+# Pin the exact signed consensus-header hash independently of the artifact. This field is required
+# on fresh starts and restarts; Kagami prints the value after signing.
+expected_hash = "<exact signed genesis block hash>"
 
 [network]
 # address =
@@ -294,7 +293,6 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # format = "full"
 
 [ivm]
-# memory_budget_profile = "cpu-small" # Compute resource profile used to cap IVM guest stack budgets.
 
 [ivm.banner]
 # show = true   # Print the Norito/IVM startup banner on daemon launch.

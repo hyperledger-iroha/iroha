@@ -4,6 +4,9 @@
   `vault://soranet/soranet-pop-m0/tls` and `.../ech`; rotate quarterly with
   SRCv2 dual-sig (Ed25519 + ML-DSA) and record attestation hashes in
   `ops_summary.json`.
+- **Observability ingress:** Bind OTLP receivers and Prometheus endpoints to
+  loopback. Remote collectors must enter through a separately authenticated,
+  encrypted proxy; do not publish the raw telemetry sockets.
 - **Sandboxing:** Run gateway processes under dedicated cgroups with eBPF
   seccomp profiles; isolate WAF and verifier helpers in separate namespaces
   with read-only roots.

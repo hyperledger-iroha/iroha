@@ -861,6 +861,53 @@ Operational guidance:
 Refer to `sorafs/provider_advert_rollout.md` for the R0–R3 enforcement
 timeline, Grafana export (`grafana_sorafs_admission.json`), checked-in dashboard (`dashboards/grafana/sorafs_provider_admission.json`), and canonical alert wiring (`dashboards/alerts/sorafs_provider_admission_rules.yml`) that Observability keeps in sync across environments.
 
+### Musubi V1 Registry and Publication
+
+The closed-label metric definitions live in
+`iroha_telemetry::metrics::musubi`. The checked operator artifacts are
+`dashboards/grafana/musubi_registry.json`,
+`dashboards/alerts/musubi_registry_rules.yml`, and its rule-unit fixture
+`dashboards/alerts/tests/musubi_registry_rules.test.yml`. The exact metric
+contract, producer boundaries, and incident procedures are maintained beside
+the implementation in `specs/musubi_operations_runbook.md`.
+
+Core records typed governance rejections at the mutation boundary and updates
+replication shortfall when an exact archive availability projection crosses
+the selectable boundary. The count is a persisted universal consensus cell:
+checked transition deltas are part of the Native AMX write set, snapshot load
+validates it against exact archive reverse references, startup seeds the gauge
+without an additional registry scan, and only a successful world-state commit
+updates the process metric. It counts every release bound to a non-selectable
+archive, including yanked and Parliament-taken-down releases, because it measures
+replication exposure rather than fresh resolver eligibility.
+Torii records structurally invalid cursors, while Core's public `Expired` query
+error remains wire-compatible. For the six paged Musubi queries, an in-process
+typed error preserves the exact failure through the Core boundary so Torii
+exports `FinalizedAnchorMismatch` as `stale_anchor`, `IndexRevisionMismatch` as
+`stale_revision`, `QueryMismatch` as `wrong_query`, `CallerMismatch` as
+`wrong_caller`, and `LastKeyStale` as `boundary`. Structurally invalid supplied
+cursors are rejected by Torii as `invalid` before Core execution; unrelated
+query paths retain their existing public behavior.
+
+The injected private publication service records authenticated terminal ingest
+deadletters and integrity failures. Invalid or future-skewed staging receipts
+use `receipt_invalid`; expired staging receipts use `receipt_expired`.
+Publication phase age, cache corruption/capacity, selected-root storage usage,
+and consumer-fetch integrity still require their authoritative long-lived host
+producers. The one-shot Musubi CLI deliberately does not install a Prometheus
+producer, and absent series for those signals mean unknown rather than healthy.
+The private publication-service journal is not a phase-age source: it owns
+route replay for seed ingress, storage coordination, and provider readback, not
+the seven publisher-journal phases. Phase-age production additionally requires
+an atomically persisted phase-entry time, a bounded complete active-journal
+snapshot, a deployment-qualified non-regressing clock, and a long-lived owner
+of both that publisher state root and the exporting metrics registry. The final
+seven-value projection and withdrawal must be serialized with Prometheus
+exposition; the existing reset/set calls are only label-level sinks. Partial
+scans, clock rollback, or ownership loss must not initialize or reset the seven
+series to zero. The exact integration and restart test contract is specified
+in `specs/musubi_operations_runbook.md`.
+
 ### Torii Norito-RPC Observability
 
 Norito-RPC transport telemetry requirements are captured in `specs/torii/norito_rpc_telemetry.md`. Key metrics:
@@ -905,7 +952,7 @@ root-history hygiene, and checkpoint behaviour:
 
 - `iroha_confidential_tree_commitments{asset_id}` — current number of commitments (leaves).
 - `iroha_confidential_tree_depth{asset_id}` — Merkle depth in levels (bounded by the verifier profile).
-- `iroha_confidential_root_history_entries{asset_id}` — retained historical roots (should match `zk.root_history_cap`).
+- `iroha_confidential_root_history_entries{asset_id}` — retained historical roots (should not exceed `confidential.tree_roots_history_len`).
 - `iroha_confidential_frontier_checkpoints{asset_id}` — number of recorded frontier checkpoints.
 - `iroha_confidential_frontier_last_checkpoint_height{asset_id}` — height of the last frontier checkpoint (0 when no checkpoint exists).
 - `iroha_confidential_frontier_last_checkpoint_commitments{asset_id}` — commitment count captured alongside the last checkpoint.

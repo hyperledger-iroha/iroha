@@ -6,7 +6,7 @@
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 831 tests",
+            "must contain exactly 826 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -36,9 +36,9 @@
             )
         ),
         (
-            "readonly expected_production_liveness_test_count=831",
-            "readonly expected_production_liveness_test_count=830",
-            "production liveness source count must be sealed as 831",
+            "readonly expected_production_liveness_test_count=826",
+            "readonly expected_production_liveness_test_count=825",
+            "production liveness source count must be sealed as 826",
         ),
         (
             "readonly expected_typed_rollover_formal_mutation_count=45",
@@ -450,28 +450,28 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 831 tests across 39 modules.\n"
-            "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 82 legs.",
-            "current inventory to 831 tests across 39 modules.\n"
+            "current inventory to 826 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 81 legs.",
+            "current inventory to 826 tests across 38 modules.\n"
+            "Together with the source-sealed command and tooling legs, the pre-network\n"
+            "corridor contains 80 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 831-test,\n39-module inventory. The complete source-sealed\n"
-            "pre-network corridor\n"
-            "contains 82 legs",
-            "current 831-test,\n39-module inventory. The complete source-sealed\n"
+            "current 826-test,\n38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 81 legs",
+            "current 826-test,\n38-module inventory. The complete source-sealed\n"
+            "pre-network corridor\n"
+            "contains 80 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current source-bound inventory to 831 exact tests "
-            "across\n39 modules and 82 pre-network legs.",
-            "current source-bound inventory to 831 exact tests "
-            "across\n39 modules and 81 pre-network legs.",
+            "current source-bound inventory to 826 exact tests "
+            "across\n38 modules and 81 pre-network legs.",
+            "current source-bound inventory to 826 exact tests "
+            "across\n38 modules and 80 pre-network legs.",
         ),
     ),
 )
@@ -521,9 +521,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 831",
-            "_PRODUCTION_TEST_COUNT = 830",
-            "production test count must equal the exact shell inventory count 831",
+            "_PRODUCTION_TEST_COUNT = 826",
+            "_PRODUCTION_TEST_COUNT = 825",
+            "production test count must equal the exact shell inventory count 826",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -591,9 +591,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=82",
             "  readonly expected_corridor_leg_count=81",
-            "sealed at 82 legs",
+            "  readonly expected_corridor_leg_count=80",
+            "sealed at 81 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),

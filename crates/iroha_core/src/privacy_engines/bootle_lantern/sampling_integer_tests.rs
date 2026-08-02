@@ -711,6 +711,33 @@ fn gaussian_retry_and_probability_error_budgets_have_integer_margins() {
 }
 
 #[test]
+fn decay_tables_initialize_on_a_bounded_native_thread_stack() {
+    const CALLER_STACK_BYTES: usize = 512 * 1024;
+
+    let digest = std::thread::Builder::new()
+        .name("bootle-decay-table-small-stack".to_owned())
+        .stack_size(CALLER_STACK_BYTES)
+        .spawn(|| {
+            let integer = integer_decay_table_q256_v1();
+            let fraction = fraction_decay_table_q256_v1();
+            assert_eq!(integer.len(), MAX_DECAY_INTEGER_V1 + 1);
+            assert_eq!(fraction.len(), FRACTION_TABLE_LEN_V1);
+            assert!(core::ptr::eq(integer, integer_decay_table_q256_v1()));
+            assert!(core::ptr::eq(fraction, fraction_decay_table_q256_v1()));
+            decay_tables_digest_v1()
+        })
+        .expect("bounded-stack test thread must spawn")
+        .join()
+        .expect("decay-table initialization must not exhaust the caller stack");
+
+    assert_ne!(digest, [0; 32]);
+    assert_eq!(
+        hex::encode(digest),
+        "ccffc4215f89cd7903a81d7f6353bf619791c7b68dba00287e2f010495ecbfbd"
+    );
+}
+
+#[test]
 fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
     let baseline = bootle_sampling_profile_binding_v1();
     let baseline_digest = sampling_profile_digest_from_binding_v1(&baseline);

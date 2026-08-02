@@ -1,0 +1,613 @@
+{
+  "format": "iroha-musubi-sdk-v1",
+  "fixture_version": 1,
+  "rust_owner": "iroha_data_model::musubi",
+  "canonical": {
+    "namespace": ["sora"],
+    "package_name": ["math-utils"],
+    "selector": {
+      "namespace": ["sora"],
+      "name": ["math-utils"]
+    },
+    "package": {
+      "home_dataspace": 7,
+      "scope": {"kind": "DataspaceRoot", "value": null},
+      "name": ["math-utils"]
+    },
+    "version": {
+      "major": 1,
+      "minor": 2,
+      "patch": 3,
+      "prerelease": [
+        {"kind": "AlphaNumeric", "value": "rc"},
+        {"kind": "Numeric", "value": 1}
+      ]
+    },
+    "requirements": [
+      {
+        "text": "^1.2.3",
+        "wire": {
+          "kind": "Caret",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      {
+        "text": "~1.2.3",
+        "wire": {
+          "kind": "Tilde",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      {
+        "text": "1.2.*",
+        "wire": {"kind": "MinorWildcard", "value": {"major": 1, "minor": 2}}
+      },
+      {
+        "text": "=1.2.3",
+        "wire": {
+          "kind": "Exact",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      {
+        "text": ">=1.2.3,<2.0.0",
+        "wire": {
+          "kind": "Comparators",
+          "value": [
+            {
+              "op": {"kind": "GreaterOrEqual", "value": null},
+              "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+            },
+            {
+              "op": {"kind": "Less", "value": null},
+              "version": {"major": 2, "minor": 0, "patch": 0, "prerelease": []}
+            }
+          ]
+        }
+      }
+    ],
+    "requirement_aliases": [
+      {
+        "input": "=1.2.3,=1.2.3",
+        "canonical": "=1.2.3",
+        "wire": {
+          "kind": "Exact",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      {
+        "input": "<2.0.0, >=1.0.0,>=1.0.0",
+        "canonical": ">=1.0.0,<2.0.0",
+        "wire": {
+          "kind": "Comparators",
+          "value": [
+            {
+              "op": {"kind": "GreaterOrEqual", "value": null},
+              "version": {"major": 1, "minor": 0, "patch": 0, "prerelease": []}
+            },
+            {
+              "op": {"kind": "Less", "value": null},
+              "version": {"major": 2, "minor": 0, "patch": 0, "prerelease": []}
+            }
+          ]
+        }
+      }
+    ],
+    "requirement_matches": [
+      {
+        "requirement": "^0.18446744073709551615.0",
+        "candidate": "0.18446744073709551615.1",
+        "matches": true
+      },
+      {
+        "requirement": "^0.18446744073709551615.0",
+        "candidate": "1.0.0",
+        "matches": false
+      },
+      {
+        "requirement": "^0.0.18446744073709551615",
+        "candidate": "0.1.0",
+        "matches": false
+      },
+      {
+        "requirement": "~0.18446744073709551615.0",
+        "candidate": "1.0.0",
+        "matches": false
+      },
+      {
+        "requirement": "^1.2.3-alpha.1",
+        "candidate": "1.2.3-beta.1",
+        "matches": true
+      },
+      {
+        "requirement": "^1.2.0",
+        "candidate": "1.2.3-beta.1",
+        "matches": false
+      }
+    ]
+  },
+  "routes": [
+    {
+      "id": "exact-package",
+      "path": "/v1/musubi/queries/exact-package",
+      "request": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        }
+      },
+      "response": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "claimed_namespace": ["sora"],
+        "claimed_namespace_binding": [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]],
+        "owners": ["sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"],
+        "member_accounts": ["sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"],
+        "claimed_at_height": 42,
+        "revisions": {"governance": 2, "metadata": 1, "archive_locations": 1}
+      }
+    },
+    {
+      "id": "exact-release",
+      "path": "/v1/musubi/queries/exact-release",
+      "request": {
+        "release": {
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      "response": {
+        "manifest": {
+          "release": {
+            "package": {
+              "home_dataspace": 7,
+              "scope": {"kind": "DataspaceRoot", "value": null},
+              "name": ["math-utils"]
+            },
+            "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+          },
+          "edition": {"kind": "V1", "value": null},
+          "abi": {
+            "abi_version": 1,
+            "abi_hash": [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]
+          },
+          "dependencies": [],
+          "exports": ["add"],
+          "interface_digest": [[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3]],
+          "metadata": {
+            "description": ["Canonical arithmetic helpers"],
+            "readme": ["README.md"],
+            "license": ["Apache-2.0"],
+            "repository": ["https://example.invalid/sora/math-utils"],
+            "keywords": [["math"], ["utility"]]
+          },
+          "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+          "verification_lock_digest": [[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5]]
+        },
+        "release_digest": [[87,215,80,27,44,176,223,180,35,168,122,48,79,93,123,5,183,105,118,20,73,60,8,227,170,31,37,187,185,197,69,244]],
+        "published_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "published_at_height": 43,
+        "yank": {
+          "release": {
+            "package": {
+              "home_dataspace": 7,
+              "scope": {"kind": "DataspaceRoot", "value": null},
+              "name": ["math-utils"]
+            },
+            "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+          },
+          "yanked": false,
+          "reason": ["initial publication"],
+          "changed_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+          "changed_at_height": 43,
+          "revision": 1
+        },
+        "artifact_governance": {"kind": "Available", "value": null},
+        "revisions": {"yank": 1, "artifact_governance": 1}
+      }
+    },
+    {
+      "id": "resolver-index",
+      "path": "/v1/musubi/queries/resolver-index",
+      "request": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "requirement": {
+          "kind": "Caret",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        },
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "query": {
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "requirement": {
+            "kind": "Caret",
+            "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+          },
+          "page": {"limit": 50, "cursor": null}
+        },
+        "chain_id": "musubi-fixture-chain",
+        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "items": [],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "versions",
+      "path": "/v1/musubi/queries/versions",
+      "request": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "query": {
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "page": {"limit": 50, "cursor": null}
+        },
+        "items": [{"major": 1, "minor": 2, "patch": 3, "prerelease": []}],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "maintainers",
+      "path": "/v1/musubi/queries/maintainers",
+      "request": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "query": {
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "page": {"limit": 50, "cursor": null}
+        },
+        "items": [
+          {
+            "kind": "Accepted",
+            "value": {
+              "package": {
+                "home_dataspace": 7,
+                "scope": {"kind": "DataspaceRoot", "value": null},
+                "name": ["math-utils"]
+              },
+              "account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+              "role": {"kind": "Owner", "value": null},
+              "accepted_at_height": 42,
+              "governance_revision": 1
+            }
+          },
+          {
+            "kind": "PendingInvitation",
+            "value": {
+              "invite_id": [[13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13]],
+              "package": {
+                "home_dataspace": 7,
+                "scope": {"kind": "DataspaceRoot", "value": null},
+                "name": ["math-utils"]
+              },
+              "invited_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+              "invited_account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+              "role": {
+                "kind": "Maintainer",
+                "value": {"publish": true, "yank": true, "metadata": true, "archive_locations": true}
+              },
+              "expected_governance_revision": 2,
+              "expires_at_height": 100,
+              "state": {"kind": "Pending", "value": null}
+            }
+          }
+        ],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "archive-locations",
+      "path": "/v1/musubi/queries/archive-locations",
+      "request": {
+        "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "chain_id": "musubi-fixture-chain",
+        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "archive": {
+          "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+          "commitment": {
+            "root_cid": [1,113,31,32,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            "chunker": {"profile_id": 1, "namespace": "sorafs", "name": "sf1", "semver": "1.0.0", "multihash_code": 31},
+            "chunk_plan_digest": [[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]],
+            "por_root": [[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3]],
+            "content_length": 1024,
+            "car_digest": [[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4]],
+            "car_size": 2048,
+            "bundle_digest": [[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5]],
+            "source_tree_digest": [[6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6]],
+            "descriptor_digest": [[7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7]],
+            "file_count": 2,
+            "chunk_count": 4
+          },
+          "staging_receipt": {
+            "payload": {
+              "version": 1,
+              "binding": {
+                "chain_id": "musubi-fixture-chain",
+                "genesis_block_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+                "publisher": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "ingress_broker": "sorauﾛ1Nuｱeﾌ4Tﾂg84yxｸL8dk6zｻｱﾛ2ﾖﾘNﾆﾔﾄrCﾐﾃ88FFzXLA2L4",
+                "seed_provider": ["1616161616161616161616161616161616161616161616161616161616161616"],
+                "semantic_release_manifest_digest": [[67,191,249,146,183,189,253,105,142,116,129,200,137,226,42,193,235,117,51,254,48,245,179,128,207,246,134,9,19,113,122,38]],
+                "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+                "car_body_digest": [[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4]],
+                "car_body_length": 2048,
+                "nonce": [24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24]
+              },
+              "issued_at_ms": 1000,
+              "expires_at_ms": 2000
+            },
+            "approvals": [{
+              "public_key": "ed012017CB79FB2B4120F2B1EC65E4198D6E08B28E813FEB01E4A400839B85E18080CE",
+              "signature": "222282F05B7E31CCF7150C2A21867B34D2922525A4C10ABD83C19A4347720FB4F8B34E63EC4237141C4F984C26F79FAA439B31E8DE7618D11AC433F5BFFBB702"
+            }]
+          },
+          "registered_by": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+          "registered_at_height": 42,
+          "location_revision": 1,
+          "location_ids": []
+        },
+        "items": [],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "archive-retention",
+      "path": "/v1/musubi/queries/archive-retention",
+      "request": {
+        "archive_ids": [
+          [[16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16]],
+          [[32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32]],
+          [[48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48]],
+          [[64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64]]
+        ],
+        "expected_snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      },
+      "response": {
+        "chain_id": "musubi-fixture-chain",
+        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "items": [
+          {
+            "archive_id": [[16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16]],
+            "disposition": {"kind": "RetainUnknown", "value": null},
+            "active_releases": 0,
+            "yanked_releases": 0,
+            "taken_down_releases": 0,
+            "storage": null
+          },
+          {
+            "archive_id": [[32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32]],
+            "disposition": {"kind": "RetainReferenced", "value": null},
+            "active_releases": 1,
+            "yanked_releases": 1,
+            "taken_down_releases": 1,
+            "storage": {
+              "archive_id": [[32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32]],
+              "availability": {"kind": "Unavailable", "value": null},
+              "healthy_replicas": 0,
+              "active_locations": 0,
+              "finalized_height": 49,
+              "finalized_block_hash": [6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6],
+              "index_revision": 8
+            }
+          },
+          {
+            "archive_id": [[48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48]],
+            "disposition": {"kind": "PruneUnreferenced", "value": null},
+            "active_releases": 0,
+            "yanked_releases": 0,
+            "taken_down_releases": 0,
+            "storage": {
+              "archive_id": [[48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48]],
+              "availability": {"kind": "BelowQuorum", "value": null},
+              "healthy_replicas": 1,
+              "active_locations": 1,
+              "finalized_height": 50,
+              "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+              "index_revision": 9
+            }
+          },
+          {
+            "archive_id": [[64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64]],
+            "disposition": {"kind": "PruneGovernedTakedown", "value": null},
+            "active_releases": 0,
+            "yanked_releases": 0,
+            "taken_down_releases": 2,
+            "storage": {
+              "archive_id": [[64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64]],
+              "availability": {"kind": "Selectable", "value": null},
+              "healthy_replicas": 3,
+              "active_locations": 1,
+              "finalized_height": 50,
+              "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+              "index_revision": 9
+            }
+          }
+        ],
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        },
+        "finalized_time_ms": 1700000000000
+      }
+    },
+    {
+      "id": "alias",
+      "path": "/v1/musubi/queries/alias",
+      "request": {"alias": ["math"], "page": {"limit": 50, "cursor": null}},
+      "response": {
+        "alias": ["math"],
+        "target": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "registered_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "pricing_revision": 1,
+        "paid_xor": 8,
+        "registered_at_height": 44,
+        "history_revision": 1
+      }
+    },
+    {
+      "id": "alias-history",
+      "path": "/v1/musubi/queries/alias-history",
+      "request": {"alias": ["math"], "page": {"limit": 50, "cursor": null}},
+      "response": {
+        "query": {"alias": ["math"], "page": {"limit": 50, "cursor": null}},
+        "items": [{
+          "alias": ["math"],
+          "revision": 1,
+          "action": {"kind": "Registered", "value": null},
+          "previous_target": null,
+          "target": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "governance_action": null,
+          "finalized_height": 44
+        }],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "ordered-prefix",
+      "path": "/v1/musubi/queries/ordered-prefix",
+      "request": {"prefix": ["sora/"], "page": {"limit": 50, "cursor": null}},
+      "response": {
+        "query": {"prefix": ["sora/"], "page": {"limit": 50, "cursor": null}},
+        "chain_id": "musubi-fixture-chain",
+        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "namespace_binding": {
+          "namespace": ["sora"],
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "generation": 1
+        },
+        "items": [{
+          "selector": {"namespace": ["sora"], "name": ["math-utils"]},
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "latest_selectable": {"major": 1, "minor": 2, "patch": 3, "prerelease": []},
+          "metadata_revision": 1,
+          "index_revision": 9
+        }],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "search",
+      "path": "/v1/musubi/queries/search",
+      "request": {
+        "query": "arithmetic math",
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "query": {
+          "query": "arithmetic math",
+          "page": {"limit": 50, "cursor": null}
+        },
+        "items": [{
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "claimed_namespace": ["sora"],
+          "description": ["Canonical arithmetic helpers"],
+          "keywords": [["math"], ["utility"]],
+          "metadata_revision": 1
+        }],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "projection_revision": 9
+        }
+      }
+    }
+  ],
+  "reject": {
+    "fixture_versions": [0, 2],
+    "names": ["", "Upper", "leading-", "two--hyphens", "has/slash"],
+    "versions": ["1.2", "01.2.3", "1.02.3", "1.2.03", "1.2.3+build", "1.2.3-01", "1.2.3-١"],
+    "requirements": ["", "1", "1.2", "1.2.x", "+1.*", " ^1.2.3 ", ">=1.0.0,", ">=1.0.0,\u00a0<2.0.0", "=1.0.0,=2.0.0"]
+  }
+}

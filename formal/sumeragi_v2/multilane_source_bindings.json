@@ -264,7 +264,7 @@
         {
           "path": "ci/run_native_amx_v2_grouped_sdk_parity.sh",
           "required_tokens": [
-            "readonly expected_negative_control_count=50",
+            "readonly expected_negative_control_count=51",
             "openapi|python|javascript|swift|kotlin|java)",
             "grouped Native AMX V2 negative controls must fail closed",
             "--suite-source-manifest-sha256"
@@ -275,7 +275,8 @@
           "required_tokens": [
             "\"format\": \"iroha-native-amx-v2-grouped\"",
             "\"rust_owner\": \"iroha_data_model::block::consensus\"",
-            "\"negative_controls\": ["
+            "\"negative_controls\": [",
+            "\"id\": \"manifest_leaf_hash_tampering\""
           ]
         }
       ]

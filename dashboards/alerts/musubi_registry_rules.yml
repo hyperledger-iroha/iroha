@@ -1,0 +1,114 @@
+groups:
+  - name: musubi-registry
+    interval: 1m
+    rules:
+      - alert: MusubiPublicationPhaseStalled
+        expr: max by (phase) (musubi_publication_phase_age_seconds{phase=~"validation|seed_ingress|archive_registration|release_submission|final_verification"}) > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Musubi publication phase is stalled"
+          description: |
+            A Musubi publication has remained in phase={{ $labels.phase }} for
+            more than 15 minutes. Resume it by operation ID from the secret-free
+            journal and inspect finalized evidence before retrying any mutation.
+      - alert: MusubiReplicationOrReadbackStalled
+        expr: max by (phase) (musubi_publication_phase_age_seconds{phase=~"replication|readback"}) > 1800
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Musubi replication or readback is stalled"
+          description: |
+            A publication has remained in phase={{ $labels.phase }} for more
+            than 30 minutes. Confirm three distinct finalized provider
+            completions and two-provider readback before allowing publication.
+      - alert: MusubiReplicationShortfall
+        expr: musubi_replication_shortfall_releases > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Musubi releases are below replication quorum"
+          description: |
+            One or more Musubi releases have fewer than three healthy replicas
+            and must be excluded from fresh resolution. Preserve locked fetches
+            while a valid location remains and repair storage availability.
+      - alert: MusubiIngestDeadletters
+        expr: sum by (reason) (increase(musubi_ingest_deadletters_total[10m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Musubi seed-ingress deadletters detected"
+          description: |
+            Authenticated seed ingress produced deadletters for bounded
+            reason={{ $labels.reason }}. Quarantine the affected operation,
+            verify receipt signatures and expiry, and do not bypass ingress.
+      - alert: MusubiIntegrityFailure
+        expr: sum by (surface) (increase(musubi_integrity_failures_total[10m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Musubi commitment verification failed"
+          description: |
+            Musubi detected an integrity failure at surface={{ $labels.surface }}.
+            Stop publication or serving for the affected archive, retain the
+            evidence, and follow the integrity incident procedure.
+      - alert: MusubiCacheCorruption
+        expr: sum by (operation) (increase(musubi_cache_corruption_total[15m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Musubi immutable cache corruption detected"
+          description: |
+            Cache operation={{ $labels.operation }} found a corrupt validated
+            descendant. Use authenticated cache repair; never derive a deletion
+            target from Musubi.lock or replace an immutable destination.
+      - alert: MusubiCursorFailureSpike
+        expr: sum by (reason) (increase(musubi_cursor_failures_total[10m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Musubi query cursor failures elevated"
+          description: |
+            Bounded cursor reason={{ $labels.reason }} exceeded the expected
+            retry rate. Confirm finalized height/hash and index revision
+            stability; clients should restart the exact query without a cursor.
+      - alert: MusubiUnauthorizedGovernanceChange
+        expr: sum by (action) (increase(musubi_governance_rejections_total{reason="unauthorized"}[10m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Unauthorized Musubi governance mutation attempted"
+          description: |
+            Musubi rejected action={{ $labels.action }} as unauthorized. Retain
+            the transaction evidence, verify package membership and revisions,
+            and escalate repeated attempts to the security response owner.
+      - alert: MusubiStoragePressure
+        expr: musubi_storage_bytes_used / clamp_min(musubi_storage_bytes_capacity, 1) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Musubi archive or cache storage pressure is high"
+          description: |
+            Musubi storage utilization has exceeded 85%. Prune only against the
+            trusted retained-ArchiveId projection and preserve every active or
+            yanked release's last valid location.
+      - alert: MusubiStoragePressureCritical
+        expr: musubi_storage_bytes_used / clamp_min(musubi_storage_bytes_capacity, 1) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Musubi archive or cache storage pressure is critical"
+          description: |
+            Musubi storage utilization has exceeded 95%. Suspend new admission
+            if necessary, repair replica placement, and do not perform broad or
+            lockfile-directed deletion.

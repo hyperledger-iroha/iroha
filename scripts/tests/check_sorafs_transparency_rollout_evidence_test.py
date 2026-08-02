@@ -55,31 +55,29 @@ def write_json(path: Path, payload: dict) -> Path:
 
 
 def source_entry_evidence() -> dict:
-    probes = [
+    producers = [
         {
             "source_kind": source_kind,
-            "response_success": True,
-            "response_status": 202,
-            "request_body_blake3": "a" * 64,
-            "response_body_blake3": "b" * 64,
+            "producer_id": f"transparency-{index}",
+            "producer_route": f"internal:transparency/{index}",
+            "provenance_digest_hex": f"{index + 1:x}" * 64,
+            "durable_checkpoint_verified": True,
         }
-        for source_kind in REQUIRED_SOURCE_KINDS
+        for index, source_kind in enumerate(REQUIRED_SOURCE_KINDS)
     ]
     return {
-        "schema": "sorafs.transparency.source_entry.canary.v1",
+        "schema": "sorafs.transparency.source_entry.producer_evidence.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
         "source_batch_digest_hex": DIGEST,
-        "probe_count": len(probes),
-        "passed_probe_count": len(probes),
-        "source_entry_probe_count": len(probes),
+        "producer_count": len(producers),
+        "generic_public_ingress_absent": True,
         "payload_bytes_included": False,
         "private_payloads_included": False,
-        "response_bodies_included": False,
-        "probes": probes,
+        "producers": producers,
     }
 
 
@@ -444,13 +442,11 @@ def test_routes_must_not_include_unknown_values_for_route_artifacts(
         assert "routes must not include unknown values" in artifact["errors"]
 
 
-def test_source_entry_probes_must_not_duplicate_source_kind(tmp_path: Path) -> None:
+def test_source_entry_producers_must_not_duplicate_source_kind(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = source_entry_evidence()
-    payload["probes"].append(dict(payload["probes"][0]))
-    payload["probe_count"] = len(payload["probes"])
-    payload["passed_probe_count"] = len(payload["probes"])
-    payload["source_entry_probe_count"] = len(payload["probes"])
+    payload["producers"].append(dict(payload["producers"][0]))
+    payload["producer_count"] = len(payload["producers"])
     write_json(tmp_path / "source-entry.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -458,26 +454,22 @@ def test_source_entry_probes_must_not_duplicate_source_kind(tmp_path: Path) -> N
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["source_entry"]["artifacts"][0]
-    assert "probes must not contain duplicate values" in artifact["errors"]
-    assert (
-        "source_entry_probe_count must match unique probes count"
-        in artifact["errors"]
-    )
+    assert "producers must not contain duplicate values" in artifact["errors"]
+    assert "producer_count must match unique producers count" in artifact["errors"]
 
 
-def test_source_entry_probe_kinds_must_not_include_unknown_values(
+def test_source_entry_producer_kinds_must_not_include_unknown_values(
     tmp_path: Path,
 ) -> None:
     write_complete_evidence(tmp_path)
     payload = source_entry_evidence()
-    unknown = dict(payload["probes"][0])
+    unknown = dict(payload["producers"][0])
     unknown["source_kind"] = "unreviewed-source-kind"
-    unknown["request_body_blake3"] = "c" * 64
-    unknown["response_body_blake3"] = "d" * 64
-    payload["probes"].append(unknown)
-    payload["probe_count"] = len(payload["probes"])
-    payload["passed_probe_count"] = len(payload["probes"])
-    payload["source_entry_probe_count"] = len(payload["probes"])
+    unknown["producer_id"] = "unreviewed-producer"
+    unknown["producer_route"] = "internal:unreviewed/producer"
+    unknown["provenance_digest_hex"] = "c" * 64
+    payload["producers"].append(unknown)
+    payload["producer_count"] = len(payload["producers"])
     write_json(tmp_path / "source-entry.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -485,14 +477,54 @@ def test_source_entry_probe_kinds_must_not_include_unknown_values(
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["source_entry"]["artifacts"][0]
-    assert "probes must not include unknown values" in artifact["errors"]
+    assert "producers must not include unknown values" in artifact["errors"]
+
+
+def test_source_entry_producer_evidence_rejects_public_generic_ingress(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = source_entry_evidence()
+    payload["generic_public_ingress_absent"] = False
+    payload["producers"][0]["producer_route"] = (
+        "/v1/sorafs/transparency/source-entries/gar-enforcement-receipt"
+    )
+    write_json(tmp_path / "source-entry.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert CHECKER(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = result["required"]["source_entry"]["artifacts"][0]["errors"]
+    assert "generic_public_ingress_absent must be true" in errors
+    assert MODULE.TRUSTED_SOURCE_PRODUCER_ROUTE_ERROR in errors
+
+
+def test_source_entry_producer_evidence_requires_durable_provenance(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = source_entry_evidence()
+    payload["producers"][0]["durable_checkpoint_verified"] = False
+    payload["producers"][0]["provenance_digest_hex"] = "not-a-digest"
+    write_json(tmp_path / "source-entry.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert CHECKER(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = result["required"]["source_entry"]["artifacts"][0]["errors"]
+    assert (
+        "producers[0].provenance_digest_hex must be 64 lowercase hex characters"
+        in errors
+    )
+    assert "producers[0].durable_checkpoint_verified must be true" in errors
 
 
 def test_probe_count_must_match_probe_inventory_for_probe_artifacts(
     tmp_path: Path,
 ) -> None:
     probe_artifacts = (
-        ("source_entry", "source-entry.json", source_entry_evidence),
         ("privacy_aggregate", "privacy-aggregate.json", privacy_aggregate_evidence),
         (
             "proof_token_issuance",
@@ -524,13 +556,6 @@ def test_probe_count_must_match_probe_inventory_for_probe_artifacts(
 
 def test_specific_probe_counts_must_match_probe_roles(tmp_path: Path) -> None:
     role_artifacts = (
-        (
-            "source_entry",
-            "source-entry.json",
-            source_entry_evidence,
-            "source_entry_probe_count",
-            "source_entry probes count",
-        ),
         (
             "privacy_aggregate",
             "privacy-aggregate.json",
@@ -1142,10 +1167,8 @@ def test_cycle_bound_subset_requires_publication_anchor(tmp_path: Path) -> None:
 def test_source_entry_requires_all_supported_source_kinds(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = source_entry_evidence()
-    payload["probes"] = payload["probes"][:-1]
-    payload["probe_count"] = len(payload["probes"])
-    payload["passed_probe_count"] = len(payload["probes"])
-    payload["source_entry_probe_count"] = len(payload["probes"])
+    payload["producers"] = payload["producers"][:-1]
+    payload["producer_count"] = len(payload["producers"])
     write_json(tmp_path / "source-entry.json", payload)
 
     assert CHECKER(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
@@ -1163,7 +1186,7 @@ def test_explorer_requires_named_route_coverage(tmp_path: Path) -> None:
 def test_sensitive_response_body_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = source_entry_evidence()
-    payload["probes"][0]["response_body"] = {"secret": "leaked"}
+    payload["producers"][0]["payload_body"] = {"secret": "leaked"}
     write_json(tmp_path / "source-entry.json", payload)
 
     assert CHECKER(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1

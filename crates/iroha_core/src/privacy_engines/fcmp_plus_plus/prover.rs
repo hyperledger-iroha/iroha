@@ -34,8 +34,8 @@ use super::{
         native_parameters, selene_curve,
     },
     proof_math::{
-        HeliosSuite, ProofPoint, ProofScalar, ProofSuite, ProverTranscript, SeleneSuite,
-        helios_bp_generators, selene_bp_generators,
+        FcmpProofRandomSource, HeliosSuite, ProofPoint, ProofScalar, ProofSuite, ProverTranscript,
+        SeleneSuite, helios_bp_generators, random_scalar_from_fcmp_rng, selene_bp_generators,
     },
     range::prove_fcmp_range_with_checked_rng_v1,
     sal::{generator_t, generator_u, generator_v, prove_fcmp_sal_with_checked_rng_v1},
@@ -698,7 +698,7 @@ fn random_proof_scalar<F: ProofScalar>(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<F, FcmpNativeErrorV1> {
     for _ in 0..MAX_PROVER_SCALAR_ATTEMPTS_V1 {
-        if let Some(scalar) = F::random(rng)?
+        if let Some(scalar) = random_scalar_from_fcmp_rng::<F, _>(rng)?
             && !scalar.is_zero()
         {
             return Ok(scalar);
@@ -1183,9 +1183,17 @@ fn prove_fcmp_plus_plus_once_v1(
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
     let (c1_statement, c1_witness) = c1_circuit.proving_statement(c1_generators, c1_commitments)?;
-    c1_statement.prove(rng, &mut transcript, c1_witness)?;
+    c1_statement.prove(
+        &mut FcmpProofRandomSource::new(rng),
+        &mut transcript,
+        c1_witness,
+    )?;
     let (c2_statement, c2_witness) = c2_circuit.proving_statement(c2_generators, c2_commitments)?;
-    c2_statement.prove(rng, &mut transcript, c2_witness)?;
+    c2_statement.prove(
+        &mut FcmpProofRandomSource::new(rng),
+        &mut transcript,
+        c2_witness,
+    )?;
     let circuit_proof = transcript.complete();
     let range_proof = prove_fcmp_range_with_checked_rng_v1(rng, context_hash, new_output_openings)?;
 

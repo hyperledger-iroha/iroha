@@ -21,7 +21,7 @@ use std::{
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{OnceLock, RwLock, mpsc},
+    sync::{OnceLock, mpsc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -32,6 +32,7 @@ use iroha_config::parameters::actual::AttachmentSanitizerMode;
 use iroha_data_model::account::AccountId;
 use iroha_logger::prelude::*;
 use norito::json;
+use parking_lot::RwLock;
 use sha2::{Digest as _, Sha256};
 use tokio::{sync::Mutex, task};
 use zstd::stream::read::Decoder as ZstdDecoder;
@@ -1248,11 +1249,7 @@ fn decode_sanitizer_response_bytes(stdout_bytes: &[u8]) -> Result<SanitizerOutco
 }
 
 fn sanitizer_executable() -> Result<PathBuf, SanitizeError> {
-    let override_path = attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .sanitizer_exe_override
-        .clone();
+    let override_path = attach_cfg().read().sanitizer_exe_override.clone();
     sanitizer_executable_with_override(override_path)
 }
 
@@ -2044,7 +2041,7 @@ pub fn configure(
         .into_iter()
         .filter_map(|entry| normalize_mime(&entry))
         .collect();
-    *attach_cfg().write().expect("attachment config lock") = AttachConfig {
+    *attach_cfg().write() = AttachConfig {
         ttl_secs,
         max_bytes,
         per_tenant_max_count,
@@ -2060,69 +2057,40 @@ pub fn configure(
 }
 
 fn max_bytes_cfg() -> usize {
-    let max_bytes = attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .max_bytes;
+    let max_bytes = attach_cfg().read().max_bytes;
     usize::try_from(max_bytes).unwrap_or(usize::MAX)
 }
 
 fn ttl_secs_cfg() -> u64 {
-    attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .ttl_secs
+    attach_cfg().read().ttl_secs
 }
 
 fn per_tenant_max_count_cfg() -> u64 {
-    attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .per_tenant_max_count
+    attach_cfg().read().per_tenant_max_count
 }
 
 fn per_tenant_max_bytes_cfg() -> u64 {
-    attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .per_tenant_max_bytes
+    attach_cfg().read().per_tenant_max_bytes
 }
 
 fn allowed_mime_types_cfg() -> Vec<String> {
-    attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .allowed_mime_types
-        .clone()
+    attach_cfg().read().allowed_mime_types.clone()
 }
 
 fn max_expanded_bytes_cfg() -> u64 {
-    attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .max_expanded_bytes
+    attach_cfg().read().max_expanded_bytes
 }
 
 fn max_archive_depth_cfg() -> u32 {
-    attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .max_archive_depth
+    attach_cfg().read().max_archive_depth
 }
 
 fn sanitizer_mode_cfg() -> AttachmentSanitizerMode {
-    attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .sanitizer_mode
+    attach_cfg().read().sanitizer_mode
 }
 
 fn sanitize_timeout_cfg() -> Duration {
-    let ms = attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .sanitize_timeout_ms
-        .max(1);
+    let ms = attach_cfg().read().sanitize_timeout_ms.max(1);
     Duration::from_millis(ms)
 }
 
@@ -2311,11 +2279,7 @@ fn read_stdin_limited(max_bytes: usize) -> Result<Vec<u8>, SanitizeError> {
 }
 
 fn telemetry_handle() -> MaybeTelemetry {
-    attach_cfg()
-        .read()
-        .expect("attachment config lock")
-        .telemetry
-        .clone()
+    attach_cfg().read().telemetry.clone()
 }
 
 fn quota_lock() -> &'static Mutex<()> {
@@ -2347,6 +2311,18 @@ mod tests {
         AttachmentSanitizerVerdict, SanitizeRejectReason, SanitizerConfig, ZK1_MAX_TLV_COUNT, json,
         parse_zk1_tags, sanitize_attachment_id, sanitize_attachment_sync,
     };
+
+    #[test]
+    fn attachment_config_lock_remains_usable_after_writer_panic() {
+        let panic = std::thread::spawn(|| {
+            let _guard = super::attach_cfg().write();
+            panic!("intentional attachment-config writer panic");
+        })
+        .join();
+
+        assert!(panic.is_err());
+        let _guard = super::attach_cfg().read();
+    }
 
     fn test_sanitizer_config(max_expanded_bytes: u64, max_archive_depth: u32) -> SanitizerConfig {
         SanitizerConfig {

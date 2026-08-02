@@ -635,7 +635,7 @@ fn csv_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha::account_address::default_domain_name;
+    use iroha::account_address::DEFAULT_DOMAIN_NAME;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use iroha_data_model::{account::AccountId, domain::DomainId};
     use iroha_i18n::{Bundle, Language, Localizer};
@@ -681,8 +681,7 @@ mod tests {
 
     #[test]
     fn address_summary_suppresses_warning_for_default_domain() {
-        let default_label = default_domain_name();
-        let account = account_id_for_domain(default_label.as_ref(), 2);
+        let account = account_id_for_domain(DEFAULT_DOMAIN_NAME, 2);
         let address = AccountAddress::from_account_id(&account).expect("address encoding");
         let parsed = ParsedAddressInput {
             parsed: ParsedAccountAddress {

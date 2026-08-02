@@ -62,8 +62,14 @@ PS = next(
         for candidate in (Path("/bin/ps"), Path("/usr/bin/ps"))
         if candidate.is_file()
     ),
-    "ps",
+    None,
 )
+PROCESS_INSPECTION_ENVIRONMENT = {
+    "HOME": "/var/empty",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+}
 DARWIN_LIBPROC = "/usr/lib/libproc.dylib"
 DARWIN_RUSAGE_INFO_V4 = 4
 DARWIN_PROC_PIDTBSDINFO = 3
@@ -444,6 +450,8 @@ def _host_lock(path: Path = LOCK_PATH, *, description: str = "TLAPS") -> Iterato
 def _process_rows() -> list[ProcessRow]:
     """Snapshot process identity, ownership, grouping, and RSS."""
 
+    if PS is None:
+        raise GuardError("absolute process-inspection utility is unavailable")
     try:
         completed = subprocess.run(
             [PS, "-axo", "pid=,ppid=,pgid=,uid=,rss=,comm="],
@@ -454,6 +462,7 @@ def _process_rows() -> list[ProcessRow]:
             encoding="utf-8",
             errors="replace",
             timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
+            env=PROCESS_INSPECTION_ENVIRONMENT,
         )
     except subprocess.TimeoutExpired as error:
         raise GuardError(

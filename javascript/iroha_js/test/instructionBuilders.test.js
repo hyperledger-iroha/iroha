@@ -208,6 +208,16 @@ const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   : ACCOUNT_ID;
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const ASSET_ID = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID}`;
+const LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64 = [
+  "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCxAQAAAAAAACBu70EtkU8QAiQjaXJvaGFfZGF0YV9tb2RlbDo6aXNpOjp6",
+  "azo6VW5zaGllbGSKA4IBAAAAAAAATlJUMAAAHLVezH/ZJiWyvuM+SRpKDABSAQAAAAAAAGVNTsPtTT6lAgAAAAAA",
+  "AAAAIAFoAXIBRQFOAZwBBAFGAUEBqgFYAR4BxQHzAYABFgEZTwAAAABKIQAAAAAAAAABAAHOAX8BpAFsAZ0BzgF+",
+  "AaQBsQElAeIB4wFrAdsBYwHqATMBBwE+AXUBkAGsAZIBgQFqAeEB6AFhAbcBBAGLAQMLBQEAAAABBAAAAABJAQAA",
+  "AAAAAABAAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQER",
+  "AREBEQERAREBEUkBAAAAAAAAAEABIgEiASIBIgEiASIBIgEiASIBIgEiASIBIgEiASIBIgEiASIBIgEiASIBIgEi",
+  "ASIBIgEiASIBIgEiASIBIgEiASIBIgEiPgoJaGFsbzIvaXBhGQoJaGFsbzIvaXBhDQUAAAAAAAAAcHJvb2YYCglo",
+  "YWxvMi9pcGEMC3ZrX3Vuc2hpZWxkAQA=",
+].join("");
 const ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID_INPUT}`;
 const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
@@ -1528,6 +1538,8 @@ test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
     alias: "demo#settlement.main",
     scale: 2,
     metadata: { purpose: "poc" },
+    owningDomain: null,
+    balanceScopePolicy: "Global",
   });
   assert.deepEqual(instruction, {
     Register: {
@@ -1541,6 +1553,7 @@ test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
         logo: null,
         metadata: { purpose: "poc" },
         balance_scope_policy: "Global",
+        owning_domain: null,
         confidential_policy: {
           mode: "TransparentOnly",
           vk_set_hash: null,
@@ -1552,6 +1565,21 @@ test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
     },
   });
   assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+  assert.throws(
+    () =>
+      buildRegisterAssetDefinitionInstruction({
+        assetDefinitionId: ASSET_DEFINITION_ID,
+      }),
+    /owningDomain is required/u,
+  );
+  assert.throws(
+    () =>
+      buildRegisterAssetDefinitionInstruction({
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        owningDomain: null,
+      }),
+    /balanceScopePolicy is required/u,
+  );
 });
 
 test("buildGrantAccountPermissionInstruction defaults payload", () => {
@@ -2673,7 +2701,7 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
 
 test("buildProposeDeployContractInstruction normalizes hashes and window", () => {
   const instruction = buildProposeDeployContractInstruction({
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "AA".repeat(32),
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
@@ -2682,7 +2710,7 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
   });
   const expected = {
     ProposeDeployContract: {
-      contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       code_hash_hex: "aa".repeat(32),
       abi_hash_hex: Buffer.alloc(32, 0xbb).toString("hex"),
       abi_version: "1",
@@ -2697,7 +2725,7 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
 
 test("buildProposeDeployContractInstruction rejects non-canonical voting modes", () => {
   const base = {
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
   };
@@ -3787,6 +3815,94 @@ test("buildUnshieldInstruction honours optional root hints", () => {
   const payload = encodeAndDecode(instruction).zk.Unshield;
   assert.equal(payload.public_amount, "18446744073709551616.25");
   assert.deepEqual(payload.root_hint, toByteArray(Buffer.alloc(32, 0x66)));
+  assert.deepEqual(Object.keys(payload).sort(), [
+    "asset",
+    "inputs",
+    "proof",
+    "public_amount",
+    "root_hint",
+    "to",
+  ]);
+});
+
+descriptorTest("Unshield builders and the pure codec reject the retired outputs field", () => {
+  const options = {
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    destinationAccountId: ACCOUNT_ID_INPUT,
+    publicAmount: "1",
+    inputs: [Buffer.alloc(32, 0x55)],
+    proof: {
+      backend: "halo2/ipa",
+      proof: Buffer.from("proof"),
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
+    },
+  };
+  assert.throws(
+    () => buildUnshieldInstruction({ ...options, outputs: [Buffer.alloc(32, 0x77)] }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /unshield\.outputs.*not supported/i);
+      return true;
+    },
+  );
+
+  const canonical = canonicalizeClone(buildUnshieldInstruction(options));
+  const encoded = withPureJsInstructionCodec(() => noritoEncodeInstruction(canonical));
+  const decoded = withPureJsInstructionCodec(() => noritoDecodeInstruction(encoded));
+  assert.deepEqual(decoded, canonical);
+  assert.deepEqual(Object.keys(decoded.zk.Unshield).sort(), [
+    "asset",
+    "inputs",
+    "proof",
+    "public_amount",
+    "root_hint",
+    "to",
+  ]);
+
+  const stale = canonicalizeClone(canonical);
+  stale.zk.Unshield.outputs = [Array(32).fill(0x77)];
+  assert.throws(
+    () => withPureJsInstructionCodec(() => noritoEncodeInstruction(stale)),
+    /zk\.Unshield contains unknown field outputs/i,
+  );
+
+  assert.throws(
+    () =>
+      withPureJsInstructionCodec(() =>
+        noritoDecodeInstruction(
+          Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
+        ),
+      ),
+    /trailing bytes/i,
+  );
+});
+
+test("native Unshield codec rejects the retired output-bearing shape", () => {
+  const instruction = canonicalizeClone(
+    buildUnshieldInstruction({
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      destinationAccountId: ACCOUNT_ID_INPUT,
+      publicAmount: "1",
+      inputs: [Buffer.alloc(32, 0x55)],
+      proof: {
+        backend: "halo2/ipa",
+        proof: Buffer.from("proof"),
+        verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
+      },
+    }),
+  );
+  instruction.zk.Unshield.outputs = [Array(32).fill(0x77)];
+  assert.throws(
+    () => nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
+    /outputs|unknown field/i,
+  );
+  assert.throws(
+    () =>
+      nativeBinding.noritoDecodeInstruction(
+        Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
+      ),
+    /decode|canonical|trailing|field/i,
+  );
 });
 
 descriptorTest("buildUnshieldInstruction enforces strict canonical Quantity inputs", () => {

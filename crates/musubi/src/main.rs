@@ -2,12 +2,8 @@
 #![deny(deprecated)]
 
 fn main() {
-    if let Err(error) = musubi::run() {
-        if let Some(rendered) = musubi::rendered_diagnostics(&error) {
-            eprintln!("{rendered}");
-        } else {
-            eprintln!("Error: {error:?}");
-        }
-        std::process::exit(1);
+    let exit_code = musubi::run();
+    if exit_code != 0 {
+        std::process::exit(exit_code);
     }
 }

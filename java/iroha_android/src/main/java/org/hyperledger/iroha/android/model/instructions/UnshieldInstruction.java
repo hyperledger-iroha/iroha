@@ -8,13 +8,17 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 
-/** Typed representation of {@code zk::Unshield}. */
+/**
+ * Typed representation of {@code zk::Unshield}.
+ *
+ * <p>Any private change commitment is authenticated by the proof and derived by the node; callers
+ * do not supply an output list.
+ */
 public final class UnshieldInstruction implements InstructionTemplate {
   private final String asset;
   private final String to;
   private final String publicAmount;
   private final List<byte[]> inputs;
-  private final List<byte[]> outputs;
   private final ProofAttachment proof;
   private final byte[] rootHint;
   private final Map<String, String> arguments;
@@ -24,7 +28,6 @@ public final class UnshieldInstruction implements InstructionTemplate {
     this.to = builder.to;
     this.publicAmount = builder.publicAmount;
     this.inputs = copyList(builder.inputs);
-    this.outputs = copyList(builder.outputs);
     this.proof = builder.proof;
     this.rootHint = builder.rootHint == null ? null : builder.rootHint.clone();
     final LinkedHashMap<String, String> args = new LinkedHashMap<>();
@@ -33,7 +36,6 @@ public final class UnshieldInstruction implements InstructionTemplate {
     args.put("to", to);
     args.put("public_amount", publicAmount);
     args.put("inputs", hexJoin(inputs));
-    args.put("outputs", hexJoin(outputs));
     args.put("proof", proof.toNativeJson());
     args.put("root_hint", rootHint == null ? "" : ZkInstructionUtils.hexLower(rootHint));
     this.arguments = Collections.unmodifiableMap(args);
@@ -53,10 +55,6 @@ public final class UnshieldInstruction implements InstructionTemplate {
 
   public List<byte[]> inputs() {
     return copyList(inputs);
-  }
-
-  public List<byte[]> outputs() {
-    return copyList(outputs);
   }
 
   public ProofAttachment proof() {
@@ -82,14 +80,14 @@ public final class UnshieldInstruction implements InstructionTemplate {
   }
 
   /**
-   * Intentionally unsupported. {@code zk::Unshield} carries binary input nullifiers, output
-   * commitments and a proof attachment that cannot be reconstructed from a generic string argument
-   * map. Build instances through {@link #builder()} instead.
+   * Intentionally unsupported. {@code zk::Unshield} carries binary input nullifiers and a proof
+   * attachment that cannot be reconstructed from a generic string argument map. Build instances
+   * through {@link #builder()} instead.
    */
   public static UnshieldInstruction fromArguments(final Map<String, String> arguments) {
     throw new UnsupportedOperationException(
-        "UnshieldInstruction cannot be built from an argument map: its nullifiers, commitments "
-            + "and proof attachment are binary fields. Use UnshieldInstruction.builder().");
+        "UnshieldInstruction cannot be built from an argument map: its nullifiers and proof "
+            + "attachment are binary fields. Use UnshieldInstruction.builder().");
   }
 
   private static List<byte[]> copyList(final List<byte[]> source) {
@@ -116,7 +114,6 @@ public final class UnshieldInstruction implements InstructionTemplate {
     private String to;
     private String publicAmount;
     private final ArrayList<byte[]> inputs = new ArrayList<>();
-    private final ArrayList<byte[]> outputs = new ArrayList<>();
     private ProofAttachment proof;
     private byte[] rootHint;
 
@@ -156,23 +153,6 @@ public final class UnshieldInstruction implements InstructionTemplate {
     public Builder addInput(final byte[] input) {
       inputs.add(
           ZkInstructionUtils.fixedNonZeroBytes(input, 32, "inputs[" + inputs.size() + "]"));
-      return this;
-    }
-
-    public Builder setOutputs(final List<byte[]> outputs) {
-      this.outputs.clear();
-      if (outputs != null) {
-        for (int i = 0; i < outputs.size(); i++) {
-          this.outputs.add(
-              ZkInstructionUtils.fixedNonZeroBytes(outputs.get(i), 32, "outputs[" + i + "]"));
-        }
-      }
-      return this;
-    }
-
-    public Builder addOutput(final byte[] output) {
-      outputs.add(
-          ZkInstructionUtils.fixedNonZeroBytes(output, 32, "outputs[" + outputs.size() + "]"));
       return this;
     }
 

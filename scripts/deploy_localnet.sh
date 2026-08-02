@@ -11,10 +11,6 @@ set -euo pipefail
 #   IROHA_BIN        Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
 #   SKIP_TOOL_BUILD  Skip cargo build and reuse existing binaries (default: false).
 #   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
-#   IROHA_LOCALNET_GUEST_STACK_BYTES Override [concurrency].guest_stack_bytes in generated peer configs.
-#   IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER Override [concurrency].gas_to_stack_multiplier in generated peer configs.
-#   IROHA_LOCALNET_MEMORY_BUDGET_PROFILE Override [ivm].memory_budget_profile in generated peer configs.
-#   IROHA_LOCALNET_MAX_STACK_BYTES Add/update a compute resource profile with this max_stack_bytes value.
 #   IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS Override [sumeragi.persistence].commit_inflight_timeout_ms in generated peer configs.
 #   IROHA_LOCALNET_KURA_BLOCKS_IN_MEMORY Override [kura].blocks_in_memory in generated peer configs.
 
@@ -54,7 +50,7 @@ Options:
   --no-sample-asset          Do not include kagami's extra sample asset
   --asset-id <ID>            Built-in Kagemusha asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
   --asset-name <NAME>        Built-in Kagemusha asset name to verify (default: usd)
-  --asset-alias <ALIAS>      Built-in Kagemusha alias to verify (default: usd#wonderland)
+  --asset-alias <ALIAS>      Built-in Kagemusha alias to verify (default: usd#wonderland.universal)
   --skip-asset-check         Skip built-in Kagemusha asset verification
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
@@ -102,7 +98,7 @@ PROFILE="debug"
 SAMPLE_ASSET=true
 ASSET_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 ASSET_NAME="usd"
-ASSET_ALIAS="usd#wonderland"
+ASSET_ALIAS="usd#wonderland.universal"
 SKIP_ASSET_CHECK=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30
@@ -124,10 +120,6 @@ USE_CARGO_FAST=false
 FAST_ZERO_DEBUG=false
 FAST_NO_INCREMENTAL=false
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-LOCALNET_GUEST_STACK_BYTES="${IROHA_LOCALNET_GUEST_STACK_BYTES:-}"
-LOCALNET_GAS_TO_STACK_MULTIPLIER="${IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER:-}"
-LOCALNET_MEMORY_BUDGET_PROFILE="${IROHA_LOCALNET_MEMORY_BUDGET_PROFILE:-}"
-LOCALNET_MAX_STACK_BYTES="${IROHA_LOCALNET_MAX_STACK_BYTES:-${LOCALNET_GUEST_STACK_BYTES:-}}"
 LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS="${IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS:-}"
 KURA_BLOCKS_IN_MEMORY="${IROHA_LOCALNET_KURA_BLOCKS_IN_MEMORY:-}"
 
@@ -759,139 +751,6 @@ if [[ -n "$LOGGER_LEVEL" || -n "$LOGGER_FILTER" ]]; then
         flush_logger()
       }
     ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
-  done
-fi
-
-if [[ -n "$LOCALNET_GUEST_STACK_BYTES" || -n "$LOCALNET_GAS_TO_STACK_MULTIPLIER" || -n "$LOCALNET_MEMORY_BUDGET_PROFILE" || -n "$LOCALNET_MAX_STACK_BYTES" ]]; then
-  if [[ -z "$LOCALNET_GUEST_STACK_BYTES" || -z "$LOCALNET_GAS_TO_STACK_MULTIPLIER" || -z "$LOCALNET_MEMORY_BUDGET_PROFILE" || -z "$LOCALNET_MAX_STACK_BYTES" ]]; then
-    echo "IROHA localnet stack overrides require guest stack bytes, gas-to-stack multiplier, memory budget profile, and max stack bytes together." >&2
-    exit 2
-  fi
-
-  echo "Applying IVM stack overrides in peer configs..."
-  for cfg in "$OUT_DIR"/peer*.toml; do
-    [[ -f "$cfg" ]] || continue
-    "$PYTHON_BIN" - "$cfg" \
-      "$LOCALNET_GUEST_STACK_BYTES" \
-      "$LOCALNET_GAS_TO_STACK_MULTIPLIER" \
-      "$LOCALNET_MEMORY_BUDGET_PROFILE" \
-      "$LOCALNET_MAX_STACK_BYTES" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-guest_stack_bytes = int(sys.argv[2])
-gas_to_stack_multiplier = int(sys.argv[3])
-profile = sys.argv[4]
-max_stack_bytes = int(sys.argv[5])
-profile_header_key = profile.replace("\\", "\\\\").replace('"', '\\"')
-
-target_sections = {
-    "[ivm]": {
-        "memory_budget_profile": json.dumps(profile),
-    },
-    "[concurrency]": {
-        "guest_stack_bytes": str(guest_stack_bytes),
-        "gas_to_stack_multiplier": str(gas_to_stack_multiplier),
-    },
-    "[compute]": {
-        "default_resource_profile": json.dumps(profile),
-    },
-    f'[compute.resource_profiles."{profile_header_key}"]': {
-        "max_cycles": "10000000",
-        "max_memory_bytes": "268435456",
-        "max_stack_bytes": str(max_stack_bytes),
-        "max_io_bytes": "25165824",
-        "max_egress_bytes": "12582912",
-        "allow_gpu_hints": "true",
-        "allow_wasi": "true",
-    },
-}
-
-key_pattern = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*=")
-header_pattern = re.compile(r"^\s*\[[^\]]+\]\s*$|^\s*\[\[[^\]]+\]\]\s*$")
-
-
-def split_sections(lines):
-    chunks = []
-    current_header = None
-    current = []
-    for line in lines:
-        if header_pattern.match(line):
-            if current or current_header is not None:
-                chunks.append((current_header, current))
-            current_header = line.strip()
-            current = [line]
-        else:
-            current.append(line)
-    if current or current_header is not None:
-        chunks.append((current_header, current))
-    return chunks
-
-
-lines = path.read_text().splitlines()
-chunks = split_sections(lines)
-chunks_by_header = {}
-for header, chunk in chunks:
-    chunks_by_header.setdefault(header, []).append(chunk)
-
-emitted_targets = set()
-result = []
-
-
-def append_blank_if_needed():
-    if result and result[-1] != "":
-        result.append("")
-
-
-def merged_target_section(header):
-    overrides = target_sections[header]
-    preserved = []
-    seen_preserved = set()
-    for chunk in chunks_by_header.get(header, []):
-        for line in chunk[1:]:
-            match = key_pattern.match(line)
-            if match and match.group(1) in overrides:
-                continue
-            identity = line.strip()
-            if identity and identity in seen_preserved:
-                continue
-            if identity:
-                seen_preserved.add(identity)
-            preserved.append(line)
-
-    merged = [header]
-    merged.extend(preserved)
-    if preserved and preserved[-1] != "":
-        merged.append("")
-    for key, value in overrides.items():
-        merged.append(f"{key} = {value}")
-    return merged
-
-
-for header, chunk in chunks:
-    if header in target_sections:
-        if header in emitted_targets:
-            continue
-        append_blank_if_needed()
-        result.extend(merged_target_section(header))
-        emitted_targets.add(header)
-        continue
-    if result and chunk and chunk[0].strip().startswith("[") and result[-1] != "":
-        result.append("")
-    result.extend(chunk)
-
-for header in target_sections:
-    if header in emitted_targets:
-        continue
-    append_blank_if_needed()
-    result.extend(merged_target_section(header))
-    emitted_targets.add(header)
-
-path.write_text("\n".join(result).rstrip() + "\n")
-PY
   done
 fi
 

@@ -147,10 +147,12 @@ fn configure_taira(stx: &mut StateTransaction<'_, '_>) {
 }
 
 fn register_settlement_definition(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
-    Register::asset_definition(
-        AssetDefinition::numeric(route.settlement.asset_definition_id.clone())
-            .with_name("xor".to_owned()),
-    )
+    Register::asset_definition(AssetDefinition::numeric(
+        route.settlement.asset_definition_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&ALICE_ID, stx)
     .expect("register exact SCCP settlement definition");
 }
@@ -353,13 +355,13 @@ fn route_registration_rejects_insufficient_asset_precision_without_mutation() {
     let route = staged_route();
     let key = route.key();
 
-    Register::asset_definition(
-        AssetDefinition::new(
-            route.settlement.asset_definition_id.clone(),
-            NumericSpec::fractional(route.settlement.payload_amount_scale - 1),
-        )
-        .with_name("xor".to_owned()),
-    )
+    Register::asset_definition(AssetDefinition::new(
+        route.settlement.asset_definition_id.clone(),
+        "xor".to_owned(),
+        NumericSpec::fractional(route.settlement.payload_amount_scale - 1),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register insufficient-precision settlement definition");
     register_custody_account(&mut stx, &route);

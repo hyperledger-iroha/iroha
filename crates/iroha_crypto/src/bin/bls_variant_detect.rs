@@ -172,17 +172,12 @@ fn validate_flavor(title: &str, flavor: Flavor) -> Result<(), Box<dyn Error>> {
 fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", banner());
     println!(
-        "  構成: bls-backend-blstrs = {}, bls-multi-pairing = {}",
+        "  構成: bls-backend-blstrs = {}",
         if cfg!(feature = "bls-backend-blstrs") {
             "ON"
         } else {
             "OFF"
-        },
-        if cfg!(feature = "bls-multi-pairing") {
-            "ON"
-        } else {
-            "OFF"
-        },
+        }
     );
     println!("  ───────────────────────────────────────────────────────────────");
 

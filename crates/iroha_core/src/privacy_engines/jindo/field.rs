@@ -1,8 +1,8 @@
 //! Canonical arithmetic for Jindo's 255-bit coefficient field.
 //!
 //! The modulus is
-//! `p = 60272^16 + 1 =
-//! 0x430d45996b62afc2d65643d9e6fb65558e9630dc8c3732810000000000000001`.
+//! `p = 3611623616^8 + 1 =
+//! 0x40000969b871277cc1de70130355aeec17e854be7764570ef9a1000000000001`.
 //! Values use one canonical 32-byte little-endian wire encoding and a
 //! four-limb Montgomery representation internally.
 
@@ -43,30 +43,30 @@ impl JindoFieldElementV1 {
 
     /// `R mod p` for `R = 2^256`.
     const MONTGOMERY_R: [u64; 4] = [
-        0xffff_ffff_ffff_fffd,
-        0x543d_6d6a_5b5a_687c,
-        0x7cfd_3472_4b0d_cfff,
-        0x36d8_2f33_bdd7_f0b7,
+        0x131c_ffff_ffff_fffd,
+        0xb847_01c4_99d2_fad3,
+        0xba64_afc6_f5fe_f33b,
+        0x3fff_e3c2_d6ac_8989,
     ];
 
     /// `R^2 mod p`, used when importing an ordinary residue.
     const MONTGOMERY_R2: [u64; 4] = [
-        0xf116_9a2d_c3ac_a563,
-        0x3e4e_0dc8_607a_08cd,
-        0x3e18_db5d_7300_0020,
-        0x34a8_0d03_8d4a_9211,
+        0x2854_9231_8baa_46f4,
+        0x126c_32fc_93ba_ba76,
+        0xb7a7_f2fd_9bf7_1a8a,
+        0x2a63_2b92_0759_bb7f,
     ];
 
     /// `-p^{-1} mod 2^64`.
-    const MONTGOMERY_NEG_INV: u64 = 0xffff_ffff_ffff_ffff;
+    const MONTGOMERY_NEG_INV: u64 = 0xf9a0_ffff_ffff_ffff;
 
     /// Exponent `p - 2`, in little-endian limbs.
     #[cfg(test)]
     const INVERSE_EXPONENT: [u64; 4] = [
-        0xffff_ffff_ffff_ffff,
-        0x8e96_30dc_8c37_3280,
-        0xd656_43d9_e6fb_6555,
-        0x430d_4599_6b62_afc2,
+        0xf9a0_ffff_ffff_ffff,
+        0x17e8_54be_7764_570e,
+        0xc1de_7013_0355_aeec,
+        0x4000_0969_b871_277c,
     ];
 
     /// Additive identity.
@@ -342,10 +342,10 @@ mod tests {
             [0, 0, 1, 0],
             [0, 0, 0, 1],
             [
-                0,
-                0x8e96_30dc_8c37_3281,
-                0xd656_43d9_e6fb_6555,
-                0x430d_4599_6b62_afc2,
+                0xf9a1_0000_0000_0000,
+                0x17e8_54be_7764_570e,
+                0xc1de_7013_0355_aeec,
+                0x4000_0969_b871_277c,
             ],
         ];
         for limbs in values {
@@ -357,10 +357,10 @@ mod tests {
     #[test]
     fn addition_subtraction_and_negation_cross_the_modulus_boundary() {
         let modulus_minus_one = decode([
-            0,
-            0x8e96_30dc_8c37_3281,
-            0xd656_43d9_e6fb_6555,
-            0x430d_4599_6b62_afc2,
+            0xf9a1_0000_0000_0000,
+            0x17e8_54be_7764_570e,
+            0xc1de_7013_0355_aeec,
+            0x4000_0969_b871_277c,
         ]);
         assert_eq!(
             modulus_minus_one + JindoFieldElementV1::ONE,
@@ -416,19 +416,19 @@ mod tests {
             0x22, 0x22, 0x22, 0x22,
         ];
         let square_bytes = [
-            0x4c, 0x20, 0xb8, 0x7d, 0xc0, 0x49, 0x3c, 0x6e, 0x0e, 0xa1, 0xec, 0x4e, 0x1f, 0x1d,
-            0x6c, 0xcc, 0xee, 0x42, 0xfd, 0xa3, 0x96, 0x6d, 0x4e, 0x46, 0xed, 0xdc, 0xdb, 0xe6,
-            0xf7, 0x09, 0x87, 0x13,
+            0x09, 0x85, 0xfc, 0x37, 0x1a, 0xe1, 0xd4, 0x2c, 0x7e, 0x4b, 0x74, 0x29, 0x4d, 0xa3,
+            0xd0, 0x71, 0x97, 0xb5, 0x35, 0x7d, 0xb6, 0x4e, 0x6a, 0xd7, 0xe7, 0x10, 0x8a, 0x38,
+            0x01, 0xff, 0xb1, 0x04,
         ];
         let product_bytes = [
-            0x17, 0x1a, 0x7e, 0x50, 0x2d, 0x7d, 0x88, 0x3d, 0x92, 0x78, 0xd7, 0x15, 0x51, 0x00,
-            0x03, 0x2a, 0xa4, 0xf2, 0xd5, 0xe0, 0xae, 0x6d, 0x74, 0x7a, 0xc5, 0xd1, 0xc8, 0xd1,
-            0xc1, 0xa6, 0xcd, 0x3c,
+            0x1b, 0xb6, 0x4e, 0x33, 0xe7, 0xa1, 0xb1, 0xc2, 0xdc, 0x15, 0x5f, 0x9d, 0x5a, 0x62,
+            0xd8, 0xde, 0x4a, 0x93, 0x69, 0x65, 0xd9, 0xc5, 0x07, 0xcb, 0x80, 0xbc, 0x65, 0x27,
+            0xdd, 0xb3, 0x84, 0x04,
         ];
         let inverse_bytes = [
-            0x86, 0x0e, 0xd9, 0x7a, 0xcb, 0xdd, 0x0f, 0x79, 0xa0, 0xf9, 0xda, 0x90, 0x5b, 0xac,
-            0xbb, 0xd1, 0x63, 0x2e, 0x88, 0xbd, 0x59, 0xd4, 0x77, 0x49, 0xec, 0x72, 0x4f, 0x95,
-            0x4e, 0xf2, 0x33, 0x40,
+            0x4f, 0xc9, 0xaa, 0x22, 0xd7, 0x6b, 0xae, 0xa1, 0xe7, 0x82, 0x4e, 0xbd, 0xb0, 0xa3,
+            0xbf, 0xcd, 0x5c, 0x9b, 0x7b, 0x65, 0x1e, 0x22, 0x1e, 0xed, 0xab, 0x66, 0x8c, 0x98,
+            0xd4, 0xb8, 0x3a, 0x05,
         ];
 
         let left = JindoFieldElementV1::from_canonical_bytes(left_bytes).expect("canonical left");
@@ -450,10 +450,10 @@ mod tests {
             JindoFieldElementV1::from_u64(2),
             JindoFieldElementV1::from_u64(60_272),
             decode([
-                0,
-                0x8e96_30dc_8c37_3281,
-                0xd656_43d9_e6fb_6555,
-                0x430d_4599_6b62_afc2,
+                0xf9a1_0000_0000_0000,
+                0x17e8_54be_7764_570e,
+                0xc1de_7013_0355_aeec,
+                0x4000_0969_b871_277c,
             ]),
         ];
         for value in values {
@@ -478,10 +478,10 @@ mod tests {
             0x2222_2222_2222_2222,
         ]);
         let c = decode([
-            0xffff_ffff_ffff_fffe,
-            0x8e96_30dc_8c37_3280,
-            0xd656_43d9_e6fb_6555,
-            0x430d_4599_6b62_afc2,
+            0xf9a0_ffff_ffff_ffff,
+            0x17e8_54be_7764_570e,
+            0xc1de_7013_0355_aeec,
+            0x4000_0969_b871_277c,
         ]);
         assert_eq!(a * (b + c), a * b + a * c);
         assert_eq!((a - b) + b, a);

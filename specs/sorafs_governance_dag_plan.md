@@ -19,14 +19,15 @@ verified heads to optional CAR and mirror-index artifacts for handoff.
 Checkpoint verification and recovery can replay those local bindings and rebuild
 a local mirror index independently of the network publisher. Torii can expose a
 read-only local dashboard/query API over a configured mirror index. Filesystem
-governance publishers also maintain a local `publish-index.json` as runtime
-artifacts are materialized, and Torii exposes read-only publish-index queries,
-giving operators a deterministic publication feed without requiring the
-optional RocksDB/IPLD backend. The filesystem publisher also assembles a
-runtime-local `car-queue.json`
-with per-publication deterministic CARv2 segments for the canonical `.to`
-payload, JSON mirror, and BLAKE3 sidecars, and Torii exposes read-only queue
-and segment lookup endpoints for that local queue. When configured with a
+governance publishers maintain one authoritative
+`governance-publication-state-v1.json` envelope as runtime artifacts are
+materialized. Its one-to-one `publish_index` and `car_queue` sections expose the
+deterministic publication feed and fully assembled per-publication CARv2
+segments for the canonical `.to` payload, JSON mirror, and BLAKE3 sidecars.
+Both sections become visible through one atomic rename; the retired separate
+`publish-index.json` and `car-queue.json` files are rejected. Torii exposes
+read-only publish-index, queue, and segment lookup endpoints over the same
+envelope without requiring the optional RocksDB/IPLD backend. When configured with a
 publisher peer ID, opaque signer handle, canonical Ed25519 public key, and a
 matching deployment-injected runtime signer, the filesystem publisher also
 appends supported published payloads to a local signed
@@ -37,6 +38,62 @@ read-only runtime index/head/block/node/digest/kind queries over that local
 index. Publish-index, CAR queue, and runtime digest/kind lookup responses keep
 full match counts visible while bounding returned `entries`, `segments`, or
 `blocks` arrays through `limit` (default 50, max 500).
+
+Filesystem publication objects are immutable and use only composite identities.
+The encoded and JSON sources live at
+`publication-sources/<payload_kind>/<source_pair_id>/payload.{to,json}`, where
+`payload_kind` is canonical lowercase ASCII and `source_pair_id` binds that
+kind plus both exact byte lengths and BLAKE3 digests. CAR, plan, and manifest objects live at
+`car-segments/<position>_<source_pair_id>.{car,plan.json,json}`. Validators
+derive every path from the committed identity, reject cross-entry path or
+archive-digest aliasing, and include each digest sidecar in the same ownership
+map. The retained segment manifest has one shared 128 KiB producer/readback
+ceiling. Compact scalar labels are limited to 64 entries, canonical 128-byte
+keys, 4 KiB string values, and 64 KiB total JSON.
+
+The producer constructs and serializes the complete bounded successor envelope
+and CAR segment in memory before creating any immutable object. It then writes
+the exact source/CAR objects create-only and replaces the single authority
+envelope last. A byte-identical duplicate verifies its exact source and CAR
+objects but does not rewrite the envelope, advance its generation, or refresh a
+timestamp; divergent immutable bytes fail closed. If an object write or the
+final envelope swap fails, descriptor-rooted reconciliation rereads whichever
+valid envelope is actually visible and removes only the single bounded batch of
+canonical, unreferenced objects. Startup performs the same bounded recovery,
+removes a bounded exact-name atomic temporary for each canonical target plus
+empty identity directories, and rejects unknown names, excess orphan batches,
+missing committed objects, links, and reparse points. Initialization first
+publishes an explicit generation-zero authority and then a durable marker. Once
+that marker exists, a missing authority is never interpreted as an empty root
+and recovery must not delete retained history. Startup deterministically
+rebuilds each segment from its authority-bound sources and exact-compares every
+source, digest sidecar, CAR, plan, and manifest before admitting the publisher.
+This detects in-place corruption even when a substituted sidecar matches the
+substituted file.
+
+The canonical binary payload exists only as `payload.to`; JSON sidecars do not
+carry a redundant base64 copy. Reputation snapshots can reach the full 64 MiB
+encoded V1 ceiling, so their JSON sidecar is a bounded metadata projection
+rather than a second structured copy of the snapshot. The source-pair identity
+still binds the exact metadata JSON bytes alongside the canonical payload.
+
+Caller-supplied runtime payloads also carry server-derived
+`GovernanceDagSubmissionProvenanceV1`. The canonical universal account ID and
+exact Torii ingress origin participate in the log-node CID and publisher
+signature preimages; runtime-index copies are checked against the signed node.
+Appeal-finance reports and weekly rollups require matching provenance.
+Proof-token issuances and transparency-ledger publications preserve matching
+provenance when admitted through an authenticated route, while their trusted
+in-process producer APIs are represented by its absence and remain attested by
+the node signer. Other internally derived records, including settlement
+receipts, reject caller provenance. The first-release schema is a hard cut:
+pre-change runtime DAG nodes must be reseeded instead of decoded through a
+compatibility heuristic.
+
+The node derives `publisher_account_id` from the typed canonical `AccountId`;
+it is never accepted from the request body. The manifest layer independently
+bounds that UTF-8 display and rejects whitespace/control characters, but does
+not pretend that this lower-level crate re-parses I105 account semantics.
 
 V1 now separates binary schema ceilings from mutable JSON state: canonical
 producer source payloads are capped at 64 MiB, node/block/head signing and CID
@@ -139,12 +196,19 @@ Implemented foundations include:
   entry and aggregate bytes and verifies canonical JSON/Norito, sidecars,
   source payloads, signatures, CIDs, lineage, reverse maps, and head/index
   agreement.
-  Each successful filesystem publish now updates a
-  local `sorafs.governance_dag.local_publish_index.v1` `publish-index.json` with
-  artifact paths, BLAKE3 digests, payload-kind counts, digest lookup maps, and
-  compact labels for query surfaces, then ensures a local
-  `sorafs.governance_dag.local_car_queue.v1` `car-queue.json` entry and
-  assembled CARv2 segment under `car-segments/` for that publication. With
+  Each successful filesystem publish now atomically updates the nested
+  `sorafs.governance_dag.local_publish_index.v1` and
+  `sorafs.governance_dag.local_car_queue.v1` sections of
+  `governance-publication-state-v1.json`. The index contains artifact paths,
+  BLAKE3 digests, payload-kind counts, digest lookup maps, and compact labels;
+  its corresponding queue entry references a fully qualified CARv2 segment
+  under its position/source-pair composite path in `car-segments/`. Sources use
+  their payload-kind/source-pair composite path under `publication-sources/`.
+  The complete successor state is size-checked before object creation, and the
+  two sections are validated as an exact one-to-one projection before the
+  envelope is replaced. Bounded descriptor-rooted recovery removes only
+  canonical unreferenced objects and exact canonical-target atomic temporaries
+  from an interrupted publication. With
   `sorafs.storage.governance_dag_publisher_peer_id`,
   `sorafs.storage.governance_dag_signer_handle`,
   `sorafs.storage.governance_dag_signer_revision`,
@@ -173,7 +237,8 @@ Implemented foundations include:
   worker or publisher state. No signing-key file setting or compatibility
   loader remains. A filesystem publisher now holds an
   exclusive lock on its root
-  for its full lifetime and serializes the artifact files, publish index, CAR
+  for its full lifetime and serializes the immutable objects, publication
+  envelope, CAR
   queue, and signed block/head update as one in-process publication transaction,
   so two publishers cannot race the same mutable indexes. Atomic artifact
   replacements fsync both the file and its parent directory before publication
@@ -328,30 +393,37 @@ Implemented foundations include:
     configured local mirror index.
   - `GET /v1/sorafs/governance/dag/blocks/{block_cid_hex}` and
     `/v1/sorafs/governance/dag/nodes/{node_cid_hex}` look up the indexed block
-    by block CID or governance-node CID. The API reads only the node-configured
-    governance directory and fails closed on missing, malformed, or unsupported
-    mirror indexes.
+    by block CID or governance-node CID. Each block exposes nullable submission
+    account/origin fields copied from the signed node; the publisher rejects a
+    runtime-index copy that disagrees with those signed bytes. The API reads
+    only the node-configured governance directory and fails closed on missing,
+    malformed, or unsupported mirror indexes.
   - `GET /v1/sorafs/governance/dag/publish-index?limit=N` returns the
-    runtime-local filesystem publication feed from `publish-index.json`,
+    runtime-local filesystem publication feed from the `publish_index` section
+    of `governance-publication-state-v1.json`,
     including payload-kind counts, total entry counts, and a `limit`-bounded
     embedded entry list.
   - `GET /v1/sorafs/governance/dag/publish-index/digests/{encoded_blake3_hex}`
     and `/v1/sorafs/governance/dag/publish-index/kinds/{payload_kind}` query
     that local feed by encoded payload digest or payload kind. The handlers
-    validate lookup keys, support ETag revalidation, report total and returned
+    validate lookup keys, use route/key/limit-specific ETags, report total and returned
     counts, bound the returned `entries` array with `limit` (default 50, max
     500), and fail closed on missing, malformed, or unsupported publish indexes.
   - `GET /v1/sorafs/governance/dag/car-queue` returns the runtime-local CAR
-    segment queue from `car-queue.json`, including assembled/pending counts and
-    the full local queue.
+    segment queue from the same envelope's `car_queue` section, including
+    assembled/pending counts and the full local queue.
   - `GET /v1/sorafs/governance/dag/car-queue/digests/{encoded_blake3_hex}`,
     `/v1/sorafs/governance/dag/car-queue/kinds/{payload_kind}`, and
     `/v1/sorafs/governance/dag/car-queue/archives/{car_archive_blake3_hex}`
     query assembled local segments by encoded payload digest, payload kind, or
-    CAR archive digest. Digest/kind handlers validate lookup keys, support ETag
+    CAR archive digest. Digest/kind handlers validate lookup keys, use
+    route/key/limit-specific ETags
     revalidation, report total and returned counts, bound the returned
     `segments` array with `limit` (default 50, max 500), and fail closed on
-    missing, malformed, or unsupported CAR queues.
+    missing, malformed, or unsupported CAR queues. Archive lookup verifies the
+    retained source, sidecars, plan, manifest, and canonical CAR before it may
+    answer either `200` or `304`; a matching stale ETag cannot mask a missing or
+    substituted archive.
   - `GET /v1/sorafs/governance/dag/runtime` summarizes the local signed runtime
     DAG index from `runtime-dag-index.json`, including publisher identity,
     head metadata, block counts, payload-kind counts, and the full local index.
@@ -366,6 +438,12 @@ Implemented foundations include:
     validate lookup keys, support ETag revalidation, report total and returned
     counts, bound the returned `blocks` array with `limit` (default 50, max
     500), and fail closed on missing, malformed, or unsupported runtime indexes.
+  - Every conditional route finishes lookup, route-specific metadata
+    validation, bounded projection, and fallible serialization before matching
+    `If-None-Match`. Entity-tag opaque values compare case-sensitively; weak
+    tags use the exact `W/` syntax and malformed quoting never aliases a valid
+    tag. A matching representation ETag therefore cannot turn an unconditional
+    `404`, `409`, or `500` into `304`.
 - Local publication telemetry: `sorafs_governance_dag_publish_total`,
   `sorafs_governance_dag_published_bytes_total`,
   `sorafs_governance_dag_last_publish_timestamp_seconds`,
@@ -422,6 +500,7 @@ struct GovernanceLogNodeV1 {
     prev_cid: Option<Vec<u8>>,
     timestamp: u64,
     publisher_peer_id: Vec<u8>,
+    submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     payload: GovernanceLogPayloadV1,
     publisher_signature: GovernanceLogSignatureV1,
 }
@@ -443,9 +522,12 @@ struct GovernanceLogNodeV1 {
 
 `GovernanceLogSignatureV1` stores the algorithm, public key, and raw signature.
 Validation rejects unsupported versions, empty node CIDs, empty previous CIDs,
-missing publisher peer IDs, malformed signatures, and invalid nested payloads.
-Signature verification covers canonical Norito bytes that exclude
-`publisher_signature`, so signers and verifiers operate on stable payload bytes.
+missing publisher peer IDs, malformed signatures, invalid nested payloads,
+missing finance provenance, mismatched provenance on authenticated-ingress
+payloads, and provenance attached to payloads with no external producer.
+Signature verification covers canonical Norito bytes, including submission
+provenance, that exclude only `publisher_signature`, so signers and verifiers
+operate on stable payload bytes.
 
 The shipped public DAG block/head surface wraps those log nodes without changing
 their payload semantics:
@@ -557,8 +639,8 @@ materialization:
 - `sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind,sink}`
   records the last successful local publication timestamp.
 - `sorafs_governance_dag_backlog{sink}` reports the local CAR queue pending
-  segment count for the filesystem sink when `car-queue.json` is built or
-  refreshed.
+  segment count for the filesystem sink when the authoritative publication
+  envelope is built or refreshed.
 - `sorafs_governance_dag_head_age_seconds{sink}` reports the signed
   runtime DAG head age for the filesystem sink when runtime DAG state is
   written or refreshed.
@@ -597,23 +679,29 @@ recovered index when the CAR binding is tampered. Focused Torii unit coverage
 verifies the local Governance DAG dashboard/head/block/node handlers, ETag
 revalidation, malformed CID rejection, and missing CID rejection over a
 configured local mirror index. Focused `sorafs_node` unit coverage verifies that
-filesystem governance publishers update `publish-index.json`, populate
-payload-kind and digest lookup maps, write a BLAKE3 sidecar for the index, and
-avoid duplicate index entries when the same artifact is republished. The same
-coverage now verifies runtime-local `car-queue.json` maintenance, deterministic
-CAR segment/plan/manifest emission, CAR sidecars, segment queue de-duplication,
-and fail-closed rejection of malformed CAR queue state. It also verifies
+filesystem governance publishers atomically update the `publish_index` and
+`car_queue` sections of `governance-publication-state-v1.json`, populate
+canonical lookup maps, derive source and CAR paths from the full composite
+identity, and leave the authority bytes and generation unchanged when the exact
+same artifact is republished. The same coverage verifies deterministic CAR
+segment/plan/manifest emission, CAR sidecars, segment queue de-duplication,
+byte-exact reuse, fail-closed immutable substitution, exact predecessor
+preservation after a failed successor swap, bounded startup orphan reclamation,
+and fail-closed rejection of malformed, missing, or cross-substituted
+publication state. It also verifies
 config-backed signed runtime DAG append for supported payloads, duplicate
 publish idempotency, decoded head/block signature-chain validation with
 `validate_governance_dag_head_against_chain_v1`, and fail-closed rejection of
 malformed runtime DAG index state, including orderbook settlement receipt
 publication. Focused Torii coverage verifies publish-index reads, digest
 lookups, payload-kind lookups, `limit`-bounded returned entries, ETag
-revalidation, malformed lookup rejection, and missing lookup rejection over a
+revalidation without cross-route/key cache collisions, malformed lookup
+rejection, and missing lookup rejection over a
 configured local publish index. Torii CAR queue coverage verifies local queue
 reads, digest lookups, payload-kind lookups, `limit`-bounded returned segments,
-CAR archive digest lookups, ETag revalidation, malformed lookup rejection, and
-missing lookup rejection over a configured local CAR queue. Torii runtime DAG
+CAR archive digest lookups, ETag revalidation only after actual archive
+verification, malformed lookup rejection, and missing lookup rejection over a
+configured local CAR queue. Torii runtime DAG
 coverage verifies local runtime-index reads, runtime head reads, block/node/
 digest/payload-kind lookups, `limit`-bounded returned blocks, ETag
 revalidation, malformed lookup rejection, missing lookup rejection, and
@@ -687,10 +775,11 @@ The rollout evidence scripts have focused Python coverage in:
   node has `sorafs.storage.governance_dag_dir` pointing at a local
   `mirror-index.json` and operators need a read-only dashboard/query surface
   over the pre-publication local mirror.
-- Use `publish-index.json` in the configured governance directory as the
-  runtime-local feed of filesystem-published governance artifacts. It is an
-  operator handoff and dashboard source, not a public IPNS head or a replacement
-  for the shipped bounded authenticated public mirror.
+- Use the `publish_index` section of
+  `governance-publication-state-v1.json` in the configured governance directory
+  as the runtime-local feed of filesystem-published governance artifacts. The
+  envelope is an operator handoff and dashboard source, not a public IPNS head
+  or a replacement for the shipped bounded authenticated public mirror.
 - Use Torii `GET /v1/sorafs/governance/dag/publish-index?limit=N`,
   `/publish-index/digests/{encoded_blake3_hex}`, and
   `/publish-index/kinds/{payload_kind}` to query that runtime-local feed through
@@ -817,7 +906,7 @@ rollout gate. This evidence must be collected from the shipped always-on
 publisher rather than synthesized from the pre-publication filesystem hooks.
 
 ## Rollout Status
-- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export and schema-closed plan validation, payload-free canary builder for all SF-12 evidence kinds, operator argfile templates, and focused tests.
+- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with one atomic `governance-publication-state-v1.json` containing one-to-one publish-index and CAR-queue sections, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, deterministic CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export and schema-closed plan validation, payload-free canary builder for all SF-12 evidence kinds, operator argfile templates, and focused tests.
 - Done addendum: valid SF-12 operator-recovery evidence now surfaces
   `valid_checkpoint_digests`, and aggregate readiness validates those checkpoint
   digests as payload-free metadata tied to recognized artifact fingerprints.

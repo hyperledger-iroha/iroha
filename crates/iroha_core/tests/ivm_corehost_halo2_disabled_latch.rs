@@ -89,16 +89,16 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
     assert_eq!(vm.register(10), 0, "verify must return 0 when disabled");
 
     // Now enqueue an Unshield via vendor syscall and ensure apply_queued rejects
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),
         public_amount: 1_u128.into(),
         inputs: vec![[0u8; 32]],
-        outputs: Vec::new(),
         proof: iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0xAA, 0xBB]),

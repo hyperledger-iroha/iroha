@@ -1,4 +1,4 @@
-//! Selector-free ABI-21/V4 Kagemusha recursive-spend backend and retained V2 primitives.
+//! Selector-free ABI-21/V4 Kagemusha recursive-spend backend.
 //!
 //! V4 reuses the unchanged V2 amounts, note openings, authorization,
 //! membership, and finality relations. Its fixed Eq/Ep recursive circuits keep
@@ -16,22 +16,26 @@ use iroha_data_model::offline::{
     KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
     KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendBranchClaimV2,
     KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendPublicStatementV4,
-    KagemushaRecursiveSpendStateBoundaryV2, KagemushaRecursiveSpendTransitionV4,
+    KagemushaRecursiveSpendStateBoundaryV5, KagemushaRecursiveSpendTransitionV4,
 };
 use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+pub use super::kagemusha_recursion_adapter::generate_candidate_recursive_step_two_receipt_v4;
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 pub use super::kagemusha_recursion_adapter::run_kagemusha_k17_shape_probe_v5;
 pub use super::kagemusha_recursion_adapter::{
-    KagemushaGeneratedArtifactSpoolV4, KagemushaGeneratedParityArtifactsV4,
-    KagemushaGeneratedParityProfileV4, KagemushaGeneratedPastaCycleArtifactsV4,
-    KagemushaGeneratedProofPairMeasurementV4, KagemushaGenerationSupervisorPermitV4,
-    claim_kagemusha_generation_supervisor_permit_v4,
-    generate_kagemusha_pasta_cycle_artifacts_streaming_v4,
+    KAGEMUSHA_GENERATION_MEMORY_CAPACITY_POLICY_V1, KAGEMUSHA_GENERATION_MEMORY_CAPACITY_SCHEMA_V1,
+    KagemushaCandidateRecursiveStepTwoEvidenceV4, KagemushaGeneratedArtifactSpoolV4,
+    KagemushaGeneratedParityArtifactsV4, KagemushaGeneratedParityProfileV4,
+    KagemushaGeneratedPastaCycleArtifactsV4, KagemushaGeneratedProofPairMeasurementV4,
+    KagemushaGenerationMemoryCapacityV1, KagemushaGenerationMemoryGuardV4,
+    KagemushaQualificationMemoryContractV4, generate_kagemusha_pasta_cycle_artifacts_streaming_v4,
     generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4,
-    generate_kagemusha_pasta_cycle_artifacts_v4, validate_kagemusha_proof_pair_measurement_v4,
-    validate_kagemusha_step_bootstrap_payload_v4,
+    generate_kagemusha_pasta_cycle_artifacts_v4, kagemusha_generation_memory_capacity_v1,
+    start_kagemusha_generation_memory_guard_v4, validate_kagemusha_proof_pair_measurement_v4,
+    validate_kagemusha_step_bootstrap_payload_v4, verify_candidate_recursive_step_two_receipt_v4,
 };
 pub use super::kagemusha_step_transition::{
     KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4,
@@ -60,15 +64,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5: usize =
         + 1
         + 2
         + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_ACCUMULATOR_LIMBS_V5;
-/// Source-compatible name for the layout used by the retained V2 state carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2: u32 =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-/// Source-compatible name for the size used by the retained V2 state carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2: usize =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5;
-/// Source-compatible name for the compact claim used by the retained V2 state carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2: usize =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5;
 
 pub(crate) const S_VERSION: usize = 0;
 pub(crate) const S_CHAIN_TAG: usize = S_VERSION + 1;
@@ -88,12 +83,12 @@ pub(crate) const S_CURRENT_SCALE: usize = S_CURRENT_AMOUNT + 4;
 pub(crate) const S_BRANCH_CLAIM_COUNT: usize = S_CURRENT_SCALE + 1;
 pub(crate) const S_BRANCH_CLAIMS: usize = S_BRANCH_CLAIM_COUNT + 1;
 pub(crate) const S_ARTIFACT_MANIFEST_SHA256: usize = S_BRANCH_CLAIMS
-    + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2
+    + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5
         * KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2;
 pub(crate) const S_VERIFIER_KEY_ID: usize = S_ARTIFACT_MANIFEST_SHA256 + 8;
 const S_END: usize = S_VERIFIER_KEY_ID + 8;
 
-const _: [(); KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2] = [(); S_END];
+const _: [(); KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5] = [(); S_END];
 
 /// Compile-time layout table for the exact recursive continuing-state vector.
 ///
@@ -123,16 +118,12 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5: &[(&str, usize, usiz
     (
         "branch_claims",
         S_BRANCH_CLAIMS,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2
+        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5
             * KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2,
     ),
     ("artifact_manifest_sha256", S_ARTIFACT_MANIFEST_SHA256, 8),
     ("verifier_key_id", S_VERIFIER_KEY_ID, 8),
 ];
-
-/// Source-compatible layout-table name for the retained V2 state carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V2: &[(&str, usize, usize)] =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5;
 
 /// Audit map from every continuing statement field to its exact state-vector slot.
 ///
@@ -172,18 +163,14 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V5: &[(&str, &str)] = 
     ("statement.verifier_key_id", "verifier_key_id"),
 ];
 
-/// Source-compatible coverage-table name for the retained V2 state carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V2: &[(&str, &str)] =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V5;
-
 /// Exact field-neutral recursive state represented only by canonical `u32` limbs.
 ///
 /// No limb is reduced modulo either Pasta field. Both recursive circuits range
 /// constrain every public limb to 32 bits and copy the vector limb-for-limb.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KagemushaRecursiveSpendStateVectorV2 {
+pub struct KagemushaRecursiveSpendStateVectorV5 {
     /// Fixed continuing-state limbs in [`KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5`] order.
-    pub limbs: [u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2],
+    pub limbs: [u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5],
 }
 
 /// Public operation selected by one logical recursive transition.
@@ -1064,7 +1051,7 @@ impl KagemushaRecursiveSpendOperationKindV1 {
     }
 }
 
-impl KagemushaRecursiveSpendStateVectorV2 {
+impl KagemushaRecursiveSpendStateVectorV5 {
     /// Embedded proof-step count used by the paired recursion relation.
     #[must_use]
     pub(crate) const fn proof_step_count(&self) -> u32 {
@@ -1101,8 +1088,8 @@ impl KagemushaRecursiveSpendStateVectorV2 {
     fn from_statement_v4_inner(
         statement: &KagemushaRecursiveSpendPublicStatementV4,
     ) -> Result<Self, String> {
-        let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-        limbs[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+        limbs[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
 
         let chain_tag =
             super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
@@ -1145,7 +1132,7 @@ impl KagemushaRecursiveSpendStateVectorV2 {
             .map_err(|_| "Kagemusha V4 branch-claim count does not fit u32".to_owned())?;
         for (index, claim) in statement.branch_claims.iter().enumerate() {
             let start =
-                S_BRANCH_CLAIMS + index * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2;
+                S_BRANCH_CLAIMS + index * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5;
             write_recursive_spend_branch_claim_v5(
                 &mut limbs[start..start + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5],
                 claim,
@@ -1173,7 +1160,7 @@ impl KagemushaRecursiveSpendStateVectorV2 {
         statement
             .validate_public_binding()
             .map_err(|err| err.to_string())?;
-        if self.limbs[S_VERSION] != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2 {
+        if self.limbs[S_VERSION] != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5 {
             return Err("Kagemusha V4 recursive state-vector version mismatch".to_owned());
         }
         if self != &Self::from_statement_v4_inner(statement)? {
@@ -1204,8 +1191,8 @@ struct KagemushaParentStateOpeningV5<'a> {
 fn kagemusha_parent_state_opening_v5(
     parts: KagemushaParentStateOpeningV5<'_>,
 ) -> Result<Vec<u32>, String> {
-    let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-    limbs[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+    let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+    limbs[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
     let chain_tag =
         super::confidential_v2::derive_confidential_chain_tag_v3(parts.chain_id.as_str())?;
     write_exact_u32_limbs(&mut limbs[S_CHAIN_TAG..S_CHAIN_TAG + 8], &chain_tag);
@@ -1243,7 +1230,7 @@ fn kagemusha_parent_state_opening_v5(
     limbs[S_BRANCH_CLAIM_COUNT] = u32::try_from(parts.branch_claims.len())
         .map_err(|_| "Kagemusha V5 parent branch-claim count does not fit u32".to_owned())?;
     for (index, claim) in parts.branch_claims.iter().enumerate() {
-        let start = S_BRANCH_CLAIMS + index * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2;
+        let start = S_BRANCH_CLAIMS + index * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5;
         write_recursive_spend_branch_claim_v5(
             &mut limbs[start..start + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5],
             claim,
@@ -1267,7 +1254,7 @@ fn encode_kagemusha_u32_scalar_v4(value: u32) -> [u8; 32] {
     encoded
 }
 
-fn kagemusha_public_inputs_for_statement_v4(
+pub(super) fn kagemusha_public_inputs_for_statement_v4(
     statement: &KagemushaRecursiveSpendPublicStatementV4,
     operation: KagemushaStepOperationVectorV4,
     expected_manifest_sha256: [u8; 32],
@@ -1288,7 +1275,7 @@ fn kagemusha_public_inputs_for_statement_v4(
         );
     }
     let statement_digest = statement.digest().map_err(|error| error.to_string())?;
-    let state = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(statement)?;
+    let state = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(statement)?;
     Ok(KagemushaPastaCyclePublicInputsV4 {
         public_statement_digest: bytes_to_exact_u32_limbs(&statement_digest),
         operation,
@@ -1296,7 +1283,7 @@ fn kagemusha_public_inputs_for_statement_v4(
         // parents. Callers never supply a state or lineage accumulator.
         parent_count: 0,
         parent_states: std::array::from_fn(|_| {
-            vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2]
+            vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5]
         }),
         result_state: state.limbs.to_vec(),
         manifest_sha256: bytes_to_exact_u32_limbs(&expected_manifest_sha256),
@@ -1312,6 +1299,88 @@ fn kagemusha_public_inputs_for_statement_v4(
         parent_ep_deferred_sha256: [[0; 8]; KAGEMUSHA_PASTA_PARENT_SLOTS_V1],
         live_selector: KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4,
     })
+}
+
+/// Derive the canonical ABI-21 child statement for one validated peer split.
+///
+/// The caller supplies only the proof-derived final tree root and next-zero
+/// frontier. All lineage, transition, count, release, and verifier identities
+/// are derived from the split itself, so bridge and release-qualification
+/// paths cannot drift into distinct statement constructors.
+///
+/// # Errors
+///
+/// Returns an error when the split is invalid, the requested branch is absent,
+/// a recursive counter overflows, or the derived statement is invalid.
+pub fn kagemusha_recursive_spend_append_statement_v4(
+    split: &iroha_data_model::offline::KagemushaRecursiveSpendSplitIntentV4,
+    branch: iroha_data_model::offline::KagemushaRecursiveSpendBranchV2,
+    final_root: [u8; 32],
+    next_zero_leaf_index: u32,
+) -> Result<KagemushaRecursiveSpendPublicStatementV4, String> {
+    use iroha_data_model::offline::{
+        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPeerSplitTransitionV4,
+        KagemushaRecursiveSpendTransitionV4,
+    };
+
+    split
+        .validate_public_binding()
+        .map_err(|error| error.to_string())?;
+    let current_note = match branch {
+        KagemushaRecursiveSpendBranchV2::Recipient => split.recipient_output.clone(),
+        KagemushaRecursiveSpendBranchV2::Change => split
+            .change_output
+            .clone()
+            .ok_or_else(|| "Kagemusha V4 split has no change output".to_owned())?,
+    };
+    let parent_max_proof_step_count = split
+        .inputs
+        .iter()
+        .map(|input| input.proof_step_count)
+        .max()
+        .ok_or_else(|| "Kagemusha V4 split has no parent proof".to_owned())?;
+    let parent_max_peer_hop_count = split
+        .inputs
+        .iter()
+        .map(|input| input.peer_hop_count)
+        .max()
+        .ok_or_else(|| "Kagemusha V4 split has no parent hop".to_owned())?;
+    let transition = KagemushaRecursiveSpendPeerSplitTransitionV4 {
+        binding_digest: split.binding_digest().map_err(|error| error.to_string())?,
+        branch,
+        recipient_request_digest: split.recipient_request_digest,
+        operation_id: split.operation_id,
+        parent_max_proof_step_count,
+        parent_max_peer_hop_count,
+    };
+    let statement = KagemushaRecursiveSpendPublicStatementV4 {
+        chain_id: split.chain_id.clone(),
+        asset: split.asset.clone(),
+        asset_scale: split.asset_scale,
+        final_root,
+        next_zero_leaf_index,
+        topup_anchor_refs: split.topup_anchor_refs.clone(),
+        proof_step_count: parent_max_proof_step_count
+            .checked_add(1)
+            .ok_or_else(|| "Kagemusha V4 proof-step count overflow".to_owned())?,
+        peer_hop_count: parent_max_peer_hop_count
+            .checked_add(1)
+            .ok_or_else(|| "Kagemusha V4 peer-hop count overflow".to_owned())?,
+        current_note,
+        branch_claims: split
+            .output_branch_claims(branch)
+            .map_err(|error| error.to_string())?,
+        transition: Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition)),
+        artifact_binding: split.output_artifact_binding.clone(),
+        verifier_key_id: iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+            KagemushaPastaCycleParityV1::StepEq,
+            split.output_artifact_binding.manifest_sha256,
+        ),
+    };
+    statement
+        .validate_public_binding()
+        .map_err(|error| error.to_string())?;
+    Ok(statement)
 }
 
 enum KagemushaArtifactLoaderBindingV4<'a> {
@@ -2200,7 +2269,7 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
             );
         }
         let statement_digest = statement.digest().map_err(|error| error.to_string())?;
-        let state = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(statement)?;
+        let state = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(statement)?;
         self.inner.verify_encoded_pair_binding(
             encoded_pair,
             statement,
@@ -2243,8 +2312,8 @@ fn ensure_kagemusha_recursive_spend_v4_state_boundary_binding(
     bundle: &KagemushaRecursiveSpendBundleV4,
 ) -> Result<(), String> {
     let envelope = &bundle.recursive_proof.proof_envelope;
-    let state = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(&bundle.statement)?;
-    let expected_state_boundary = KagemushaRecursiveSpendStateBoundaryV2::new(state.limbs.to_vec())
+    let state = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&bundle.statement)?;
+    let expected_state_boundary = KagemushaRecursiveSpendStateBoundaryV5::new(state.limbs.to_vec())
         .map_err(|error| error.to_string())?;
     if envelope.state_boundary != expected_state_boundary {
         return Err(
@@ -2282,7 +2351,7 @@ mod tests {
         };
 
         let chain_id = ChainId::from("kagemusha-v4-statement-binding");
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
             "rose".parse().expect("asset name"),
         );
@@ -2345,7 +2414,7 @@ mod tests {
         statement
             .validate_public_binding()
             .expect("canonical V4 statement");
-        let state = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(&statement)
+        let state = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&statement)
             .expect("canonical V4 state");
         let statement_digest = statement.digest().expect("canonical V4 statement digest");
         let proof_envelope = KagemushaPastaCycleProofEnvelopeV4 {
@@ -2362,7 +2431,7 @@ mod tests {
             step_ep_circuit_params_sha256: [0x52; 32],
             step_eq_verifier_key_sha256: [0x61; 32],
             step_ep_verifier_key_sha256: [0x62; 32],
-            state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state.limbs.to_vec())
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state.limbs.to_vec())
                 .expect("canonical V4 state boundary"),
             proof: ProofBox::new(
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
@@ -2479,7 +2548,7 @@ mod tests {
             assert!(len > 0, "state-vector field {field} must not be empty");
             next += len;
         }
-        assert_eq!(next, KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2);
+        assert_eq!(next, KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5);
         assert_eq!(next, 138);
         assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5, 19);
         assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5, 5);
@@ -2541,11 +2610,11 @@ mod tests {
     #[test]
     fn recursive_state_vector_is_exact_and_zero_padded() {
         let statement = init_statement();
-        let vector = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(&statement)
+        let vector = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&statement)
             .expect("canonical init state vector");
         assert_eq!(
             vector.limbs[S_VERSION],
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5
         );
         assert_eq!(
             vector.limbs[S_NEXT_ZERO_LEAF_INDEX],
@@ -2563,11 +2632,11 @@ mod tests {
         let first_history = S_BRANCH_CLAIMS + 11;
         assert!(
             vector.limbs[first_history
-                ..S_BRANCH_CLAIMS + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2]
+                ..S_BRANCH_CLAIMS + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5]
                 .iter()
                 .all(|limb| *limb == 0)
         );
-        let second_claim = S_BRANCH_CLAIMS + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2;
+        let second_claim = S_BRANCH_CLAIMS + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5;
         assert!(
             vector.limbs[second_claim..S_ARTIFACT_MANIFEST_SHA256]
                 .iter()
@@ -2609,7 +2678,7 @@ mod tests {
     fn recursive_state_vector_reference_encoding_is_deterministic() {
         use sha2::{Digest as _, Sha256};
 
-        let vector = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(&init_statement())
+        let vector = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&init_statement())
             .expect("canonical init state vector");
         let bytes = vector
             .limbs
@@ -2617,7 +2686,7 @@ mod tests {
             .flat_map(|limb| limb.to_le_bytes())
             .collect::<Vec<_>>();
         let actual: [u8; 32] = Sha256::digest(bytes).into();
-        let repeated = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(&init_statement())
+        let repeated = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&init_statement())
             .expect("repeated canonical init state vector")
             .limbs
             .iter()

@@ -21,9 +21,12 @@ from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS,
     EVIDENCE_REQUIRED_FIELDS,
     KIND_BY_NAME,
-    REQUIRED_TRANSPARENCY_SOURCE_KINDS,
+    MAX_EVIDENCE_BYTES,
     SUMMARY_SCHEMA,
+    ValidationOptions,
+    validate_evidence_payload,
 )
+from sorafs_evidence_json import load_evidence_json  # noqa: E402
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
@@ -31,8 +34,6 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
     require_equals_form_option_values,
 )
-from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
-from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     require_rollout_deployment_context_review,
     require_rollout_deployment_id,
@@ -69,7 +70,7 @@ PLAN_FIELDS = frozenset(
     }
 )
 PLAN_EXTERNAL_EVIDENCE_FIELDS = frozenset(
-    {"governance_dag", "end_to_end_workflow"}
+    {"governance_dag", "end_to_end_workflow", "transparency_publication"}
 )
 
 
@@ -85,19 +86,43 @@ class CommandPlan:
 IROHA_ARG_EQUALS_FORM_DIAGNOSTIC = (
     "SoraFS runner --iroha-arg values must use --iroha-arg=VALUE form"
 )
+TRANSPARENCY_PRODUCER_EVIDENCE_READ_DIAGNOSTIC = (
+    "pre-collected moderation transparency producer evidence cannot be read"
+)
+TRANSPARENCY_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC = (
+    "pre-collected moderation transparency producer evidence is invalid"
+)
+TRANSPARENCY_PRODUCER_EVIDENCE_CONTEXT_DIAGNOSTIC = (
+    "pre-collected moderation transparency producer evidence must match rollout context"
+)
 
 
-def split_source_entry_spec(spec: str) -> tuple[str, Path]:
-    source_kind, separator, path = spec.partition("=")
+def validate_transparency_producer_evidence(args: argparse.Namespace) -> list[str]:
+    """Validate trusted producer evidence before contacting live services."""
+
+    try:
+        payload = load_evidence_json(
+            args.transparency_producer_evidence,
+            MAX_EVIDENCE_BYTES,
+        )
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
+        return [TRANSPARENCY_PRODUCER_EVIDENCE_READ_DIAGNOSTIC]
+    kind_name, validation_errors = validate_evidence_payload(
+        payload,
+        ValidationOptions(
+            now_unix=args.now_unix,
+            max_evidence_age_secs=args.max_evidence_age_secs,
+        ),
+    )
+    if kind_name != "transparency_publication" or validation_errors:
+        return [TRANSPARENCY_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC]
     if (
-        not separator
-        or not source_kind
-        or not path
-        or not diagnostic_text_is_canonical(source_kind)
-        or not diagnostic_text_is_canonical(path)
+        payload.get("deployment_id") != args.deployment_id
+        or payload.get("environment") != args.environment
+        or payload.get("deployment_context_reviewed") is not True
     ):
-        raise ValueError("--source-entry must use KIND=PATH form")
-    return source_kind, Path(path)
+        return [TRANSPARENCY_PRODUCER_EVIDENCE_CONTEXT_DIAGNOSTIC]
+    return []
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
@@ -124,29 +149,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     )
     seen_input_files: dict[Path, tuple[str, Path]] = {}
     seen_input_dirs: dict[Path, tuple[str, Path]] = {}
-    source_entries: list[tuple[str, Path]] = []
-    for spec in args.source_entry:
-        try:
-            source_entries.append(split_source_entry_spec(spec))
-        except ValueError as error:
-            errors.append(error_diagnostic_label(error))
-
-    allowed_source_kinds = set(REQUIRED_TRANSPARENCY_SOURCE_KINDS)
-    present_source_kinds: set[str] = set()
-    source_paths: list[Path] = []
-    for source_kind, path in source_entries:
-        if source_kind not in allowed_source_kinds:
-            errors.append("source-entry supplied for unsupported kind")
-            continue
-        if source_kind in present_source_kinds:
-            errors.append("duplicate source-entry kind")
-            continue
-        present_source_kinds.add(source_kind)
-        source_paths.append(path)
-    for source_kind in REQUIRED_TRANSPARENCY_SOURCE_KINDS:
-        if source_kind not in present_source_kinds:
-            errors.append("missing required source-entry coverage")
-
     errors.extend(require_existing_files([args.manifest], "--manifest", seen=seen_input_files))
     errors.extend(require_existing_files([args.runner_payload], "--runner-payload", seen=seen_input_files))
     errors.extend(require_existing_files(args.committee_result, "--committee-result", seen=seen_input_files))
@@ -156,7 +158,14 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors.extend(
         require_existing_files([args.executor_execution_summary], "--executor-execution-summary", seen=seen_input_files)
     )
-    errors.extend(require_existing_files(source_paths, "--source-entry", seen=seen_input_files))
+    producer_evidence_errors = require_existing_files(
+        [args.transparency_producer_evidence],
+        "--transparency-producer-evidence",
+        seen=seen_input_files,
+    )
+    errors.extend(producer_evidence_errors)
+    if not producer_evidence_errors:
+        errors.extend(validate_transparency_producer_evidence(args))
     errors.extend(require_existing_files([args.governance_dag_evidence], "--governance-dag-evidence", seen=seen_input_files))
     errors.extend(require_existing_files([args.e2e_evidence], "--e2e-evidence", seen=seen_input_files))
     errors.extend(
@@ -253,7 +262,6 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     operator_out = out_dir / "operator-workflow.json"
     notification_out = out_dir / "notification-transport.json"
     executor_out = out_dir / "commit-reveal-executor.json"
-    transparency_out = out_dir / "transparency-publication.json"
     iroha_prefix = [args.iroha_bin, *args.iroha_arg]
 
     runner_command = [
@@ -353,18 +361,6 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         str(executor_out),
     ]
 
-    transparency_command = [
-        *iroha_prefix,
-        "sorafs",
-        "transparency",
-        "source-entry",
-        "canary",
-        "--out",
-        str(transparency_out),
-    ]
-    for spec in args.source_entry:
-        transparency_command.extend(["--source-entry", spec])
-
     verifier_command = [
         sys.executable,
         str(BUNDLED_VERIFIER),
@@ -374,6 +370,8 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         str(args.governance_dag_evidence),
         "--evidence",
         str(args.e2e_evidence),
+        "--evidence",
+        str(args.transparency_producer_evidence),
         "--summary-out",
         str(summary_out),
         "--topology-qualification-summary",
@@ -390,7 +388,6 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         CommandPlan("operator_workflow_canary", operator_out, operator_command),
         CommandPlan("notification_transport_canary", notification_out, notification_command),
         CommandPlan("commit_reveal_executor_canary", executor_out, executor_command),
-        CommandPlan("transparency_source_entry_canary", transparency_out, transparency_command),
         CommandPlan("rollout_evidence_gate", summary_out, verifier_command),
     ]
 
@@ -401,6 +398,7 @@ def external_evidence(args: argparse.Namespace) -> dict[str, str]:
     return {
         "governance_dag": str(args.governance_dag_evidence),
         "end_to_end_workflow": str(args.e2e_evidence),
+        "transparency_publication": str(args.transparency_producer_evidence),
     }
 
 
@@ -630,11 +628,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Payload-free deployed executor run summary.",
     )
     parser.add_argument(
-        "--source-entry",
-        action="append",
-        default=[],
-        metavar="KIND=PATH",
-        help="Moderation transparency source-entry canary payload. Repeat for every required kind.",
+        "--transparency-producer-evidence",
+        type=Path,
+        required=True,
+        help=(
+            "Pre-collected, checker-valid evidence from trusted internal moderation "
+            "transparency producers. Generic live source-entry submission is not supported."
+        ),
     )
     parser.add_argument(
         "--governance-dag-evidence",

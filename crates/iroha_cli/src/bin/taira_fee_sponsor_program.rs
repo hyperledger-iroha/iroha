@@ -335,7 +335,7 @@ mod tests {
                 )],
             }],
             asset_budgets: vec![FeeSponsorAssetBudget {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("rose").expect("asset name"),
                 ),

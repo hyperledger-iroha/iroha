@@ -4,8 +4,110 @@ import {readFile} from 'node:fs/promises';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
+import {
+  MUSUBI_V1_MODELS,
+  MUSUBI_V1_PATHS,
+  RETIRED_MUSUBI_PATHS,
+  verifyMusubiV1OpenApiContract,
+} from '../lib/musubi-v1-contract.mjs';
+
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(testDir, '..', '..', '..', '..');
+
+function exactMusubiDocument() {
+  return {
+    paths: Object.fromEntries(MUSUBI_V1_PATHS.map((path) => {
+      const [requestType, responseType] = MUSUBI_V1_MODELS[path];
+      return [path, {
+        post: {
+          tags: ['Musubi'],
+          'x-iroha-norito-request-type': requestType,
+          'x-iroha-norito-response-type': responseType,
+          'x-iroha-tool-effect': path.startsWith('/v1/musubi/queries/')
+            ? 'read'
+            : 'build_instruction',
+        },
+      }];
+    })),
+  };
+}
+
+test('Musubi V1 contract verifier is exact and fail closed', () => {
+  const exact = exactMusubiDocument();
+  assert.doesNotThrow(() => verifyMusubiV1OpenApiContract(exact, 'fixture'));
+
+  const missing = structuredClone(exact);
+  delete missing.paths[MUSUBI_V1_PATHS[0]];
+  assert.throws(
+    () => verifyMusubiV1OpenApiContract(missing, 'missing fixture'),
+    /stale Musubi route inventory/,
+  );
+
+  const wrongModel = structuredClone(exact);
+  wrongModel.paths['/v1/musubi/queries/exact-package'].post[
+    'x-iroha-norito-response-type'
+  ] = 'LegacyMusubiPackage';
+  assert.throws(
+    () => verifyMusubiV1OpenApiContract(wrongModel, 'wrong-model fixture'),
+    /response model must be MusubiPackageRecordV1/,
+  );
+
+  const retired = structuredClone(exact);
+  retired.paths[RETIRED_MUSUBI_PATHS[0]] = {get: {}};
+  assert.throws(
+    () => verifyMusubiV1OpenApiContract(retired, 'retired fixture'),
+    /stale Musubi route inventory/,
+  );
+});
+
+test('checked OpenAPI artifacts expose only the Musubi V1 route contract', async () => {
+  assert.equal(MUSUBI_V1_PATHS.length, 29);
+  assert.deepEqual(Object.keys(MUSUBI_V1_MODELS).sort(), MUSUBI_V1_PATHS);
+
+  for (const relativePath of [
+    join('artifacts', 'openapi', 'torii.json'),
+    join('artifacts', 'openapi', 'versions', 'current', 'torii.json'),
+  ]) {
+    const document = JSON.parse(await readFile(join(repoRoot, relativePath), 'utf8'));
+    verifyMusubiV1OpenApiContract(document, relativePath);
+    const paths = document.paths;
+    assert.ok(paths && typeof paths === 'object' && !Array.isArray(paths));
+
+    const musubiPaths = Object.keys(paths)
+      .filter((path) => path.startsWith('/v1/musubi/'))
+      .sort();
+    assert.deepEqual(musubiPaths, MUSUBI_V1_PATHS, relativePath);
+
+    for (const path of MUSUBI_V1_PATHS) {
+      assert.deepEqual(Object.keys(paths[path]), ['post'], `${relativePath}: ${path}`);
+      const operation = paths[path].post;
+      const [requestType, responseType] = MUSUBI_V1_MODELS[path];
+      assert.deepEqual(operation.tags, ['Musubi'], `${relativePath}: ${path} tag`);
+      assert.equal(
+        operation['x-iroha-norito-request-type'],
+        requestType,
+        `${relativePath}: ${path} request model`,
+      );
+      assert.equal(
+        operation['x-iroha-norito-response-type'],
+        responseType,
+        `${relativePath}: ${path} response model`,
+      );
+      assert.equal(
+        operation['x-iroha-tool-effect'],
+        path.startsWith('/v1/musubi/queries/') ? 'read' : 'build_instruction',
+        `${relativePath}: ${path} effect`,
+      );
+    }
+    for (const retiredPath of RETIRED_MUSUBI_PATHS) {
+      assert.equal(
+        Object.hasOwn(paths, retiredPath),
+        false,
+        `${relativePath} retains retired Musubi path ${retiredPath}`,
+      );
+    }
+  }
+});
 
 test('OpenAPI CI uses a locked graph and detached-only signing', async () => {
   const gate = await readFile(join(repoRoot, 'ci', 'check_openapi_spec.sh'), 'utf8');

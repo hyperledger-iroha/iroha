@@ -1119,7 +1119,7 @@ pub async fn handle_gov_citizen_count(
 ) -> Result<JsonBody<CitizenCountResponse>, crate::Error> {
     let world = state.world_view();
     Ok(JsonBody(CitizenCountResponse {
-        total: world.citizens().iter().count().to_string(),
+        total: world.citizens().len().to_string(),
     }))
 }
 
@@ -1184,26 +1184,12 @@ pub async fn handle_gov_unlock_stats(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<UnlockStatsResponse>, crate::Error> {
     let world = state.world_view();
-    let now_h = state.committed_height() as u64;
-    let mut expired_locks_now: u64 = 0;
-    let mut refs_with_expired: u64 = 0;
-    for (_rid, rec) in world.governance_locks().iter() {
-        let mut any = false;
-        for (_owner, l) in rec.locks.iter() {
-            if l.expiry_height <= now_h {
-                expired_locks_now += 1;
-                any = true;
-            }
-        }
-        if any {
-            refs_with_expired += 1;
-        }
-    }
+    let snapshot = *world.governance_unlock_stats();
     let last_sweep_height = *world.governance_last_unlock_sweep_height();
     Ok(JsonBody(UnlockStatsResponse {
-        height_current: now_h,
-        expired_locks_now,
-        referenda_with_expired: refs_with_expired,
+        height_current: snapshot.evaluated_height,
+        expired_locks_now: snapshot.expired_locks_now,
+        referenda_with_expired: snapshot.referenda_with_expired,
         last_sweep_height,
     }))
 }
@@ -2668,32 +2654,26 @@ pub async fn handle_gov_council_current(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<CouncilCurrentResponse>, crate::Error> {
     let world = state.world_view();
-    let mut last_epoch: Option<u64> = None;
-    for (ep, _) in world.council().iter() {
-        last_epoch = Some(last_epoch.map(|e| e.max(*ep)).unwrap_or(*ep));
-    }
-    if let Some(epoch) = last_epoch {
-        if let Some(cs) = world.council().get(&epoch) {
-            return Ok(JsonBody(CouncilCurrentResponse {
-                epoch,
-                members: cs
-                    .members
-                    .iter()
-                    .map(|a| CouncilMemberDto {
-                        account_id: a.to_string(),
-                    })
-                    .collect(),
-                alternates: cs
-                    .alternates
-                    .iter()
-                    .map(|a| CouncilMemberDto {
-                        account_id: a.to_string(),
-                    })
-                    .collect(),
-                candidate_count: cs.candidate_count as usize,
-                derived_by: cs.derived_by,
-            }));
-        }
+    if let Some((epoch, council)) = world.council().last_key_value() {
+        return Ok(JsonBody(CouncilCurrentResponse {
+            epoch: *epoch,
+            members: council
+                .members
+                .iter()
+                .map(|account| CouncilMemberDto {
+                    account_id: account.to_string(),
+                })
+                .collect(),
+            alternates: council
+                .alternates
+                .iter()
+                .map(|account| CouncilMemberDto {
+                    account_id: account.to_string(),
+                })
+                .collect(),
+            candidate_count: council.candidate_count as usize,
+            derived_by: council.derived_by,
+        }));
     }
     let height = state.committed_height() as u64;
     let term_blocks = state.gov.parliament_term_blocks.max(1);
@@ -2720,7 +2700,7 @@ mod tests {
         queue::{Queue, TransactionGuard},
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
-            GovernanceLockRecord, GovernanceLocksForReferendum, GovernancePipeline,
+            CouncilState, GovernanceLockRecord, GovernanceLocksForReferendum, GovernancePipeline,
             GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
             GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceStageApprovals,
             State, World,
@@ -2747,6 +2727,52 @@ mod tests {
 
     const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    #[test]
+    fn unlock_stats_handler_cannot_reintroduce_an_expiry_index_scan() {
+        let source = include_str!("gov.rs");
+        let start = source
+            .find("pub async fn handle_gov_unlock_stats(")
+            .expect("unlock stats handler");
+        let tail = &source[start..];
+        let end = tail
+            .find("pub struct TxInstr")
+            .expect("unlock stats handler terminator");
+        let implementation = &tail[..end];
+
+        assert!(implementation.contains("governance_unlock_stats()"));
+        assert!(!implementation.contains("governance_lock_expiry_index()"));
+        assert!(!implementation.contains(".range("));
+    }
+
+    #[test]
+    fn scalar_governance_handlers_cannot_reintroduce_history_scans() {
+        let source = include_str!("gov.rs");
+
+        let citizen_start = source
+            .find("pub async fn handle_gov_citizen_count(")
+            .expect("citizen count handler");
+        let citizen_tail = &source[citizen_start..];
+        let citizen_end = citizen_tail
+            .find("/// GET /v1/gov/citizens/{account_id}")
+            .expect("citizen count handler terminator");
+        let citizen_handler = &citizen_tail[..citizen_end];
+        assert!(citizen_handler.contains("world.citizens().len()"));
+        assert!(!citizen_handler.contains("citizens().iter()"));
+
+        let council_start = source
+            .find("pub async fn handle_gov_council_current(")
+            .expect("current council handler");
+        let council_tail = &source[council_start..];
+        let council_end = council_tail
+            .find("#[cfg(test)]\nmod tests")
+            .expect("current council handler terminator");
+        let council_handler = &council_tail[..council_end];
+        assert!(council_handler.contains("world.council().last_key_value()"));
+        assert!(!council_handler.contains("world.council().iter()"));
+        assert!(!council_handler.contains(".max_by"));
+        assert!(!council_handler.contains(".max_by_key"));
+    }
 
     #[test]
     fn hint_present_handles_nulls() {
@@ -2876,14 +2902,18 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let escrow_account = Account::new(escrow.clone()).build(&escrow);
-        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             Name::from_str("vote").expect("asset definition name"),
         );
         let asset_def = {
             let __asset_definition_id = asset_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "vote".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         }
         .build(&authority);
         let asset = Asset::new(
@@ -2903,7 +2933,7 @@ mod tests {
         );
         if with_permissions {
             let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-                0,
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &authority,
                 0,
                 iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -3005,7 +3035,7 @@ mod tests {
     }
 
     fn sample_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
             .expect("contract address")
     }
@@ -3034,7 +3064,7 @@ seiyaku GovernedReadFixture {
         );
         let signed_manifest = manifest.signed(&harness.authority_keypair);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &harness.authority,
             91,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -3287,6 +3317,46 @@ seiyaku GovernedReadFixture {
             .0;
 
         assert_eq!(response.total, "1");
+    }
+
+    #[tokio::test]
+    async fn council_current_projects_latest_epoch_from_multi_epoch_history() {
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let latest_member = AccountId::of(
+            checked_governance_ed25519_keypair(0xA4)
+                .public_key()
+                .clone(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        for epoch in 0_u64..128 {
+            transaction.world.council_mut().insert(
+                epoch,
+                CouncilState {
+                    epoch,
+                    members: vec![if epoch == 127 {
+                        latest_member.clone()
+                    } else {
+                        ALICE_ID.clone()
+                    }],
+                    candidate_count: 1,
+                    ..CouncilState::default()
+                },
+            );
+        }
+        transaction.apply();
+        block.commit().expect("commit multi-epoch council history");
+
+        let response = handle_gov_council_current(state)
+            .await
+            .expect("current council response")
+            .0;
+
+        assert_eq!(response.epoch, 127);
+        assert_eq!(response.candidate_count, 1);
+        assert_eq!(response.members.len(), 1);
+        assert_eq!(response.members[0].account_id, latest_member.to_string());
     }
 
     #[test]
@@ -4481,7 +4551,7 @@ seiyaku GovernedReadFixture {
     async fn governed_contract_read_serializes_exact_inactive_shape() {
         let harness = mk_governance_harness(true);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &harness.authority,
             92,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -4571,7 +4641,7 @@ seiyaku GovernedReadFixture {
     async fn governed_contract_read_rejects_incomplete_active_state() {
         let harness = mk_governance_harness(true);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &harness.authority,
             93,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

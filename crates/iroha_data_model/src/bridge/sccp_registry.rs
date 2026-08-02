@@ -4204,7 +4204,7 @@ mod tests {
         );
 
         let mut wrong_asset = route(1, SccpRouteActivationV1::Staged);
-        wrong_asset.settlement.asset_definition_id = AssetDefinitionId::new(
+        wrong_asset.settlement.asset_definition_id = AssetDefinitionId::derive_from_components(
             crate::domain::DomainId::try_new("wrong", "universal").expect("valid domain"),
             "xor".parse().expect("valid name"),
         );

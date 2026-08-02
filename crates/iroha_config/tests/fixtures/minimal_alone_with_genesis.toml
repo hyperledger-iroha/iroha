@@ -2,3 +2,4 @@ extends = "base.toml"
 
 [genesis]
 file = "./genesis.signed.nrt"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"

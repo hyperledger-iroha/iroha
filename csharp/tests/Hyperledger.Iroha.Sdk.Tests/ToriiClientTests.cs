@@ -76,7 +76,12 @@ public sealed class ToriiClientTests
     private static readonly string VpnQuoteSessionIdHex = new('6', 32);
     private static readonly string VpnPaymentTransactionHashHex = new('2', 64);
     private static readonly string VpnMeteringPublicKeyHex = new('3', 64);
-    private static readonly string VpnSpkiSha256Hex = new('7', 64);
+    private static readonly string VpnSpkiSha256Hex = string.Concat(Enumerable.Repeat("ab", 32));
+    private const string VpnRelayIdHex =
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    private static readonly string VpnDescriptorCommitHex = string.Concat(Enumerable.Repeat("cd", 32));
+    private static readonly string VpnRelayCertificateSha256Hex = string.Concat(Enumerable.Repeat("ef", 32));
+    private static readonly string VpnDirectorySnapshotDigestHex = string.Concat(Enumerable.Repeat("42", 32));
     private static readonly string VpnHelperTicketHex = "5356504e48543100" + new string('0', (664 - 8) * 2);
     private static readonly string SoraFsManifestDigestHex = new('d', 64);
     private static readonly string SoraFsManifestIdHex = new('e', 64);
@@ -1900,7 +1905,7 @@ public sealed class ToriiClientTests
             Content = new StringContent($$"""
                 {
                   "canonical_id": "{{ExplorerDirectoryAccountId}}",
-                  "literal": "sorauロ1Nholder",
+                  "literal": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "network_prefix": 753,
                   "error_correction": "M",
                   "modules": 192,
@@ -1911,13 +1916,13 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var snapshot = await client.GetExplorerAccountQrAsync("sorauロ1Nholder", cancellationToken: TestContext.Current.CancellationToken);
+        var snapshot = await client.GetExplorerAccountQrAsync("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(ExplorerDirectoryAccountId, snapshot.CanonicalId);
-        Assert.Equal("sorauロ1Nholder", snapshot.Literal);
+        Assert.Equal("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", snapshot.Literal);
         Assert.Equal(753, snapshot.NetworkPrefix);
         Assert.Equal("<svg/>", snapshot.Svg);
-        Assert.Equal("/v1/explorer/accounts/sorau%E3%83%AD1Nholder/qr", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/v1/explorer/accounts/sorau%EF%BE%9B1P%EF%BE%89%EF%BD%B3%EF%BE%87mE%EF%BD%B4W%EF%BD%B5ebH%EF%BE%916%EF%BE%94%EF%BE%99%EF%BD%B2%E3%83%B0iwuCWErJ7u%EF%BD%BDoPG%EF%BD%B1%EF%BE%94nj%EF%BE%91K%EF%BE%8BTCW2PV/qr", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -1927,7 +1932,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 2, "per_page": 5, "total_pages": 3, "total_items": 11 },
+                  "pagination": { "limit": 5, "next_cursor": "bmV4dA", "has_more": true },
                   "items": [
                     {
                       "id": "{{ExplorerDirectoryAccountId}}",
@@ -1946,18 +1951,19 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery
         {
-            Page = 2,
-            PerPage = 5,
+            Cursor = "cHJldg",
+            Limit = 5,
             Domain = "wonderland.paynet",
             WithAsset = "rose#wonderland.paynet",
         }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)11, page.Pagination.TotalItems);
+        Assert.Equal("bmV4dA", page.Pagination.NextCursor);
+        Assert.True(page.Pagination.HasMore);
         Assert.Single(page.Items);
         Assert.Equal(ExplorerDirectoryAccountId, page.Items[0].Id);
         Assert.Equal(ExplorerDirectoryAccountId, page.Items[0].I105Address);
         Assert.Equal("gold", page.Items[0].Metadata!["tier"]!.GetValue<string>());
-        Assert.Equal("/v1/explorer/accounts?page=2&per_page=5&domain=wonderland.paynet&with_asset=rose%23wonderland.paynet", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/accounts?cursor=cHJldg&limit=5&domain=wonderland.paynet&with_asset=rose%23wonderland.paynet", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -1995,7 +2001,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 1, "per_page": 10, "total_pages": 1, "total_items": 1 },
+                  "pagination": { "limit": 10, "next_cursor": null, "has_more": false },
                   "items": [
                     {
                       "id": "wonderland.paynet",
@@ -2014,8 +2020,8 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerDomainsAsync(new ToriiExplorerDomainsQuery
         {
-            Page = 1,
-            PerPage = 10,
+            Cursor = "cHJldg",
+            Limit = 10,
             OwnedBy = ExplorerDomainOwnerAccountId,
         }, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -2024,7 +2030,7 @@ public sealed class ToriiClientTests
         Assert.Equal(ExplorerDomainOwnerAccountId, page.Items[0].OwnedBy);
         Assert.Equal("jp", page.Items[0].Metadata!["region"]!.GetValue<string>());
         Assert.Equal(
-            $"/v1/explorer/domains?page=1&per_page=10&owned_by={Uri.EscapeDataString(ExplorerDomainOwnerAccountId)}",
+            $"/v1/explorer/domains?cursor=cHJldg&limit=10&owned_by={Uri.EscapeDataString(ExplorerDomainOwnerAccountId)}",
             handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
@@ -2081,7 +2087,7 @@ public sealed class ToriiClientTests
         {
             "accounts-page",
             "items[0].id",
-            ExplorerDirectoryResponseJson("accounts-page", "items[0].id", " sorauロ1Nholder"),
+            ExplorerDirectoryResponseJson("accounts-page", "items[0].id", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "surrounding whitespace",
         };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -2147,7 +2153,7 @@ public sealed class ToriiClientTests
         {
             "domain-detail",
             "owned_by",
-            ExplorerDirectoryResponseJson("domain-detail", "owned_by", "sorauロ1Nowner\u0001"),
+            ExplorerDirectoryResponseJson("domain-detail", "owned_by", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001"),
             "control characters",
         };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -2191,9 +2197,13 @@ public sealed class ToriiClientTests
     {
         yield return new object[] { "accounts-page", "explorer accounts page", "null", "must not be null" };
         yield return new object[] { "accounts-page", "items", ExplorerDirectoryDuplicatePropertyJson("accounts-page", "items"), "must not appear more than once" };
-        yield return new object[] { "accounts-page", "pagination.total_items", ExplorerDirectoryResponseJson("accounts-page", "pagination.total_items", "1"), "unsigned integer" };
-        yield return new object[] { "accounts-page", "pagination.page", ExplorerDirectoryResponseJson("accounts-page", "pagination.page", 0), "positive" };
-        yield return new object[] { "accounts-page", "pagination.per_page", ExplorerDirectoryResponseJson("accounts-page", "pagination.per_page", 0), "positive" };
+        yield return new object[] { "accounts-page", "pagination.limit", ExplorerDirectoryResponseJson("accounts-page", "pagination.limit", "1"), "unsigned integer" };
+        yield return new object[] { "accounts-page", "pagination.limit", ExplorerDirectoryResponseJson("accounts-page", "pagination.limit", 0), "between 1 and 100" };
+        yield return new object[] { "accounts-page", "pagination.next_cursor", ExplorerDirectoryResponseJson("accounts-page", "pagination.next_cursor", "bmV4dA=="), "base64url" };
+        yield return new object[] { "accounts-page", "pagination.has_more", ExplorerDirectoryResponseJson("accounts-page", "pagination.has_more", false), "exactly when next_cursor" };
+        yield return new object[] { "accounts-page", "pagination.page", ExplorerWorldPageWithAdditionalPropertyJson("accounts-page", "pagination.page", 1), "not supported" };
+        yield return new object[] { "accounts-page", "pagination.next_cursor", ExplorerWorldPageWithoutPropertyJson("accounts-page", "pagination.next_cursor"), "must be present" };
+        yield return new object[] { "accounts-page", "items", ExplorerWorldPageWithTooManyItemsJson("accounts-page"), "pagination.limit" };
         yield return new object[] { "accounts-page", "items[0]", ExplorerDirectoryResponseJson("accounts-page", "items[0]", 1), "object" };
         yield return new object[] { "accounts-page", "items[0].id", ExplorerDirectoryDuplicateItemPropertyJson("accounts-page", "id"), "must not appear more than once" };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -2204,8 +2214,9 @@ public sealed class ToriiClientTests
         yield return new object[] { "account-detail", "network_prefix", ExplorerDirectoryResponseJson("account-detail", "network_prefix", "753"), "unsigned integer" };
         yield return new object[] { "account-detail", "owned_assets", ExplorerDirectoryResponseJson("account-detail", "owned_assets", "2"), "unsigned integer" };
         yield return new object[] { "domains-page", "pagination", ExplorerDirectoryResponseJson("domains-page", "pagination", 1), "object" };
-        yield return new object[] { "domains-page", "pagination.page", ExplorerDirectoryResponseJson("domains-page", "pagination.page", 0), "positive" };
-        yield return new object[] { "domains-page", "pagination.per_page", ExplorerDirectoryResponseJson("domains-page", "pagination.per_page", 0), "positive" };
+        yield return new object[] { "domains-page", "pagination.limit", ExplorerDirectoryResponseJson("domains-page", "pagination.limit", 101), "between 1 and 100" };
+        yield return new object[] { "domains-page", "pagination.has_more", ExplorerDirectoryResponseJson("domains-page", "pagination.has_more", "false"), "boolean" };
+        yield return new object[] { "domains-page", "per_page", ExplorerWorldPageWithAdditionalPropertyJson("domains-page", "per_page", 10), "not supported" };
         yield return new object[] { "domains-page", "items[0].accounts", ExplorerDirectoryResponseJson("domains-page", "items[0].accounts", "4"), "unsigned integer" };
         yield return new object[] { "domain-detail", "logo", ExplorerDirectoryResponseJson("domain-detail", "logo", 1), "string" };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -2248,10 +2259,11 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 3, "per_page": 2, "total_pages": 4, "total_items": 8 },
+                  "pagination": { "limit": 2, "next_cursor": "bmV4dA", "has_more": true },
                   "items": [
                     {
                       "id": "rose#wonderland.paynet",
+                      "owning_domain": "wonderland.paynet",
                       "mintable": "Infinitely",
                       "logo": "https://cdn.example/rose.svg",
                       "metadata": { "category": "flora" },
@@ -2269,19 +2281,19 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerAssetDefinitionsAsync(new ToriiExplorerAssetDefinitionsQuery
         {
-            Page = 3,
-            PerPage = 2,
-            Domain = "wonderland.paynet",
+            Cursor = "cHJldg",
+            Limit = 2,
+            OwningDomain = "wonderland.paynet",
             OwnedBy = ExplorerAssetDefinitionOwnerAccountId,
         }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)8, page.Pagination.TotalItems);
+        Assert.Equal((uint)2, page.Pagination.Limit);
         Assert.Single(page.Items);
         Assert.Equal(ExplorerAssetDefinitionOwnerAccountId, page.Items[0].OwnedBy);
         Assert.Equal("975", page.Items[0].CirculatingQuantity);
         Assert.Equal("flora", page.Items[0].Metadata!["category"]!.GetValue<string>());
         Assert.Equal(
-            $"/v1/explorer/asset-definitions?page=3&per_page=2&domain=wonderland.paynet&owned_by={Uri.EscapeDataString(ExplorerAssetDefinitionOwnerAccountId)}",
+            $"/v1/explorer/asset-definitions?cursor=cHJldg&limit=2&owning_domain=wonderland.paynet&owned_by={Uri.EscapeDataString(ExplorerAssetDefinitionOwnerAccountId)}",
             handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
@@ -2293,6 +2305,7 @@ public sealed class ToriiClientTests
             Content = new StringContent($$"""
                 {
                   "id": "rose#wonderland.paynet",
+                  "owning_domain": null,
                   "mintable": "Infinitely",
                   "logo": null,
                   "metadata": { "category": "flora" },
@@ -2309,6 +2322,7 @@ public sealed class ToriiClientTests
         var definition = await client.GetExplorerAssetDefinitionAsync("rose#wonderland.paynet", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("Infinitely", definition.Mintable);
+        Assert.Null(definition.OwningDomain);
         Assert.Equal(ExplorerAssetDefinitionOwnerAccountId, definition.OwnedBy);
         Assert.Equal("975", definition.CirculatingQuantity);
         Assert.Equal("/v1/explorer/asset-definitions/rose%23wonderland.paynet", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -2550,7 +2564,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 4, "per_page": 1, "total_pages": 9, "total_items": 9 },
+                  "pagination": { "limit": 1, "next_cursor": "bmV4dA", "has_more": true },
                   "items": [
                     {
                       "id": "asset-001",
@@ -2566,19 +2580,19 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerAssetsAsync(new ToriiExplorerAssetsQuery
         {
-            Page = 4,
-            PerPage = 1,
+            Cursor = "cHJldg",
+            Limit = 1,
             OwnedBy = ExplorerAssetAccountId,
             Definition = "rose#wonderland.paynet",
             AssetId = "asset-001",
         }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)9, page.Pagination.TotalItems);
+        Assert.Equal((uint)1, page.Pagination.Limit);
         Assert.Single(page.Items);
         Assert.Equal(ExplorerAssetAccountId, page.Items[0].AccountId);
         Assert.Equal("25", page.Items[0].Value);
         Assert.Equal(
-            $"/v1/explorer/assets?page=4&per_page=1&owned_by={Uri.EscapeDataString(ExplorerAssetAccountId)}&definition=rose%23wonderland.paynet&asset_id=asset-001",
+            $"/v1/explorer/assets?cursor=cHJldg&limit=1&owned_by={Uri.EscapeDataString(ExplorerAssetAccountId)}&definition=rose%23wonderland.paynet&asset_id=asset-001",
             handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
@@ -2613,7 +2627,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 2, "per_page": 2, "total_pages": 2, "total_items": 3 },
+                  "pagination": { "limit": 2, "next_cursor": null, "has_more": false },
                   "items": [
                     {
                       "id": "ticket$wonderland",
@@ -2628,8 +2642,8 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerNftsAsync(new ToriiExplorerNftsQuery
         {
-            Page = 2,
-            PerPage = 2,
+            Cursor = "cHJldg",
+            Limit = 2,
             OwnedBy = ExplorerNftOwnerAccountId,
             Domain = "wonderland.paynet",
         }, cancellationToken: TestContext.Current.CancellationToken);
@@ -2638,7 +2652,7 @@ public sealed class ToriiClientTests
         Assert.Equal(ExplorerNftOwnerAccountId, page.Items[0].OwnedBy);
         Assert.Equal("A1", page.Items[0].Metadata!["seat"]!.GetValue<string>());
         Assert.Equal(
-            $"/v1/explorer/nfts?page=2&per_page=2&owned_by={Uri.EscapeDataString(ExplorerNftOwnerAccountId)}&domain=wonderland.paynet",
+            $"/v1/explorer/nfts?cursor=cHJldg&limit=2&owned_by={Uri.EscapeDataString(ExplorerNftOwnerAccountId)}&domain=wonderland.paynet",
             handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
@@ -2671,7 +2685,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 1, "per_page": 5, "total_pages": 1, "total_items": 1 },
+                  "pagination": { "limit": 5, "next_cursor": null, "has_more": false },
                   "items": [
                     {
                       "id": "lot$gold#wonderland",
@@ -2694,8 +2708,8 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerRwasAsync(new ToriiExplorerRwasQuery
         {
-            Page = 1,
-            PerPage = 5,
+            Cursor = "cHJldg",
+            Limit = 5,
             OwnedBy = ExplorerRwaOwnerAccountId,
             Domain = "wonderland.paynet",
         }, cancellationToken: TestContext.Current.CancellationToken);
@@ -2705,7 +2719,7 @@ public sealed class ToriiClientTests
         Assert.Equal("vault-7", page.Items[0].PrimaryReference);
         Assert.Equal("ore$mine#wonderland", page.Items[0].Parents[0].Rwa);
         Assert.Equal(
-            $"/v1/explorer/rwas?page=1&per_page=5&owned_by={Uri.EscapeDataString(ExplorerRwaOwnerAccountId)}&domain=wonderland.paynet",
+            $"/v1/explorer/rwas?cursor=cHJldg&limit=5&owned_by={Uri.EscapeDataString(ExplorerRwaOwnerAccountId)}&domain=wonderland.paynet",
             handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
@@ -2738,6 +2752,84 @@ public sealed class ToriiClientTests
         Assert.Equal("100", rwa.Quantity);
         Assert.Equal("A", rwa.Metadata!["grade"]!.GetValue<string>());
         Assert.Equal("/v1/explorer/rwas/lot%24gold%23wonderland", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    public static IEnumerable<object[]> ExplorerWorldListOperations()
+    {
+        yield return new object[] { "accounts" };
+        yield return new object[] { "domains" };
+        yield return new object[] { "asset-definitions" };
+        yield return new object[] { "assets" };
+        yield return new object[] { "nfts" };
+        yield return new object[] { "rwas" };
+    }
+
+    [Theory]
+    [MemberData(nameof(ExplorerWorldListOperations))]
+    public async Task ExplorerWorldListQueriesRejectNonCanonicalCursor(string operation)
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("HTTP must not be attempted."));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            InvokeExplorerWorldListQueryAsync(
+                client,
+                operation,
+                "bmV4dA==",
+                10,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("base64url", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [MemberData(nameof(ExplorerWorldListOperations))]
+    public async Task ExplorerWorldListQueriesRejectOutOfRangeLimit(string operation)
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("HTTP must not be attempted."));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            InvokeExplorerWorldListQueryAsync(
+                client,
+                operation,
+                "bmV4dA",
+                101,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("between 1 and 100", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task ExplorerWorldListQueryRejectsOversizedCursor()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("HTTP must not be attempted."));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery
+            {
+                Cursor = new string('A', 1428),
+                Limit = 10,
+            }, cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("at most 1424", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [MemberData(nameof(ExplorerWorldListOperations))]
+    public void RawExplorerWorldListPagesRejectRetiredPaginationFields(string operation)
+    {
+        var pageOperation = $"{operation}-page";
+        var json = ExplorerWorldPageWithAdditionalPropertyJson(pageOperation, "pagination.page", 1);
+
+        var error = Assert.Throws<JsonException>(() => DeserializeRawExplorerWorldPage(pageOperation, json));
+
+        Assert.Contains("pagination.page", error.Message);
+        Assert.Contains("not supported", error.Message);
     }
 
     public static IEnumerable<object?[]> InvalidExplorerInventoryResponses()
@@ -2788,7 +2880,7 @@ public sealed class ToriiClientTests
         {
             "asset-definitions-page",
             "items[0].owned_by",
-            ExplorerInventoryResponseJson("asset-definitions-page", "items[0].owned_by", "sorauロ1Nissuer\u0001"),
+            ExplorerInventoryResponseJson("asset-definitions-page", "items[0].owned_by", "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\u0001"),
             "control characters",
         };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -2861,7 +2953,7 @@ public sealed class ToriiClientTests
         {
             "assets-page",
             "items[0].account_id",
-            ExplorerInventoryResponseJson("assets-page", "items[0].account_id", " sorauロ1Nholder"),
+            ExplorerInventoryResponseJson("assets-page", "items[0].account_id", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "surrounding whitespace",
         };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -2906,7 +2998,7 @@ public sealed class ToriiClientTests
         {
             "nft-detail",
             "owned_by",
-            ExplorerInventoryResponseJson("nft-detail", "owned_by", "sorauロ1Nholder\u0001"),
+            ExplorerInventoryResponseJson("nft-detail", "owned_by", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001"),
             "control characters",
         };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -3044,14 +3136,16 @@ public sealed class ToriiClientTests
     {
         yield return new object[] { "asset-definitions-page", "explorer asset definitions page", "null", "must not be null" };
         yield return new object[] { "asset-definitions-page", "items", ExplorerInventoryDuplicatePropertyJson("asset-definitions-page", "items"), "must not appear more than once" };
-        yield return new object[] { "asset-definitions-page", "pagination.total_items", ExplorerInventoryResponseJson("asset-definitions-page", "pagination.total_items", "8"), "unsigned integer" };
-        yield return new object[] { "asset-definitions-page", "pagination.page", ExplorerInventoryResponseJson("asset-definitions-page", "pagination.page", 0), "positive" };
-        yield return new object[] { "asset-definitions-page", "pagination.per_page", ExplorerInventoryResponseJson("asset-definitions-page", "pagination.per_page", 0), "positive" };
+        yield return new object[] { "asset-definitions-page", "pagination.limit", ExplorerInventoryResponseJson("asset-definitions-page", "pagination.limit", "8"), "unsigned integer" };
+        yield return new object[] { "asset-definitions-page", "pagination.limit", ExplorerInventoryResponseJson("asset-definitions-page", "pagination.limit", 0), "between 1 and 100" };
+        yield return new object[] { "asset-definitions-page", "pagination.has_more", ExplorerWorldPageWithoutPropertyJson("asset-definitions-page", "pagination.has_more"), "must be present" };
         yield return new object[] { "asset-definitions-page", "items[0].assets", ExplorerInventoryResponseJson("asset-definitions-page", "items[0].assets", "12"), "unsigned integer" };
+        yield return new object[] { "asset-definitions-page", "owning_domain", ExplorerInventoryWithoutItemPropertyJson("asset-definitions-page", "owning_domain"), "must be present" };
         yield return new object[] { "asset-definition-detail", "total_quantity", ExplorerInventoryDuplicateItemPropertyJson("asset-definition-detail", "total_quantity"), "must not appear more than once" };
         yield return new object[] { "assets-page", "items[0].value", ExplorerInventoryResponseJson("assets-page", "items[0].value", 25), "string" };
-        yield return new object[] { "assets-page", "pagination.page", ExplorerInventoryResponseJson("assets-page", "pagination.page", 0), "positive" };
-        yield return new object[] { "assets-page", "pagination.per_page", ExplorerInventoryResponseJson("assets-page", "pagination.per_page", 0), "positive" };
+        yield return new object[] { "assets-page", "pagination.limit", ExplorerInventoryResponseJson("assets-page", "pagination.limit", 101), "between 1 and 100" };
+        yield return new object[] { "assets-page", "pagination.next_cursor", ExplorerInventoryResponseJson("assets-page", "pagination.next_cursor", "bad="), "base64url" };
+        yield return new object[] { "assets-page", "pagination.total_items", ExplorerWorldPageWithAdditionalPropertyJson("assets-page", "pagination.total_items", 1), "not supported" };
         yield return new object[] { "asset-detail", "account_id", ExplorerInventoryResponseJson("asset-detail", "account_id", 1), "string" };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
         {
@@ -3065,12 +3159,12 @@ public sealed class ToriiClientTests
             yield return new object[] { "rwa-detail", "owned_by", ExplorerInventoryResponseJson("rwa-detail", "owned_by", invalidAccountId), "canonical I105" };
         }
         yield return new object[] { "nfts-page", "items[0]", ExplorerInventoryResponseJson("nfts-page", "items[0]", 1), "object" };
-        yield return new object[] { "nfts-page", "pagination.page", ExplorerInventoryResponseJson("nfts-page", "pagination.page", 0), "positive" };
-        yield return new object[] { "nfts-page", "pagination.per_page", ExplorerInventoryResponseJson("nfts-page", "pagination.per_page", 0), "positive" };
+        yield return new object[] { "nfts-page", "pagination.has_more", ExplorerInventoryResponseJson("nfts-page", "pagination.has_more", false), "exactly when next_cursor" };
+        yield return new object[] { "nfts-page", "page", ExplorerWorldPageWithAdditionalPropertyJson("nfts-page", "page", 1), "not supported" };
         yield return new object[] { "nft-detail", "owned_by", ExplorerInventoryDuplicateItemPropertyJson("nft-detail", "owned_by"), "must not appear more than once" };
         yield return new object[] { "rwas-page", "items[0].is_frozen", ExplorerInventoryResponseJson("rwas-page", "items[0].is_frozen", "false"), "boolean" };
-        yield return new object[] { "rwas-page", "pagination.page", ExplorerInventoryResponseJson("rwas-page", "pagination.page", 0), "positive" };
-        yield return new object[] { "rwas-page", "pagination.per_page", ExplorerInventoryResponseJson("rwas-page", "pagination.per_page", 0), "positive" };
+        yield return new object[] { "rwas-page", "pagination.has_more", ExplorerInventoryResponseJson("rwas-page", "pagination.has_more", "true"), "boolean" };
+        yield return new object[] { "rwas-page", "pagination.limit", ExplorerWorldPageWithoutPropertyJson("rwas-page", "pagination.limit"), "must be present" };
         yield return new object[] { "rwa-detail", "parents[0].quantity", ExplorerInventoryDuplicateRwaParentPropertyJson("quantity"), "must not appear more than once" };
         yield return new object[] { "rwa-detail", "parents[0].quantity", ExplorerInventoryResponseJson("rwa-detail", "parents[0].quantity", 10), "string" };
     }
@@ -3115,12 +3209,11 @@ public sealed class ToriiClientTests
             Assert.Same(original, Assert.Single(secondAccess));
         }
 
-        var pagination = new ToriiExplorerPaginationMeta
+        var pagination = new ToriiExplorerCursorMeta
         {
-            Page = 1,
-            PerPage = 10,
-            TotalPages = 1,
-            TotalItems = 1,
+            Limit = 10,
+            NextCursor = null,
+            HasMore = false,
         };
 
         var account = new ToriiExplorerAccount
@@ -3164,6 +3257,7 @@ public sealed class ToriiClientTests
         var assetDefinition = new ToriiExplorerAssetDefinition
         {
             Id = "rose#wonderland.paynet",
+            OwningDomain = "wonderland.paynet",
             Mintable = "Infinitely",
             Logo = "https://cdn.example/rose.svg",
             Metadata = new JsonObject(),
@@ -3251,6 +3345,42 @@ public sealed class ToriiClientTests
         var roundTripRwas = Assert.IsType<ToriiExplorerRwasPage>(
             JsonSerializer.Deserialize<ToriiExplorerRwasPage>(JsonSerializer.Serialize(rwasPage)));
         Assert.Equal("lot$gold#wonderland", Assert.Single(roundTripRwas.Items).Id);
+    }
+
+    [Fact]
+    public void ExplorerCursorMetadataUsesCanonicalWireOrderAndConsistency()
+    {
+        var pagination = new ToriiExplorerCursorMeta
+        {
+            Limit = 25,
+            NextCursor = "bmV4dA",
+            HasMore = true,
+        };
+
+        var json = JsonSerializer.Serialize(pagination);
+        Assert.Equal("""{"limit":25,"next_cursor":"bmV4dA","has_more":true}""", json);
+
+        var roundTrip = Assert.IsType<ToriiExplorerCursorMeta>(
+            JsonSerializer.Deserialize<ToriiExplorerCursorMeta>(json));
+        Assert.Equal((uint)25, roundTrip.Limit);
+        Assert.Equal("bmV4dA", roundTrip.NextCursor);
+        Assert.True(roundTrip.HasMore);
+    }
+
+    [Fact]
+    public void ExplorerCursorMetadataWriteRejectsInconsistentContinuationFlag()
+    {
+        var pagination = new ToriiExplorerCursorMeta
+        {
+            Limit = 25,
+            NextCursor = "bmV4dA",
+            HasMore = false,
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(pagination));
+
+        Assert.Contains("has_more", error.Message);
+        Assert.Contains("next_cursor", error.Message);
     }
 
     [Fact]
@@ -3398,7 +3528,7 @@ public sealed class ToriiClientTests
             "account-qr",
             "canonical_id",
             RemoveTopLevelJsonField(
-                ExplorerSupplementalResponseJson("account-qr", "canonical_id", "sorauロ1Nholder"),
+                ExplorerSupplementalResponseJson("account-qr", "canonical_id", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
                 "canonical_id"),
             "must not be null",
         };
@@ -3406,7 +3536,7 @@ public sealed class ToriiClientTests
         {
             "account-qr",
             "canonical_id",
-            ExplorerSupplementalResponseJson("account-qr", "canonical_id", " sorauロ1Nholder"),
+            ExplorerSupplementalResponseJson("account-qr", "canonical_id", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "surrounding whitespace",
         };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -3431,7 +3561,7 @@ public sealed class ToriiClientTests
             "account-qr",
             "literal",
             RemoveTopLevelJsonField(
-                ExplorerSupplementalResponseJson("account-qr", "literal", "sorauロ1Nholder"),
+                ExplorerSupplementalResponseJson("account-qr", "literal", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
                 "literal"),
             "must not be null",
         };
@@ -3638,7 +3768,7 @@ public sealed class ToriiClientTests
         {
             "asset-definition-snapshot",
             "top_holders[0].account_id",
-            ExplorerSupplementalResponseJson("asset-definition-snapshot", "top_holders[0].account_id", " sorauロ1Nholder"),
+            ExplorerSupplementalResponseJson("asset-definition-snapshot", "top_holders[0].account_id", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "surrounding whitespace",
         };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
@@ -3825,14 +3955,14 @@ public sealed class ToriiClientTests
         };
         yield return new object[] { "account-qr", "explorer account QR response.audit.nonce", ExplorerSupplementalUnknownExtensionDuplicateJson("account-qr"), "must not appear more than once" };
         yield return new object[] { "account-qr", "canonical_id", ExplorerSupplementalResponseJson("account-qr", "canonical_id", null), "must not be null" };
-        yield return new object[] { "account-qr", "canonical_id", RemoveTopLevelJsonField(ExplorerSupplementalResponseJson("account-qr", "canonical_id", "sorauロ1Nholder"), "canonical_id"), "must not be null" };
+        yield return new object[] { "account-qr", "canonical_id", RemoveTopLevelJsonField(ExplorerSupplementalResponseJson("account-qr", "canonical_id", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), "canonical_id"), "must not be null" };
         yield return new object[] { "account-qr", "canonical_id", ExplorerSupplementalResponseJson("account-qr", "canonical_id", 1), "string" };
         foreach (var invalidAccountId in InvalidCanonicalAccountIds())
         {
             yield return new object[] { "account-qr", "canonical_id", ExplorerSupplementalResponseJson("account-qr", "canonical_id", invalidAccountId), "canonical I105" };
         }
         yield return new object[] { "account-qr", "literal", ExplorerSupplementalResponseJson("account-qr", "literal", null), "must not be null" };
-        yield return new object[] { "account-qr", "literal", RemoveTopLevelJsonField(ExplorerSupplementalResponseJson("account-qr", "literal", "sorauロ1Nholder"), "literal"), "must not be null" };
+        yield return new object[] { "account-qr", "literal", RemoveTopLevelJsonField(ExplorerSupplementalResponseJson("account-qr", "literal", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), "literal"), "must not be null" };
         yield return new object[] { "account-qr", "network_prefix", RemoveTopLevelJsonField(ExplorerSupplementalResponseJson("account-qr", "network_prefix", 753), "network_prefix"), "must not be null" };
         yield return new object[] { "account-qr", "network_prefix", ExplorerSupplementalResponseJson("account-qr", "network_prefix", "753"), "integer" };
         yield return new object[] { "account-qr", "error_correction", ExplorerSupplementalResponseJson("account-qr", "error_correction", null), "must not be null" };
@@ -4121,7 +4251,7 @@ public sealed class ToriiClientTests
         yield return new object?[]
         {
             "items[0].account_id",
-            AccountAssetsResponseJson("items[0].account_id", " sorauロ1Nholder"),
+            AccountAssetsResponseJson("items[0].account_id", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "surrounding whitespace",
         };
         yield return new object?[]
@@ -4468,13 +4598,13 @@ public sealed class ToriiClientTests
         yield return new object?[]
         {
             "items[0].authority",
-            AccountTransactionsResponseJson("items[0].authority", " sorauロ1Nholder"),
+            AccountTransactionsResponseJson("items[0].authority", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "surrounding whitespace",
         };
         yield return new object?[]
         {
             "items[0].authority",
-            AccountTransactionsResponseJson("items[0].authority", "sorauロ1Nholder\u0001"),
+            AccountTransactionsResponseJson("items[0].authority", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001"),
             "control characters",
         };
         yield return new object?[]
@@ -4558,7 +4688,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "entrypoint_hash", RemoveTopLevelJsonField(AccountTransactionSummaryJson("entrypoint_hash", ToriiTransactionHashHex), "entrypoint_hash"), "must not be null" };
         yield return new object[] { "entrypoint_hash", AccountTransactionSummaryJson("entrypoint_hash", 1), "string" };
         yield return new object[] { "entrypoint_hash", AccountTransactionSummaryJson("entrypoint_hash", "hash"), "32-byte hex string" };
-        yield return new object[] { "authority", AccountTransactionSummaryJson("authority", " sorauロ1Nholder"), "surrounding whitespace" };
+        yield return new object[] { "authority", AccountTransactionSummaryJson("authority", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), "surrounding whitespace" };
         yield return new object[] { "authority", AccountTransactionSummaryJson("authority", "merchant@sora"), "canonical I105" };
         yield return new object[] { "authority", AccountTransactionSummaryJson("authority", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
         yield return new object[] { "authority", AccountTransactionSummaryJson("authority", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
@@ -5086,7 +5216,7 @@ public sealed class ToriiClientTests
             ("explorer-accounts-domain", "Domain"),
             ("explorer-accounts-with-asset", "WithAsset"),
             ("explorer-domains-owned-by", "OwnedBy"),
-            ("explorer-asset-definitions-domain", "Domain"),
+            ("explorer-asset-definitions-owning-domain", "OwningDomain"),
             ("explorer-asset-definitions-owned-by", "OwnedBy"),
             ("explorer-assets-owned-by", "OwnedBy"),
             ("explorer-assets-definition", "Definition"),
@@ -5942,14 +6072,14 @@ public sealed class ToriiClientTests
     public static IEnumerable<object?[]> InvalidDirectExplorerDirectoryInventoryMetadata()
     {
         yield return new object?[] { "account", "Id", "i105:sorauロ 1Nholder" };
-        yield return new object?[] { "account", "I105Address", "sorauロ1Nholder\u0001" };
+        yield return new object?[] { "account", "I105Address", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001" };
         yield return new object?[] { "domain", "Id", "wonderland paynet" };
         yield return new object?[] { "domain", "Logo", "" };
         yield return new object?[] { "domain", "OwnedBy", "i105:sorauロ 1Nowner" };
         yield return new object?[] { "asset-definition", "Id", "rose #wonderland.paynet" };
         yield return new object?[] { "asset-definition", "Mintable", "In finitely" };
         yield return new object?[] { "asset-definition", "Logo", " https://cdn.example/rose.svg" };
-        yield return new object?[] { "asset-definition", "OwnedBy", "sorauロ1Nowner\u0001" };
+        yield return new object?[] { "asset-definition", "OwnedBy", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001" };
         yield return new object?[] { "asset-definition", "TotalQuantity", "-1" };
         yield return new object?[] { "asset-definition", "LockedQuantity", "01" };
         yield return new object?[] { "asset-definition", "CirculatingQuantity", "1.0" };
@@ -5958,7 +6088,7 @@ public sealed class ToriiClientTests
         yield return new object?[] { "asset", "AccountId", "i105:sorauロ 1Nholder" };
         yield return new object?[] { "asset", "Value", "+1" };
         yield return new object?[] { "nft", "Id", "" };
-        yield return new object?[] { "nft", "OwnedBy", "sorauロ1Nholder\u0001" };
+        yield return new object?[] { "nft", "OwnedBy", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001" };
         yield return new object?[] { "rwa-parent", "Rwa", "ore mine#wonderland" };
         yield return new object?[] { "rwa-parent", "Quantity", "1.20" };
         yield return new object?[] { "rwa", "Id", "lot gold#wonderland" };
@@ -6034,7 +6164,7 @@ public sealed class ToriiClientTests
         yield return new object?[] { "distribution", "Median", "01" };
         yield return new object?[] { "distribution", "P90", "1.0" };
         yield return new object?[] { "distribution", "P99", "7\u0001" };
-        yield return new object?[] { "top-holder", "AccountId", " sorauロ1Nholder" };
+        yield return new object?[] { "top-holder", "AccountId", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV" };
         yield return new object?[] { "top-holder", "Balance", "1.20" };
         yield return new object?[] { "snapshot", "DefinitionId", "rose#wonderland.paynet\u0001" };
         yield return new object?[] { "snapshot", "TotalSupply", "-1" };
@@ -6234,9 +6364,9 @@ public sealed class ToriiClientTests
     {
         yield return new object?[] { null, null, null, "accountId", "null or whitespace" };
         yield return new object?[] { "", null, null, "accountId", "null or whitespace" };
-        yield return new object?[] { " sorauロ1Nholder", null, null, "accountId", "whitespace" };
-        yield return new object?[] { "sorauロ1Nholder ", null, null, "accountId", "whitespace" };
-        yield return new object?[] { "sorauロ1Nholder\u0001", null, null, "accountId", "control characters" };
+        yield return new object?[] { " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", null, null, "accountId", "whitespace" };
+        yield return new object?[] { "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV ", null, null, "accountId", "whitespace" };
+        yield return new object?[] { "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001", null, null, "accountId", "control characters" };
         yield return new object?[] { "merchant@sora", null, null, "accountId", "canonical I105" };
         yield return new object?[] { "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", null, null, "accountId", "canonical I105" };
         yield return new object?[] { "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ", null, null, "accountId", "canonical I105" };
@@ -6275,7 +6405,7 @@ public sealed class ToriiClientTests
     {
         yield return new object?[] { "account_id", AccountAliasLookupResponseJson("account_id", null), "must not be null" };
         yield return new object?[] { "account_id", RemoveTopLevelJsonField(AccountAliasLookupResponseJson("account_id", AliasLookupAccountId), "account_id"), "must not be null" };
-        yield return new object?[] { "account_id", AccountAliasLookupResponseJson("account_id", " sorauロ1Nholder"), "surrounding whitespace" };
+        yield return new object?[] { "account_id", AccountAliasLookupResponseJson("account_id", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), "surrounding whitespace" };
         yield return new object?[] { "account_id", AccountAliasLookupResponseJson("account_id", "merchant@sora"), "canonical I105" };
         yield return new object?[] { "account_id", AccountAliasLookupResponseJson("account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
         yield return new object?[] { "account_id", AccountAliasLookupResponseJson("account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
@@ -6538,7 +6668,7 @@ public sealed class ToriiClientTests
             Content = new StringContent($$"""
                 {
                   "available": true,
-                  "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                  "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                   "supported_exit_classes": ["standard", "low-latency", "high-security"],
                   "default_exit_class": "standard",
                   "lease_secs": 3600,
@@ -6550,14 +6680,17 @@ public sealed class ToriiClientTests
                   "tunnel_addresses": ["10.208.0.2/32"],
                   "mtu_bytes": 1280,
                   "display_billing_label": "standard · vpn-standard · 1000000 nano-XOR",
-                  "fee_asset_id": "xor#universal.universal",
-                  "escrow_account_id": "{{VpnEscrowAccountId}}",
                   "operator_account_id": "{{VpnOperatorAccountId}}",
                   "lease_fee": "1000000.25",
                   "settlement_grace_secs": 120,
                   "flow_label_bits": 24,
                   "padding_budget_ms": 80,
-                  "relay_tls_spki_sha256_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+                  "relay_id_hex": "{{VpnRelayIdHex}}",
+                  "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
+                  "tls_server_name": "vpn.sora.org",
+                  "relay_tls_spki_sha256_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+                  "relay_certificate_sha256_hex": "{{VpnRelayCertificateSha256Hex}}",
+                  "directory_snapshot_digest_hex": "{{VpnDirectorySnapshotDigestHex}}"
                 }
                 """),
         });
@@ -6570,8 +6703,6 @@ public sealed class ToriiClientTests
         Assert.Equal((ulong)3600, profile.LeaseSeconds);
         var supportedExitClasses = Assert.IsAssignableFrom<IReadOnlyList<string>>(profile.SupportedExitClasses);
         Assert.Equal(3, supportedExitClasses.Count);
-        Assert.Equal("xor#universal.universal", profile.FeeAssetId);
-        Assert.Equal(VpnEscrowAccountId, profile.EscrowAccountId);
         Assert.Equal(VpnOperatorAccountId, profile.OperatorAccountId);
         Assert.Equal("1000000.25", profile.LeaseFee);
         Assert.Equal((ushort)80, profile.PaddingBudgetMilliseconds);
@@ -6744,15 +6875,9 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public void VpnInstructionAndReceiptListsSnapshotInitAndAccessValues()
+    public void VpnReceiptListSnapshotsInitAndAccessValues()
     {
-        var quoteInstruction = new ToriiVpnTxInstruction { WireId = "OpenVpnLeaseEscrow", PayloadHex = "abcd" };
-        ToriiVpnTxInstruction[] quoteInstructions = [quoteInstruction];
-        var quote = new ToriiVpnQuote { TxInstructions = quoteInstructions };
-
-        var receiptInstruction = new ToriiVpnTxInstruction { WireId = "SettleVpnLease", PayloadHex = "cafe" };
-        ToriiVpnTxInstruction[] receiptInstructions = [receiptInstruction];
-        var receipt = ValidVpnReceipt() with { TxInstructions = receiptInstructions };
+        var receipt = ValidVpnReceipt();
         ToriiVpnReceipt[] receiptItems = [receipt];
         var receiptList = new ToriiVpnReceiptListResponse
         {
@@ -6760,29 +6885,12 @@ public sealed class ToriiClientTests
             Total = 1,
         };
 
-        quoteInstructions[0] = new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" };
-        receiptInstructions[0] = new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" };
         receiptItems[0] = ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
 
-        AssertDetachedObjectList(
-            () => quote.TxInstructions,
-            quoteInstruction,
-            new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" });
-        AssertDetachedObjectList(
-            () => receipt.TxInstructions,
-            receiptInstruction,
-            new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" });
         AssertDetachedObjectList(
             () => receiptList.Items,
             receipt,
             ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
-
-        var nullInstructionError = Assert.Throws<ArgumentException>(() => new ToriiVpnQuote
-        {
-            TxInstructions = [quoteInstruction, null!],
-        });
-        Assert.Equal("TxInstructions[1]", nullInstructionError.ParamName);
-        Assert.Contains("must not be null", nullInstructionError.Message);
 
         var nullReceiptItemError = Assert.Throws<ArgumentException>(() => new ToriiVpnReceiptListResponse
         {
@@ -6826,7 +6934,7 @@ public sealed class ToriiClientTests
                       "payment_reference": "{{quoteId}}",
                       "account_id": "{{VpnAccountId}}",
                       "exit_class": "low-latency",
-                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                       "lease_secs": 3600,
                       "quote_expires_at_ms": 1700000000000,
                       "fee_asset_id": "xor#universal.universal",
@@ -6841,18 +6949,17 @@ public sealed class ToriiClientTests
                       "meter_family": "vpn-standard",
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
+                      "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
+                      "tls_server_name": "vpn.sora.org",
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
+                      "relay_certificate_sha256_hex": "{{VpnRelayCertificateSha256Hex}}",
+                      "directory_snapshot_digest_hex": "{{VpnDirectorySnapshotDigestHex}}",
                       "metering_public_key_hex": "{{meteringPublicKeyHex}}",
                       "open_lease_instruction": {
                         "wire_id": "OpenVpnLeaseEscrow",
                         "payload_hex": "abcd"
-                      },
-                      "tx_instructions": [
-                        {
-                          "wire_id": "OpenVpnLeaseEscrow",
-                          "payload_hex": "abcd"
-                        }
-                      ]
+                      }
                     }
                     """),
             };
@@ -6869,11 +6976,7 @@ public sealed class ToriiClientTests
         Assert.Equal(VpnAccountId, quote.AccountId);
         Assert.Equal(VpnEscrowAccountId, quote.EscrowAccountId);
         Assert.Equal(VpnOperatorAccountId, quote.OperatorAccountId);
-        Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction?.WireId);
-        var quoteInstructions = Assert.IsType<ToriiVpnTxInstruction[]>(quote.TxInstructions);
-        Assert.Single(quoteInstructions);
-        quoteInstructions[0] = new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" };
-        Assert.Equal("OpenVpnLeaseEscrow", quote.TxInstructions[0].WireId);
+        Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction.WireId);
         Assert.Equal("xor#universal.universal", quote.FeeAssetId);
     }
 
@@ -6941,7 +7044,7 @@ public sealed class ToriiClientTests
                       "session_id": "{{sessionId}}",
                       "account_id": "{{VpnAccountId}}",
                       "exit_class": "low-latency",
-                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                       "lease_secs": 3600,
                       "expires_at_ms": 1700000000000,
                       "connected_at_ms": 1699999400000,
@@ -6955,7 +7058,12 @@ public sealed class ToriiClientTests
                       "lease_fee": "1000000.25",
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
+                      "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
+                      "tls_server_name": "vpn.sora.org",
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
+                      "relay_certificate_sha256_hex": "{{VpnRelayCertificateSha256Hex}}",
+                      "directory_snapshot_digest_hex": "{{VpnDirectorySnapshotDigestHex}}",
                       "route_pushes": ["10.0.0.0/8"],
                       "excluded_routes": ["127.0.0.0/8"],
                       "dns_servers": ["1.1.1.1"],
@@ -7065,7 +7173,7 @@ public sealed class ToriiClientTests
                       "session_id": "{{sessionId}}",
                       "account_id": "{{VpnAccountId}}",
                       "exit_class": "standard",
-                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                       "lease_secs": 3600,
                       "expires_at_ms": 1700000000000,
                       "connected_at_ms": 1699999400000,
@@ -7079,7 +7187,12 @@ public sealed class ToriiClientTests
                       "lease_fee": "1000000.25",
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
-                      "relay_tls_spki_sha256_hex": null,
+                      "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
+                      "tls_server_name": "vpn.sora.org",
+                      "relay_tls_spki_sha256_hex": "{{VpnSpkiSha256Hex}}",
+                      "relay_certificate_sha256_hex": "{{VpnRelayCertificateSha256Hex}}",
+                      "directory_snapshot_digest_hex": "{{VpnDirectorySnapshotDigestHex}}",
                       "route_pushes": [],
                       "excluded_routes": [],
                       "dns_servers": [],
@@ -7148,13 +7261,7 @@ public sealed class ToriiClientTests
                       "settle_lease_instruction": {
                         "wire_id": "SettleVpnLease",
                         "payload_hex": "cafe"
-                      },
-                      "tx_instructions": [
-                        {
-                          "wire_id": "SettleVpnLease",
-                          "payload_hex": "cafe"
-                        }
-                      ]
+                      }
                     }
                     """),
             };
@@ -7174,10 +7281,6 @@ public sealed class ToriiClientTests
         Assert.Equal(VpnOperatorAccountId, receipt.OperatorAccountId);
         Assert.Equal("settled", receipt.Status);
         Assert.Equal("SettleVpnLease", receipt.SettleLeaseInstruction?.WireId);
-        var receiptInstructions = Assert.IsType<ToriiVpnTxInstruction[]>(receipt.TxInstructions);
-        Assert.Single(receiptInstructions);
-        receiptInstructions[0] = new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" };
-        Assert.Equal("SettleVpnLease", receipt.TxInstructions[0].WireId);
         Assert.Equal("500000.125", receipt.EarnedFee);
     }
 
@@ -7267,13 +7370,7 @@ public sealed class ToriiClientTests
                           "settle_lease_instruction": {
                             "wire_id": "SettleVpnLease",
                             "payload_hex": "cafe"
-                          },
-                          "tx_instructions": [
-                            {
-                              "wire_id": "SettleVpnLease",
-                              "payload_hex": "cafe"
-                            }
-                          ]
+                          }
                         }
                       ],
                       "total": 1
@@ -7288,15 +7385,12 @@ public sealed class ToriiClientTests
         Assert.Equal((ulong)1, receipts.Total);
         var items = Assert.IsType<ToriiVpnReceipt[]>(receipts.Items);
         Assert.Single(items);
-        var itemInstructions = Assert.IsType<ToriiVpnTxInstruction[]>(items[0].TxInstructions);
-        Assert.Single(itemInstructions);
         Assert.Equal(sessionId, items[0].SessionId);
         Assert.Equal(VpnAccountId, items[0].AccountId);
         Assert.Equal(quoteId, items[0].LeaseIdHex);
         items[0] = ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
-        itemInstructions[0] = new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" };
         Assert.Equal(sessionId, receipts.Items[0].SessionId);
-        Assert.Equal("SettleVpnLease", receipts.Items[0].TxInstructions[0].WireId);
+        Assert.Equal("SettleVpnLease", receipts.Items[0].SettleLeaseInstruction?.WireId);
     }
 
     [Fact]
@@ -7350,8 +7444,7 @@ public sealed class ToriiClientTests
                   "earned_fee": "0",
                   "refunded_fee": "1000000.25",
                   "lease_id_hex": "{{quoteId}}",
-                  "settle_lease_instruction": null,
-                  "tx_instructions": []
+                  "settle_lease_instruction": null
                 }
                 """
                 .Replace("{{quoteId}}", quoteId)
@@ -7395,7 +7488,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt-submit", "lease_id_hex", new string('A', 64), "lowercase" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", new string('z', 64), "32-byte hex string" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", new string('A', 64), "lowercase" };
-        yield return new object[] { "receipt-list", "tx_instructions[0].payload_hex", "ca fe", "whitespace" };
+        yield return new object[] { "receipt-list", "settle_lease_instruction.payload_hex", "ca fe", "whitespace" };
         yield return new object[] { "receipt-delete", "settle_lease_instruction.payload_hex", "caf", "even-length hex string" };
     }
 
@@ -7474,14 +7567,10 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "excluded_routes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "excluded_routes"), "required" };
         yield return new object[] { "quote", "dns_servers", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "dns_servers"), "required" };
         yield return new object[] { "quote", "tunnel_addresses", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "tunnel_addresses"), "required" };
-        yield return new object[] { "quote", "tx_instructions", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "tx_instructions"), "required" };
         yield return new object[] { "session-create", "route_pushes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "route_pushes"), "required" };
         yield return new object[] { "session-get", "excluded_routes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "excluded_routes"), "required" };
         yield return new object[] { "session-get", "dns_servers", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "dns_servers"), "required" };
         yield return new object[] { "session-get", "tunnel_addresses", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "tunnel_addresses"), "required" };
-        yield return new object[] { "receipt-submit", "tx_instructions", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "tx_instructions"), "required" };
-        yield return new object[] { "receipt-delete", "tx_instructions", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "tx_instructions"), "required" };
-        yield return new object[] { "receipt-list", "items[0].tx_instructions", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "tx_instructions"), "required" };
     }
 
     public static IEnumerable<object[]> InvalidVpnRequiredStringResponses()
@@ -7512,8 +7601,6 @@ public sealed class ToriiClientTests
             "relay_endpoint",
             "meter_family",
             "display_billing_label",
-            "fee_asset_id",
-            "escrow_account_id",
             "operator_account_id",
         })
         {
@@ -7558,7 +7645,6 @@ public sealed class ToriiClientTests
             "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ",
         })
         {
-            yield return new object[] { "profile", "escrow_account_id", VpnProfileRawResponseJson("escrow_account_id", invalidAccountId), "canonical I105" };
             yield return new object[] { "profile", "operator_account_id", VpnProfileRawResponseJson("operator_account_id", invalidAccountId), "canonical I105" };
             yield return new object[] { "quote", "account_id", VpnQuoteRawResponseJson("account_id", invalidAccountId), "canonical I105" };
             yield return new object[] { "quote", "escrow_account_id", VpnQuoteRawResponseJson("escrow_account_id", invalidAccountId), "canonical I105" };
@@ -7715,8 +7801,6 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "tunnel_addresses", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "tunnel_addresses"), "required" };
         yield return new object[] { "profile", "meter_family", RemoveTopLevelJsonField(VpnProfileRawResponseJson("meter_family", "vpn-standard"), "meter_family"), "must not be null" };
         yield return new object[] { "profile", "display_billing_label", VpnProfileRawResponseJson("display_billing_label", null), "must not be null" };
-        yield return new object[] { "profile", "fee_asset_id", VpnProfileRawResponseJson("fee_asset_id", null), "must not be null" };
-        yield return new object[] { "profile", "escrow_account_id", VpnProfileRawResponseJson("escrow_account_id", null), "must not be null" };
         yield return new object[] { "profile", "operator_account_id", VpnProfileRawResponseJson("operator_account_id", null), "must not be null" };
         yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", "3600"), "unsigned integer" };
         yield return new object[] { "profile", "lease_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
@@ -7744,7 +7828,6 @@ public sealed class ToriiClientTests
             "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ",
         })
         {
-            yield return new object[] { "profile", "escrow_account_id", VpnProfileRawResponseJson("escrow_account_id", invalidAccountId), "canonical I105" };
             yield return new object[] { "profile", "operator_account_id", VpnProfileRawResponseJson("operator_account_id", invalidAccountId), "canonical I105" };
             yield return new object[] { "quote", "account_id", VpnQuoteRawResponseJson("account_id", invalidAccountId), "canonical I105" };
             yield return new object[] { "quote", "escrow_account_id", VpnQuoteRawResponseJson("escrow_account_id", invalidAccountId), "canonical I105" };
@@ -7790,9 +7873,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "meter_family", VpnQuoteRawResponseJson("meter_family", null), "must not be null" };
         yield return new object[] { "quote", "metering_public_key_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("metering_public_key_hex", VpnMeteringPublicKeyHex), "metering_public_key_hex"), "must not be null" };
         yield return new object[] { "quote", "metering_public_key_hex", VpnQuoteRawResponseJson("metering_public_key_hex", null), "must not be null" };
-        yield return new object[] { "quote", "tx_instructions", VpnQuoteRawResponseJson("tx_instructions", null), "required" };
-        yield return new object[] { "quote", "tx_instructions", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "tx_instructions"), "required" };
-        yield return new object[] { "quote", "tx_instructions[0]", VpnQuoteRawResponseJson("tx_instructions[0]", null), "must not be null" };
+        yield return new object[] { "quote", "tx_instructions", VpnQuoteRawResponseJson("tx_instructions", null), "not allowed" };
         yield return new object[] { "session", "session_id", VpnSessionDuplicatePropertyJson("session_id"), "must not appear more than once" };
         yield return new object[] { "session", "vpn session.audit", VpnSessionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "session", "session_id", RemoveTopLevelJsonField(VpnSessionRawResponseJson("session_id", VpnSessionIdHex), "session_id"), "must not be null" };
@@ -7862,8 +7943,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", null), "must not be null" };
         yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", new string('A', 64)), "lowercase" };
         yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", "0x" + VpnQuoteIdHex), "32-byte hex string" };
-        yield return new object[] { "receipt", "tx_instructions", VpnReceiptRawResponseJson("tx_instructions", null), "required" };
-        yield return new object[] { "receipt", "tx_instructions", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "tx_instructions"), "required" };
+        yield return new object[] { "receipt", "tx_instructions", VpnReceiptRawResponseJson("tx_instructions", null), "not allowed" };
         yield return new object[] { "receipt-list", "vpn receipt list response.audit", VpnReceiptListUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "receipt-list", "vpn receipt list response.items[0].audit", VpnReceiptListReceiptUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "receipt-list", "items", RemoveTopLevelJsonField(VpnReceiptListRawResponseJson("total", 1), "items"), "required" };
@@ -7878,7 +7958,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt-list", "items[0].lease_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "lease_fee"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].earned_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "earned_fee"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].refunded_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].tx_instructions", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "tx_instructions"), "required" };
+        yield return new object[] { "receipt-list", "items[0].tx_instructions", VpnReceiptListRawNestedReceiptJson("tx_instructions", null), "not allowed" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", VpnReceiptListRawNestedReceiptJson("payment_tx_hash", new string('z', 64)), "32-byte hex string" };
         yield return new object[] { "receipt-list", "total", RemoveTopLevelJsonField(VpnReceiptListRawResponseJson("total", 1), "total"), "must not be null" };
         yield return new object[] { "receipt-list", "total", VpnReceiptListRawResponseJson("total", 0), "item count" };
@@ -7889,8 +7969,6 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "padding_budget_ms", VpnQuoteRawResponseJson("padding_budget_ms", 0), "between 1" };
         yield return new object[] { "quote", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
         yield return new object[] { "quote", "open_lease_instruction", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("open_lease_instruction", null), "open_lease_instruction"), "required" };
-        yield return new object[] { "quote", "tx_instructions", VpnQuoteInstructionCountJson(0), "exactly 1" };
-        yield return new object[] { "quote", "tx_instructions", VpnQuoteInstructionCountJson(2), "exactly 1" };
         yield return new object[] { "session", "exit_class", VpnSessionRawResponseJson("exit_class", "premium"), "must be one of" };
         yield return new object[] { "session", "lease_secs", VpnSessionRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
         yield return new object[] { "session", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 1279), "equal 1280" };
@@ -7902,7 +7980,6 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt", "status", VpnReceiptRawResponseJson("status", "active"), "must be one of" };
         yield return new object[] { "receipt", "receipt_source", VpnReceiptRawResponseJson("receipt_source", "peer"), "must be one of" };
         yield return new object[] { "receipt", "settle_lease_instruction", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("settle_lease_instruction", null), "settle_lease_instruction"), "required" };
-        yield return new object[] { "receipt", "tx_instructions", VpnReceiptInstructionCountJson(2), "between 0 and 1" };
         yield return new object[] { "receipt-list", "items", VpnReceiptListCountJson(25, 25), "at most 24" };
         yield return new object[] { "receipt-list", "total", VpnReceiptListCountJson(1, 25), "at most 24" };
     }
@@ -8067,7 +8144,6 @@ public sealed class ToriiClientTests
             "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ",
         })
         {
-            yield return new object[] { "profile", "escrow_account_id", invalidAccountId };
             yield return new object[] { "profile", "operator_account_id", invalidAccountId };
             yield return new object[] { "quote", "account_id", invalidAccountId };
             yield return new object[] { "quote", "escrow_account_id", invalidAccountId };
@@ -8103,7 +8179,6 @@ public sealed class ToriiClientTests
         yield return new object?[] { "profile", "SupportedExitClasses[0]", "low latency" };
         yield return new object?[] { "profile", "LeaseSeconds", 0UL };
         yield return new object?[] { "profile", "DnsPushIntervalSeconds", 29UL };
-        yield return new object?[] { "profile", "EscrowAccountId", "merchant@sora" };
         yield return new object?[] { "profile", "RelayTlsSpkiSha256Hex", "0x" + VpnSpkiSha256Hex };
         yield return new object?[] { "tx-instruction", "WireId", " OpenVpnLeaseEscrow" };
         yield return new object?[] { "tx-instruction", "PayloadHex", "CAFE" };
@@ -8111,7 +8186,7 @@ public sealed class ToriiClientTests
         yield return new object?[] { "quote", "SessionIdHex", "abc" };
         yield return new object?[] { "quote", "AccountId", "merchant@sora" };
         yield return new object?[] { "quote", "MeteringPublicKeyHex", new string('g', 64) };
-        yield return new object?[] { "quote", "TxInstructions[0].PayloadHex", "CAFE" };
+        yield return new object?[] { "quote", "OpenLeaseInstruction.PayloadHex", "CAFE" };
         yield return new object?[] { "session", "SessionId", "session-1" };
         yield return new object?[] { "session", "ConnectedAtMilliseconds", 0UL };
         yield return new object?[] { "session", "RoutePushes[0]", "10.0.0.0 /8" };
@@ -8215,7 +8290,7 @@ public sealed class ToriiClientTests
                   "items": [
                     {
                       "policy_id": "phone#retail",
-                      "owner": "sorauロ1Nowner",
+                      "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
                       "resolver_public_key": "ed0120abcd",
@@ -8272,7 +8347,7 @@ public sealed class ToriiClientTests
                   "items": [
                     {
                       "policy_id": {{JsonSerializer.Serialize(policyId)}},
-                      "owner": "sorauロ1Nowner",
+                      "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
                       "resolver_public_key": {{JsonSerializer.Serialize(resolverPublicKey)}},
@@ -10033,7 +10108,7 @@ public sealed class ToriiClientTests
                     {
                       "kind": "Singular",
                       "value": {
-                        "id": "sorauﾛ1Nmerchant"
+                        "id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"
                       }
                     }
                     """),
@@ -10044,7 +10119,7 @@ public sealed class ToriiClientTests
         using var response = await client.SubmitSignedQueryAsync(queryBytes, query: "limit=1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("Singular", response.RootElement.GetProperty("kind").GetString());
-        Assert.Equal("sorauﾛ1Nmerchant", response.RootElement.GetProperty("value").GetProperty("id").GetString());
+        Assert.Equal("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", response.RootElement.GetProperty("value").GetProperty("id").GetString());
     }
 
     [Fact]
@@ -10112,8 +10187,8 @@ public sealed class ToriiClientTests
                 {
                   "kind": "Singular",
                   "value": {
-                    "id": "sorauﾛ1Nmerchant",
-                    "id": "sorauﾛ1Nattacker"
+                    "id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
+                    "id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
                   }
                 }
                 """),
@@ -11543,7 +11618,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         Assert.Equal("opaque-1", resolved.OpaqueId);
         Assert.Equal("receipt-1", resolved.ReceiptHash);
-        Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
+        Assert.Equal("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", resolved.AccountId);
         Assert.Equal("bfv-programmed-sha3-256-v1", resolved.Backend);
         Assert.NotNull(resolved.SignaturePayload);
         Assert.Equal("phone#retail", resolved.SignaturePayload!["payload"]!["policy_id"]!.GetValue<string>());
@@ -11576,7 +11651,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("phone#retail", resolved.PolicyId);
         Assert.Equal("opaque-1", resolved.OpaqueId);
         Assert.Equal("receipt-1", resolved.ReceiptHash);
-        Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
+        Assert.Equal("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", resolved.AccountId);
         Assert.Equal(1710000000000L, resolved.ResolvedAtMilliseconds);
         Assert.Equal(1710003600000L, resolved.ExpiresAtMilliseconds);
         Assert.Equal("bfv-programmed-sha3-256-v1", resolved.Backend);
@@ -11733,7 +11808,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(RetiredIdentifierResolveResponseJson(
                 "ABCD",
                 "DEADBEEF",
-                """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""")),
+                """{"policy_id":"phone#retail","account_id":"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"}""")),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -11930,7 +12005,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """
                 {
                   "policy_id": "phone#retail",
-                  "account_id": "sorauﾛ1Nmerchant",
+                  "account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
                   "opaque_id": "opaque-1",
                   "receipt_hash": "receipt-1",
                   "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -11979,9 +12054,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("""{"payload":{"account_id":" sorauﾛ1Nmerchant"}}""", "identifier resolve response.payload.account_id", "whitespace")]
+    [InlineData("""{"payload":{"account_id":" sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"}}""", "identifier resolve response.payload.account_id", "whitespace")]
     [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmer chant"}}""", "identifier resolve response.payload.account_id", "whitespace")]
-    [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmerchant\u0001"}}""", "identifier resolve response.payload.account_id", "control")]
+    [InlineData("""{"payload":{"account_id":"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\u0001"}}""", "identifier resolve response.payload.account_id", "control")]
     [InlineData("""{"payload":{"opaque_id":" opaque-1"}}""", "identifier resolve response.payload.opaque_id", "whitespace")]
     [InlineData("""{"payload":{"receipt_hash":"receipt-1 "}}""", "identifier resolve response.payload.receipt_hash", "whitespace")]
     [InlineData("""{"payload":{"uaid":" uaid:0123456789abcdef"}}""", "identifier resolve response.payload.uaid", "whitespace")]
@@ -12087,7 +12162,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "alias", AccountAliasIndexResponseJson("alias", "merchant @paynet.universal"), "whitespace" };
         yield return new object?[] { "account_id", AccountAliasIndexResponseJson("account_id", null), "must not be null" };
         yield return new object?[] { "account_id", RemoveTopLevelJsonField(AccountAliasIndexResponseJson("account_id", AliasIndexAccountId), "account_id"), "must not be null" };
-        yield return new object?[] { "account_id", AccountAliasIndexResponseJson("account_id", " sorauﾛ1Nmerchant"), "surrounding whitespace" };
+        yield return new object?[] { "account_id", AccountAliasIndexResponseJson("account_id", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"), "surrounding whitespace" };
         yield return new object?[] { "account_id", AccountAliasIndexResponseJson("account_id", "merchant@sora"), "canonical I105" };
         yield return new object?[] { "account_id", AccountAliasIndexResponseJson("account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
         yield return new object?[] { "account_id", AccountAliasIndexResponseJson("account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
@@ -12165,7 +12240,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             AccountId = AliasIndexAccountId,
             Source = "on_chain",
         };
-        SetPrivateField(response, "accountId", " sorauﾛ1Nmerchant");
+        SetPrivateField(response, "accountId", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT");
 
         var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
 
@@ -12363,7 +12438,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[]
         {
             "dataspaces[0].accounts[0].account_id",
-            UaidPortfolioResponseJson("dataspaces[0].accounts[0].account_id", " sorauロ1Nholder"),
+            UaidPortfolioResponseJson("dataspaces[0].accounts[0].account_id", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "surrounding whitespace",
         };
         yield return new object?[]
@@ -12547,7 +12622,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[]
         {
             "dataspaces[0].accounts[0]",
-            UaidBindingsResponseJson("dataspaces[0].accounts[0]", " sorauﾛ1Nmerchant"),
+            UaidBindingsResponseJson("dataspaces[0].accounts[0]", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"),
             "surrounding whitespace",
         };
         yield return new object?[]
@@ -12801,7 +12876,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[]
         {
             "manifests[0].accounts[0]",
-            UaidManifestsResponseJson("manifests[0].accounts[0]", " sorauﾛ1Nmerchant"),
+            UaidManifestsResponseJson("manifests[0].accounts[0]", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"),
             "surrounding whitespace",
         };
         yield return new object?[]
@@ -12879,7 +12954,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "account", "UAID portfolio account", "[]", "object" };
         yield return new object[] { "account", "assets", UaidPortfolioAccountDuplicatePropertyJson("assets"), "must not appear more than once" };
         yield return new object[] { "account", "UAID portfolio account.audit.nonce", UaidPortfolioAccountUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "account", "account_id", RemoveTopLevelJsonField(UaidPortfolioAccountJson("account_id", "sorauロ1Nholder"), "account_id"), "must not be null" };
+        yield return new object[] { "account", "account_id", RemoveTopLevelJsonField(UaidPortfolioAccountJson("account_id", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), "account_id"), "must not be null" };
         yield return new object[] { "account", "account_id", UaidPortfolioAccountJson("account_id", null), "must not be null" };
         yield return new object[] { "account", "account_id", UaidPortfolioAccountJson("account_id", 1), "string" };
         yield return new object[] { "account", "account_id", UaidPortfolioAccountJson("account_id", "merchant@sora"), "canonical I105" };
@@ -12942,7 +13017,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "dataspace", "accounts", UaidBindingsDataspaceJson("accounts", 1), "array" };
         yield return new object[] { "dataspace", "accounts[0]", UaidBindingsDataspaceJson("accounts[0]", null), "must not be null" };
         yield return new object[] { "dataspace", "accounts[0]", UaidBindingsDataspaceJson("accounts[0]", 1), "string" };
-        yield return new object[] { "dataspace", "accounts[0]", UaidBindingsDataspaceJson("accounts[0]", " sorauﾛ1Nmerchant"), "surrounding whitespace" };
+        yield return new object[] { "dataspace", "accounts[0]", UaidBindingsDataspaceJson("accounts[0]", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"), "surrounding whitespace" };
         yield return new object[] { "dataspace", "accounts[0]", UaidBindingsDataspaceJson("accounts[0]", "merchant@sora"), "canonical I105" };
         yield return new object[] { "dataspace", "accounts[0]", UaidBindingsDataspaceJson("accounts[0]", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
         yield return new object[] { "dataspace", "accounts[0]", UaidBindingsDataspaceJson("accounts[0]", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
@@ -13112,7 +13187,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Dataspaces = [dataspace],
         };
-        SetPrivateField(dataspace, "accounts", new[] { " sorauﾛ1Nmerchant" });
+        SetPrivateField(dataspace, "accounts", new[] { " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT" });
 
         var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
 
@@ -15058,7 +15133,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "account", "alias", AliasResolutionResponseJson("account", "alias", "merchant @paynet.universal"), "whitespace" };
         yield return new object?[] { "account", "account_id", AliasResolutionResponseJson("account", "account_id", null), "must not be null" };
         yield return new object?[] { "account", "account_id", RemoveTopLevelJsonField(AliasResolutionResponseJson("account", "account_id", AliasResolutionAccountId), "account_id"), "must not be null" };
-        yield return new object?[] { "account", "account_id", AliasResolutionResponseJson("account", "account_id", " sorauﾛ1Nmerchant"), "surrounding whitespace" };
+        yield return new object?[] { "account", "account_id", AliasResolutionResponseJson("account", "account_id", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"), "surrounding whitespace" };
         yield return new object?[] { "account", "account_id", AliasResolutionResponseJson("account", "account_id", "merchant@sora"), "canonical I105" };
         yield return new object?[] { "account", "account_id", AliasResolutionResponseJson("account", "account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
         yield return new object?[] { "account", "account_id", AliasResolutionResponseJson("account", "account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
@@ -17949,7 +18024,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { MultisigAccountAlias = null, MultisigAccountId = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "MultisigAccountId", "canonical I105" };
         yield return new object[] { valid with { MultisigAccountAlias = null, MultisigAccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "MultisigAccountId", "canonical I105" };
         yield return new object[] { valid with { MultisigAccountAlias = " ops@universal" }, "MultisigAccountAlias", "whitespace" };
-        yield return new object[] { valid with { SignerAccountId = "sorauロ1Nsigner " }, "SignerAccountId", "whitespace" };
+        yield return new object[] { valid with { SignerAccountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV " }, "SignerAccountId", "whitespace" };
         yield return new object[] { valid with { SignerAccountId = "merchant@sora" }, "SignerAccountId", "canonical I105" };
         yield return new object[] { valid with { SignerAccountId = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "SignerAccountId", "canonical I105" };
         yield return new object[] { valid with { SignerAccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "SignerAccountId", "canonical I105" };
@@ -18540,7 +18615,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { MultisigAccountAlias = null, MultisigAccountId = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "MultisigAccountId", "canonical I105" };
         yield return new object[] { valid with { MultisigAccountAlias = null, MultisigAccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "MultisigAccountId", "canonical I105" };
         yield return new object[] { valid with { MultisigAccountAlias = " ops@universal" }, "MultisigAccountAlias", "whitespace" };
-        yield return new object[] { valid with { SignerAccountId = "sorauロ1Nsigner\u0001" }, "SignerAccountId", "control characters" };
+        yield return new object[] { valid with { SignerAccountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001" }, "SignerAccountId", "control characters" };
         yield return new object[] { valid with { SignerAccountId = "merchant@sora" }, "SignerAccountId", "canonical I105" };
         yield return new object[] { valid with { SignerAccountId = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "SignerAccountId", "canonical I105" };
         yield return new object[] { valid with { SignerAccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "SignerAccountId", "canonical I105" };
@@ -19579,10 +19654,57 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return operation switch
         {
             "accounts-page" => client.GetExplorerAccountsAsync(),
-            "account-detail" => client.GetExplorerAccountAsync("sorauロ1Nholder"),
+            "account-detail" => client.GetExplorerAccountAsync("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "domains-page" => client.GetExplorerDomainsAsync(),
             "domain-detail" => client.GetExplorerDomainAsync("wonderland.paynet"),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown explorer directory response operation."),
+        };
+    }
+
+    private static Task InvokeExplorerWorldListQueryAsync(
+        ToriiClient client,
+        string operation,
+        string? cursor,
+        uint? limit,
+        CancellationToken cancellationToken)
+    {
+        return operation switch
+        {
+            "accounts" => client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "domains" => client.GetExplorerDomainsAsync(new ToriiExplorerDomainsQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "asset-definitions" => client.GetExplorerAssetDefinitionsAsync(
+                new ToriiExplorerAssetDefinitionsQuery
+                {
+                    Cursor = cursor,
+                    Limit = limit,
+                }, cancellationToken),
+            "assets" => client.GetExplorerAssetsAsync(new ToriiExplorerAssetsQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "nfts" => client.GetExplorerNftsAsync(new ToriiExplorerNftsQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "rwas" => client.GetExplorerRwasAsync(new ToriiExplorerRwasQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(operation),
+                operation,
+                "Unknown explorer world-list operation."),
         };
     }
 
@@ -19610,7 +19732,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-qr" => client.GetExplorerAccountQrAsync("sorauロ1Nholder"),
+            "account-qr" => client.GetExplorerAccountQrAsync("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "asset-definition-econometrics" => client.GetExplorerAssetDefinitionEconometricsAsync("rose#wonderland.paynet"),
             "asset-definition-snapshot" => client.GetExplorerAssetDefinitionSnapshotAsync("rose#wonderland.paynet"),
             "health" => client.GetExplorerHealthAsync(),
@@ -19641,6 +19763,23 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "domains-page" => JsonSerializer.Deserialize<ToriiExplorerDomainsPage>(json),
             "domain-detail" => JsonSerializer.Deserialize<ToriiExplorerDomain>(json),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown explorer directory response operation."),
+        };
+    }
+
+    private static object? DeserializeRawExplorerWorldPage(string operation, string json)
+    {
+        return operation switch
+        {
+            "accounts-page" => JsonSerializer.Deserialize<ToriiExplorerAccountsPage>(json),
+            "domains-page" => JsonSerializer.Deserialize<ToriiExplorerDomainsPage>(json),
+            "asset-definitions-page" => JsonSerializer.Deserialize<ToriiExplorerAssetDefinitionsPage>(json),
+            "assets-page" => JsonSerializer.Deserialize<ToriiExplorerAssetsPage>(json),
+            "nfts-page" => JsonSerializer.Deserialize<ToriiExplorerNftsPage>(json),
+            "rwas-page" => JsonSerializer.Deserialize<ToriiExplorerRwasPage>(json),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(operation),
+                operation,
+                "Unknown explorer world-list operation."),
         };
     }
 
@@ -21702,6 +21841,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiExplorerAssetDefinition
         {
             Id = "rose#wonderland.paynet",
+            OwningDomain = "wonderland.paynet",
             Mintable = "Infinitely",
             Logo = "https://cdn.example/rose.svg",
             Metadata = new JsonObject(),
@@ -21819,7 +21959,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiExplorerAccountQrSnapshot
         {
             CanonicalId = ExplorerDirectoryAccountId,
-            Literal = "sorauロ1Nholder",
+            Literal = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             NetworkPrefix = 753,
             ErrorCorrection = "M",
             Modules = 192,
@@ -22307,10 +22447,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 DnsPushIntervalSeconds = RequiredUInt64Value(value),
             },
-            ("profile", "EscrowAccountId") => ValidVpnProfile() with
-            {
-                EscrowAccountId = RequiredStringValue(value),
-            },
             ("profile", "RelayTlsSpkiSha256Hex") => ValidVpnProfile() with
             {
                 RelayTlsSpkiSha256Hex = RequiredStringValue(value),
@@ -22341,9 +22477,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 MeteringPublicKeyHex = RequiredStringValue(value),
             },
-            ("quote", "TxInstructions[0].PayloadHex") => ValidVpnQuote() with
+            ("quote", "OpenLeaseInstruction.PayloadHex") => ValidVpnQuote() with
             {
-                TxInstructions = [VpnTxInstructionWithPrivateField("payloadHex", RequiredStringValue(value))],
+                OpenLeaseInstruction = VpnTxInstructionWithPrivateField("payloadHex", RequiredStringValue(value)),
             },
             ("session", "SessionId") => ValidVpnSession() with
             {
@@ -22580,7 +22716,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return (operation, field) switch
         {
-            ("profile", "escrow_account_id") => SerializeWithPrivateField(ValidVpnProfile(), "escrowAccountId", accountId),
             ("profile", "operator_account_id") => SerializeWithPrivateField(ValidVpnProfile(), "operatorAccountId", accountId),
             ("quote", "account_id") => SerializeWithPrivateField(ValidVpnQuote(), "accountId", accountId),
             ("quote", "escrow_account_id") => SerializeWithPrivateField(ValidVpnQuote(), "escrowAccountId", accountId),
@@ -22685,7 +22820,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "explorer-accounts-domain" => client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery { Domain = value }),
             "explorer-accounts-with-asset" => client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery { WithAsset = value }),
             "explorer-domains-owned-by" => client.GetExplorerDomainsAsync(new ToriiExplorerDomainsQuery { OwnedBy = value }),
-            "explorer-asset-definitions-domain" => client.GetExplorerAssetDefinitionsAsync(new ToriiExplorerAssetDefinitionsQuery { Domain = value }),
+            "explorer-asset-definitions-owning-domain" => client.GetExplorerAssetDefinitionsAsync(new ToriiExplorerAssetDefinitionsQuery { OwningDomain = value }),
             "explorer-asset-definitions-owned-by" => client.GetExplorerAssetDefinitionsAsync(new ToriiExplorerAssetDefinitionsQuery { OwnedBy = value }),
             "explorer-assets-owned-by" => client.GetExplorerAssetsAsync(new ToriiExplorerAssetsQuery { OwnedBy = value }),
             "explorer-assets-definition" => client.GetExplorerAssetsAsync(new ToriiExplorerAssetsQuery { Definition = value }),
@@ -22746,7 +22881,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiIdentifierPolicySummary
         {
             PolicyId = "phone#retail",
-            Owner = "sorauロ1Nowner",
+            Owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             Active = true,
             Normalization = "phone_e164",
             ResolverPublicKey = "ed0120abcd",
@@ -22770,7 +22905,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new JsonObject
         {
             ["policy_id"] = "phone#retail",
-            ["owner"] = "sorauロ1Nowner",
+            ["owner"] = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             ["active"] = true,
             ["normalization"] = "phone_e164",
             ["resolver_public_key"] = "ed0120abcd",
@@ -22789,7 +22924,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
               "{{propertyName}}": "phone#retail",
               "{{propertyName}}": "phone#retail",
-              "owner": "sorauロ1Nowner",
+              "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "active": true,
               "normalization": "phone_e164",
               "resolver_public_key": "ed0120abcd",
@@ -22845,7 +22980,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 {
                   "{{propertyName}}": "phone#retail",
                   "{{propertyName}}": "phone#retail",
-                  "owner": "sorauロ1Nowner",
+                  "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "active": true,
                   "normalization": "phone_e164",
                   "resolver_public_key": "ed0120abcd",
@@ -24318,9 +24453,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             null => null,
             JsonNode node => node,
             string text => JsonValue.Create(text),
+            bool boolean => JsonValue.Create(boolean),
             long number => JsonValue.Create(number),
             int number => JsonValue.Create(number),
-            bool boolean => JsonValue.Create(boolean),
             _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported account page JSON value."),
         };
     }
@@ -25379,6 +25514,68 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             """;
     }
 
+    private static JsonObject ExplorerWorldPageJsonObject(string operation)
+    {
+        return operation switch
+        {
+            "accounts-page" => ExplorerDirectoryPageJsonObject(ExplorerDirectoryAccountJsonObject()),
+            "domains-page" => ExplorerDirectoryPageJsonObject(ExplorerDirectoryDomainJsonObject()),
+            "asset-definitions-page" => ExplorerDirectoryPageJsonObject(
+                ExplorerInventoryAssetDefinitionJsonObject()),
+            "assets-page" => ExplorerDirectoryPageJsonObject(ExplorerInventoryAssetJsonObject()),
+            "nfts-page" => ExplorerDirectoryPageJsonObject(ExplorerInventoryNftJsonObject()),
+            "rwas-page" => ExplorerDirectoryPageJsonObject(ExplorerInventoryRwaJsonObject()),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(operation),
+                operation,
+                "Unknown explorer world-list operation."),
+        };
+    }
+
+    private static string ExplorerWorldPageWithAdditionalPropertyJson(
+        string operation,
+        string field,
+        object? value)
+    {
+        var root = ExplorerWorldPageJsonObject(operation);
+        const string paginationPrefix = "pagination.";
+        if (field.StartsWith(paginationPrefix, StringComparison.Ordinal))
+        {
+            ((JsonObject)root["pagination"]!)[field[paginationPrefix.Length..]] = JsonValueForExplorer(value);
+        }
+        else
+        {
+            root[field] = JsonValueForExplorer(value);
+        }
+
+        return root.ToJsonString();
+    }
+
+    private static string ExplorerWorldPageWithoutPropertyJson(string operation, string field)
+    {
+        var root = ExplorerWorldPageJsonObject(operation);
+        const string paginationPrefix = "pagination.";
+        if (field.StartsWith(paginationPrefix, StringComparison.Ordinal))
+        {
+            ((JsonObject)root["pagination"]!).Remove(field[paginationPrefix.Length..]);
+        }
+        else
+        {
+            root.Remove(field);
+        }
+
+        return root.ToJsonString();
+    }
+
+    private static string ExplorerWorldPageWithTooManyItemsJson(string operation)
+    {
+        var root = ExplorerWorldPageJsonObject(operation);
+        ((JsonObject)root["pagination"]!)["limit"] = 1;
+        var items = (JsonArray)root["items"]!;
+        items.Add(items[0]!.DeepClone());
+        return root.ToJsonString();
+    }
+
     private static string ExplorerDirectoryResponseJson(string operation, string field, object? value)
     {
         var account = ExplorerDirectoryAccountJsonObject();
@@ -25403,17 +25600,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case "pagination":
                 root["pagination"] = JsonValueForExplorer(value);
                 break;
-            case "pagination.page":
-                ((JsonObject)root["pagination"]!)["page"] = JsonValueForExplorer(value);
+            case "pagination.limit":
+                ((JsonObject)root["pagination"]!)["limit"] = JsonValueForExplorer(value);
                 break;
-            case "pagination.per_page":
-                ((JsonObject)root["pagination"]!)["per_page"] = JsonValueForExplorer(value);
+            case "pagination.next_cursor":
+                ((JsonObject)root["pagination"]!)["next_cursor"] = JsonValueForExplorer(value);
                 break;
-            case "pagination.total_pages":
-                ((JsonObject)root["pagination"]!)["total_pages"] = JsonValueForExplorer(value);
-                break;
-            case "pagination.total_items":
-                ((JsonObject)root["pagination"]!)["total_items"] = JsonValueForExplorer(value);
+            case "pagination.has_more":
+                ((JsonObject)root["pagination"]!)["has_more"] = JsonValueForExplorer(value);
                 break;
             case "items":
                 root["items"] = JsonValueForExplorer(value);
@@ -25483,7 +25677,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         return $$"""
             {
-              "pagination": { "page": 1, "per_page": 10, "total_pages": 1, "total_items": 1 },
+              "pagination": { "limit": 10, "next_cursor": "bmV4dA", "has_more": true },
               "{{propertyName}}": [{{item}}],
               "{{propertyName}}": [{{item}}]
             }
@@ -25504,7 +25698,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         if (operation.EndsWith("-page", StringComparison.Ordinal))
         {
-            return $$"""{"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},"items":[{{itemJson}}]}""";
+            return $$"""{"pagination":{"limit":10,"next_cursor":"bmV4dA","has_more":true},"items":[{{itemJson}}]}""";
         }
 
         return itemJson;
@@ -25516,10 +25710,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             ["pagination"] = new JsonObject
             {
-                ["page"] = 1,
-                ["per_page"] = 10,
-                ["total_pages"] = 1,
-                ["total_items"] = 1,
+                ["limit"] = 10,
+                ["next_cursor"] = "bmV4dA",
+                ["has_more"] = true,
             },
             ["items"] = new JsonArray(item),
         };
@@ -25591,17 +25784,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case "pagination":
                 root["pagination"] = JsonValueForExplorer(value);
                 break;
-            case "pagination.page":
-                ((JsonObject)root["pagination"]!)["page"] = JsonValueForExplorer(value);
+            case "pagination.limit":
+                ((JsonObject)root["pagination"]!)["limit"] = JsonValueForExplorer(value);
                 break;
-            case "pagination.per_page":
-                ((JsonObject)root["pagination"]!)["per_page"] = JsonValueForExplorer(value);
+            case "pagination.next_cursor":
+                ((JsonObject)root["pagination"]!)["next_cursor"] = JsonValueForExplorer(value);
                 break;
-            case "pagination.total_pages":
-                ((JsonObject)root["pagination"]!)["total_pages"] = JsonValueForExplorer(value);
-                break;
-            case "pagination.total_items":
-                ((JsonObject)root["pagination"]!)["total_items"] = JsonValueForExplorer(value);
+            case "pagination.has_more":
+                ((JsonObject)root["pagination"]!)["has_more"] = JsonValueForExplorer(value);
                 break;
             case "items":
                 root["items"] = JsonValueForExplorer(value);
@@ -25616,6 +25806,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case "items[0].mintable":
             case "mintable":
                 target["mintable"] = JsonValueForExplorer(value);
+                break;
+            case "items[0].owning_domain":
+            case "owning_domain":
+                target["owning_domain"] = JsonValueForExplorer(value);
                 break;
             case "items[0].logo":
             case "logo":
@@ -25696,6 +25890,22 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return root.ToJsonString();
     }
 
+    private static string ExplorerInventoryWithoutItemPropertyJson(
+        string operation,
+        string propertyName)
+    {
+        var item = operation switch
+        {
+            "asset-definitions-page" => ExplorerInventoryAssetDefinitionJsonObject(),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(operation),
+                operation,
+                "Unknown explorer inventory response operation."),
+        };
+        item.Remove(propertyName);
+        return ExplorerDirectoryPageJsonObject(item).ToJsonString();
+    }
+
     private static string ExplorerInventoryDuplicatePropertyJson(string operation, string propertyName)
     {
         var item = operation switch
@@ -25709,7 +25919,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         return $$"""
             {
-              "pagination": { "page": 1, "per_page": 10, "total_pages": 1, "total_items": 1 },
+              "pagination": { "limit": 10, "next_cursor": "bmV4dA", "has_more": true },
               "{{propertyName}}": [{{item}}],
               "{{propertyName}}": [{{item}}]
             }
@@ -25737,7 +25947,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             return $$"""
                 {
-                  "pagination": { "page": 1, "per_page": 10, "total_pages": 1, "total_items": 1 },
+                  "pagination": { "limit": 10, "next_cursor": "bmV4dA", "has_more": true },
                   "items": [{{itemJson}}]
                 }
                 """;
@@ -25774,6 +25984,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new JsonObject
         {
             ["id"] = "rose#wonderland.paynet",
+            ["owning_domain"] = "wonderland.paynet",
             ["mintable"] = "Infinitely",
             ["logo"] = "https://cdn.example/rose.svg",
             ["metadata"] = new JsonObject
@@ -26042,9 +26253,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             "account-qr" => $$"""
                 {
-                  "{{propertyName}}": "sorauロ1Nholder",
-                  "{{propertyName}}": "sorauロ1Nholder",
-                  "literal": "sorauロ1Nholder",
+                  "{{propertyName}}": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                  "{{propertyName}}": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                  "literal": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "network_prefix": 753,
                   "error_correction": "M",
                   "modules": 192,
@@ -26155,7 +26366,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new JsonObject
         {
             ["canonical_id"] = ExplorerDirectoryAccountId,
-            ["literal"] = "sorauロ1Nholder",
+            ["literal"] = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             ["network_prefix"] = 753,
             ["error_correction"] = "M",
             ["modules"] = 192,
@@ -26650,6 +26861,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             null => null,
             JsonNode node => node,
             string text => JsonValue.Create(text),
+            bool boolean => JsonValue.Create(boolean),
             long number => JsonValue.Create(number),
             int number => JsonValue.Create(number),
             double number => JsonValue.Create(number),
@@ -28823,32 +29035,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return response.ToJsonString();
     }
 
-    private static string VpnQuoteInstructionCountJson(int count)
-    {
-        var response = (JsonObject)JsonNode.Parse(VpnQuoteRawResponseJson("quote_id", VpnQuoteIdHex))!;
-        var items = new JsonArray();
-        for (var index = 0; index < count; index++)
-        {
-            items.Add(VpnTxInstructionJson("OpenVpnLeaseEscrow", "abcd"));
-        }
-
-        response["tx_instructions"] = items;
-        return response.ToJsonString();
-    }
-
-    private static string VpnReceiptInstructionCountJson(int count)
-    {
-        var response = (JsonObject)JsonNode.Parse(VpnReceiptRawResponseJson("status", "settled"))!;
-        var items = new JsonArray();
-        for (var index = 0; index < count; index++)
-        {
-            items.Add(VpnTxInstructionJson("SettleVpnLease", "cafe"));
-        }
-
-        response["tx_instructions"] = items;
-        return response.ToJsonString();
-    }
-
     private static string VpnReceiptListCountJson(int itemCount, ulong total)
     {
         var items = new JsonArray();
@@ -28869,12 +29055,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var response = (JsonObject)JsonNode.Parse(VpnResponseJson("quote", "quote_id", VpnQuoteIdHex))!;
         var replacement = JsonValueForVpnResponse(value);
 
-        if (field == "tx_instructions[0]")
-        {
-            var items = (JsonArray)response["tx_instructions"]!;
-            items[0] = replacement;
-        }
-        else if (field.StartsWith("route_pushes[0]", StringComparison.Ordinal))
+        if (field.StartsWith("route_pushes[0]", StringComparison.Ordinal))
         {
             var items = (JsonArray)response["route_pushes"]!;
             items[0] = replacement;
@@ -29034,13 +29215,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var quoteSessionIdHex = VpnQuoteSessionIdHex;
         var meteringPublicKeyHex = VpnMeteringPublicKeyHex;
         var openLeasePayloadHex = "abcd";
-        var quoteTxPayloadHex = "abcd";
         var sessionId = VpnSessionIdHex;
         var paymentTxHash = VpnPaymentTransactionHashHex;
         var helperTicketHex = VpnHelperTicketHex;
         var receiptLeaseIdHex = VpnQuoteIdHex;
         var settleLeasePayloadHex = "cafe";
-        var receiptTxPayloadHex = "cafe";
 
         switch ((operation, field))
         {
@@ -29061,9 +29240,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 break;
             case ("quote", "open_lease_instruction.payload_hex"):
                 openLeasePayloadHex = value;
-                break;
-            case ("quote", "tx_instructions[0].payload_hex"):
-                quoteTxPayloadHex = value;
                 break;
             case ("session-create", "session_id"):
             case ("session-get", "session_id"):
@@ -29098,11 +29274,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case ("receipt-list", "settle_lease_instruction.payload_hex"):
                 settleLeasePayloadHex = value;
                 break;
-            case ("receipt-submit", "tx_instructions[0].payload_hex"):
-            case ("receipt-delete", "tx_instructions[0].payload_hex"):
-            case ("receipt-list", "tx_instructions[0].payload_hex"):
-                receiptTxPayloadHex = value;
-                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown VPN response field.");
         }
@@ -29118,7 +29289,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["payment_reference"] = VpnQuoteIdHex,
                 ["account_id"] = VpnAccountId,
                 ["exit_class"] = "standard",
-                ["relay_endpoint"] = "/dns4/vpn.sora.org/tcp/443/wss",
+                ["relay_endpoint"] = "/dns4/vpn.sora.org/udp/443/quic",
                 ["lease_secs"] = 3600,
                 ["quote_expires_at_ms"] = 1700000000000,
                 ["fee_asset_id"] = "xor#universal.universal",
@@ -29133,10 +29304,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["meter_family"] = "vpn-standard",
                 ["flow_label_bits"] = 24,
                 ["padding_budget_ms"] = 80,
+                ["relay_id_hex"] = VpnRelayIdHex,
+                ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
+                ["tls_server_name"] = "vpn.sora.org",
                 ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
+                ["relay_certificate_sha256_hex"] = VpnRelayCertificateSha256Hex,
+                ["directory_snapshot_digest_hex"] = VpnDirectorySnapshotDigestHex,
                 ["metering_public_key_hex"] = meteringPublicKeyHex,
                 ["open_lease_instruction"] = VpnTxInstructionJson("OpenVpnLeaseEscrow", openLeasePayloadHex),
-                ["tx_instructions"] = new JsonArray(VpnTxInstructionJson("OpenVpnLeaseEscrow", quoteTxPayloadHex)),
             }.ToJsonString(),
             "session-create" or "session-get" => VpnSessionResponseJson(
                 sessionId,
@@ -29149,8 +29324,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 quoteId,
                 paymentTxHash,
                 receiptLeaseIdHex,
-                settleLeasePayloadHex,
-                receiptTxPayloadHex),
+                settleLeasePayloadHex),
             "receipt-list" => new JsonObject
             {
                 ["items"] = new JsonArray(JsonNode.Parse(VpnReceiptResponseJson(
@@ -29158,8 +29332,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                     quoteId,
                     paymentTxHash,
                     receiptLeaseIdHex,
-                    settleLeasePayloadHex,
-                    receiptTxPayloadHex))),
+                    settleLeasePayloadHex))),
                 ["total"] = 1,
             }.ToJsonString(),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown VPN response operation."),
@@ -29186,7 +29359,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new JsonObject
         {
             ["available"] = true,
-            ["relay_endpoint"] = "/dns4/vpn.sora.org/tcp/443/wss",
+            ["relay_endpoint"] = "/dns4/vpn.sora.org/udp/443/quic",
             ["supported_exit_classes"] = new JsonArray("standard", "low-latency", "high-security"),
             ["default_exit_class"] = "standard",
             ["lease_secs"] = 3600,
@@ -29198,14 +29371,17 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["tunnel_addresses"] = new JsonArray("10.208.0.2/32"),
             ["mtu_bytes"] = 1280,
             ["display_billing_label"] = "standard",
-            ["fee_asset_id"] = "xor#universal.universal",
-            ["escrow_account_id"] = VpnEscrowAccountId,
             ["operator_account_id"] = VpnOperatorAccountId,
             ["lease_fee"] = "1000000.25",
             ["settlement_grace_secs"] = 120,
             ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
+            ["relay_id_hex"] = VpnRelayIdHex,
+            ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
+            ["tls_server_name"] = "vpn.sora.org",
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
+            ["relay_certificate_sha256_hex"] = VpnRelayCertificateSha256Hex,
+            ["directory_snapshot_digest_hex"] = VpnDirectorySnapshotDigestHex,
         };
     }
 
@@ -29221,7 +29397,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["session_id"] = sessionId,
             ["account_id"] = VpnAccountId,
             ["exit_class"] = "standard",
-            ["relay_endpoint"] = "/dns4/vpn.sora.org/tcp/443/wss",
+            ["relay_endpoint"] = "/dns4/vpn.sora.org/udp/443/quic",
             ["lease_secs"] = 3600,
             ["expires_at_ms"] = 1700000000000,
             ["connected_at_ms"] = 1699999400000,
@@ -29235,7 +29411,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["lease_fee"] = "1000000.25",
             ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
+            ["relay_id_hex"] = VpnRelayIdHex,
+            ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
+            ["tls_server_name"] = "vpn.sora.org",
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
+            ["relay_certificate_sha256_hex"] = VpnRelayCertificateSha256Hex,
+            ["directory_snapshot_digest_hex"] = VpnDirectorySnapshotDigestHex,
             ["route_pushes"] = new JsonArray("10.0.0.0/8"),
             ["excluded_routes"] = new JsonArray("127.0.0.0/8"),
             ["dns_servers"] = new JsonArray("1.1.1.1"),
@@ -29253,16 +29434,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string quoteId,
         string paymentTxHash,
         string leaseIdHex,
-        string settleLeasePayloadHex,
-        string receiptTxPayloadHex)
+        string settleLeasePayloadHex)
     {
         return VpnReceiptResponseJsonObject(
             sessionId,
             quoteId,
             paymentTxHash,
             leaseIdHex,
-            settleLeasePayloadHex,
-            receiptTxPayloadHex).ToJsonString();
+            settleLeasePayloadHex).ToJsonString();
     }
 
     private static JsonObject VpnReceiptResponseJsonObject(
@@ -29270,8 +29449,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string quoteId,
         string paymentTxHash,
         string leaseIdHex,
-        string settleLeasePayloadHex,
-        string receiptTxPayloadHex)
+        string settleLeasePayloadHex)
     {
         return new JsonObject
         {
@@ -29297,7 +29475,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["refunded_fee"] = "500000.125",
             ["lease_id_hex"] = leaseIdHex,
             ["settle_lease_instruction"] = VpnTxInstructionJson("SettleVpnLease", settleLeasePayloadHex),
-            ["tx_instructions"] = new JsonArray(VpnTxInstructionJson("SettleVpnLease", receiptTxPayloadHex)),
         };
     }
 
@@ -29329,7 +29506,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             SessionId = VpnSessionIdHex,
             AccountId = VpnAccountId,
             ExitClass = "standard",
-            RelayEndpoint = "/dns4/vpn.sora.org/tcp/443/wss",
+            RelayEndpoint = "/dns4/vpn.sora.org/udp/443/quic",
             LeaseSeconds = 3600,
             ExpiresAtMilliseconds = 1700000000000,
             ConnectedAtMilliseconds = 1699999400000,
@@ -29343,7 +29520,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             LeaseFee = "1000000.25",
             FlowLabelBits = 24,
             PaddingBudgetMilliseconds = 80,
+            RelayIdHex = VpnRelayIdHex,
+            DescriptorCommitHex = VpnDescriptorCommitHex,
+            TlsServerName = "vpn.sora.org",
             RelayTlsSpkiSha256Hex = VpnSpkiSha256Hex,
+            RelayCertificateSha256Hex = VpnRelayCertificateSha256Hex,
+            DirectorySnapshotDigestHex = VpnDirectorySnapshotDigestHex,
             RoutePushes = new[] { "10.0.0.0/8" },
             ExcludedRoutes = new[] { "127.0.0.0/8" },
             DnsServers = new[] { "1.1.1.1" },
@@ -29385,14 +29567,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 WireId = "SettleVpnLease",
                 PayloadHex = "cafe",
-            },
-            TxInstructions = new[]
-            {
-                new ToriiVpnTxInstruction
-                {
-                    WireId = "SettleVpnLease",
-                    PayloadHex = "cafe",
-                },
             },
         };
     }
@@ -30231,7 +30405,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               "opaque_id": "opaque-1",
               "receipt_hash": "receipt-1",
               "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-              "account_id": "sorauﾛ1Nmerchant",
+              "account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "resolved_at_ms": 1710000000000,
               "expires_at_ms": 1710003600000,
               "backend": "bfv-programmed-sha3-256-v1",
@@ -30292,7 +30466,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return $$"""
             {
               "policy_id": {{JsonSerializer.Serialize(policyId)}},
-              "account_id": "sorauﾛ1Nmerchant",
+              "account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "opaque_id": "opaque-1",
               "receipt_hash": "receipt-1",
               "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

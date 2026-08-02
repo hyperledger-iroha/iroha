@@ -1685,6 +1685,55 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     native_amx_grouped_suite_source_paths = writer_symbols[
         "_NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS"
     ]
+    expected_direct_source_groups = (
+        (
+            "javascript/iroha_js/src/toriiClient.js",
+            "javascript/iroha_js/src/norito.js",
+            "javascript/iroha_js/src/native.js",
+            "javascript/iroha_js/scripts/build-dist.mjs",
+            "javascript/iroha_js/scripts/native-build-provenance.mjs",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
+            "SumeragiDiagnosticsModels.kt",
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/util/"
+            "HashLiteral.kt",
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/"
+            "IrohaHash.kt",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
+            "SumeragiDiagnosticsModels.java",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/"
+            "IrohaHash.java",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/util/"
+            "HashLiteral.java",
+        ),
+    )
+    for expected_group in expected_direct_source_groups:
+        start = native_amx_grouped_suite_source_paths.index(expected_group[0])
+        assert (
+            tuple(
+                native_amx_grouped_suite_source_paths[
+                    start : start + len(expected_group)
+                ]
+            )
+            == expected_group
+        )
+    assert len(native_amx_grouped_suite_source_paths) == 50
+    harness_text = (
+        ROOT_DIR / writer_symbols["_NATIVE_AMX_GROUPED_PARITY_HARNESS"]
+    ).read_text(encoding="utf-8")
+    assert (
+        'readonly javascript_staged_scripts_root="${javascript_package_root}/scripts"'
+        in harness_text
+    )
+    assert re.search(
+        r'cp "\$\{javascript_sdk_root\}/scripts/native-build-provenance\.mjs"'
+        r'(?:\s*\\)?\s+'
+        r'"\$\{javascript_staged_scripts_root\}/native-build-provenance\.mjs"',
+        harness_text,
+    )
     native_amx_grouped_suite_source_manifest = writer_symbols[
         "_native_amx_grouped_suite_source_manifest"
     ](ROOT_DIR)

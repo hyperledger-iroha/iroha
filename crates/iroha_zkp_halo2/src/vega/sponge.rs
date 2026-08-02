@@ -69,7 +69,7 @@ impl Keccak256 {
     }
 }
 
-fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
+fn absorb_and_finalize(input: &[u8], delimiter: u8) -> [u64; 25] {
     let mut state = [0_u64; 25];
     let mut chunks = input.chunks_exact(KECCAK_256_RATE);
     for chunk in &mut chunks {
@@ -84,6 +84,11 @@ fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
     final_block[KECCAK_256_RATE - 1] ^= 0x80;
     xor_rate_block(&mut state, &final_block);
     keccakf(&mut state);
+    state
+}
+
+fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
+    let mut state = absorb_and_finalize(input, delimiter);
 
     let mut output = Vec::with_capacity(output_len);
     while output.len() < output_len {
@@ -101,6 +106,56 @@ fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
         }
     }
     output
+}
+
+/// Incremental SHAKE256 output reader.
+///
+/// This keeps only one Keccak rate block in memory, which is required by the
+/// release-size deterministic RNS samplers.  Reading the same total number of
+/// bytes in any chunking produces the exact one-shot `shake256` stream.
+pub(super) struct Shake256Reader {
+    state: [u64; 25],
+    block: [u8; KECCAK_256_RATE],
+    cursor: usize,
+}
+
+impl Shake256Reader {
+    pub(super) fn new(input: &[u8]) -> Self {
+        let state = absorb_and_finalize(input, 0x1f);
+        let mut reader = Self {
+            state,
+            block: [0; KECCAK_256_RATE],
+            cursor: 0,
+        };
+        reader.materialize_block();
+        reader
+    }
+
+    pub(super) fn read(&mut self, mut output: &mut [u8]) {
+        while !output.is_empty() {
+            if self.cursor == KECCAK_256_RATE {
+                keccakf(&mut self.state);
+                self.materialize_block();
+                self.cursor = 0;
+            }
+            let take = output
+                .len()
+                .min(KECCAK_256_RATE.saturating_sub(self.cursor));
+            output[..take].copy_from_slice(&self.block[self.cursor..self.cursor + take]);
+            self.cursor += take;
+            output = &mut output[take..];
+        }
+    }
+
+    fn materialize_block(&mut self) {
+        for (destination, lane) in self
+            .block
+            .chunks_exact_mut(8)
+            .zip(self.state.iter().copied())
+        {
+            destination.copy_from_slice(&lane.to_le_bytes());
+        }
+    }
 }
 
 fn xor_rate_block(state: &mut [u64; 25], block: &[u8]) {
@@ -163,6 +218,22 @@ mod tests {
             let input = vec![0xa5; len];
             assert_eq!(keccak256(&input), keccak256(&input));
             assert_eq!(shake256(&input, 257).len(), 257);
+        }
+    }
+
+    #[test]
+    fn streaming_shake_matches_one_shot_under_adversarial_chunkings() {
+        let input = (0..2 * KECCAK_256_RATE + 19)
+            .map(|index| index as u8)
+            .collect::<Vec<_>>();
+        let expected = shake256(&input, 3 * KECCAK_256_RATE + 23);
+        for chunk_size in [1, 7, 8, 31, KECCAK_256_RATE - 1, KECCAK_256_RATE, 509] {
+            let mut reader = Shake256Reader::new(&input);
+            let mut actual = vec![0_u8; expected.len()];
+            for chunk in actual.chunks_mut(chunk_size) {
+                reader.read(chunk);
+            }
+            assert_eq!(actual, expected, "chunk_size={chunk_size}");
         }
     }
 

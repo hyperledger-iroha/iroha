@@ -96,9 +96,9 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::por::{
-    POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
-    POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1, decode_por_challenge_status_page_v1,
-    decode_por_weekly_report_v1,
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+    POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1, POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1,
+    PorStatusCursorV1, decode_por_weekly_report_v1,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
@@ -2142,6 +2142,197 @@ enum ReportOutputFormat {
     Json,
 }
 
+const POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1: usize = 64 * 1024;
+const POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1: usize = 512;
+const POR_STATUS_DECODE_MAX_TOTAL_ELEMENTS_V1: usize =
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 * 64;
+const POR_STATUS_DECODE_ALLOCATION_MULTIPLIER_V1: usize = 4;
+const POR_STATUS_DECODE_MAX_NESTING_DEPTH_V1: usize = 32;
+
+#[derive(Clone, Copy)]
+struct PorStatusResponseBoundsV1 {
+    response_max_bytes: usize,
+    response_max_bytes_u64: u64,
+    response_read_limit: u64,
+    decode_limits: norito::DecodeLimits,
+}
+
+fn por_status_response_bounds(canonical_record_bytes: usize) -> Option<PorStatusResponseBoundsV1> {
+    if canonical_record_bytes == 0
+        || canonical_record_bytes > POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1
+    {
+        return None;
+    }
+    let response_max_bytes =
+        canonical_record_bytes.checked_add(POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1)?;
+    let response_max_bytes_u64 = u64::try_from(response_max_bytes).ok()?;
+    let response_read_limit = response_max_bytes_u64.checked_add(1)?;
+    let max_total_allocated_bytes =
+        response_max_bytes.checked_mul(POR_STATUS_DECODE_ALLOCATION_MULTIPLIER_V1)?;
+    let decode_limits = norito::DecodeLimits::new(
+        POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+        response_max_bytes,
+        POR_STATUS_DECODE_MAX_TOTAL_ELEMENTS_V1,
+        max_total_allocated_bytes,
+        POR_STATUS_DECODE_MAX_NESTING_DEPTH_V1,
+    );
+    Some(PorStatusResponseBoundsV1 {
+        response_max_bytes,
+        response_max_bytes_u64,
+        response_read_limit,
+        decode_limits,
+    })
+}
+
+#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
+struct ToriiPorStatusPageV1 {
+    version: u8,
+    snapshot_generation: u64,
+    record_limit: u32,
+    canonical_byte_limit: u64,
+    canonical_bytes: u64,
+    inspected_candidates: u32,
+    has_more: bool,
+    #[norito(default)]
+    next_cursor: Option<String>,
+    statuses: Vec<PorChallengeStatusV1>,
+}
+
+#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
+struct ToriiPorStatusExportPageV1 {
+    version: u8,
+    #[norito(default)]
+    start_epoch: Option<u64>,
+    #[norito(default)]
+    end_epoch: Option<u64>,
+    page: ToriiPorStatusPageV1,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct RequestedPorStatusFilter {
+    manifest_digest: Option<[u8; 32]>,
+    provider_id: Option<[u8; 32]>,
+    epoch_id: Option<u64>,
+    outcome: Option<PorChallengeOutcome>,
+}
+
+fn validate_sorafs_por_cursor(cursor: &str, context: &str) -> Result<PorStatusCursorV1, String> {
+    PorStatusCursorV1::decode_opaque(cursor)
+        .map_err(|error| {
+            format!(
+                "{context} must be a bounded canonical PoR cursor (maximum {POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1} bytes): {error}"
+            )
+        })
+}
+
+fn validate_torii_por_status_page(
+    page: &ToriiPorStatusPageV1,
+    expected_limit: usize,
+    expected_max_bytes: usize,
+) -> Result<(), String> {
+    if page.version != 1
+        || page.snapshot_generation == 0
+        || usize::try_from(page.record_limit).ok() != Some(expected_limit)
+        || usize::try_from(page.canonical_byte_limit).ok() != Some(expected_max_bytes)
+        || page.statuses.len() > expected_limit
+        || usize::try_from(page.canonical_bytes)
+            .ok()
+            .is_none_or(|bytes| bytes > expected_max_bytes)
+        || usize::try_from(page.inspected_candidates)
+            .ok()
+            .is_none_or(|count| {
+                count < page.statuses.len() || count > POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
+            })
+        || page.has_more != page.next_cursor.is_some()
+        || (page.has_more && page.inspected_candidates == 0)
+    {
+        return Err("PoR status page metadata violates the requested bounds".into());
+    }
+    if let Some(cursor) = page.next_cursor.as_deref() {
+        let cursor = validate_sorafs_por_cursor(cursor, "PoR status page next_cursor")?;
+        if cursor.snapshot_generation != page.snapshot_generation {
+            return Err("PoR status page next_cursor does not bind the response generation".into());
+        }
+    }
+
+    let mut canonical_bytes = 0usize;
+    for (index, status) in page.statuses.iter().enumerate() {
+        status
+            .validate()
+            .map_err(|error| format!("PoR status record #{index} is invalid: {error}"))?;
+        canonical_bytes = canonical_bytes
+            .checked_add(
+                to_bytes(status)
+                    .map_err(|error| format!("failed to encode PoR status #{index}: {error}"))?
+                    .len(),
+            )
+            .ok_or_else(|| "PoR status canonical-byte accounting overflowed".to_owned())?;
+    }
+    if u64::try_from(canonical_bytes).ok() != Some(page.canonical_bytes) {
+        return Err("PoR status canonical-byte total does not match its page envelope".into());
+    }
+    Ok(())
+}
+
+fn validate_por_status_order(
+    statuses: &[PorChallengeStatusV1],
+    epoch_ordered: bool,
+) -> Result<(), String> {
+    let strictly_ordered = statuses.windows(2).all(|pair| {
+        if epoch_ordered {
+            (pair[0].epoch_id, pair[0].issued_at, pair[0].challenge_id)
+                < (pair[1].epoch_id, pair[1].issued_at, pair[1].challenge_id)
+        } else {
+            (pair[0].issued_at, pair[0].challenge_id) < (pair[1].issued_at, pair[1].challenge_id)
+        }
+    });
+    if !strictly_ordered {
+        return Err("PoR status records are not in strict canonical order".into());
+    }
+    Ok(())
+}
+
+fn validate_por_status_filter_membership(
+    statuses: &[PorChallengeStatusV1],
+    filter: RequestedPorStatusFilter,
+) -> Result<(), String> {
+    for (index, status) in statuses.iter().enumerate() {
+        if filter
+            .manifest_digest
+            .is_some_and(|manifest| status.manifest_digest != manifest)
+        {
+            return Err(format!(
+                "PoR status record #{index} does not match the requested manifest filter"
+            ));
+        }
+        if filter
+            .provider_id
+            .is_some_and(|provider| status.provider_id != provider)
+        {
+            return Err(format!(
+                "PoR status record #{index} does not match the requested provider filter"
+            ));
+        }
+        if filter
+            .epoch_id
+            .is_some_and(|epoch| status.epoch_id != epoch)
+        {
+            return Err(format!(
+                "PoR status record #{index} does not match the requested epoch filter"
+            ));
+        }
+        if filter
+            .outcome
+            .is_some_and(|outcome| status.status != outcome)
+        {
+            return Err(format!(
+                "PoR status record #{index} does not match the requested outcome filter"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     let mut torii_url: Option<String> = None;
     let mut manifest_hex: Option<String> = None;
@@ -2149,7 +2340,8 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     let mut epoch: Option<u64> = None;
     let mut status_filter: Option<String> = None;
     let mut limit: Option<u32> = None;
-    let mut page_token: Option<String> = None;
+    let mut max_bytes: Option<usize> = None;
+    let mut cursor: Option<String> = None;
     let mut format_label: String = "table".to_string();
 
     for arg in raw_args {
@@ -2181,7 +2373,23 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
                 }
                 limit = Some(parsed);
             }
-            "--page-token" => page_token = Some(value.to_string()),
+            "--max-bytes" => {
+                let parsed = value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|err| format!("invalid `--max-bytes` value: {err}"))?;
+                if parsed == 0 || parsed > POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 {
+                    return Err(format!(
+                        "`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1}"
+                    ));
+                }
+                max_bytes = Some(parsed);
+            }
+            "--cursor" => {
+                let value = value.trim();
+                validate_sorafs_por_cursor(value, "`--cursor`")?;
+                cursor = Some(value.to_owned());
+            }
             "--format" => format_label = value.to_string(),
             _ => {
                 return Err(format!(
@@ -2204,27 +2412,36 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
         }
     };
 
-    if let Some(hex) = manifest_hex.as_ref() {
-        parse_digest_hex(hex).map_err(|err| {
-            format!("invalid `--manifest` digest `{hex}` supplied to `por status`: {err}")
-        })?;
-    }
-    if let Some(hex) = provider_hex.as_ref() {
-        parse_digest_hex(hex).map_err(|err| {
-            format!("invalid `--provider` digest `{hex}` supplied to `por status`: {err}")
-        })?;
-    }
-    let status_param = if let Some(label) = status_filter.as_ref() {
-        Some(
-            PorChallengeOutcome::parse(label)
-                .map_err(|err| {
-                    format!("invalid `--status` value `{label}` supplied to `por status`: {err}")
-                })?
-                .as_str()
-                .to_string(),
-        )
-    } else {
-        None
+    let manifest_filter = manifest_hex
+        .as_deref()
+        .map(|hex| {
+            parse_digest_hex(hex).map_err(|err| {
+                format!("invalid `--manifest` digest `{hex}` supplied to `por status`: {err}")
+            })
+        })
+        .transpose()?;
+    let provider_filter = provider_hex
+        .as_deref()
+        .map(|hex| {
+            parse_digest_hex(hex).map_err(|err| {
+                format!("invalid `--provider` digest `{hex}` supplied to `por status`: {err}")
+            })
+        })
+        .transpose()?;
+    let outcome_filter = status_filter
+        .as_deref()
+        .map(|label| {
+            PorChallengeOutcome::parse(label).map_err(|err| {
+                format!("invalid `--status` value `{label}` supplied to `por status`: {err}")
+            })
+        })
+        .transpose()?;
+    let status_param = outcome_filter.map(|outcome| outcome.as_str().to_owned());
+    let response_filter = RequestedPorStatusFilter {
+        manifest_digest: manifest_filter,
+        provider_id: provider_filter,
+        epoch_id: epoch,
+        outcome: outcome_filter,
     };
     let effective_limit = match limit {
         Some(limit) => usize::try_from(limit)
@@ -2236,6 +2453,7 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
             "`--limit={effective_limit}` exceeds the PoR status page maximum of {POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1}"
         ));
     }
+    let effective_max_bytes = max_bytes.unwrap_or(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1);
 
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
@@ -2256,8 +2474,9 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
         serializer.append_pair("status", status.as_str());
     }
     serializer.append_pair("limit", &effective_limit.to_string());
-    if let Some(token) = page_token {
-        serializer.append_pair("page_token", token.trim());
+    serializer.append_pair("max_bytes", &effective_max_bytes.to_string());
+    if let Some(cursor) = cursor {
+        serializer.append_pair("cursor", &cursor);
     }
     let query = serializer.finish();
     if !query.is_empty() {
@@ -2273,31 +2492,25 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
         .send()
         .map_err(|err| format!("failed to request PoR status from `{endpoint}`: {err}"))?;
     let status = response.status();
-    if response.content_length().is_some_and(|length| {
-        length
-            > u64::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
-                .expect("PoR status response bound fits u64")
-    }) {
+    let response_bounds = por_status_response_bounds(effective_max_bytes)
+        .ok_or_else(|| "PoR status response bound overflowed".to_owned())?;
+    let response_max_bytes = response_bounds.response_max_bytes;
+    if response
+        .content_length()
+        .is_some_and(|length| length > response_bounds.response_max_bytes_u64)
+    {
         return Err(format!(
-            "PoR status response exceeds the {}-byte canonical limit",
-            POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
+            "PoR status response exceeds the {response_max_bytes}-byte envelope limit"
         ));
     }
-    let response_read_limit = u64::try_from(
-        POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
-            .checked_add(1)
-            .expect("PoR status response bound can be incremented"),
-    )
-    .expect("PoR status response bound fits u64");
     let mut body = Vec::new();
     response
-        .take(response_read_limit)
+        .take(response_bounds.response_read_limit)
         .read_to_end(&mut body)
         .map_err(|err| format!("failed to read PoR status response: {err}"))?;
-    if body.len() > POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 {
+    if body.len() > response_max_bytes {
         return Err(format!(
-            "PoR status response exceeds the {}-byte canonical limit",
-            POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
+            "PoR status response exceeds the {response_max_bytes}-byte envelope limit"
         ));
     }
     if !status.is_success() {
@@ -2306,9 +2519,18 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
             body_snippet(&body)
         ));
     }
-    let statuses: Vec<PorChallengeStatusV1> =
-        decode_por_challenge_status_page_v1(&body, effective_limit)
-            .map_err(|err| format!("failed to decode PoR status records: {err}"))?;
+    let page: ToriiPorStatusPageV1 =
+        norito::decode_from_bytes_with_limits(&body, response_bounds.decode_limits)
+            .map_err(|err| format!("failed to decode PoR status page: {err}"))?;
+    if to_bytes(&page).map_err(|err| format!("failed to re-encode PoR status page: {err}"))? != body
+    {
+        return Err("PoR status page is not canonical Norito".into());
+    }
+    validate_torii_por_status_page(&page, effective_limit, effective_max_bytes)?;
+    validate_por_status_order(&page.statuses, false)?;
+    validate_por_status_filter_membership(&page.statuses, response_filter)?;
+    let next_cursor = page.next_cursor;
+    let statuses = page.statuses;
 
     match output_format {
         StatusOutputFormat::Table => {
@@ -2323,6 +2545,9 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
             println!("{pretty}");
         }
     }
+    if let Some(cursor) = next_cursor {
+        eprintln!("next_cursor={cursor}");
+    }
     Ok(())
 }
 
@@ -2331,6 +2556,9 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     let mut out_path: Option<PathBuf> = None;
     let mut start_epoch: Option<u64> = None;
     let mut end_epoch: Option<u64> = None;
+    let mut limit: usize = POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1;
+    let mut max_bytes: usize = POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1;
+    let mut cursor: Option<String> = None;
 
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
@@ -2356,6 +2584,33 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
                     .map_err(|err| format!("invalid `--end-epoch` value: {err}"))?;
                 end_epoch = Some(parsed);
             }
+            "--limit" => {
+                limit = value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|err| format!("invalid `--limit` value: {err}"))?;
+                if limit == 0 || limit > POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 {
+                    return Err(format!(
+                        "`--limit` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1}"
+                    ));
+                }
+            }
+            "--max-bytes" => {
+                max_bytes = value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|err| format!("invalid `--max-bytes` value: {err}"))?;
+                if max_bytes == 0 || max_bytes > POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 {
+                    return Err(format!(
+                        "`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1}"
+                    ));
+                }
+            }
+            "--cursor" => {
+                let value = value.trim();
+                validate_sorafs_por_cursor(value, "`--cursor`")?;
+                cursor = Some(value.to_owned());
+            }
             _ => {
                 return Err(format!(
                     "unrecognised option `{key}` for `sorafs_cli por export`"
@@ -2369,6 +2624,14 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     })?;
     let out_path = out_path
         .ok_or_else(|| "missing required `--out=PATH` for `sorafs_cli por export`".to_string())?;
+    if start_epoch.is_some() != end_epoch.is_some() {
+        return Err("`--start-epoch` and `--end-epoch` must be supplied together".into());
+    }
+    if let (Some(start), Some(end)) = (start_epoch, end_epoch)
+        && start > end
+    {
+        return Err("`--start-epoch` must not exceed `--end-epoch`".into());
+    }
 
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
@@ -2380,6 +2643,11 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     }
     if let Some(end) = end_epoch {
         serializer.append_pair("end_epoch", &end.to_string());
+    }
+    serializer.append_pair("limit", &limit.to_string());
+    serializer.append_pair("max_bytes", &max_bytes.to_string());
+    if let Some(cursor) = cursor {
+        serializer.append_pair("cursor", &cursor);
     }
     let query = serializer.finish();
     if !query.is_empty() {
@@ -2395,17 +2663,61 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
         .send()
         .map_err(|err| format!("failed to request PoR export from `{endpoint}`: {err}"))?;
     let status = response.status();
-    let body = response
-        .bytes()
+    let response_bounds = por_status_response_bounds(max_bytes)
+        .ok_or_else(|| "PoR export response bound overflowed".to_owned())?;
+    let response_max_bytes = response_bounds.response_max_bytes;
+    if response
+        .content_length()
+        .is_some_and(|length| length > response_bounds.response_max_bytes_u64)
+    {
+        return Err(format!(
+            "PoR export response exceeds the {response_max_bytes}-byte envelope limit"
+        ));
+    }
+    let mut body = Vec::new();
+    response
+        .take(response_bounds.response_read_limit)
+        .read_to_end(&mut body)
         .map_err(|err| format!("failed to read PoR export response: {err}"))?;
+    if body.len() > response_max_bytes {
+        return Err(format!(
+            "PoR export response exceeds the {response_max_bytes}-byte envelope limit"
+        ));
+    }
     if !status.is_success() {
         return Err(format!(
             "PoR export failed with status {status}: {}",
             body_snippet(&body)
         ));
     }
+    let export: ToriiPorStatusExportPageV1 =
+        norito::decode_from_bytes_with_limits(&body, response_bounds.decode_limits)
+            .map_err(|err| format!("failed to decode PoR export page: {err}"))?;
+    if to_bytes(&export).map_err(|err| format!("failed to re-encode PoR export page: {err}"))?
+        != body
+    {
+        return Err("PoR export page is not canonical Norito".into());
+    }
+    if export.version != 1 || export.start_epoch != start_epoch || export.end_epoch != end_epoch {
+        return Err("PoR export page does not match the requested epoch range".into());
+    }
+    validate_torii_por_status_page(&export.page, limit, max_bytes)?;
+    let epoch_ordered = start_epoch.is_some();
+    validate_por_status_order(&export.page.statuses, epoch_ordered)?;
+    if let (Some(start), Some(end)) = (start_epoch, end_epoch)
+        && export
+            .page
+            .statuses
+            .iter()
+            .any(|status| !(start..=end).contains(&status.epoch_id))
+    {
+        return Err("PoR export page contains a status outside the requested epoch range".into());
+    }
     write_bytes(&out_path, &body)?;
     println!("exported {} bytes to `{}`.", body.len(), out_path.display());
+    if let Some(cursor) = export.page.next_cursor {
+        println!("next_cursor={cursor}");
+    }
     Ok(())
 }
 
@@ -2868,8 +3180,8 @@ fn usage() -> String {
   sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
   sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]
-  sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--format=table|json]
-  sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N] [--end-epoch=N]
+  sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
+  sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]
   sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]
   sorafs_cli proxy set-mode --orchestrator-config=PATH --mode=bridge|metadata-only [--json-out=PATH] [--config-out=PATH] [--dry-run]
   sorafs_cli taikai bundle --payload=PATH --car-out=PATH --envelope-out=PATH --event-id=NAME --stream-id=NAME --rendition-id=NAME --track-kind=video|audio|data --codec=CODEC --bitrate-kbps=KBPS --segment-sequence=N --segment-start-pts=N --segment-duration=N --wallclock-unix-ms=N --manifest-hash=HEX --storage-ticket=HEX [--indexes-out=PATH] [--ingest-metadata-out=PATH] [--summary-out=PATH] [--resolution=WxH] [--audio-layout=mono|stereo|5.1|7.1|custom:<label>] [--ingest-latency-ms=N] [--live-edge-drift-ms=N] [--ingest-node-id=ID] [--metadata-json=PATH]
@@ -3135,8 +3447,8 @@ fn insert_telemetry_source(summary: &mut Value, telemetry_source: Option<&str>) 
 
 fn por_usage() -> String {
     "Usage:
-  sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--limit=N] [--page-token=TOKEN] [--format=table|json]
-  sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N] [--end-epoch=N]
+  sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
+  sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]
   sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]"
         .to_string()
 }
@@ -18397,7 +18709,42 @@ struct GovernanceDagNodeSummary {
     prev_cid_hex: Option<String>,
     timestamp: u64,
     publisher_peer_id: String,
+    submission_publisher_account_digest_hex: Option<String>,
+    submission_origin: Option<&'static str>,
     payload_kind: &'static str,
+}
+
+fn governance_submission_summary(
+    node: &GovernanceLogNodeV1,
+) -> (Option<String>, Option<&'static str>) {
+    node.submission_provenance
+        .as_ref()
+        .map_or((None, None), |provenance| {
+            (
+                Some(hex_encode(provenance.publisher_account_digest)),
+                Some(provenance.origin.label()),
+            )
+        })
+}
+
+fn insert_governance_submission_summary(
+    object: &mut Map,
+    publisher_account_digest_hex: Option<&str>,
+    origin: Option<&str>,
+) {
+    object.insert(
+        "submission_publisher_account_digest_hex".into(),
+        publisher_account_digest_hex.map_or(Value::Null, Value::from),
+    );
+    object.insert(
+        "submission_origin".into(),
+        origin.map_or(Value::Null, Value::from),
+    );
+}
+
+fn insert_governance_node_submission_summary(object: &mut Map, node: &GovernanceLogNodeV1) {
+    let (publisher_account_digest_hex, origin) = governance_submission_summary(node);
+    insert_governance_submission_summary(object, publisher_account_digest_hex.as_deref(), origin);
 }
 
 #[derive(Debug, Clone)]
@@ -18641,6 +18988,11 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
         if let Some(node) = &artifact.node {
             file.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
             file.insert("payload_kind".into(), Value::from(node.payload_kind));
+            insert_governance_submission_summary(
+                &mut file,
+                node.submission_publisher_account_digest_hex.as_deref(),
+                node.submission_origin,
+            );
         }
         exported_files.push(Value::Object(file));
     }
@@ -18846,6 +19198,11 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
                 Value::from(node.node_cid_hex.clone()),
             );
             block_value.insert("payload_kind".into(), Value::from(node.payload_kind));
+            insert_governance_submission_summary(
+                &mut block_value,
+                node.submission_publisher_account_digest_hex.as_deref(),
+                node.submission_origin,
+            );
         }
         block_value.insert(
             "encoded_blake3_hex".into(),
@@ -20004,6 +20361,7 @@ fn governance_dag_mirror_index_value(
             "payload_kind".into(),
             Value::from(governance_payload_kind_cli(&block.node.payload)),
         );
+        insert_governance_node_submission_summary(&mut block_value, &block.node);
         block_value.insert("blake3".into(), Value::from(blake3_hex.clone()));
         block_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
         block_values.push(Value::Object(block_value));
@@ -20491,6 +20849,7 @@ fn load_governance_dag_block_snapshot(
             "payload_kind".into(),
             Value::from(governance_payload_kind_cli(&block.node.payload)),
         );
+        insert_governance_node_submission_summary(&mut record, &block.node);
         record.insert("blake3".into(), Value::from(blake3_hex));
         record.insert("sidecar_status".into(), Value::from(sidecar_status));
         blocks.push(block);
@@ -20833,6 +21192,7 @@ fn verify_governance_dag_build_snapshot(
                             "payload_kind".into(),
                             Value::from(governance_payload_kind_cli(&block.node.payload)),
                         );
+                        insert_governance_node_submission_summary(&mut block_value, &block.node);
                         decoded_blocks.push((rel_path, block));
                     }
                     Err(err) => {
@@ -21141,6 +21501,8 @@ fn write_governance_blake3_sidecar(path: &Path, bytes: &[u8]) -> Result<Vec<u8>,
 
 impl GovernanceDagNodeSummary {
     fn from_node(node: &GovernanceLogNodeV1) -> Self {
+        let (submission_publisher_account_digest_hex, submission_origin) =
+            governance_submission_summary(node);
         Self {
             node_cid: node.node_cid.clone(),
             node_cid_label: cid_display(&node.node_cid),
@@ -21150,6 +21512,8 @@ impl GovernanceDagNodeSummary {
             prev_cid_hex: node.prev_cid.as_ref().map(hex_encode),
             timestamp: node.timestamp,
             publisher_peer_id: String::from_utf8_lossy(&node.publisher_peer_id).to_string(),
+            submission_publisher_account_digest_hex,
+            submission_origin,
             payload_kind: governance_payload_kind_cli(&node.payload),
         }
     }
@@ -21532,13 +21896,20 @@ fn governance_dag_node_value(node: &GovernanceDagNodeSummary) -> Value {
         "publisher_peer_id".into(),
         Value::from(node.publisher_peer_id.clone()),
     );
+    insert_governance_submission_summary(
+        &mut obj,
+        node.submission_publisher_account_digest_hex.as_deref(),
+        node.submission_origin,
+    );
     obj.insert("payload_kind".into(), Value::from(node.payload_kind));
     Value::Object(obj)
 }
 
 fn print_governance_dag_inventory_table(root: &Path, artifacts: &[GovernanceDagArtifact]) {
     println!("root: {}", root.display());
-    println!("path\tkind\tvalidation\tsidecar\tblake3");
+    println!(
+        "path\tkind\tsubmission_account_digest_hex\tsubmission_origin\tvalidation\tsidecar\tblake3"
+    );
     for artifact in artifacts {
         let kind = artifact
             .node
@@ -21550,9 +21921,25 @@ fn print_governance_dag_inventory_table(root: &Path, artifacts: &[GovernanceDagA
             .as_ref()
             .map(|outcome| outcome.status.as_str())
             .unwrap_or("not_governance_node");
+        let submission_account_digest_hex = artifact
+            .node
+            .as_ref()
+            .and_then(|node| node.submission_publisher_account_digest_hex.as_deref())
+            .unwrap_or("-");
+        let submission_origin = artifact
+            .node
+            .as_ref()
+            .and_then(|node| node.submission_origin)
+            .unwrap_or("-");
         println!(
-            "{}\t{}\t{}\t{}\t{}",
-            artifact.rel_path, kind, validation, artifact.sidecar_status, artifact.blake3_hex
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            artifact.rel_path,
+            kind,
+            submission_account_digest_hex,
+            submission_origin,
+            validation,
+            artifact.sidecar_status,
+            artifact.blake3_hex
         );
     }
 }
@@ -21571,6 +21958,16 @@ fn print_governance_dag_artifact_table(artifact: &GovernanceDagArtifact) {
         );
         println!("timestamp: {}", node.timestamp);
         println!("publisher_peer_id: {}", node.publisher_peer_id);
+        println!(
+            "submission_publisher_account_digest_hex: {}",
+            node.submission_publisher_account_digest_hex
+                .as_deref()
+                .unwrap_or("-")
+        );
+        println!(
+            "submission_origin: {}",
+            node.submission_origin.unwrap_or("-")
+        );
         println!("payload_kind: {}", node.payload_kind);
     }
     if let Some(outcome) = &artifact.outcome {
@@ -21969,6 +22366,161 @@ mod tests {
 
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(fixture_keypair(seed).public_key().clone())
+    }
+
+    #[test]
+    fn sorafs_por_cursor_validation_is_strictly_canonical() {
+        let cursor = PorStatusCursorV1 {
+            version: sorafs_manifest::por::POR_STATUS_CURSOR_VERSION_V1,
+            snapshot_generation: 7,
+            selection_digest: [0x41; 32],
+            last_epoch_id: 11,
+            last_issued_at: 1_700_000_000,
+            last_challenge_id: [0x42; 32],
+        };
+        let canonical = cursor.encode_opaque().expect("canonical cursor fixture");
+        assert_eq!(
+            validate_sorafs_por_cursor(&canonical, "cursor").expect("canonical bounded cursor"),
+            cursor
+        );
+        for malformed in ["", "A", "AB", "AA=", "AA!", "AA\n"] {
+            assert!(
+                validate_sorafs_por_cursor(malformed, "cursor").is_err(),
+                "cursor {malformed:?} must fail closed"
+            );
+        }
+        assert!(
+            validate_sorafs_por_cursor(
+                &"A".repeat(POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1 + 1),
+                "cursor",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sorafs_por_response_decode_field_bound_is_exact() {
+        assert!(por_status_response_bounds(0).is_none());
+        assert!(
+            por_status_response_bounds(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 1).is_none()
+        );
+        let response_bounds =
+            por_status_response_bounds(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1)
+                .expect("protocol response bound");
+        let response_max_bytes = response_bounds.response_max_bytes;
+        let limits = response_bounds.decode_limits;
+        assert_eq!(
+            response_bounds.response_max_bytes_u64,
+            u64::try_from(response_max_bytes).expect("response bound fits u64")
+        );
+        assert_eq!(
+            response_bounds.response_read_limit,
+            response_bounds.response_max_bytes_u64 + 1
+        );
+        assert_eq!(limits.max_field_bytes(), response_max_bytes);
+        assert_eq!(
+            limits.max_sequence_elements(),
+            POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1
+        );
+        assert_eq!(
+            limits.max_total_elements(),
+            POR_STATUS_DECODE_MAX_TOTAL_ELEMENTS_V1
+        );
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            response_max_bytes * POR_STATUS_DECODE_ALLOCATION_MULTIPLIER_V1
+        );
+        assert_eq!(
+            limits.max_nesting_depth(),
+            POR_STATUS_DECODE_MAX_NESTING_DEPTH_V1
+        );
+
+        let exact = u64::try_from(response_max_bytes)
+            .expect("response bound fits u64")
+            .to_le_bytes();
+        norito::with_decode_limits(limits, || {
+            norito::core::read_len_from_slice_with_flags(&exact, 0).map(|_| ())
+        })
+        .expect("the exact protocol field bound is accepted");
+
+        let above = u64::try_from(response_max_bytes + 1)
+            .expect("response bound plus one fits u64")
+            .to_le_bytes();
+        let error = norito::with_decode_limits(limits, || {
+            norito::core::read_len_from_slice_with_flags(&above, 0).map(|_| ())
+        })
+        .expect_err("one byte above the protocol field bound is rejected");
+        assert!(matches!(
+            error,
+            norito::Error::FieldLengthExceeded { length, limit }
+                if length == u64::try_from(response_max_bytes + 1).expect("bound fits u64")
+                    && limit == u64::try_from(response_max_bytes).expect("bound fits u64")
+        ));
+    }
+
+    #[test]
+    fn sorafs_por_status_filter_membership_is_exact() {
+        let status = PorChallengeStatusV1 {
+            version: 1,
+            challenge_id: [0x11; 32],
+            manifest_digest: [0x22; 32],
+            provider_id: [0x33; 32],
+            epoch_id: 42,
+            drand_round: 100,
+            status: PorChallengeOutcome::AwaitingProof,
+            sample_count: 64,
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: None,
+            proof_digest: None,
+            repair_task_id: None,
+            failure_reason: None,
+            verifier_latency_ms: None,
+        };
+        let exact = RequestedPorStatusFilter {
+            manifest_digest: Some(status.manifest_digest),
+            provider_id: Some(status.provider_id),
+            epoch_id: Some(status.epoch_id),
+            outcome: Some(status.status),
+        };
+        validate_por_status_filter_membership(std::slice::from_ref(&status), exact)
+            .expect("exact status selection");
+
+        for (filter, expected_field) in [
+            (
+                RequestedPorStatusFilter {
+                    manifest_digest: Some([0x44; 32]),
+                    ..exact
+                },
+                "manifest",
+            ),
+            (
+                RequestedPorStatusFilter {
+                    provider_id: Some([0x44; 32]),
+                    ..exact
+                },
+                "provider",
+            ),
+            (
+                RequestedPorStatusFilter {
+                    epoch_id: Some(43),
+                    ..exact
+                },
+                "epoch",
+            ),
+            (
+                RequestedPorStatusFilter {
+                    outcome: Some(PorChallengeOutcome::Verified),
+                    ..exact
+                },
+                "outcome",
+            ),
+        ] {
+            let error =
+                validate_por_status_filter_membership(std::slice::from_ref(&status), filter)
+                    .expect_err("substituted selection must fail closed");
+            assert!(error.contains(expected_field), "unexpected error: {error}");
+        }
     }
 
     fn fixture_reputation_auth(seed: u8, discriminant: u16) -> ReputationRequestAuth {
@@ -24317,7 +24869,7 @@ fn render_status_table(entries: &[PorChallengeStatusV1]) -> String {
     let mut out = String::new();
     let _ = writeln!(
         &mut out,
-        "{:<12} {:<12} {:<8} {:>8} {:>6} {:>12} {:>12} FAILURE",
+        "{:<12} {:<12} {:<15} {:>8} {:>6} {:>12} {:>12} FAILURE",
         "CHALLENGE", "PROVIDER", "STATUS", "SAMPLES", "FORCED", "ISSUED", "RESPONDED"
     );
     for entry in entries {
@@ -24338,7 +24890,7 @@ fn render_status_table(entries: &[PorChallengeStatusV1]) -> String {
             .unwrap_or_else(|| "-".to_string());
         let _ = writeln!(
             &mut out,
-            "{challenge:<12} {provider:<12} {status:<8} {samples:>8} {forced:>6} \
+            "{challenge:<12} {provider:<12} {status:<15} {samples:>8} {forced:>6} \
              {issued:>12} {responded:>12} {failure}"
         );
     }

@@ -24,7 +24,7 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     let state = CoreState::new_for_testing(World::new(), kura, query);
 
     let domain_id = DomainId::try_new("zkd", "universal").expect("domain id");
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "rose".parse().expect("asset definition name"),
     );
@@ -36,9 +36,12 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     for instruction in [
         Register::domain(Domain::new(domain_id)).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone()).with_name("rose".to_owned()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
     ] {
         transaction
@@ -127,7 +130,7 @@ async fn zk_roots_endpoint_returns_404_for_missing_asset() {
         }),
     );
 
-    let missing_asset_id = AssetDefinitionId::new(
+    let missing_asset_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("missing", "universal").expect("domain id"),
         "rose".parse().expect("asset definition name"),
     )
@@ -237,7 +240,7 @@ async fn zk_roots_endpoint_returns_403_for_blank_asset_selector() {
 }
 
 #[tokio::test]
-async fn zk_vote_tally_endpoint_returns_200() {
+async fn zk_vote_tally_endpoint_returns_404_for_missing_election() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(CoreState::new_for_testing(World::default(), kura, query));
@@ -262,13 +265,5 @@ async fn zk_vote_tally_endpoint_returns_200() {
         .body(axum::body::Body::from(body))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), http::StatusCode::OK);
-    assert_eq!(
-        resp.headers().get(http::header::CONTENT_TYPE),
-        Some(&http::HeaderValue::from_static("application/json"))
-    );
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    assert!(v.get("finalized").is_some());
-    assert!(v.get("tally").is_some());
+    assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
 }

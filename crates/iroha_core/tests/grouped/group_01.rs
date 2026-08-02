@@ -30,6 +30,8 @@ mod contract_code_bytes;
 mod contract_execution_header_binding;
 #[path = "../contract_manifest_triggers.rs"]
 mod contract_manifest_triggers;
+#[path = "../default_domain_independence.rs"]
+mod default_domain_independence;
 #[path = "../deterministic_tie_break.rs"]
 mod deterministic_tie_break;
 #[path = "../event_ordering.rs"]

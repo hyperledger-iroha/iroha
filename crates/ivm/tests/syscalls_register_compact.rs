@@ -5,19 +5,23 @@ use common::assemble_syscalls;
 
 #[test]
 fn register_compact_proof_decodes_and_verifies() {
-    use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
+    use std::num::NonZeroU64;
+
+    use iroha_crypto::{
+        CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
+    };
     use sha2::{Digest, Sha256};
 
     let mut vm = IVM::new(u64::MAX);
     // Modify a few registers (including tag) to create nontrivial tree
     vm.set_register(5, 123456789);
-    vm.set_register(6, 42);
+    vm.set_register(255, 42);
     // Simulate tag change via direct method (call VM internal API if accessible)
     // Here we keep only values and rely on default tag=false for simplicity.
 
     let out_ptr = ivm::Memory::OUTPUT_START;
     let root_out = ivm::Memory::OUTPUT_START + 8192;
-    let idx = 6u64;
+    let idx = 255u64;
     vm.set_register(10, idx);
     vm.set_register(11, out_ptr);
     vm.set_register(12, 16);
@@ -34,6 +38,18 @@ fn register_compact_proof_decodes_and_verifies() {
     let total = 1 + 4 + 4 + depth * 32;
     let mut buf = vec![0u8; total];
     vm.memory.load_bytes(out_ptr, &mut buf).expect("body");
+
+    let mut noncanonical = buf.clone();
+    let dirs = u32::from_le_bytes(noncanonical[1..5].try_into().expect("dirs"));
+    let unused_direction_bit = 1u32
+        .checked_shl(u32::try_from(depth).expect("compact depth fits u32"))
+        .expect("register proof depth is below 32");
+    noncanonical[1..5].copy_from_slice(&(dirs | unused_direction_bit).to_le_bytes());
+    assert!(
+        ivm::merkle_utils::decode_compact_proof_bytes(&noncanonical).is_err(),
+        "unused direction bits must be rejected at decode"
+    );
+
     let (compact, used) = ivm::merkle_utils::decode_compact_proof_bytes(&buf).expect("decode");
     assert_eq!(used, total);
 
@@ -54,9 +70,31 @@ fn register_compact_proof_decodes_and_verifies() {
         .expect("root");
     let root = HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(root_bytes));
 
-    assert!(compact.clone().verify_sha256(&leaf, &root));
-    let full: MerkleProof<[u8; 32]> = compact.into_full_with_index(idx as u32);
-    assert!(full.verify_sha256(&leaf, &root, 32));
+    let commitment = MerkleTreeCommitment::new(
+        root.clone(),
+        NonZeroU64::new(256).expect("register count is non-zero"),
+    );
+    assert!(compact.verify_sha256(&leaf, &commitment));
+
+    let full: MerkleProof<[u8; 32]> = compact
+        .clone()
+        .try_into_full()
+        .expect("syscall emitted a canonical compact proof");
+    assert_eq!(full.leaf_index(), idx as u32);
+    assert!(full.verify_sha256(&leaf, &commitment));
+
+    let wrong_count = MerkleTreeCommitment::new(
+        root.clone(),
+        NonZeroU64::new(255).expect("wrong count is non-zero"),
+    );
+    assert!(!compact.verify_sha256(&leaf, &wrong_count));
+
+    let wrong_index = CompactMerkleProof::from_parts(
+        compact.depth(),
+        compact.dirs() ^ 1,
+        compact.siblings().to_vec(),
+    );
+    assert!(!wrong_index.verify_sha256(&leaf, &commitment));
 }
 
 #[test]

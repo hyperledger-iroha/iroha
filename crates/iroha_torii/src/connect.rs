@@ -10,7 +10,6 @@ use core::future::Future;
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
-    num::NonZeroU64,
     sync::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -2950,6 +2949,10 @@ mod tests {
 
     #[tokio::test]
     async fn broadcasts_block_proofs_to_app_and_wallet() {
+        use iroha_data_model::{
+            block::proofs::ExecutionReceiptProof, transaction::signed::TransactionResult,
+        };
+
         let bus = Bus::new();
         let sid = [0xBCu8; 32];
         let mut app_inbox = bus.attach(sid, proto::Role::App).await;
@@ -2958,23 +2961,33 @@ mod tests {
         let entry_hash =
             HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed([0x11u8; 32]));
         let entry_tree: MerkleTree<TransactionEntrypoint> = [entry_hash].into_iter().collect();
-        let entry_root = entry_tree.root().expect("entry root");
+        let entry_commitment = entry_tree.commitment().expect("entry commitment");
         let entry_proof: BlockReceiptProof =
             BlockReceiptProof::new(entry_hash, entry_tree.get_proof(0).expect("entry proof"));
+        let result_hash =
+            HashOf::<TransactionResult>::from_untyped_unchecked(Hash::prehashed([0x23u8; 32]));
+        let result_tree: MerkleTree<TransactionResult> = [result_hash].into_iter().collect();
+        let result_commitment = result_tree.commitment().expect("result commitment");
+        let result_proof = ExecutionReceiptProof::new(
+            result_hash,
+            result_tree.get_proof(0).expect("result proof"),
+        );
         let proofs = BlockProofs {
             block_height: NonZeroU64::new(1).expect("non-zero height"),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"connect carrier block")),
+            executed_block_wire_hash: Hash::new(b"connect executed block wire"),
             entry_hash,
-            entry_root,
+            entry_commitment,
             entry_proof,
-            result_root: None,
-            result_proof: None,
+            result_commitment,
+            result_proof,
             fastpq_transcripts: BTreeMap::new(),
         };
 
         let expected_entry_hex = hex::encode(entry_hash.as_ref());
         let expected_json = norito::json::to_json(&proofs).expect("serialize proofs");
 
-        bus.broadcast_block_proof(NonZeroU64::new(1).unwrap(), &entry_hash, &proofs)
+        bus.broadcast_block_proof(&proofs)
             .await
             .expect("broadcast block proof");
 
@@ -3184,14 +3197,12 @@ impl Bus {
     /// Broadcast a block proof payload to locally attached Connect peers.
     pub async fn broadcast_block_proof(
         &self,
-        height: NonZeroU64,
-        entry_hash: &HashOf<TransactionEntrypoint>,
         proofs: &BlockProofs,
     ) -> Result<(), norito::json::Error> {
         let proofs_json = norito::json::to_json(proofs)?;
         let event = proto::ServerEventV1::BlockProofs {
-            height: height.get(),
-            entry_hash: hex::encode(entry_hash.as_ref()),
+            height: proofs.block_height.get(),
+            entry_hash: hex::encode(proofs.entry_hash.as_ref()),
             proofs_json,
         };
         let control = proto::ConnectControlV1::ServerEvent { event };

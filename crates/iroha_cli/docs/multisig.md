@@ -6,12 +6,13 @@ This guide explains how to create and operate a multi-signature account shared b
 
 __Prerequisites:__
 
-- Any account may submit the multisig registration transaction; the runtime materializes the
-  controller and related roles under the multisig home domain automatically.
+- Any account may submit the multisig registration transaction. The CLI creates a universal,
+  domainless controller and does not invent a home domain. A typed instruction may supply an
+  explicit `DomainId` when domain-owned routing and role ownership are intentionally required.
 - Signatory accounts do not need to exist in advance. Missing signatories are materialized during
   registration and tagged with metadata `iroha:created_via = "multisig"`.
-- The CLI expects canonical I105 account literals for `--account` and `--signatories`. The
-  multisig home domain is taken from the configured default domain.
+- The CLI expects canonical I105 account literals for `--account` and `--signatories`. These
+  literals identify universal accounts and are never resolved through a node-local default.
 
 __Example usage:__
 

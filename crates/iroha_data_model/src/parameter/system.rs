@@ -491,9 +491,9 @@ mod model {
             if self
                 .vrf_commit_window_blocks
                 .checked_add(self.vrf_reveal_window_blocks)
-                .is_none_or(|total| total > self.epoch_length_blocks.get())
+                .is_none_or(|total| total >= self.epoch_length_blocks.get())
             {
-                return Err("VRF commit and reveal windows must fit within the epoch");
+                return Err("VRF reveal window must close before the epoch boundary");
             }
             if self.min_self_bond.is_zero() || self.min_nomination_bond.is_zero() {
                 return Err("NPoS minimum bond values must be greater than zero");
@@ -2506,5 +2506,22 @@ mod tests {
             Json::from_raw_json(payload.to_owned()).is_err(),
             "invalid JSON must be rejected before it can enter a custom parameter"
         );
+    }
+
+    #[test]
+    fn sumeragi_npos_reveal_window_must_close_before_boundary() {
+        let mut parameters = SumeragiNposParameters::default();
+        parameters.epoch_length_blocks = NonZeroU64::new(4).expect("non-zero epoch");
+        parameters.vrf_commit_window_blocks = 2;
+        parameters.vrf_reveal_window_blocks = 2;
+        assert_eq!(
+            parameters.validate(),
+            Err("VRF reveal window must close before the epoch boundary")
+        );
+
+        parameters.epoch_length_blocks = NonZeroU64::new(5).expect("non-zero epoch");
+        parameters
+            .validate()
+            .expect("one finalized pre-boundary block is sufficient");
     }
 }

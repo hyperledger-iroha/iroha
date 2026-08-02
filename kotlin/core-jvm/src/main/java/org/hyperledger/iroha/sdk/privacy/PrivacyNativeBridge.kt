@@ -36,41 +36,13 @@ class PrivacyNativeBridge private constructor() {
         INVALID_BUNDLE(8),
     }
 
-    enum class ProtocolIdV1(val canonicalLabel: String) {
-        ZK_ACE_PQ_AUTHORIZATION_V0("zk-ace-pq-authorization-v0"),
-        ANONYMOUS_PGC_K_OUT_OF_N_V1("anonymous-pgc-k-out-of-n-v1"),
-        VERANGE_TRANSPARENT_RANGE_V1("verange-transparent-range-v1"),
-        IROHA_ZK_AMS_V1("iroha-zk-ams-v1"),
-        VEGA_EXISTING_CREDENTIAL_ZK_V0("vega-existing-credential-zk-v0"),
-        IROHA_ZK_X509_STARK_P256_V0("iroha-zk-x509-stark-p256-v0"),
-        IROHA_JINDO_POLYNOMIAL_COMMITMENT_V0("iroha-jindo-polynomial-commitment-v0"),
-        IROHA_BOOTLE_LANTERN_ANONCRED_V1("iroha-bootle-lantern-anoncred-v1"),
-        ORCHARD_HALO2_ACTIONS_V1("orchard-halo2-actions-v1"),
-        MONERO_FCMP_PLUS_PLUS_V1("monero-fcmp-plus-plus-v1"),
-        IROHA_IVM_PRIVATE_NOTE_STARK_V1("iroha-ivm-private-note-stark-v1"),
-        PQ_MASP_STARK_V0("pq-masp-stark-v0"),
-        ;
-
-        companion object {
-            /**
-             * Parse one exact canonical label.
-             *
-             * Aliases, retired identifiers, whitespace, and case changes are rejected.
-             */
-            @JvmStatic
-            fun fromCanonicalLabel(label: String): ProtocolIdV1 =
-                values().firstOrNull { it.canonicalLabel == label }
-                    ?: throw IllegalArgumentException("unknown canonical privacy protocol id")
-        }
-    }
-
     companion object {
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
         const val COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Int = 256 * 1024
         const val EXACT12_FIXTURE_BUNDLE_MAX_BYTES: Int = 2 * 1024 * 1024
         private const val LIBRARY_NAME: String = "connect_norito_bridge"
-        private val PROTOCOLS: List<ProtocolIdV1> =
-            Collections.unmodifiableList(ProtocolIdV1.values().toList())
+        private val PROTOCOLS: List<PrivacyProtocolIdV1> =
+            Collections.unmodifiableList(PrivacyProtocolIdV1.values().toList())
         private val nativeAvailable: Boolean = loadLibrary()
 
         @JvmStatic
@@ -78,7 +50,7 @@ class PrivacyNativeBridge private constructor() {
 
         /** All twelve protocol identities in exact wire order. */
         @JvmStatic
-        fun protocolsV1(): List<ProtocolIdV1> = PROTOCOLS
+        fun protocolsV1(): List<PrivacyProtocolIdV1> = PROTOCOLS
 
         /** Returns this binary's canonical `PrivacyCompiledProfileCatalogV1` Norito archive. */
         @JvmStatic
@@ -100,6 +72,11 @@ class PrivacyNativeBridge private constructor() {
                 }
             return requireCompiledProfileCatalog(archive)
         }
+
+        /** Returns this binary's local catalog as the closed typed first-release model. */
+        @JvmStatic
+        fun compiledProfileCatalogTypedV1(): PrivacyCompiledProfileCatalogV1 =
+            PrivacyCompiledProfileCatalogCodecV1.decodeCanonical(compiledProfileCatalogV1())
 
         /** Validates bytes as the exact compiled-profile catalog of the loaded binary. */
         @JvmStatic
@@ -204,7 +181,9 @@ class PrivacyNativeBridge private constructor() {
             ) {
                 "invalid typed privacy compiled-profile catalog"
             }
-            return archive.copyOf()
+            val snapshot = archive.copyOf()
+            PrivacyCompiledProfileCatalogCodecV1.decodeCanonical(snapshot)
+            return snapshot
         }
 
         internal fun requireExact12FixtureBundle(archive: ByteArray?): ByteArray {

@@ -233,7 +233,7 @@ mod tests {
     }
 
     fn payment_asset() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("assets", "paynet").expect("asset domain"),
             "xor".parse().expect("asset name"),
         )

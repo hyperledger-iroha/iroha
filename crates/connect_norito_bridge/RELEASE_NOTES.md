@@ -6,9 +6,11 @@ instruction boxes; later additive revisions include the native Kagemusha V2
 surfaces and the bounded SoraFS Governance DAG block/head-chain reference
 validators consumed by the C# SDK. The ABI-21 Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface additionally requires native-signer JNI contract
-revision 1. This descriptor revision is checked separately so that an older
-ABI-21 artifact fails closed instead of dispatching through a stale JNI calling
-convention.
+revision 2. Revision 2 removes the caller-supplied `outputs` parameter from the
+Kotlin/JVM and Java/Android Unshield signing descriptors; proof-authenticated
+change is derived by the node. This descriptor revision is checked separately
+so that an older ABI-21 artifact fails closed instead of dispatching through a
+stale JNI calling convention.
 
 The exact-12 privacy KAT ABI is compiled through the narrow
 `iroha_data_model/privacy-exact12-conformance` feature. Shipping bridge builds
@@ -22,7 +24,7 @@ fresh authoritative `PrivacyCapabilitySnapshotV1` from live Torii before
 submitting a privacy proof.
 
 The archive checksums below are historical and do not establish a current
-ABI-21/revision-1 artifact. Regenerate, verify, and republish the bridge
+ABI-21/revision-2 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source
 surface.
 

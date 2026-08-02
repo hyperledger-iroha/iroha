@@ -249,6 +249,7 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
                     | IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
                     | IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner
                     | IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
+                    | IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
             )
         }) {
             return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
@@ -380,6 +381,105 @@ mod governance_service_registry_tests {
     }
 }
 
+/// Stable redacted failure from the private Bootle/Lantern issuer boundary.
+///
+/// The broker deliberately exposes no backend-specific diagnostics, key
+/// identifiers, or randomness details to its same-UID client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootleLanternIssuanceBrokerBackendErrorV1 {
+    /// The canonical request or one of its public bindings was invalid.
+    InvalidRequest,
+    /// The injected issuer key does not match the governed active policy.
+    PolicyMismatch,
+    /// The issuer key service or cryptographic randomness was unavailable.
+    Unavailable,
+}
+
+/// Deployment-owned pure cryptographic boundary for brokered Bootle/Lantern issuance.
+///
+/// Implementations hold the issuer trapdoor (or its HSM boundary) and opaque
+/// authenticator. They must not hold or mutate an issuance replay store. Torii
+/// remains the sole authority for authorization registration, preflight,
+/// claim, completion, and terminal failure.
+pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
+    /// Exact stable production handle served by this backend.
+    fn handle(&self) -> &str;
+
+    /// Return the current independently administered public qualification.
+    fn qualification(
+        &self,
+    ) -> Result<
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderQualificationV1,
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+    >;
+
+    /// Return the exact current public issuer, policy, and lifetime bindings.
+    fn bindings(
+        &self,
+    ) -> Result<
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+    >;
+
+    /// Authenticate opaque bearer bytes for one exact action/body/height binding.
+    fn authenticate(
+        &self,
+        opaque_credential: &[u8],
+        action: iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1,
+        request_binding: [u8; 32],
+        committed_height: u64,
+    ) -> Result<
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatedPrincipalV1,
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticationErrorV1,
+    >;
+
+    /// Prepare one native canonical `ILA1` candidate without replay-state mutation.
+    fn prepare_authorization(
+        &self,
+        context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+        requester_authorization_digest: [u8; 32],
+        issued_at_height: u64,
+        expires_at_height: u64,
+    ) -> Result<
+        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
+        BootleLanternIssuanceBrokerBackendErrorV1,
+    >;
+
+    /// Verify one canonical `ILQ1` against the injected issuer key without randomness or state mutation.
+    ///
+    /// Native implementations use core's
+    /// `issuer_validate_blind_issuance_request_for_issuer_encoded_v1`; a
+    /// public-only validation is not a sufficient HSM/key-bound readiness
+    /// check for this operation.
+    fn validate_request(
+        &self,
+        context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+        authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+            BootleLanternIssuanceAuthorizationV1,
+        request_bytes: &[u8],
+        current_height: u64,
+    ) -> Result<[u8; 32], BootleLanternIssuanceBrokerBackendErrorV1>;
+
+    /// Repeat validation and issue one canonical response after Torii's exact claim.
+    fn issue_validated(
+        &self,
+        context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+        authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+            BootleLanternIssuanceAuthorizationV1,
+        request_bytes: &[u8],
+        current_height: u64,
+    ) -> Result<
+        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
+        BootleLanternIssuanceBrokerBackendErrorV1,
+    >;
+}
+
 /// Runtime-only backends injected into the stock local broker server.
 ///
 /// The value contains no credential loader, key material, endpoint discovery,
@@ -388,6 +488,8 @@ mod governance_service_registry_tests {
 /// extra, substituted, stale, revoked, and test-marked bindings.
 #[derive(Clone, Default)]
 pub struct RuntimeProviderBrokerBackendsV1 {
+    pub(super) bootle_lantern_issuance:
+        Option<Arc<dyn BootleLanternIssuanceBrokerBackendV1>>,
     pub(super) moderation_quarantine_key_wrapper:
         Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     pub(super) privacy_cycle_prf_provider:
@@ -539,6 +641,10 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeProviderBrokerBackendsV1")
+            .field(
+                "bootle_lantern_issuance",
+                &self.bootle_lantern_issuance.is_some(),
+            )
             .field(
                 "moderation_quarantine_key_wrapper",
                 &self.moderation_quarantine_key_wrapper.is_some(),
@@ -749,6 +855,7 @@ impl RuntimeProviderBrokerBackendsV1 {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            bootle_lantern_issuance: None,
             moderation_quarantine_key_wrapper: None,
             privacy_cycle_prf_provider: None,
             privacy_release_anchor: None,
@@ -802,6 +909,16 @@ impl RuntimeProviderBrokerBackendsV1 {
             soracloud_runtime_mutation_signer: None,
             soracloud_hf_inference_credential_provider: None,
         }
+    }
+
+    /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
+    #[must_use]
+    pub fn with_bootle_lantern_issuance(
+        mut self,
+        backend: Arc<dyn BootleLanternIssuanceBrokerBackendV1>,
+    ) -> Self {
+        self.bootle_lantern_issuance = Some(backend);
+        self
     }
 
     /// Attach the deployment-owned Soracloud transaction and provenance signer.

@@ -111,8 +111,13 @@ mod tests {
     }
 
     fn contract_address() -> ContractAddress {
-        ContractAddress::derive(0x1234, &account(0xC1), 7, DataSpaceId::UNIVERSAL)
-            .expect("contract address")
+        ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &account(0xC1),
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address")
     }
 
     fn contract_alias() -> ContractAlias {

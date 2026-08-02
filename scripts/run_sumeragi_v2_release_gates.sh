@@ -1850,11 +1850,6 @@ required_production_liveness_tests=(
   tests::relay_fairness::base_one_four_sources_reserve_both_upstream_lanes_without_head_of_line_wait
   tests::relay_fairness::hold_release_same_source_reconnect_retires_old_delivery_without_rebinding_new_route
   tests::relay_fairness::hold_release_preserves_exact_layered_ownership_until_recorded_terminal
-  genesis_bootstrap::tests::pending_reply_count_uses_shared_per_source_waiter_geometry
-  genesis_bootstrap::tests::unavailable_reply_writer_uses_requester_retransmission_without_parking_old_route
-  genesis_bootstrap::tests::genesis_request_fanout_deduplicates_same_source_targets
-  genesis_bootstrap::tests::bootstrapper_clones_cannot_multiply_listener_producers
-  genesis_bootstrap::tests::bootstrapper_clones_cannot_multiply_fetch_fanouts
   parameters::actual::tests::sumeragi_v2_exact_output_geometry_checks_every_arithmetic_boundary
   parameters::actual::tests::sumeragi_v2_config_format_changes_the_handshake_fingerprint
   parameters::user::duration_clamp_tests::sumeragi_v2_exact_output_geometry_accepts_network_source_boundary
@@ -1863,7 +1858,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=831
+readonly expected_production_liveness_test_count=826
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1885,7 +1880,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# thirty-nine-module pre-network inventory.
+# thirty-eight-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -1938,8 +1933,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
     required_ignored_unit_list="$production_p2p_ignored_unit_list"
   elif [[ "$required_test" == consensus_message_control::tests::* \
     || "$required_test" == network_relay_tests::* \
-    || "$required_test" == tests::relay_fairness::* \
-    || "$required_test" == genesis_bootstrap::tests::* ]]; then
+    || "$required_test" == tests::relay_fairness::* ]]; then
     required_unit_list="$production_irohad_unit_list"
     required_ignored_unit_list="$production_irohad_ignored_unit_list"
   elif [[ "$required_test" == parameters::* ]]; then
@@ -1963,7 +1957,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 831-test liveness inventory above. The later
+# not belong to the canonical 826-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2700,7 +2694,6 @@ production_liveness_modules=(
   consensus_message_control::tests
   network_relay_tests
   tests::relay_fairness
-  genesis_bootstrap::tests
   parameters::actual::tests
   parameters::user::duration_clamp_tests
 )
@@ -2741,7 +2734,6 @@ production_liveness_leg_ids=(
   production-irohad-consensus-message-control
   production-irohad-network-relay
   production-irohad-authenticated-via
-  production-irohad-genesis-reply-geometry
   production-config-v2-exact-output-geometry
   production-config-v2-exact-output-root-parse
 )
@@ -2786,8 +2778,7 @@ for module_index in "${!production_liveness_modules[@]}"; do
       run_cargo test --locked --offline -p iroha_p2p --lib "$module" -- --test-threads=1
   elif [[ "$module" == consensus_message_control::tests \
     || "$module" == network_relay_tests \
-    || "$module" == tests::relay_fairness \
-    || "$module" == genesis_bootstrap::tests ]]; then
+    || "$module" == tests::relay_fairness ]]; then
     module_command="cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
@@ -2980,9 +2971,9 @@ if [[ "$profile" == "--release" ]]; then
   )
   native_amx_grouped_parity_test_counts=(
     7
+    58
     56
-    54
-    3
+    4
     6
     5
   )
@@ -3377,11 +3368,11 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 39 production modules + 9 G-UNIT groups + 2 data-model contracts
+  # 38 production modules + 9 G-UNIT groups + 2 data-model contracts
   # + 5 Taira contracts + 1 cross-SDK Rust leg + 1 Native AMX fixture check
   # + 6 grouped SDK parity legs + 2 status SDK legs + 11 contract preflights
   # + 6 final workspace-verification legs.
-  readonly expected_corridor_leg_count=82
+  readonly expected_corridor_leg_count=81
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -3446,7 +3437,7 @@ publish_corridor_completion() {
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
       "$native_amx_grouped_suite_source_manifest_sha256" \
-    native_amx_grouped_negative_control_count 50 \
+    native_amx_grouped_negative_control_count 51 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"

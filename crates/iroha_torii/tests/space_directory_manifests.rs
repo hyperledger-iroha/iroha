@@ -136,7 +136,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
                 dataspace: Some(dataspace),
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
-                asset: Some(AssetDefinitionId::new(
+                asset: Some(AssetDefinitionId::derive_from_components(
                     DomainId::try_new("bank", "universal").expect("domain id"),
                     "cbdc".parse().expect("asset definition name"),
                 )),
@@ -1231,7 +1231,7 @@ async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
                 dataspace: Some(dataspace),
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
-                asset: Some(AssetDefinitionId::new(
+                asset: Some(AssetDefinitionId::derive_from_components(
                     DomainId::try_new("bank", "universal").expect("domain id"),
                     "cbdc".parse().expect("asset definition name"),
                 )),
@@ -1316,7 +1316,7 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
                     dataspace: Some(dataspace),
                     program: Some("cbdc.transfer".parse().unwrap()),
                     method: Some("transfer".parse().unwrap()),
-                    asset: Some(AssetDefinitionId::new(
+                    asset: Some(AssetDefinitionId::derive_from_components(
                         DomainId::try_new("bank", "universal").expect("domain id"),
                         "cbdc".parse().expect("asset definition name"),
                     )),
@@ -1333,7 +1333,7 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
                     dataspace: Some(dataspace),
                     program: Some("cbdc.transfer".parse().unwrap()),
                     method: Some("refund".parse().unwrap()),
-                    asset: Some(AssetDefinitionId::new(
+                    asset: Some(AssetDefinitionId::derive_from_components(
                         DomainId::try_new("bank", "universal").expect("domain id"),
                         "cbdc".parse().expect("asset definition name"),
                     )),
@@ -1430,7 +1430,7 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
                 dataspace: Some(dataspace),
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
-                asset: Some(AssetDefinitionId::new(
+                asset: Some(AssetDefinitionId::derive_from_components(
                     DomainId::try_new("bank", "universal").expect("domain id"),
                     "cbdc".parse().expect("asset definition name"),
                 )),
@@ -1826,7 +1826,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
                 dataspace: Some(dataspace),
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
-                asset: Some(AssetDefinitionId::new(
+                asset: Some(AssetDefinitionId::derive_from_components(
                     DomainId::try_new("bank", "universal").expect("domain id"),
                     "cbdc".parse().expect("asset definition name"),
                 )),

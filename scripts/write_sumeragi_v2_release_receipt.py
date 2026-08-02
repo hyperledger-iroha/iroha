@@ -369,7 +369,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 831
+_PRODUCTION_TEST_COUNT = 826
 _G_UNIT_TEST_COUNT = 309
 _G_UNIT_GROUPS = (
     (
@@ -562,11 +562,6 @@ _PRODUCTION_MODULES = (
         7,
     ),
     (
-        "production-irohad-genesis-reply-geometry",
-        "genesis_bootstrap::tests",
-        5,
-    ),
-    (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
         2,
@@ -618,12 +613,12 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 51
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 56),
-    ("javascript", 54),
-    ("swift", 3),
+    ("python", 58),
+    ("javascript", 56),
+    ("swift", 4),
     ("kotlin", 6),
     ("java", 5),
 )
@@ -639,7 +634,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "python/iroha_torii_client/native_amx.py",
     "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
     "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/src/norito.js",
+    "javascript/iroha_js/src/native.js",
     "javascript/iroha_js/scripts/build-dist.mjs",
+    "javascript/iroha_js/scripts/native-build-provenance.mjs",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
@@ -659,6 +657,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "NativeAmxV2.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
     "SumeragiDiagnosticsModels.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/util/"
+    "HashLiteral.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/"
+    "IrohaHash.kt",
     "kotlin/core-jvm/build.gradle.kts",
     "kotlin/settings.gradle.kts",
     "kotlin/gradlew",
@@ -670,6 +672,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "NativeAmxV2Models.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
     "SumeragiDiagnosticsModels.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/"
+    "IrohaHash.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/util/"
+    "HashLiteral.java",
     "java/iroha_android/core/build.gradle.kts",
     "java/iroha_android/settings.gradle.kts",
     "java/iroha_android/gradlew",
@@ -735,7 +741,6 @@ def _canonical_production_tests(
                     "consensus_message_control::tests::",
                     "network_relay_tests::",
                     "tests::relay_fairness::",
-                    "genesis_bootstrap::tests::",
                     "parameters::",
                 )
             )
@@ -841,7 +846,6 @@ def _production_module_command(module: str) -> str:
         "consensus_message_control::tests",
         "network_relay_tests",
         "tests::relay_fairness",
-        "genesis_bootstrap::tests",
     }:
         return (
             "cargo test --locked --offline -p irohad --bin irohad "

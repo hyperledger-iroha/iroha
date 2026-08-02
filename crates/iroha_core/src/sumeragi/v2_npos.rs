@@ -162,14 +162,39 @@ struct EpochSchedule {
     position: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct NposEpochParams {
-    epoch_length_blocks: u64,
-    commit_deadline_offset: u64,
-    reveal_deadline_offset: u64,
+#[derive(Clone, Copy)]
+struct VrfRecordValidationContext<'a> {
+    chain_id: &'a iroha_data_model::ChainId,
+    height: u64,
+    epoch: u64,
+    epoch_end_height: u64,
+    leader_seed: [u8; 32],
+    roster: &'a [wire::ValidatorPower],
 }
 
-fn committed_epoch_params(world: &impl WorldReadOnly) -> Result<NposEpochParams, V2NposError> {
+impl<'a> From<&'a wire::HeightContext> for VrfRecordValidationContext<'a> {
+    fn from(context: &'a wire::HeightContext) -> Self {
+        Self {
+            chain_id: &context.chain_id,
+            height: context.height,
+            epoch: context.epoch,
+            epoch_end_height: context.epoch_end_height,
+            leader_seed: context.leader_seed,
+            roster: &context.roster,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NposEpochParams {
+    pub(crate) epoch_length_blocks: u64,
+    pub(crate) commit_deadline_offset: u64,
+    pub(crate) reveal_deadline_offset: u64,
+}
+
+pub(crate) fn committed_epoch_params(
+    world: &impl WorldReadOnly,
+) -> Result<NposEpochParams, V2NposError> {
     let params = world
         .sumeragi_npos_parameters()
         .ok_or(V2NposError::MissingCommittedParameters)?;
@@ -185,7 +210,7 @@ fn committed_epoch_params(world: &impl WorldReadOnly) -> Result<NposEpochParams,
     }
     let reveal_deadline_offset = commit_deadline_offset
         .checked_add(reveal_window_blocks)
-        .filter(|deadline| *deadline <= epoch_length_blocks)
+        .filter(|deadline| *deadline < epoch_length_blocks)
         .ok_or(V2NposError::InvalidSchedule)?;
     Ok(NposEpochParams {
         epoch_length_blocks,
@@ -265,7 +290,9 @@ impl V2NposVrfLifecycle {
                 )
             },
         );
-        let schedule = EpochSchedule::for_context(context, length, commit_end, reveal_end)?;
+        let validation_context = VrfRecordValidationContext::from(context);
+        let schedule =
+            EpochSchedule::for_context(validation_context, length, commit_end, reveal_end)?;
         Self::from_parts(
             context.clone(),
             schedule,
@@ -293,7 +320,12 @@ impl V2NposVrfLifecycle {
         let mut penalties_applied_at_height = None;
         let mut validator_election = None;
         if let Some(record) = committed_record.as_ref() {
-            validate_persisted_record(&context, schedule, record, roster_len)?;
+            validate_persisted_record(
+                VrfRecordValidationContext::from(&context),
+                schedule,
+                record,
+                roster_len,
+            )?;
             updated_at_height = record.updated_at_height;
             penalties_applied = record.penalties_applied;
             penalties_applied_at_height = record.penalties_applied_at_height;
@@ -435,7 +467,8 @@ pub(crate) fn validate_candidate_records(
             )
         },
     );
-    let schedule = EpochSchedule::for_context(context, length, commit_end, reveal_end)?;
+    let validation_context = VrfRecordValidationContext::from(context);
+    let schedule = EpochSchedule::for_context(validation_context, length, commit_end, reveal_end)?;
     let boundary = context.height == context.epoch_end_height;
     if boundary && records.len() != 1 {
         return Err(V2NposError::MissingBoundarySeal);
@@ -452,7 +485,7 @@ pub(crate) fn validate_candidate_records(
     };
     let roster_len =
         u32::try_from(context.roster.len()).map_err(|_| V2NposError::RosterTooLarge)?;
-    validate_authenticated_record(context, schedule, record, roster_len, boundary)?;
+    validate_authenticated_record(validation_context, schedule, record, roster_len, boundary)?;
     if let Some(existing) = existing.as_ref()
         && !record_extends(existing, record)
     {
@@ -464,14 +497,51 @@ pub(crate) fn validate_candidate_records(
     Ok(())
 }
 
+/// Authenticate the exact pre-boundary record and derive the immediate
+/// successor epoch seed from its canonically ordered, in-window reveals.
+///
+/// The reveal window is required to close before the boundary height. This
+/// makes the record part of finalized pre-state before the boundary context is
+/// frozen; late or boundary-height observations cannot influence the seed.
+pub(crate) fn authenticated_successor_seed(
+    chain_id: &iroha_data_model::ChainId,
+    epoch: u64,
+    epoch_end_height: u64,
+    leader_seed: [u8; 32],
+    roster: &[wire::ValidatorPower],
+    params: NposEpochParams,
+    record: &VrfEpochRecord,
+) -> Result<[u8; 32], V2NposError> {
+    let cutoff_height = epoch_end_height
+        .checked_sub(1)
+        .ok_or(V2NposError::InvalidSchedule)?;
+    let context = VrfRecordValidationContext {
+        chain_id,
+        height: cutoff_height,
+        epoch,
+        epoch_end_height,
+        leader_seed,
+        roster,
+    };
+    let schedule = EpochSchedule::for_context(
+        context,
+        params.epoch_length_blocks,
+        params.commit_deadline_offset,
+        params.reveal_deadline_offset,
+    )?;
+    let roster_len = u32::try_from(roster.len()).map_err(|_| V2NposError::RosterTooLarge)?;
+    validate_authenticated_record(context, schedule, record, roster_len, false)?;
+    Ok(super::next_epoch_seed_from_record(record))
+}
+
 impl EpochSchedule {
     fn for_context(
-        context: &wire::HeightContext,
+        context: VrfRecordValidationContext<'_>,
         length: u64,
         commit_end: u64,
         reveal_end: u64,
     ) -> Result<Self, V2NposError> {
-        if length == 0 || commit_end == 0 || commit_end > reveal_end || reveal_end > length {
+        if length == 0 || commit_end == 0 || commit_end > reveal_end || reveal_end >= length {
             return Err(V2NposError::InvalidSchedule);
         }
         let start = context
@@ -866,7 +936,11 @@ impl ActiveVrfLifecycle {
 const MAX_VRF_SIGNATURE_BYTES: usize = 512;
 const MAX_VRF_PROOF_BYTES: usize = 128;
 
-fn verify_vrf_reveal(context: &wire::HeightContext, peer: &PeerId, reveal: &VrfReveal) -> bool {
+fn verify_vrf_reveal_for_chain(
+    chain_id: &iroha_data_model::ChainId,
+    peer: &PeerId,
+    reveal: &VrfReveal,
+) -> bool {
     if reveal.vrf_proof.is_empty() || reveal.vrf_proof.len() > MAX_VRF_PROOF_BYTES {
         return false;
     }
@@ -883,7 +957,7 @@ fn verify_vrf_reveal(context: &wire::HeightContext, peer: &PeerId, reveal: &VrfR
     if algorithm != iroha_crypto::Algorithm::BlsNormal {
         return false;
     }
-    let chain_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+    let chain_hash = Hash::new(chain_id.clone().into_inner().as_bytes());
     let input = vrf_input(&chain_hash, reveal.epoch, reveal.signer);
     iroha_crypto::vrf::verify_normal_bytes_with_chain(
         public_key,
@@ -892,6 +966,10 @@ fn verify_vrf_reveal(context: &wire::HeightContext, peer: &PeerId, reveal: &VrfR
         &proof,
     )
     .is_some_and(|output| output.0 == reveal.reveal)
+}
+
+fn verify_vrf_reveal(context: &wire::HeightContext, peer: &PeerId, reveal: &VrfReveal) -> bool {
+    verify_vrf_reveal_for_chain(&context.chain_id, peer, reveal)
 }
 
 fn validate_extension_at_candidate_height(
@@ -996,7 +1074,7 @@ fn old_commitment_without_reveal(
 
 #[allow(clippy::too_many_lines)]
 fn validate_authenticated_record(
-    context: &wire::HeightContext,
+    context: VrfRecordValidationContext<'_>,
     schedule: EpochSchedule,
     record: &VrfEpochRecord,
     roster_len: u32,
@@ -1213,7 +1291,7 @@ fn validate_authenticated_record(
 }
 
 fn window_position(
-    context: &wire::HeightContext,
+    context: VrfRecordValidationContext<'_>,
     schedule: EpochSchedule,
     height: u64,
 ) -> Option<u64> {
@@ -1228,7 +1306,7 @@ fn window_position(
 }
 
 fn verify_commit_proof(
-    context: &wire::HeightContext,
+    context: VrfRecordValidationContext<'_>,
     proof: &VrfCommitProof,
 ) -> Result<(), V2NposError> {
     if proof.signature.is_empty() || proof.signature.len() > MAX_VRF_SIGNATURE_BYTES {
@@ -1255,13 +1333,13 @@ fn verify_commit_proof(
     signature
         .verify(
             peer.validator.public_key(),
-            &v2_vrf_commit_preimage(&context.chain_id, NPOS_TAG, &message),
+            &v2_vrf_commit_preimage(context.chain_id, NPOS_TAG, &message),
         )
         .map_err(|_| V2NposError::InvalidRecord("commit signature verification failed"))
 }
 
 fn verify_reveal_proof(
-    context: &wire::HeightContext,
+    context: VrfRecordValidationContext<'_>,
     proof: &VrfRevealProof,
 ) -> Result<(), V2NposError> {
     if proof.signature.is_empty() || proof.signature.len() > MAX_VRF_SIGNATURE_BYTES {
@@ -1289,10 +1367,10 @@ fn verify_reveal_proof(
     signature
         .verify(
             peer.validator.public_key(),
-            &v2_vrf_reveal_preimage(&context.chain_id, NPOS_TAG, &message),
+            &v2_vrf_reveal_preimage(context.chain_id, NPOS_TAG, &message),
         )
         .map_err(|_| V2NposError::InvalidRecord("reveal signature verification failed"))?;
-    if !verify_vrf_reveal(context, &peer.validator, &message) {
+    if !verify_vrf_reveal_for_chain(context.chain_id, &peer.validator, &message) {
         return Err(V2NposError::InvalidRecord(
             "reveal VRF proof verification failed",
         ));
@@ -1301,7 +1379,7 @@ fn verify_reveal_proof(
 }
 
 fn validate_persisted_record(
-    context: &wire::HeightContext,
+    context: VrfRecordValidationContext<'_>,
     schedule: EpochSchedule,
     record: &VrfEpochRecord,
     roster_len: u32,
@@ -1486,6 +1564,14 @@ mod tests {
         }
     }
 
+    fn epoch_params() -> NposEpochParams {
+        NposEpochParams {
+            epoch_length_blocks: 10,
+            commit_deadline_offset: 3,
+            reveal_deadline_offset: 6,
+        }
+    }
+
     fn state_with_record(record: Option<VrfEpochRecord>) -> State {
         let world = World::new();
         {
@@ -1660,6 +1746,196 @@ mod tests {
             validate_candidate_records(&context, &state, None),
             Err(V2NposError::MissingCommittedParameters)
         ));
+    }
+
+    #[test]
+    fn authenticated_pre_boundary_reveals_drive_only_the_immediate_successor_seed() {
+        let keys = keys();
+        let commit_context = context(2, &keys);
+        let mut commits = lifecycle_at(2, 2, None, None, &keys);
+        for signer in 0..2_u32 {
+            let signer_index = usize::try_from(signer).expect("small signer");
+            let (_, commitment, _) = material(&keys[signer_index], &commit_context, signer);
+            let message = sign_commit(
+                &keys[signer_index],
+                &commit_context,
+                VrfCommit {
+                    epoch: 0,
+                    commitment,
+                    signer,
+                    bls_sig: Vec::new(),
+                },
+            );
+            assert_eq!(
+                commits.accept_commit(
+                    message,
+                    Some(&commit_context.roster[signer_index].validator),
+                ),
+                V2VrfIngressOutcome::Accepted
+            );
+        }
+        let committed = commits
+            .pending_records()
+            .pop()
+            .expect("two authenticated commitments");
+
+        let reveal_context = context(4, &keys);
+        let authenticated_reveal = |signer: u32| {
+            let (reveal, _, vrf_proof) = material(
+                &keys[usize::try_from(signer).expect("small signer")],
+                &reveal_context,
+                signer,
+            );
+            sign_reveal(
+                &keys[usize::try_from(signer).expect("small signer")],
+                &reveal_context,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer,
+                    vrf_proof,
+                    bls_sig: Vec::new(),
+                },
+            )
+        };
+
+        let mut one_reveal = lifecycle_at(4, 4, Some(committed.clone()), None, &keys);
+        assert_eq!(
+            one_reveal.accept_reveal(
+                authenticated_reveal(0),
+                Some(&reveal_context.roster[0].validator),
+            ),
+            V2VrfIngressOutcome::Accepted
+        );
+        let one_reveal = one_reveal
+            .pending_records()
+            .pop()
+            .expect("one authenticated reveal");
+
+        let mut two_reveals = lifecycle_at(4, 4, Some(committed.clone()), None, &keys);
+        for signer in 0..2_u32 {
+            let signer_index = usize::try_from(signer).expect("small signer");
+            assert_eq!(
+                two_reveals.accept_reveal(
+                    authenticated_reveal(signer),
+                    Some(&reveal_context.roster[signer_index].validator),
+                ),
+                V2VrfIngressOutcome::Accepted
+            );
+        }
+        let two_reveals = two_reveals
+            .pending_records()
+            .pop()
+            .expect("two authenticated reveals");
+
+        let seed_with_one = authenticated_successor_seed(
+            &reveal_context.chain_id,
+            reveal_context.epoch,
+            reveal_context.epoch_end_height,
+            reveal_context.leader_seed,
+            &reveal_context.roster,
+            epoch_params(),
+            &one_reveal,
+        )
+        .expect("one-reveal successor seed");
+        let seed_with_two = authenticated_successor_seed(
+            &reveal_context.chain_id,
+            reveal_context.epoch,
+            reveal_context.epoch_end_height,
+            reveal_context.leader_seed,
+            &reveal_context.roster,
+            epoch_params(),
+            &two_reveals,
+        )
+        .expect("two-reveal successor seed");
+        assert_ne!(seed_with_one, seed_with_two);
+
+        let mut mismatched_params = epoch_params();
+        mismatched_params.reveal_deadline_offset -= 1;
+        assert!(
+            authenticated_successor_seed(
+                &reveal_context.chain_id,
+                reveal_context.epoch,
+                reveal_context.epoch_end_height,
+                reveal_context.leader_seed,
+                &reveal_context.roster,
+                mismatched_params,
+                &one_reveal,
+            )
+            .is_err(),
+            "the record schedule must match the independently committed epoch parameters"
+        );
+
+        let mut reordered = two_reveals.clone();
+        reordered.participants.reverse();
+        assert!(
+            authenticated_successor_seed(
+                &reveal_context.chain_id,
+                reveal_context.epoch,
+                reveal_context.epoch_end_height,
+                reveal_context.leader_seed,
+                &reveal_context.roster,
+                epoch_params(),
+                &reordered,
+            )
+            .is_err()
+        );
+
+        let mut forged = two_reveals;
+        forged.participants[0]
+            .reveal
+            .as_mut()
+            .expect("authenticated reveal")[0] ^= 1;
+        assert!(
+            authenticated_successor_seed(
+                &reveal_context.chain_id,
+                reveal_context.epoch,
+                reveal_context.epoch_end_height,
+                reveal_context.leader_seed,
+                &reveal_context.roster,
+                epoch_params(),
+                &forged,
+            )
+            .is_err()
+        );
+
+        let late_context = context(7, &keys);
+        let mut late = lifecycle_at(7, 7, Some(committed.clone()), None, &keys);
+        assert_eq!(
+            late.accept_reveal(
+                authenticated_reveal(0),
+                Some(&late_context.roster[0].validator),
+            ),
+            V2VrfIngressOutcome::AcceptedLate
+        );
+        let late = late
+            .pending_records()
+            .pop()
+            .expect("authenticated late reveal");
+        let late_seed = authenticated_successor_seed(
+            &late_context.chain_id,
+            late_context.epoch,
+            late_context.epoch_end_height,
+            late_context.leader_seed,
+            &late_context.roster,
+            epoch_params(),
+            &late,
+        )
+        .expect("late reveal record remains authenticated");
+        let no_reveal_seed = authenticated_successor_seed(
+            &late_context.chain_id,
+            late_context.epoch,
+            late_context.epoch_end_height,
+            late_context.leader_seed,
+            &late_context.roster,
+            epoch_params(),
+            &committed,
+        )
+        .expect("commit-only record remains authenticated");
+        assert_eq!(
+            late_seed, no_reveal_seed,
+            "late reveals never affect entropy"
+        );
     }
 
     #[test]
