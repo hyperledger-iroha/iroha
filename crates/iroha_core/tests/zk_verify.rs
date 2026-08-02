@@ -155,13 +155,12 @@ fn duplicate_proof_in_same_block_is_rejected() {
             .expect("register vk");
         reg_stx.apply();
     }
-    let attachments = bounded_proof_attachments(vec![
-        iroha_data_model::proof::ProofAttachment::new_ref(
+    let attachments =
+        bounded_proof_attachments(vec![iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             fixture.proof_box("halo2/ipa"),
             vk_id,
-        ),
-    ]);
+        )]);
 
     let tx1: SignedTransaction = TransactionBuilder::new(
         state.chain_id.clone(),
@@ -375,13 +374,12 @@ fn preverify_rejects_missing_vk_reference() {
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_missing");
     let fixture = bound_halo2_fixture();
-    let attachments = bounded_proof_attachments(vec![
-        iroha_data_model::proof::ProofAttachment::new_ref(
+    let attachments =
+        bounded_proof_attachments(vec![iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             fixture.proof_box("halo2/ipa"),
             vk_id,
-        ),
-    ]);
+        )]);
     let tx: SignedTransaction = TransactionBuilder::new(
         state.chain_id.clone(),
         authority.clone(),
@@ -885,13 +883,12 @@ fn preverify_rejects_empty_proof_as_malformed() {
             .expect("register vk");
         reg_stx.apply();
     }
-    let attachments = bounded_proof_attachments(vec![
-        iroha_data_model::proof::ProofAttachment::new_ref(
+    let attachments =
+        bounded_proof_attachments(vec![iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![]),
             vk_id,
-        ),
-    ]);
+        )]);
 
     let tx: SignedTransaction = TransactionBuilder::new(
         state.chain_id.clone(),
@@ -944,13 +941,12 @@ fn preverify_rejects_proof_too_big() {
             .expect("register vk");
         reg_stx.apply();
     }
-    let attachments = bounded_proof_attachments(vec![
-        iroha_data_model::proof::ProofAttachment::new_ref(
+    let attachments =
+        bounded_proof_attachments(vec![iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), big),
             vk_id,
-        ),
-    ]);
+        )]);
 
     let tx: SignedTransaction = TransactionBuilder::new(
         state.chain_id.clone(),

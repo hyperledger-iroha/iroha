@@ -1070,9 +1070,7 @@ mod tests {
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
-    use super::query::{
-        CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace,
-    };
+    use super::query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace};
     use crate::permission::Permission as _;
     use iroha_crypto::KeyPair;
     use iroha_data_model::oracle::OracleChangeStage;
