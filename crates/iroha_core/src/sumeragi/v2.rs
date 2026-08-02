@@ -4039,6 +4039,18 @@ impl SumeragiV2Adapter {
         self.reducer.current_tag()
     }
 
+    /// Return the reducer body state for one wire identity in seam tests.
+    #[cfg(test)]
+    pub(crate) fn body_state_for_test(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> reducer::BodyState {
+        let round = reducer::Round::new(round.height, round.view);
+        let subject = reducer::Subject::new(Hash::new(subject.encode()).into());
+        self.reducer.body_state(round, subject)
+    }
+
     /// Actor-global ordinal source shared with every replacement height
     /// adapter owned by this runtime actor.
     pub(crate) const fn deferred_admission_ordinal_source(

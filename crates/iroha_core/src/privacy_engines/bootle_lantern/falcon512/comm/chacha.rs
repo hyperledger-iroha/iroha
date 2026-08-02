@@ -155,6 +155,7 @@ fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) 
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
+    use zeroize::Zeroizing;
 
     use super::*;
 

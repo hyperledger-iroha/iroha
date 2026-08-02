@@ -571,7 +571,7 @@ mod tests {
         PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand_08::{SeedableRng as _, rngs::StdRng};
 
     use super::*;
     use crate::privacy_engines::bootle_lantern::{

@@ -231,9 +231,6 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
         | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
-
-        #[cfg(test)]
-        SingularQueryBox::__TestFallback => NativeQueryAccess::AllLedger,
     }
 }
 
