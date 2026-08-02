@@ -244,8 +244,9 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```bash
       cargo run --release -p iroha_kagami -- \
         genesis sign deploy/peer/genesis.json \
-        --public-key <PEER_PUBLIC_KEY> \
         --private-key <PEER_PRIVATE_KEY> \
+        --expected-public-key <PEER_PUBLIC_KEY> \
+        --bound-manifest-out deploy/peer/genesis.json \
         --out-file deploy/peer/genesis.signed.nrt
       ```
 
@@ -255,6 +256,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```toml
       [genesis]
       file = "genesis.signed.nrt"
+      manifest_json = "genesis.json"
       public_key = "<PEER_PUBLIC_KEY>"
       ```
 
@@ -272,9 +274,12 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
     ./irohad --sora --config ./config.toml
     ```
 
-    Repeat the configuration/key/genesis steps for every peer. Remember that to
-    tolerate _f_ Byzantine faults the network must contain at least _3f + 1_
-    peers with mutually listed `trusted_peers` entries.
+    Repeat the validator configuration/key steps for every peer and provision
+    the same signed genesis block plus exact bound manifest on every peer with
+    empty storage. Genesis is a local startup trust artifact and is not fetched
+    from another validator. To tolerate _f_ Byzantine faults the network must
+    contain exactly _3f + 1_ validators with mutually listed `trusted_peers`
+    entries.
 
 ### Docker
 
@@ -290,9 +295,12 @@ export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/compose-genesis/private.key"
 docker compose -f defaults/docker-compose.yml up --build
 ```
 
-Compose mounts the verifier key into every peer and the signing key into only
-the genesis-submitting peer. Missing files and mismatched keys fail closed. For
-a deployed network, generate validator identities and matching
+Compose mounts the verifier key into every peer and the signing key into a
+one-shot genesis signer. The signer atomically publishes the signed block and
+exact bound manifest into a shared volume, exits, and only then may all
+validators start with those artifacts mounted read-only. Missing files and
+mismatched keys fail closed. For a deployed network, generate validator
+identities and matching
 `TRUSTED_PEERS_POP` entries with Kagami rather than inheriting the sample
 validator credentials. To keep containers running after closing the terminal,
 use the `-d` (*detached*) flag:

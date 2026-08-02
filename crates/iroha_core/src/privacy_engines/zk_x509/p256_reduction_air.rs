@@ -554,11 +554,6 @@ impl P256ComparisonStarkFixedProviderV1 {
         row[STARK_ACTIVE] = F::ONE;
         Ok(row)
     }
-
-    /// Native row count.
-    pub(crate) const fn trace_size_v1(self) -> usize {
-        self.trace_size
-    }
 }
 
 fn compile_p256_comparison_stark_fixed_rows_v1(

@@ -102,9 +102,9 @@ def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
     assert config["torii"]["address"] == "addr:0.0.0.0:18080#2F16"
     assert config["torii"]["deploy_rate_per_origin_per_sec"] == 4
     assert config["torii"]["deploy_burst_per_origin"] == 8
-    assert config["sumeragi"]["block"]["max_payload_bytes"] == 21 * MODULE.MIB
-    assert config["sumeragi"]["queues"]["body_source_bytes"] == 43 * MODULE.MIB
-    assert config["sumeragi"]["queues"]["body_bytes"] == 7 * 43 * MODULE.MIB
+    assert config["sumeragi"]["block"]["max_payload_bytes"] == 16 * MODULE.MIB
+    assert config["sumeragi"]["queues"]["body_source_bytes"] == 33 * MODULE.MIB
+    assert config["sumeragi"]["queues"]["body_bytes"] == 7 * 33 * MODULE.MIB
     assert (
         config["network"]["max_frame_bytes_block_sync"]
         == MODULE.TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES
@@ -375,12 +375,12 @@ max_frame_bytes_block_sync = 23068672
 max_frame_bytes_tx_gossip = 11534336
 
 [sumeragi.block]
-max_payload_bytes = 22020096
+max_payload_bytes = 16777216
 
 [sumeragi.queues]
 authenticated_non_validator_sources = 2
-body_bytes = 315621376
-body_source_bytes = 45088768
+body_bytes = 242221056
+body_source_bytes = 34603008
 
 [torii]
 address = "0.0.0.0:18080"
@@ -961,7 +961,7 @@ def test_render_bundle_scales_body_budget_for_seven_validators(tmp_path: Path) -
     )
     queues = rendered["sumeragi"]["queues"]
     assert queues["authenticated_non_validator_sources"] == 2
-    assert queues["body_source_bytes"] == 45_088_768
+    assert queues["body_source_bytes"] == 34_603_008
     assert queues["body_bytes"] == 10 * queues["body_source_bytes"]
 
 
@@ -973,13 +973,13 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
 
     malformed = {
         "authenticated_non_validator_sources": ["0", "-1", '"2"', "true"],
-        "body_bytes": ["0", "-1", '"315621376"', "true"],
-        "body_source_bytes": ["0", "-1", '"45088768"', "true"],
+        "body_bytes": ["0", "-1", '"242221056"', "true"],
+        "body_source_bytes": ["0", "-1", '"34603008"', "true"],
     }
     defaults = {
         "authenticated_non_validator_sources": 2,
-        "body_bytes": 315621376,
-        "body_source_bytes": 45088768,
+        "body_bytes": 242221056,
+        "body_source_bytes": 34603008,
     }
     for key, values in malformed.items():
         for index, value in enumerate(values):
@@ -1006,15 +1006,21 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
     [
         (
             "max_payload_bytes",
-            "22020096",
+            "16777216",
             str(MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES - 1),
-            "must be at least 22020096 bytes",
+            "must equal the revision-4 protocol ceiling of 16777216 bytes",
+        ),
+        (
+            "max_payload_bytes",
+            "16777216",
+            str(MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES + 1),
+            "must equal the revision-4 protocol ceiling of 16777216 bytes",
         ),
         (
             "body_source_bytes",
-            "45088768",
+            "34603008",
             str(MODULE.TAIRA_BODY_SOURCE_MIN_BYTES - 1),
-            "must be at least 44270600 bytes",
+            "must be at least 33784840 bytes",
         ),
         (
             "max_frame_bytes_block_sync",
@@ -1036,7 +1042,7 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
         ),
     ],
 )
-def test_render_bundle_rejects_privacy_transport_corridor_below_boundary(
+def test_render_bundle_rejects_invalid_privacy_transport_corridor(
     tmp_path: Path,
     field: str,
     current: str,
@@ -1058,20 +1064,25 @@ def test_render_bundle_rejects_privacy_transport_corridor_below_boundary(
         MODULE.render_bundle(base_config_path, roster_path, tmp_path / "out")
 
 
-def test_genesis_renderer_rejects_da_payload_one_byte_below_privacy_corridor(
+@pytest.mark.parametrize("delta", [-1, 1])
+def test_genesis_renderer_rejects_da_payload_outside_protocol_ceiling(
     tmp_path: Path,
+    delta: int,
 ) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     _write_roster(roster_path)
     validators = MODULE.load_roster(roster_path)
     genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
     genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"] = (
-        MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES - 1
+        MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES + delta
     )
     base_genesis_path = tmp_path / "genesis.json"
     base_genesis_path.write_text(json.dumps(genesis), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="must be at least 22020096"):
+    with pytest.raises(
+        ValueError,
+        match="must equal the revision-4 protocol ceiling of 16777216",
+    ):
         MODULE.render_genesis_template(
             base_genesis_path,
             validators,

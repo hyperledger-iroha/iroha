@@ -1035,32 +1035,6 @@ impl CertifiedServeIngressGate {
         self.queue.serve_barrier()
     }
 
-    /// Return the least scheduler ordinal owned by an admitted Serve request.
-    ///
-    /// The selected off-queue reservation and every bounded waiter are part of
-    /// one immutable admission prefix.  Fair ingress compares this value with
-    /// the durable leader-wire gate before selecting either source, so a later
-    /// carrier cannot pass an earlier provisional or physical Serve owner.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn earliest_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
-        let state = self.queue.lock();
-        let mut earliest = None;
-        for reservation in state
-            .serve_ingress_reservation
-            .iter()
-            .chain(state.serve_ingress_waiters.values())
-        {
-            let ordinal = reservation.id.0;
-            if ordinal == 0 {
-                return Err(
-                    "Sumeragi v2 Serve ingress retained the zero scheduler ordinal".to_owned(),
-                );
-            }
-            earliest = Some(earliest.map_or(ordinal, |current: u128| current.min(ordinal)));
-        }
-        Ok(earliest)
-    }
-
     /// Return the least durable owner ordinal whose physical carrier is absent.
     ///
     /// Production startup discharges restored owners before exposing this
@@ -18833,6 +18807,8 @@ pub(super) mod tests {
         admission.lifecycle_id
     }
 
+    // Scheduler-attempt telemetry is intentionally excluded: even a failed
+    // dequeue records that the fair-ingress queue received a service turn.
     #[derive(Debug, PartialEq, Eq)]
     struct FairIngressAccountingSnapshot {
         last_admission_ordinal: u64,
@@ -18842,7 +18818,6 @@ pub(super) mod tests {
         len: usize,
         bytes: usize,
         nonempty_since: Option<Instant>,
-        last_service_attempt_at: Option<Instant>,
         open: bool,
     }
 
@@ -18906,7 +18881,6 @@ pub(super) mod tests {
             len: state.len,
             bytes: state.bytes,
             nonempty_since: state.nonempty_since,
-            last_service_attempt_at: state.last_service_attempt_at,
             open: state.open,
         }
     }
@@ -19237,14 +19211,6 @@ pub(super) mod tests {
             String,
         > {
             Ok(None)
-        }
-
-        fn enqueue_body_available(
-            &mut self,
-            _tag: EventTag,
-            _manifest: wire::PayloadManifest,
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
         }
 
         fn reserve_body_available(

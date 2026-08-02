@@ -430,13 +430,15 @@ and use the same two states:
    `tx_hash_hex`. Torii runs the same authoritative fee-quote engine as
    `POST /v1/fees/quote` and returns the exact canonical quoted transaction
    payload plus its 32-byte signing prehash. Sign that returned payload without
-   rebuilding or editing it.
+   rebuilding or editing it. The payload carries the standard 100-second
+   signature-bound transaction TTL and no nonce.
 2. **Direct submit:** resend the same artifact and payer selection with both
    `signature_b64` and the quoted `transaction_payload_b64`, plus the exact
    positive `creation_time_ms`. Torii decodes and re-encodes the bounded
    payload, byte-compares its chain, authority, fee payer and exact sponsor
-   revision, proof instruction, metadata, and time, verifies the detached
-   signature, and queues exactly that transaction. The response has
+   revision, proof instruction, metadata, creation time, default TTL, and absent
+   nonce, verifies the detached signature, and queues exactly that transaction.
+   The response has
    `submitted: true` and `tx_hash_hex`, with no signing scaffold.
 
 Detached signatures are canonical padded base64 of one nonempty, nonzero

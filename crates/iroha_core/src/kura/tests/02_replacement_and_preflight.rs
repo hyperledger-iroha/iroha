@@ -1305,7 +1305,8 @@
                 Kura::new(&config, &RuntimeLaneConfig::default()).expect("open legacy Kura");
             let blocks = store_dummy_block_arcs(&kura, 4);
             expected_artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
-            kura.store_v2_finality_artifact(&expected_artifact)
+            let _commit_receipt = kura
+                .store_v2_finality_artifact(&expected_artifact)
                 .expect("persist exact finality before legacy projection");
             let height = nonzero!(2_usize);
             let (_, payload_len) = advertise_required_replicas(&kura, height);
@@ -1377,7 +1378,7 @@
         // valid QC: production BLS aggregate signatures are fixed-size. Grow
         // the variable test field until the complete QC encoding is within 64
         // bytes of the independent 4 MiB consensus-side byte ceiling.
-        let qc_target = 4 * 1024 * 1024;
+        let qc_target: usize = 4 * 1024 * 1024;
         for _ in 0..8 {
             let encoded = entry.merge_qc.encoded_len();
             if encoded >= qc_target.saturating_sub(64) && encoded <= qc_target {

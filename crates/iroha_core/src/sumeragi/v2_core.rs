@@ -142,6 +142,8 @@ pub(crate) use refinement::{
     production_reliable_flush_two_phase_link_kernel,
 };
 pub(crate) use scheduler::{ScheduleState, ScheduledWork};
+#[cfg(test)]
+pub(crate) use types::FUTURE_TIMEOUT_VOTE_LOOKAHEAD;
 pub(crate) use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
     HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest,
@@ -149,10 +151,6 @@ pub(crate) use types::{
     SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
     TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
     timeout_vote_view_is_admissible,
-};
-#[cfg(test)]
-pub(crate) use types::{
-    FUTURE_TIMEOUT_VOTE_LOOKAHEAD, MAX_FAULT_TOLERANCE, MIN_FAULT_TOLERANCE, MIN_VOTING_ROSTER_LEN,
 };
 pub(crate) use wal::{
     DurableState, PersistenceId, ReplayError, SAFETY_WAL_HASH_LEN, WalAppendError, WalAppendIo,

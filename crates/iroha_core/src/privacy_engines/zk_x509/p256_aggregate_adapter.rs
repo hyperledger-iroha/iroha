@@ -59,13 +59,11 @@ use super::{
         p256_reduction_opened_binding_cells_v1,
     },
     p256_scalar_bit_bus::{
-        P256_SCALAR_BIT_BUS_LANES_V1, P256_SCALAR_BIT_BUS_ROWS_V1,
-        P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1, P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1,
-        P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1, P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1,
-        P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1, P256ScalarBitBusBaseSourceV1,
-        P256ScalarBitBusBoundSourceV1, P256ScalarBitBusChallengesV1, P256ScalarBitBusErrorV1,
-        P256ScalarBitBusStarkTraceV1, evaluate_p256_scalar_bit_bus_stark_residues_v1,
-        p256_scalar_bit_bus_opened_terminals_v1, p256_scalar_bit_bus_stark_fixed_row_v1,
+        P256_SCALAR_BIT_BUS_LANES_V1, P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1,
+        P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1, P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1,
+        P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1, P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1,
+        P256ScalarBitBusBaseSourceV1, P256ScalarBitBusBoundSourceV1, P256ScalarBitBusChallengesV1,
+        P256ScalarBitBusErrorV1, evaluate_p256_scalar_bit_bus_stark_residues_v1,
     },
     p256_trace::{
         P256EcdsaTopologyV1, P256EcdsaTraceMaterialV1, P256TraceCompilerErrorV1,
@@ -1438,18 +1436,6 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
         Ok(fixed)
     }
 
-    /// One verifier-preprocessed cell without retaining a fixed-row matrix.
-    pub(crate) fn fixed_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if column >= P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.row_v1(row)?[column])
-    }
-
     /// Regenerate one complete verifier-preprocessed native column.
     pub(crate) fn fill_fixed_column_v1(
         &self,
@@ -1462,11 +1448,6 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
             output,
             |row| self.row_v1(row),
         )
-    }
-
-    /// Logical value-bus rows.
-    pub(crate) const fn logical_rows_v1(&self) -> usize {
-        self.value.logical_rows_v1()
     }
 }
 
@@ -1537,37 +1518,6 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             arithmetic_copy_terminal,
             next_row: 0,
         })
-    }
-
-    /// Direct committed base row.
-    pub(crate) fn base_row_v1(
-        &self,
-        index: usize,
-    ) -> Result<[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        Ok(self.base.base_row_v1(index)?)
-    }
-
-    /// One directly committed value-bus base cell.
-    pub(crate) fn base_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        Ok(self.base.base_cell_v1(row, column)?)
-    }
-
-    /// Copy one complete committed base column into caller-owned storage.
-    pub(crate) fn fill_base_column_v1(
-        &self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(
-            P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
-            column,
-            output,
-            |row| self.base_row_v1(row),
-        )
     }
 
     /// Emit the next exact 116-column auxiliary row.
@@ -1678,25 +1628,6 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
         self.arithmetic_copy_running.fill(F::ZERO);
         self.arithmetic_copy_terminal.fill(F::ZERO);
         self.next_row = P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1;
-    }
-
-    #[cfg(test)]
-    fn private_is_zeroized_v1(&self) -> bool {
-        self.value_aux.is_none()
-            && self.writer.is_none()
-            && self.writer_terminal.iter().all(|value| *value == F::ZERO)
-            && self
-                .arithmetic_copy_challenges
-                .lanes
-                .iter()
-                .flat_map(|lane| lane.terms)
-                .all(|value| value == F::ZERO)
-            && self
-                .arithmetic_copy_running
-                .iter()
-                .chain(&self.arithmetic_copy_terminal)
-                .all(|value| *value == F::ZERO)
-            && self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1
     }
 }
 
@@ -2025,24 +1956,6 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
             .unwrap_or([F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1]))
     }
 
-    /// One directly committed arithmetic cell without copying the other 210
-    /// cells in its row.
-    pub(crate) fn base_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if row >= P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 || column >= P256_ARITHMETIC_BASE_WIDTH_V1
-        {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self
-            .trace
-            .base
-            .get(row)
-            .map_or(F::ZERO, |base| base[column]))
-    }
-
     /// Copy one complete committed arithmetic column into caller-owned
     /// storage without materializing an aggregate row matrix.
     pub(crate) fn fill_base_column_v1(
@@ -2055,66 +1968,6 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
             column,
             output,
             |row| self.base_row_v1(row),
-        )
-    }
-
-    /// Exact flat fixed row.
-    pub(crate) fn fixed_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        let mut fixed = [F::ZERO; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1];
-        fixed[..P256_ARITHMETIC_STARK_FIXED_WIDTH_V1].copy_from_slice(&self.fixed.row_v1(row)?);
-        let events = arithmetic_scalar_events_v1(row)?;
-        for (slot, event) in events.into_iter().enumerate() {
-            let start = ARITHMETIC_SCALAR_FIXED + slot * SCALAR_EVENT_FIXED_WIDTH;
-            encode_scalar_event_v1(event, &mut fixed[start..start + SCALAR_EVENT_FIXED_WIDTH]);
-        }
-        encode_boundary_v1(
-            P256CrossTraceBoundaryFixedV1::for_row(row, P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1)?,
-            &mut fixed
-                [ARITHMETIC_BOUNDARY_FIXED..ARITHMETIC_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
-        );
-        for (slot, event) in arithmetic_value_copy_events_v1(row, self.trace.rows())?
-            .into_iter()
-            .enumerate()
-        {
-            let start = ARITHMETIC_VALUE_COPY_FIXED + slot * ARITHMETIC_COPY_EVENT_FIXED_WIDTH;
-            encode_arithmetic_copy_event_v1(
-                event,
-                &mut fixed[start..start + ARITHMETIC_COPY_EVENT_FIXED_WIDTH],
-            );
-        }
-        encode_boundary_v1(
-            P256CrossTraceBoundaryFixedV1::for_row(row, P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1)?,
-            &mut fixed[ARITHMETIC_VALUE_COPY_BOUNDARY_FIXED..],
-        );
-        Ok(fixed)
-    }
-
-    /// One verifier-preprocessed arithmetic cell.
-    pub(crate) fn fixed_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if column >= P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.fixed_row_v1(row)?[column])
-    }
-
-    /// Regenerate one complete verifier-preprocessed arithmetic column.
-    pub(crate) fn fill_fixed_column_v1(
-        &self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(
-            P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
-            column,
-            output,
-            |row| self.fixed_row_v1(row),
         )
     }
 }
@@ -2194,22 +2047,6 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
             next_row: 0,
             _not_copy: core::cell::Cell::new(()),
         })
-    }
-
-    /// Direct committed base row.
-    pub(crate) fn base_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_ARITHMETIC_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        self.rows.base_row_v1(row)
-    }
-
-    /// Exact flat fixed row.
-    pub(crate) fn fixed_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        self.rows.fixed_row_v1(row)
     }
 
     /// Emit the next exact integrated auxiliary row.
@@ -2297,29 +2134,6 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         self.arithmetic_copy_running.fill(F::ZERO);
         self.arithmetic_copy_terminal.fill(F::ZERO);
         self.next_row = P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1;
-    }
-
-    #[cfg(test)]
-    fn private_is_zeroized_v1(&self) -> bool {
-        self.scalar_challenges
-            .lanes
-            .iter()
-            .flat_map(|lane| lane.terms)
-            .chain(
-                self.arithmetic_copy_challenges
-                    .lanes
-                    .iter()
-                    .flat_map(|lane| lane.terms),
-            )
-            .all(|value| value == F::ZERO)
-            && self
-                .scalar_running
-                .iter()
-                .chain(&self.scalar_terminal)
-                .chain(&self.arithmetic_copy_running)
-                .chain(&self.arithmetic_copy_terminal)
-                .all(|value| *value == F::ZERO)
-            && self.next_row == P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1
     }
 }
 
@@ -2477,7 +2291,6 @@ fn window_scalar_event_v1(
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct P256WindowAggregateRowsV1<'a> {
     trace: &'a P256WindowBatchStarkTraceV1,
-    fixed: P256WindowBatchStarkFixedProviderV1,
 }
 
 impl<'a> P256WindowAggregateRowsV1<'a> {
@@ -2491,12 +2304,7 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
         {
             return Err(P256AggregateAdapterErrorV1::Topology);
         }
-        Ok(Self {
-            trace,
-            fixed: P256WindowBatchStarkFixedProviderV1::new_v1(
-                P256_WINDOW_AGGREGATE_TRACE_SIZE_V1,
-            )?,
-        })
+        Ok(Self { trace })
     }
 
     /// Direct committed base row or canonical zero padding.
@@ -2515,22 +2323,6 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
             .unwrap_or([F::ZERO; P256_WINDOW_BASE_WIDTH_V1]))
     }
 
-    /// One directly committed window cell without copying its row.
-    pub(crate) fn base_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if row >= P256_WINDOW_AGGREGATE_TRACE_SIZE_V1 || column >= P256_WINDOW_BASE_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self
-            .trace
-            .base
-            .get(row)
-            .map_or(F::ZERO, |base| base[column]))
-    }
-
     /// Copy one complete committed window column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
         &self,
@@ -2539,55 +2331,6 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
     ) -> Result<(), P256AggregateAdapterErrorV1> {
         fill_aggregate_row_column_v1(P256_WINDOW_AGGREGATE_TRACE_SIZE_V1, column, output, |row| {
             self.base_row_v1(row)
-        })
-    }
-
-    /// Exact flat verifier preprocessing.
-    pub(crate) fn fixed_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        let mut fixed = [F::ZERO; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1];
-        fixed[..P256_WINDOW_STARK_FIXED_WIDTH_V1].copy_from_slice(&self.fixed.row_v1(row)?);
-        for (slot, event) in window_cross_events_v1(row)?.into_iter().enumerate() {
-            let start = WINDOW_CROSS_FIXED + slot * CROSS_EVENT_FIXED_WIDTH;
-            encode_cross_event_v1(event, &mut fixed[start..start + CROSS_EVENT_FIXED_WIDTH]);
-        }
-        encode_scalar_event_v1(
-            window_scalar_event_v1(row)?,
-            &mut fixed[WINDOW_SCALAR_FIXED..WINDOW_SCALAR_FIXED + SCALAR_EVENT_FIXED_WIDTH],
-        );
-        let local = row % P256_WINDOW_STARK_TRACE_SIZE_V1;
-        if row < P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1 && local < 4 {
-            fixed[WINDOW_SCALAR_BIT_SELECTORS_FIXED + local] = F::ONE;
-        }
-        encode_boundary_v1(
-            P256CrossTraceBoundaryFixedV1::for_row(row, P256_WINDOW_AGGREGATE_TRACE_SIZE_V1)?,
-            &mut fixed[WINDOW_BOUNDARY_FIXED..WINDOW_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
-        );
-        Ok(fixed)
-    }
-
-    /// One verifier-preprocessed window cell.
-    pub(crate) fn fixed_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if column >= P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.fixed_row_v1(row)?[column])
-    }
-
-    /// Regenerate one complete verifier-preprocessed window column.
-    pub(crate) fn fill_fixed_column_v1(
-        &self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(P256_WINDOW_AGGREGATE_TRACE_SIZE_V1, column, output, |row| {
-            self.fixed_row_v1(row)
         })
     }
 
@@ -2676,22 +2419,6 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
             next_row: 0,
             _not_copy: core::cell::Cell::new(()),
         })
-    }
-
-    /// Direct committed base row.
-    pub(crate) fn base_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_WINDOW_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        self.rows.base_row_v1(row)
-    }
-
-    /// Exact flat fixed row.
-    pub(crate) fn fixed_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        self.rows.fixed_row_v1(row)
     }
 
     /// Emit the next exact 37-column row.
@@ -2786,30 +2513,6 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
         self.scalar_running.fill(F::ZERO);
         self.scalar_terminal.fill(F::ZERO);
         self.next_row = P256_WINDOW_AGGREGATE_TRACE_SIZE_V1;
-    }
-
-    #[cfg(test)]
-    fn private_is_zeroized_v1(&self) -> bool {
-        self.cross_challenges
-            .lanes
-            .iter()
-            .flat_map(|lane| lane.terms)
-            .chain(
-                self.scalar_challenges
-                    .lanes
-                    .iter()
-                    .flat_map(|lane| lane.terms),
-            )
-            .all(|value| value == F::ZERO)
-            && self
-                .cross_start
-                .iter()
-                .chain(&self.cross_running)
-                .chain(&self.cross_terminal)
-                .chain(&self.scalar_running)
-                .chain(&self.scalar_terminal)
-                .all(|value| *value == F::ZERO)
-            && self.next_row == P256_WINDOW_AGGREGATE_TRACE_SIZE_V1
     }
 }
 
@@ -3014,22 +2717,6 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
             .unwrap_or([F::ZERO; P256_REDUCTION_BASE_WIDTH_V1]))
     }
 
-    /// One directly committed reduction cell without copying its row.
-    pub(crate) fn base_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if row >= P256_REDUCTION_AGGREGATE_TRACE_SIZE_V1 || column >= P256_REDUCTION_BASE_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self
-            .trace
-            .base
-            .get(row)
-            .map_or(F::ZERO, |base| base[column]))
-    }
-
     /// Copy one complete committed reduction column into caller-owned
     /// storage.
     pub(crate) fn fill_base_column_v1(
@@ -3065,32 +2752,6 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
                 [REDUCTION_BOUNDARY_FIXED..REDUCTION_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
         );
         Ok(fixed)
-    }
-
-    /// One verifier-preprocessed reduction cell.
-    pub(crate) fn fixed_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if column >= P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.fixed_row_v1(row)?[column])
-    }
-
-    /// Regenerate one complete verifier-preprocessed reduction column.
-    pub(crate) fn fill_fixed_column_v1(
-        &self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(
-            P256_REDUCTION_AGGREGATE_TRACE_SIZE_V1,
-            column,
-            output,
-            |row| self.fixed_row_v1(row),
-        )
     }
 }
 
@@ -3392,22 +3053,6 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
             .unwrap_or([F::ZERO; P256_LOW_S_BASE_WIDTH_V1]))
     }
 
-    /// One directly committed low-S cell without copying its row.
-    pub(crate) fn base_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if row >= P256_LOW_S_AGGREGATE_TRACE_SIZE_V1 || column >= P256_LOW_S_BASE_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self
-            .trace
-            .base
-            .get(row)
-            .map_or(F::ZERO, |base| base[column]))
-    }
-
     /// Copy one complete committed low-S column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
         &self,
@@ -3435,29 +3080,6 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
             &mut fixed[LOW_S_BOUNDARY_FIXED..LOW_S_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
         );
         Ok(fixed)
-    }
-
-    /// One verifier-preprocessed low-S cell.
-    pub(crate) fn fixed_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if column >= P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.fixed_row_v1(row)?[column])
-    }
-
-    /// Regenerate one complete verifier-preprocessed low-S column.
-    pub(crate) fn fill_fixed_column_v1(
-        &self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(P256_LOW_S_AGGREGATE_TRACE_SIZE_V1, column, output, |row| {
-            self.fixed_row_v1(row)
-        })
     }
 }
 
@@ -3829,18 +3451,6 @@ impl P256BindingSinkFixedProviderV1 {
         Ok(fixed)
     }
 
-    /// One verifier-preprocessed sink cell.
-    pub(crate) fn fixed_cell_v1(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if column >= P256_BINDING_SINK_FIXED_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.row_v1(row)?[column])
-    }
-
     /// Regenerate one complete verifier-preprocessed sink column.
     pub(crate) fn fill_fixed_column_v1(
         &self,
@@ -3853,11 +3463,6 @@ impl P256BindingSinkFixedProviderV1 {
             output,
             |row| self.row_v1(row),
         )
-    }
-
-    /// Logical non-padding binding rows.
-    pub(crate) fn logical_rows_v1(&self) -> usize {
-        self.fixed.logical_rows_v1()
     }
 }
 
@@ -3912,20 +3517,6 @@ impl<'a> P256BindingSinkRowsV1<'a> {
         Ok(base)
     }
 
-    /// One directly committed sink cell without copying its row.
-    pub(crate) fn base_cell_v1(
-        self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if row >= P256_BINDING_SINK_AGGREGATE_TRACE_SIZE_V1
-            || column >= P256_BINDING_SINK_BASE_WIDTH_V1
-        {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.base_row_v1(row)?[column])
-    }
-
     /// Copy one complete committed sink column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
         self,
@@ -3951,14 +3542,6 @@ pub(crate) struct P256BindingSinkAggregateStreamV1<'a> {
 }
 
 impl<'a> P256BindingSinkAggregateStreamV1<'a> {
-    /// Bind all six factor slots directly to the committed sink row.
-    pub(crate) fn new_v1(
-        trace: &'a P256ExternalBindingTraceV1,
-        challenges: P256CrossTraceChallengesV1,
-    ) -> Result<Self, P256AggregateAdapterErrorV1> {
-        Self::new_with_optional_certificate_v1(trace, challenges, false)
-    }
-
     /// Build the sole verifier-positioned optional certificate sink.
     pub(crate) fn new_with_optional_certificate_v1(
         trace: &'a P256ExternalBindingTraceV1,
@@ -3980,22 +3563,6 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
             terminal,
             optional_certificate,
         })
-    }
-
-    /// Direct committed base row.
-    pub(crate) fn base_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_BINDING_SINK_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        self.rows.base_row_v1(row)
-    }
-
-    /// Exact flat fixed row.
-    pub(crate) fn fixed_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_BINDING_SINK_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        self.fixed.row_v1(row)
     }
 
     /// Emit the next exact 38-column row.
@@ -4047,11 +3614,6 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.sink = None;
         self.terminal.fill(F::ZERO);
-    }
-
-    #[cfg(test)]
-    fn private_is_zeroized_v1(&self) -> bool {
-        self.sink.is_none() && self.terminal.iter().all(|value| *value == F::ZERO)
     }
 }
 
@@ -4170,158 +3732,6 @@ pub(crate) fn p256_binding_sink_last_selector_v1(
         &fixed[SINK_BOUNDARY_FIXED..SINK_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
     )
     .last
-}
-
-/// Constant-memory native-domain provider for the packed scalar-bit bus.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct P256ScalarBitBusAggregateRowsV1<'a> {
-    trace: &'a P256ScalarBitBusStarkTraceV1,
-}
-
-impl<'a> P256ScalarBitBusAggregateRowsV1<'a> {
-    /// Validate the canonical 256-row materialization.
-    pub(crate) fn new_v1(
-        trace: &'a P256ScalarBitBusStarkTraceV1,
-    ) -> Result<Self, P256AggregateAdapterErrorV1> {
-        if trace.base.len() != 256
-            || trace.aux.len() != 256
-            || trace.base.len() < P256_SCALAR_BIT_BUS_ROWS_V1
-        {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(Self { trace })
-    }
-
-    /// Direct committed base row or canonical zero padding.
-    pub(crate) fn base_row_v1(
-        self,
-        row: usize,
-    ) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        if row >= P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_SIZE_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self
-            .trace
-            .base
-            .get(row)
-            .copied()
-            .unwrap_or([F::ZERO; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]))
-    }
-
-    /// One directly committed packed-bus base cell.
-    pub(crate) fn base_cell_v1(
-        self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if row >= P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_SIZE_V1
-            || column >= P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1
-        {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.trace.base[row][column])
-    }
-
-    /// Copy one complete packed-bus base column into caller-owned storage.
-    pub(crate) fn fill_base_column_v1(
-        self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(
-            P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_SIZE_V1,
-            column,
-            output,
-            |row| self.base_row_v1(row),
-        )
-    }
-
-    /// Existing product rows or canonical zero padding.
-    pub(crate) fn aux_row_v1(
-        self,
-        row: usize,
-    ) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        if row >= P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_SIZE_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self
-            .trace
-            .aux
-            .get(row)
-            .copied()
-            .unwrap_or([F::ZERO; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1]))
-    }
-
-    /// One challenge-dependent packed-bus auxiliary cell.
-    pub(crate) fn aux_cell_v1(
-        self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if row >= P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_SIZE_V1
-            || column >= P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1
-        {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.trace.aux[row][column])
-    }
-
-    /// Copy one complete challenge-dependent packed-bus auxiliary column
-    /// into caller-owned storage.
-    pub(crate) fn fill_aux_column_v1(
-        self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(
-            P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_SIZE_V1,
-            column,
-            output,
-            |row| self.aux_row_v1(row),
-        )
-    }
-
-    /// Verifier-owned native-domain fixed row.
-    pub(crate) fn fixed_row_v1(
-        self,
-        row: usize,
-    ) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
-        Ok(p256_scalar_bit_bus_stark_fixed_row_v1(
-            row,
-            P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_SIZE_V1,
-        )?)
-    }
-
-    /// One verifier-preprocessed packed-bus cell.
-    pub(crate) fn fixed_cell_v1(
-        self,
-        row: usize,
-        column: usize,
-    ) -> Result<F, P256AggregateAdapterErrorV1> {
-        if column >= P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1 {
-            return Err(P256AggregateAdapterErrorV1::Topology);
-        }
-        Ok(self.fixed_row_v1(row)?[column])
-    }
-
-    /// Regenerate one complete verifier-preprocessed packed-bus column.
-    pub(crate) fn fill_fixed_column_v1(
-        self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(
-            P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_SIZE_V1,
-            column,
-            output,
-            |row| self.fixed_row_v1(row),
-        )
-    }
-
-    /// Arithmetic/window terminals at the exact final logical row.
-    pub(crate) fn terminals_v1(self) -> [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
-        p256_scalar_bit_bus_opened_terminals_v1(&self.trace.aux[P256_SCALAR_BIT_BUS_ROWS_V1 - 1])
-    }
 }
 
 /// Native-domain scalar-bit bus residues.

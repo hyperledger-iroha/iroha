@@ -14,6 +14,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class SccpExactTests
 {
+    private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
     private static readonly string MessageId = SccpV1.LowerHex(SccpV1.MessageId(BundleLane(), ExactTransfer()));
     private static readonly FeePaymentIntent BridgeFeePayment = FeePaymentIntent.Authority([]);
 
@@ -316,6 +317,21 @@ public sealed class SccpExactTests
             signature,
             Convert.ToBase64String(transaction),
             creationTimeMs: 7);
+        foreach (var invalidTimeToLiveMilliseconds in new ulong?[] { null, 99_999 })
+        {
+            var invalidTransaction = CanonicalTransactionPayload(
+                7,
+                destinationProof: true,
+                timeToLiveMilliseconds: invalidTimeToLiveMilliseconds);
+            Assert.Throws<ArgumentException>(() => BridgeProofRequest(
+                authority,
+                artifact,
+                Convert.ToBase64String(Ed25519Signer.Sign(
+                    IrohaHash.Hash(invalidTransaction),
+                    pair.PrivateKeySeed)),
+                Convert.ToBase64String(invalidTransaction),
+                creationTimeMs: 7));
+        }
         Assert.Equal(nativeArtifact, BridgeMessageRequest(authority, nativeArtifact).NativeProofBase64);
         using var json = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(request));
         var fields = json.RootElement.EnumerateObject()
@@ -1275,6 +1291,17 @@ public sealed class SccpExactTests
             Convert.ToBase64String(transaction),
             Convert.ToBase64String(IrohaHash.Hash(transaction)));
         Assert.False(SccpBridgeSubmitResponse.Parse(prepared).Submitted);
+        foreach (var invalidTimeToLiveMilliseconds in new ulong?[] { null, 99_999 })
+        {
+            var invalidTransaction = CanonicalTransactionPayload(
+                7,
+                timeToLiveMilliseconds: invalidTimeToLiveMilliseconds);
+            Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(ResponseJson(
+                false,
+                null,
+                Convert.ToBase64String(invalidTransaction),
+                Convert.ToBase64String(IrohaHash.Hash(invalidTransaction)))));
+        }
         var preparedAuthority = Ed25519KeyPair
             .FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray())
             .ToAccountAddress()
@@ -2587,7 +2614,8 @@ public sealed class SccpExactTests
         bool destinationProof = false,
         uint? payloadKindOverride = null,
         string chainId = "fc56984b-2be7-431d-840e-21514d1883f0",
-        FeePaymentIntent? feePayment = null)
+        FeePaymentIntent? feePayment = null,
+        ulong? timeToLiveMilliseconds = DefaultTransactionTimeToLiveMilliseconds)
     {
         const string submitBridgeProof = "iroha_data_model::isi::bridge::SubmitBridgeProof";
         var pair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
@@ -2625,7 +2653,9 @@ public sealed class SccpExactTests
         var executable = Concat(UInt32(0), CompactField(instructions));
         Span<byte> creation = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(creation, creationTimeMs);
-        var ttl = new byte[] { 0 };
+        byte[] ttl = timeToLiveMilliseconds is { } value
+            ? Concat([(byte)1], CompactField(UInt64(value)))
+            : [0];
         var nonce = new byte[] { 0 };
         var encodedFeePayment = CanonicalFeePayment(
             feePayment ?? FeePaymentIntent.Authority([]),

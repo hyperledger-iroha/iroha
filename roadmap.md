@@ -174,6 +174,11 @@ transition-checked latest-index publication, configured evidence-byte bounds,
 and State-frontier authentication. Its focused failing-mutation pytest cases
 must still execute on the final source before freeze.
 
+- Run a live four-validator idle-chain check for the restored proposal-work
+  gate, confirming that idle heights do not manufacture empty blocks while
+  explicitly armed recovery heartbeats and genuine internal work still
+  advance.
+
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
 [`specs/sumeragi_v2_multilane_closure_ledger.md`](./specs/sumeragi_v2_multilane_closure_ledger.md).

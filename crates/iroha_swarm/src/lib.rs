@@ -347,8 +347,8 @@ mod tests {
         );
         assert_eq!(
             output.matches("tail -c 1").count(),
-            peer_count,
-            "every peer must reject a public-key file without a final newline"
+            peer_count + 1,
+            "the signer and every peer must reject a public-key file without a final newline"
         );
         let cleanup = "rm -f \\\"$$GENESIS_PRIVATE_KEY_FILE\\\"";
         assert_eq!(
@@ -362,7 +362,98 @@ mod tests {
         );
         assert!(
             output.find(cleanup) < output.rfind("exec irohad"),
-            "the successful signing path must remove the copied key before starting irohad"
+            "the successful signing path must remove the copied key before validators start"
+        );
+        assert!(
+            output.contains("--bound-manifest-out \\\"$$GENESIS_MANIFEST_TMP\\\""),
+            "the signer must publish the exact manifest that produced the signed block"
+        );
+        assert!(
+            output.contains("--creation-time-ms 1700000000000"),
+            "the runtime signer must reproduce identical trust artifacts after restart"
+        );
+        assert_eq!(
+            output.matches("cmp -s").count(),
+            2,
+            "the signer must compare both persisted trust artifacts before publication"
+        );
+        assert!(
+            output.contains("persisted genesis manifest does not match"),
+            "the signer must reject a changed bound manifest"
+        );
+        assert!(
+            output.contains("persisted signed genesis does not match"),
+            "the signer must reject a changed signed genesis block"
+        );
+        assert!(
+            !output.contains("mv -f"),
+            "the signer must never overwrite a persisted genesis trust artifact"
+        );
+        assert!(
+            output.contains("ln \\\"$$GENESIS_MANIFEST_TMP\\\" \\\"$$GENESIS_MANIFEST_JSON\\\""),
+            "the bound manifest must be published with create-if-absent semantics"
+        );
+        assert!(
+            output.contains("ln \\\"$$GENESIS_SIGNED_TMP\\\" \\\"$$GENESIS\\\""),
+            "the signed genesis block must be published with create-if-absent semantics"
+        );
+        let signed_artifact_branch = output
+            .find("if test ! -e \\\"$$GENESIS\\\"")
+            .expect("signed genesis publication branch");
+        let successful_artifact_temp_cleanup = output
+            .rfind("rm -f \\\"$$GENESIS_SIGNED_TMP\\\" \\\"$$GENESIS_MANIFEST_TMP\\\"")
+            .expect("successful genesis artifact temporary-file cleanup");
+        let durability_barrier = output.find("sync &&").expect("genesis durability barrier");
+        let successful_secret_cleanup = output
+            .rfind(cleanup)
+            .expect("successful private-key cleanup");
+        assert!(
+            signed_artifact_branch < successful_artifact_temp_cleanup
+                && successful_artifact_temp_cleanup < durability_barrier
+                && durability_barrier < successful_secret_cleanup,
+            "signer success must discard artifact temporaries, then durably publish both artifacts, before deleting its key"
+        );
+        assert_eq!(
+            output.matches("sync &&").count(),
+            1,
+            "the signer needs one final durability barrier after both publication branches"
+        );
+        let root_user_lines = output
+            .lines()
+            .filter(|line| line.trim_start().starts_with("user:"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            root_user_lines.len(),
+            1,
+            "only the one-shot signer may override the image's unprivileged user"
+        );
+        assert!(
+            root_user_lines[0].contains("0:0"),
+            "the signer needs root only to own the persistent genesis volume"
+        );
+        assert!(output.contains("iroha_genesis:/genesis"));
+        assert!(output.contains("condition: service_completed_successfully"));
+        assert_eq!(
+            output
+                .matches("condition: service_completed_successfully")
+                .count(),
+            peer_count,
+            "every validator must wait for the one-shot signer"
+        );
+        assert_eq!(
+            output.matches("iroha_genesis:/genesis:ro").count(),
+            peer_count,
+            "validators must mount the published artifacts read-only"
+        );
+        assert_eq!(
+            output.matches("GENESIS_MANIFEST_JSON:").count(),
+            peer_count + 1,
+            "the signer and validators must agree on the exact bound manifest"
+        );
+        assert_eq!(
+            output.matches("PRIVATE_KEY:").count(),
+            peer_count,
+            "the one-shot signer must not receive a validator consensus private key"
         );
         assert!(
             !output.contains("GENESIS_PRIVATE_KEY:"),
@@ -374,13 +465,13 @@ mod tests {
         );
         assert_eq!(
             output.matches("- iroha_genesis_public_key").count(),
-            peer_count,
-            "every peer must receive only the public genesis secret by default"
+            peer_count + 1,
+            "the signer and every peer must receive the public genesis secret"
         );
         assert_eq!(
             output.matches("- iroha_genesis_private_key").count(),
             1,
-            "only the genesis-submitting peer may receive the signing secret"
+            "only the one-shot genesis signer may receive the signing secret"
         );
 
         let required_public_file = "${IROHA_GENESIS_PUBLIC_KEY_FILE:?set IROHA_GENESIS_PUBLIC_KEY_FILE to an owner-controlled genesis public-key file}";
@@ -441,8 +532,17 @@ mod tests {
             Some(&["Single-line banner"]),
         );
 
-        assert_eq!(output.matches("pull_policy: build").count(), 7);
-        assert!(output.contains("- irohad0"));
+        assert_eq!(
+            output.matches("pull_policy: build").count(),
+            1,
+            "the one-shot signer owns the image build"
+        );
+        assert_eq!(
+            output.matches("pull_policy: never").count(),
+            7,
+            "validators must reuse the image built by the signer"
+        );
+        assert!(output.contains("genesis-signer"));
         assert_runtime_genesis_secret_contract(&output, 7);
     }
 
@@ -459,7 +559,7 @@ mod tests {
     fn multiple_pull_healthcheck_nocache() {
         let output = build_as_string(nonzero_ext::nonzero!(4u16), true, None, true, None);
 
-        assert_eq!(output.matches("pull_policy: always").count(), 4);
+        assert_eq!(output.matches("pull_policy: always").count(), 5);
         assert_eq!(output.matches("start_period: 4s").count(), 4);
         assert_runtime_genesis_secret_contract(&output, 4);
     }

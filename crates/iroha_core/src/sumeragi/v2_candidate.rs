@@ -106,6 +106,12 @@ impl CandidateLimits {
 /// immutable inputs by the height runner.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CandidateAttachments {
+    /// An enabled time trigger requires the ledger clock to advance.
+    ///
+    /// This is proposal work rather than serialized block metadata: advancing
+    /// signed header time keeps future schedules reachable, and block
+    /// execution derives any event which is due at that header.
+    pub(crate) time_trigger_clock_progress_required: bool,
     /// DA commitments available for this height.
     pub(crate) da_commitments: Option<DaCommitmentBundle>,
     /// DA pin intents available for this height.
@@ -311,6 +317,8 @@ pub(crate) struct CandidateRequest<'request, Work> {
     pub(crate) output_guard: &'request ConsensusOutputGuard,
     /// Immutable subsystem attachments for this height.
     pub(crate) attachments: CandidateAttachments,
+    /// Whether this exact recovery path may deliberately build an empty body.
+    pub(crate) allow_empty_recovery_heartbeat: bool,
     /// Frozen readiness adapter for lane-local and Native AMX work.
     pub(crate) work_provider: Work,
 }
@@ -330,6 +338,16 @@ pub(crate) struct CandidateScanReport {
     pub(crate) work_deferred: usize,
     /// External transactions included in the final body.
     pub(crate) selected: usize,
+}
+
+/// Result of one bounded fresh-candidate assembly attempt.
+#[derive(Debug)]
+pub(crate) enum CandidateAssemblyOutcome {
+    /// A signed body carrying ordinary, autonomous, internal, or explicitly
+    /// armed recovery-heartbeat work.
+    Assembled(AssembledV2Candidate),
+    /// The queue snapshot and internal providers contained no proposal work.
+    NoProposalWork(CandidateScanReport),
 }
 
 /// A canonical successor body and its deterministic v2 dispersal plan.
@@ -422,9 +440,9 @@ impl V2CandidateAssembler {
     /// successor body.
     ///
     /// The queue is never mutated. An empty queue, an entirely unavailable
-    /// lane/AMX snapshot, or a batch whose transactions do not fit produces a
-    /// valid empty heartbeat body as long as the body-level size limit permits
-    /// it.
+    /// lane/AMX snapshot, or a batch whose transactions do not fit returns
+    /// [`CandidateAssemblyOutcome::NoProposalWork`] unless genuine internal
+    /// work exists or the caller explicitly armed a recovery heartbeat.
     ///
     /// # Errors
     ///
@@ -434,7 +452,7 @@ impl V2CandidateAssembler {
     pub(crate) fn assemble<Work: CandidateWorkProvider>(
         &self,
         mut request: CandidateRequest<'_, Work>,
-    ) -> Result<AssembledV2Candidate, CandidateError> {
+    ) -> Result<CandidateAssemblyOutcome, CandidateError> {
         validate_request(&request)?;
         if request.queue.transaction_selection_durability_faulted() {
             return Err(CandidateError::RestartRequired);
@@ -500,6 +518,17 @@ impl V2CandidateAssembler {
                 };
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
 
+            report.selected = selected.len();
+            if !request.allow_empty_recovery_heartbeat
+                && !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work)
+            {
+                if request.queue.transaction_selection_durability_faulted() {
+                    return Err(CandidateError::RestartRequired);
+                }
+                validate_request(&request)?;
+                return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
+            }
+
             let signing = request
                 .output_guard
                 .begin_fail_stop_operation()
@@ -564,7 +593,7 @@ impl V2CandidateAssembler {
                 return Err(CandidateError::RestartRequired);
             }
             signing.complete();
-            return Ok(AssembledV2Candidate {
+            return Ok(CandidateAssemblyOutcome::Assembled(AssembledV2Candidate {
                 tag,
                 block,
                 canonical_wire,
@@ -572,7 +601,7 @@ impl V2CandidateAssembler {
                 events,
                 scan_report: report,
                 _selection_lease: selection_lease,
-            });
+            }));
         }
 
         Err(CandidateError::AssemblyDidNotConverge)
@@ -795,6 +824,22 @@ impl V2CandidateAssembler {
     }
 }
 
+fn candidate_has_proposal_work(
+    selected: &[CandidateRecord],
+    attachments: &CandidateAttachments,
+    prepared_work: &PreparedCandidateWork,
+) -> bool {
+    !selected.is_empty()
+        || !prepared_work.autonomous_lane_payloads.is_empty()
+        || attachments.time_trigger_clock_progress_required
+        || attachments.da_commitments.is_some()
+        || attachments.da_pin_intents.is_some()
+        || attachments.npos_consensus_effects.is_some()
+        || attachments.sccp_commitment_root.is_some()
+        || attachments.certified_merge_carrier_header.is_some()
+        || attachments.certified_merge_entry.is_some()
+}
+
 fn stripped_carrier_context_matches(
     built_header: &BlockHeader,
     certified_header: &BlockHeader,
@@ -910,9 +955,9 @@ fn validate_candidate_parent(
 
 fn canonicalize_records(records: &mut [CandidateRecord]) {
     records.sort_by(|left, right| {
-        left.source_ordinal
-            .cmp(&right.source_ordinal)
-            .then_with(|| left.entrypoint_hash.cmp(&right.entrypoint_hash))
+        left.entrypoint_hash
+            .cmp(&right.entrypoint_hash)
+            .then_with(|| left.source_ordinal.cmp(&right.source_ordinal))
     });
 }
 
@@ -1629,6 +1674,105 @@ mod tests {
         (state, context, anchor, key)
     }
 
+    fn assemble_empty_snapshot_candidate(
+        allow_empty_recovery_heartbeat: bool,
+        attachments: CandidateAttachments,
+    ) -> CandidateAssemblyOutcome {
+        let (state, mut context, anchor, key) = snapshot_parent_fixture();
+        context.da_layout.max_payload_size_bytes = 64 * 1024;
+        context.da_layout.max_chunk_count = 128;
+        context.validate().expect("expanded fixture DA limits");
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(
+            anchor.snapshot_block_creation_time_ms + 1,
+        ));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let local_validator = context.leader(tag.view());
+        let directive = LocalProposalDirective::for_test(tag, local_validator, None, None, None);
+        V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8))
+                .expect("fixture candidate limits"),
+            time_source,
+        )
+        .assemble(CandidateRequest {
+            context: &context,
+            directive,
+            local_validator,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &output_guard,
+            attachments,
+            allow_empty_recovery_heartbeat,
+            work_provider: SingleRouteWorkProvider,
+        })
+        .expect("empty snapshot candidate assembly")
+    }
+
+    #[test]
+    fn proposal_work_gate_defers_idle_candidate() {
+        let outcome = assemble_empty_snapshot_candidate(false, CandidateAttachments::default());
+        let CandidateAssemblyOutcome::NoProposalWork(report) = outcome else {
+            panic!("an idle height must not manufacture an empty candidate");
+        };
+        assert_eq!(report, CandidateScanReport::default());
+    }
+
+    #[test]
+    fn proposal_work_gate_preserves_armed_recovery_heartbeat() {
+        let outcome = assemble_empty_snapshot_candidate(true, CandidateAttachments::default());
+        let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
+            panic!("an explicitly armed recovery heartbeat must remain available");
+        };
+        assert_eq!(candidate.scan_report(), CandidateScanReport::default());
+        assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
+    }
+
+    #[test]
+    fn proposal_work_gate_preserves_time_trigger_work() {
+        let outcome = assemble_empty_snapshot_candidate(
+            false,
+            CandidateAttachments {
+                time_trigger_clock_progress_required: true,
+                ..CandidateAttachments::default()
+            },
+        );
+        let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
+            panic!("due time-trigger work must produce a candidate");
+        };
+        assert_eq!(candidate.scan_report(), CandidateScanReport::default());
+        assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
+    }
+
+    #[test]
+    fn proposal_work_gate_accepts_external_and_control_work() {
+        let attachments = CandidateAttachments::default();
+        let prepared = PreparedCandidateWork::default();
+        assert!(!candidate_has_proposal_work(&[], &attachments, &prepared));
+
+        let external = vec![record(39, "proposal-work", 0)];
+        assert!(candidate_has_proposal_work(
+            &external,
+            &attachments,
+            &prepared
+        ));
+
+        let control = CandidateAttachments {
+            sccp_commitment_root: Some([0x5A; 32]),
+            ..CandidateAttachments::default()
+        };
+        assert!(candidate_has_proposal_work(&[], &control, &prepared));
+    }
+
     #[test]
     fn snapshot_candidate_parent_is_exact_and_one_shot() {
         let (state, context, anchor, key) = snapshot_parent_fixture();
@@ -1684,7 +1828,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_order_preserves_fifo_before_hash_tiebreak() {
+    fn canonical_order_matches_block_builder_hash_order() {
         let mut records = vec![
             record(1, "third", 2),
             record(3, "first", 0),
@@ -1692,8 +1836,8 @@ mod tests {
         ];
         canonicalize_records(&mut records);
         assert!(records.windows(2).all(|window| {
-            (window[0].source_ordinal, window[0].entrypoint_hash)
-                <= (window[1].source_ordinal, window[1].entrypoint_hash)
+            (window[0].entrypoint_hash, window[0].source_ordinal)
+                <= (window[1].entrypoint_hash, window[1].source_ordinal)
         }));
     }
 

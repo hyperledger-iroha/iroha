@@ -70,24 +70,31 @@ jobs:
           echo "IROHA_GENESIS_PRIVATE_KEY_FILE=$key_dir/private.key" >> "$GITHUB_ENV"
       - name: Test docker-compose.single.yml before pushing
         run: |
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml up --wait || {
+          docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml up --wait || {
             echo "docker-compose failed. Logs:";
-            docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml logs --tail="all";
+            docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml logs --tail="all";
+            docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml down --volumes --remove-orphans;
             exit 1;
           }
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml down
+          docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml down --volumes --remove-orphans
       - name: Test docker-compose.local.yml before pushing
         run: |
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml up --wait || {
+          docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml up --wait || {
             echo "docker-compose failed. Logs:";
-            docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml logs --tail="all";
+            docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml logs --tail="all";
+            docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml down --volumes --remove-orphans;
             exit 1;
           }
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml down
+          docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml down --volumes --remove-orphans
       - name: Test docker-compose.yml before pushing
         run: |
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml up --wait || exit 1
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down
+          docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml up --wait || {
+            echo "docker-compose failed. Logs:";
+            docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml logs --tail="all";
+            docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down --volumes --remove-orphans;
+            exit 1;
+          }
+          docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down --volumes --remove-orphans
       - name: Remove runtime-only genesis signing custody
         if: always()
         run: |

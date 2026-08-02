@@ -8,8 +8,7 @@ use std::{
 };
 
 use iroha_data_model::{
-    block::consensus_v2::is_valid_committee_size,
-    parameter::system::SumeragiConsensusMode,
+    block::consensus_v2::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
 };
 
 const MIN_PEER_COUNT: usize = 4;

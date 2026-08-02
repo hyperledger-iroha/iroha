@@ -93,6 +93,12 @@ pub struct Args {
     /// owner-held private-key file.
     #[clap(long = "seed-hex", conflicts_with = "private_key", value_name = "HEX")]
     seed: Option<String>,
+    /// Deterministic genesis transaction creation-time base in Unix milliseconds.
+    ///
+    /// Omit this for a fresh wall-clock timestamp. Fixture generators should
+    /// set it so repeated signing produces identical canonical wire bytes.
+    #[clap(long, value_name = "MILLISECONDS")]
+    creation_time_ms: Option<u64>,
     /// Algorithm of the genesis key (must match the genesis public key).
     #[clap(long, default_value = "ed25519", value_name = "ALGORITHM")]
     algorithm: Algorithm,
@@ -415,8 +421,35 @@ pub fn bind_staged_sumeragi_v2_context(
         config,
         da_proof_policies,
         confidential_policy_hash,
+        None,
     )?;
     Ok(block)
+}
+
+fn build_signed_genesis(
+    genesis: RawGenesisTransaction,
+    genesis_key_pair: &KeyPair,
+    da_proof_policies: Option<DaProofPolicyBundle>,
+    confidential_policy_hash: [u8; 32],
+    creation_time_ms: Option<u64>,
+) -> Result<GenesisBlock, color_eyre::eyre::Error> {
+    match creation_time_ms {
+        Some(creation_time_ms) => genesis
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                genesis_key_pair,
+                da_proof_policies,
+                Some(confidential_policy_hash),
+                creation_time_ms,
+            )
+            .map_err(Into::into),
+        None => genesis
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                genesis_key_pair,
+                da_proof_policies,
+                Some(confidential_policy_hash),
+            )
+            .map_err(Into::into),
+    }
 }
 
 fn bind_and_sign_staged_sumeragi_v2_context(
@@ -425,6 +458,7 @@ fn bind_and_sign_staged_sumeragi_v2_context(
     config: Option<&actual::Root>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
+    creation_time_ms: Option<u64>,
 ) -> Result<(RawGenesisTransaction, GenesisBlock), color_eyre::eyre::Error> {
     let mut parameters = genesis.sumeragi_v2_context_parameters();
     let (nexus_amx_context_hash, execution_policy_hash) = staged_sumeragi_v2_context_hashes(
@@ -433,6 +467,7 @@ fn bind_and_sign_staged_sumeragi_v2_context(
         config,
         da_proof_policies.as_ref(),
         confidential_policy_hash,
+        creation_time_ms,
     )?;
     parameters.nexus_amx_context_hash = nexus_amx_context_hash.into();
     parameters.execution_policy_hash = execution_policy_hash.into();
@@ -440,13 +475,13 @@ fn bind_and_sign_staged_sumeragi_v2_context(
     let bound_manifest = genesis
         .with_sumeragi_v2_context_parameters(parameters)
         .with_consensus_meta();
-    let block = bound_manifest
-        .clone()
-        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-            genesis_key_pair,
-            da_proof_policies,
-            Some(confidential_policy_hash),
-        )?;
+    let block = build_signed_genesis(
+        bound_manifest.clone(),
+        genesis_key_pair,
+        da_proof_policies,
+        confidential_policy_hash,
+        creation_time_ms,
+    )?;
     Ok((bound_manifest, block))
 }
 
@@ -459,6 +494,7 @@ fn staged_sumeragi_v2_context_hashes(
     config: Option<&actual::Root>,
     da_proof_policies: Option<&DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
+    creation_time_ms: Option<u64>,
 ) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
@@ -471,6 +507,7 @@ fn staged_sumeragi_v2_context_hashes(
                     config,
                     da_proof_policies,
                     confidential_policy_hash,
+                    creation_time_ms,
                 )
             })
             .wrap_err("spawn bounded genesis staging thread")?
@@ -485,6 +522,7 @@ fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
     config: Option<&actual::Root>,
     da_proof_policies: Option<&DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
+    creation_time_ms: Option<u64>,
 ) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
     // This worker is a new thread, so it does not inherit the caller's
     // thread-local I105 discriminant.
@@ -493,14 +531,13 @@ fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
         SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
         SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
     };
-    let provisional = genesis
-        .clone()
-        .with_consensus_meta()
-        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-            genesis_key_pair,
-            da_proof_policies.cloned(),
-            Some(confidential_policy_hash),
-        )?;
+    let provisional = build_signed_genesis(
+        genesis.clone().with_consensus_meta(),
+        genesis_key_pair,
+        da_proof_policies.cloned(),
+        confidential_policy_hash,
+        creation_time_ms,
+    )?;
 
     let authority = AccountId::new(genesis_key_pair.public_key().clone());
     let mut world = World::with(
@@ -901,6 +938,7 @@ impl<T: Write> RunArgs<T> for Args {
             peer_config.as_ref(),
             da_proof_policies,
             confidential_policy_hash,
+            self.creation_time_ms,
         )?;
 
         let framed = genesis_block
@@ -1346,6 +1384,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: config_path.map(|path| root.join(path)),
             consensus_mode: None,
@@ -1606,6 +1645,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 private_key_file: None,
                 expected_public_key: None,
                 seed: None,
+                creation_time_ms: None,
                 algorithm: Algorithm::Ed25519,
                 config: None,
                 consensus_mode: None,
@@ -1634,6 +1674,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -1658,6 +1699,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 private_key_file: None,
                 expected_public_key: None,
                 seed: None,
+                creation_time_ms: None,
                 algorithm: Algorithm::Ed25519,
                 config: None,
                 consensus_mode: None,
@@ -1672,6 +1714,34 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "unexpected error for protocol version {version}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn explicit_creation_time_repeats_signed_wire_bytes() {
+        let genesis_file = minimal_genesis_file();
+        let private_key = test_private_key_hex();
+        let sign = || {
+            let args = Args {
+                genesis_file: genesis_file.clone(),
+                out_file: None,
+                bound_manifest_out: None,
+                topology: None,
+                peer_pops: Vec::new(),
+                private_key: Some(private_key.clone()),
+                private_key_file: None,
+                expected_public_key: None,
+                seed: None,
+                creation_time_ms: Some(1_700_000_000_000),
+                algorithm: Algorithm::Ed25519,
+                config: None,
+                consensus_mode: None,
+            };
+            let mut writer = BufWriter::new(Vec::new());
+            args.run(&mut writer).expect("sign at fixed creation time");
+            writer.into_inner().expect("extract signed genesis bytes")
+        };
+
+        assert_eq!(sign(), sign());
     }
 
     #[test]
@@ -1702,6 +1772,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -1733,6 +1804,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -1792,6 +1864,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -1874,6 +1947,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: Some(seed),
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: Some(config_path),
             consensus_mode: None,
@@ -1952,6 +2026,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -1983,6 +2058,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2014,6 +2090,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2075,6 +2152,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2098,6 +2176,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2120,6 +2199,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2147,6 +2227,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: Some(ConsensusModeArg::Permissioned),
@@ -2179,6 +2260,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2228,6 +2310,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2308,6 +2391,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: Some(seed),
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2417,6 +2501,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: Some(config_path),
             consensus_mode: None,
@@ -2558,6 +2643,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2674,6 +2760,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id("xor#universal")),
             consensus_mode: None,
@@ -2732,6 +2819,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2794,6 +2882,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2823,6 +2912,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id(
                 "61CtjvNd9T3THAR65GsMVHr82Bjc",
@@ -2855,6 +2945,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2884,6 +2975,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_validator_modes(
                 "admin_managed",
@@ -2931,6 +3023,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2978,6 +3071,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: Some(ConsensusModeArg::Npos),
@@ -3005,6 +3099,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -3035,6 +3130,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_config_path()),
             consensus_mode: None,
@@ -3069,6 +3165,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: None,
             expected_public_key: None,
             seed: None,
+            creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,

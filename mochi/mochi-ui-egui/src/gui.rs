@@ -906,9 +906,7 @@ fn print_cli_usage() {
         "  --workspace-root <path>      Workspace root; Mochi stores runtime state under .mochi/sandbox."
     );
     println!("  --data-root <path>           Override the supervisor data root.");
-    println!(
-        "  --profile <four-peer-bft|{{ peer_count = 7, consensus_mode = \"permissioned\" }}>"
-    );
+    println!("  --profile <four-peer-bft|{{ peer_count = 7, consensus_mode = \"permissioned\" }}>");
     println!("                               Choose a preset or custom profile table.");
     println!("  --config <path>              Load overrides from a specific config file.");
     println!("  --torii-start <port>         Override the base Torii port.");

@@ -8559,6 +8559,33 @@ mod sccp_first_release_api_tests {
         transaction
             .verify_signature()
             .expect("exact generic signature remains valid");
+
+        let mut non_default_ttl = builder;
+        non_default_ttl.set_ttl(Duration::from_secs(1));
+        let non_default_payload_b64 =
+            base64::engine::general_purpose::STANDARD.encode(non_default_ttl.encode_payload());
+        let non_default_signature = Signature::try_new(
+            key_pair.private_key(),
+            &non_default_ttl.payload_hash_bytes(),
+        )
+        .expect("sign non-default SCCP TTL mutation");
+        let non_default_signature_b64 =
+            base64::engine::general_purpose::STANDARD.encode(non_default_signature.payload());
+        let error = build_exact_sccp_signed_transaction(
+            &state,
+            &chain_id,
+            &authority,
+            creation_time_ms,
+            &bridge_proof,
+            &non_default_payload_b64,
+            &non_default_signature_b64,
+            "TTL mutation test",
+        )
+        .expect_err("direct SCCP submission must reject a non-default TTL");
+        assert!(
+            conversion_message(&error)
+                .is_some_and(|message| message.contains("default TTL and no nonce"))
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -19017,9 +19044,13 @@ fn exact_sccp_transaction_builder(
                 .to_owned(),
         ));
     }
-    if payload.time_to_live_ms.is_some() || payload.nonce.is_some() {
+    if payload.time_to_live()
+        != Some(iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE)
+        || payload.nonce.is_some()
+    {
         return Err(conversion_error(
-            "prepared SCCP transaction payload must not contain a TTL or nonce".to_owned(),
+            "prepared SCCP transaction payload must contain the default TTL and no nonce"
+                .to_owned(),
         ));
     }
     validate_sccp_transaction_metadata(&payload.metadata)?;
@@ -19047,8 +19078,8 @@ fn exact_sccp_transaction_builder(
         ));
     }
 
-    // TransactionBuilder currently owns the public construction boundary. Rehydrate every field
-    // from the decoded payload, never from live defaults, and require byte identity before signing.
+    // The fixed default TTL and absent nonce were validated above. Rehydrate every remaining
+    // signature-bound field from the decoded payload and require byte identity before signing.
     let mut builder = TransactionBuilder::new(
         payload.chain.clone(),
         payload.authority.clone(),

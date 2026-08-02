@@ -23,7 +23,7 @@
 
     #[test]
     fn retained_merge_reference_survives_remote_only_body_eviction() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(nonzero!(2_usize));
         let mut generator = DummyBlocks::new();
         let genesis = generator.next();
         let mut entry = sample_merge_entry(1);
@@ -43,7 +43,8 @@
 
         let blocks = vec![genesis, carrier.clone(), third, fourth];
         let finality = v2_finality_artifacts_for_chain(&blocks)[1].clone();
-        kura.store_v2_finality_artifact(&finality)
+        let _commit_receipt = kura
+            .store_v2_finality_artifact(&finality)
             .expect("persist exact carrier finality and retained witness");
         let height = nonzero!(2_usize);
         let (_, payload_len) = advertise_required_replicas(&kura, height);

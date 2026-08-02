@@ -272,6 +272,7 @@ Sign the genesis block
 * `--private-key-file <PATH>` — Owner-held mode-0600 file containing one canonical private-key multihash
 * `--expected-public-key <PUBLIC_KEY>` — Public key that the selected private key must derive. Use this when the verifier key is distributed separately from the owner-held signing key, such as through container secrets
 * `--seed-hex <HEX>` — A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters. This is a testing convenience. Production operators should prefer an owner-held private-key file
+* `--creation-time-ms <MILLISECONDS>` — Deterministic genesis transaction creation-time base in Unix milliseconds. Omit this for a fresh wall-clock timestamp. Fixture generators should set it so repeated signing produces identical canonical wire bytes
 * `--algorithm <ALGORITHM>` — Algorithm of the genesis key (must match the genesis public key)
 
   Default value: `ed25519`

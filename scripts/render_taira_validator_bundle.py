@@ -21,16 +21,12 @@ MAX_VALIDATORS = 31
 TAIRA_CHAIN_DISCRIMINANT = 369
 MIB = 1024 * 1024
 # First-release privacy admission permits one 9 MiB action per 10 MiB
-# transaction and two such actions per block. The body retains another 1 MiB
-# for canonical block framing and context attachments.
+# transaction. Revision 4 caps the complete canonical consensus payload at
+# 16 MiB, leaving 6 MiB for canonical block framing and context attachments
+# when one maximum transaction is present.
 TAIRA_PRIVACY_MAX_ACTION_BYTES = 9 * MIB
 TAIRA_TRANSACTION_MAX_BYTES = 10 * MIB
-TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK = 2
-TAIRA_BLOCK_BODY_FRAME_HEADROOM_BYTES = MIB
-TAIRA_BLOCK_MAX_PAYLOAD_BYTES = (
-    TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK * TAIRA_TRANSACTION_MAX_BYTES
-    + TAIRA_BLOCK_BODY_FRAME_HEADROOM_BYTES
-)
+TAIRA_BLOCK_MAX_PAYLOAD_BYTES = 16 * MIB
 # Sumeragi isolates an ordinary body envelope, a completion envelope with the
 # recommended 1,024-hash manifest, and one timeout vote for every source.
 SUMERAGI_BODY_ENVELOPE_HEADROOM_BYTES = 64 * 1024
@@ -172,11 +168,10 @@ def _scaled_sumeragi_body_bytes(
     max_payload_bytes = _require_positive_integer(
         block, "max_payload_bytes", block_context
     )
-    if max_payload_bytes < TAIRA_BLOCK_MAX_PAYLOAD_BYTES:
+    if max_payload_bytes != TAIRA_BLOCK_MAX_PAYLOAD_BYTES:
         raise ValueError(
-            f"{block_context} field `max_payload_bytes` must be at least "
-            f"{TAIRA_BLOCK_MAX_PAYLOAD_BYTES} bytes to carry two maximum "
-            "first-release privacy transactions and canonical block framing"
+            f"{block_context} field `max_payload_bytes` must equal the "
+            f"revision-4 protocol ceiling of {TAIRA_BLOCK_MAX_PAYLOAD_BYTES} bytes"
         )
     queues = sumeragi.get("queues")
     if not isinstance(queues, dict):
@@ -999,12 +994,12 @@ def render_genesis_template(
     if (
         isinstance(max_payload_size_bytes, bool)
         or not isinstance(max_payload_size_bytes, int)
-        or max_payload_size_bytes < TAIRA_BLOCK_MAX_PAYLOAD_BYTES
+        or max_payload_size_bytes != TAIRA_BLOCK_MAX_PAYLOAD_BYTES
     ):
         raise ValueError(
             f"base genesis {base_genesis_path} sumeragi_v2.da_layout."
-            f"max_payload_size_bytes must be at least "
-            f"{TAIRA_BLOCK_MAX_PAYLOAD_BYTES}"
+            f"max_payload_size_bytes must equal the revision-4 protocol "
+            f"ceiling of {TAIRA_BLOCK_MAX_PAYLOAD_BYTES}"
         )
     transaction_parameter_tables = [
         transaction["parameters"]["transaction"]

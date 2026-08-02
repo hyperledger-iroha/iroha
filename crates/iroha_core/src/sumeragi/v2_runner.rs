@@ -55,9 +55,9 @@ use super::{
     },
     v2_body_store::{BlockSignaturePolicy, V2BodyStore},
     v2_candidate::{
-        CandidateAttachments, CandidateDescriptor, CandidateLimits, CandidateParent,
-        CandidateRequest, CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
-        V2CandidateAssembler,
+        CandidateAssemblyOutcome, CandidateAttachments, CandidateDescriptor, CandidateLimits,
+        CandidateParent, CandidateRequest, CandidateWorkProvider, CandidateWorkUnavailable,
+        PreparedCandidateWork, V2CandidateAssembler,
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
@@ -518,6 +518,24 @@ impl LocalProposalState {
         self.attempted = None;
         self.heartbeat_only = Some(owner);
         self.submitted = None;
+        self.candidate_work_wait = None;
+        LocalValidationDisposition::RetryHeartbeat
+    }
+
+    /// Abandon a candidate whose lane-local ownership could not be bound
+    /// before the body was submitted, then give the exact owner one empty
+    /// heartbeat attempt. The caller releases the candidate's selection lease
+    /// before crossing this boundary, without publishing a body or events.
+    fn handle_candidate_binding_rejection(
+        &mut self,
+        owner: LocalProposalOwner,
+    ) -> LocalValidationDisposition {
+        let owner = self.reconcile(owner);
+        if self.heartbeat_only == Some(owner) {
+            return LocalValidationDisposition::FatalHeartbeat;
+        }
+        self.attempted = None;
+        self.heartbeat_only = Some(owner);
         self.candidate_work_wait = None;
         LocalValidationDisposition::RetryHeartbeat
     }
@@ -2306,7 +2324,7 @@ fn schedule_local_proposal(
             &carrier_context_header,
             npos_vrf,
         )?;
-        let candidate = if proposal_state.heartbeat_only == Some(owner) {
+        let assembly = if proposal_state.heartbeat_only == Some(owner) {
             assembler.assemble(CandidateRequest {
                 context,
                 directive,
@@ -2317,6 +2335,7 @@ fn schedule_local_proposal(
                 key_pair,
                 output_guard,
                 attachments,
+                allow_empty_recovery_heartbeat: true,
                 work_provider: HeartbeatOnlyWorkProvider,
             })?
         } else {
@@ -2330,8 +2349,34 @@ fn schedule_local_proposal(
                 key_pair,
                 output_guard,
                 attachments,
+                allow_empty_recovery_heartbeat: false,
                 work_provider: &mut *lane_work,
             })?
+        };
+        let candidate = match assembly {
+            CandidateAssemblyOutcome::Assembled(candidate) => candidate,
+            CandidateAssemblyOutcome::NoProposalWork(report) => {
+                let now = Instant::now();
+                if report.work_deferred > 0 {
+                    proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound);
+                } else {
+                    // A clean idle height is not recovery work. Keep a bounded
+                    // recheck so asynchronous queue/lane arrivals are observed
+                    // promptly without manufacturing a cadence heartbeat.
+                    proposal_state.candidate_work_wait = Some(CandidateWorkWait {
+                        owner,
+                        started_at: now,
+                        next_retry: deadline_after(now, CANDIDATE_WORK_RECHECK),
+                    });
+                }
+                iroha_logger::trace!(
+                    height = owner.tag.height(),
+                    view = owner.tag.view(),
+                    ?report,
+                    "deferred Sumeragi v2 proposal because no proposal work is ready"
+                );
+                return Ok(());
+            }
         };
         let tag = candidate.tag();
         if tag != owner.tag {
@@ -2350,7 +2395,24 @@ fn schedule_local_proposal(
         if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block().hash())
             == V2LaneIngressOutcome::Rejected
         {
-            return Err(V2RunnerError::LaneCandidateBinding);
+            // Binding happens before body storage and reducer submission.
+            // Drop the abandoned candidate first so its ordinary queue lease
+            // is available to a later-height reproposal.
+            drop(candidate);
+            match proposal_state.handle_candidate_binding_rejection(owner) {
+                LocalValidationDisposition::RetryHeartbeat => {
+                    iroha_logger::warn!(
+                        height = tag.height(),
+                        view = tag.view(),
+                        "discarded an unsubmitted candidate after lane-local ownership binding rejected; retrying as an empty heartbeat"
+                    );
+                    return Ok(());
+                }
+                LocalValidationDisposition::FatalHeartbeat
+                | LocalValidationDisposition::Ignored => {
+                    return Err(V2RunnerError::LaneCandidateBinding);
+                }
+            }
         }
         let (_block, canonical_wire, encoded_payload, events, report, selection_lease) =
             candidate.into_parts();
@@ -4223,6 +4285,7 @@ fn candidate_attachments(
         Default::default()
     };
     Ok(CandidateAttachments {
+        time_trigger_clock_progress_required: state.time_trigger_clock_progress_required_fast(),
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()
@@ -7697,6 +7760,45 @@ mod tests {
             "repeated timeout handling must never re-arm ordinary candidate work"
         );
         assert!(state.candidate_work_wait.is_none());
+    }
+
+    #[test]
+    fn pre_submit_lane_binding_rejection_arms_one_empty_heartbeat_retry() {
+        let (context, _) = context();
+        let owner = proposal_owner(
+            &context,
+            EventTag::new(context.height, 3, Generation::new(19)),
+            None,
+            None,
+        );
+        let now = Instant::now();
+        let mut state = LocalProposalState {
+            attempted: Some(owner),
+            candidate_work_wait: Some(CandidateWorkWait {
+                owner,
+                started_at: now,
+                next_retry: now,
+            }),
+            ..LocalProposalState::default()
+        };
+
+        assert_eq!(
+            state.handle_candidate_binding_rejection(owner),
+            LocalValidationDisposition::RetryHeartbeat,
+            "an unsubmitted lane-binding rejection must not stop the process"
+        );
+        assert_eq!(state.attempted, None);
+        assert_eq!(state.heartbeat_only, Some(owner));
+        assert!(state.candidate_work_wait.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.pending_events.is_none());
+        assert!(state.global_selection.is_none());
+
+        assert_eq!(
+            state.handle_candidate_binding_rejection(owner),
+            LocalValidationDisposition::FatalHeartbeat,
+            "a rejected empty heartbeat still fails closed"
+        );
     }
 
     #[test]

@@ -15123,7 +15123,7 @@ mod tests {
                 locked_commit_progress: false,
             },
         );
-        let body_command = super::v2_runtime::AdapterCommand::BodyAvailable {
+        let body_command = super::super::v2_runtime::AdapterCommand::BodyAvailable {
             manifest: canonical_manifest.clone(),
         };
         adapter
@@ -15133,7 +15133,7 @@ mod tests {
             .retag_authenticated_ingress = false;
         assert_eq!(
             adapter.preflight_runtime_command_admission(deferred_tag, &body_command),
-            super::v2_runtime::RuntimeCommandAdmissionPreflight::Reject,
+            super::super::v2_runtime::RuntimeCommandAdmissionPreflight::Reject,
             "a generic deferred item cannot authorize proposal-registry rollback"
         );
         adapter
@@ -15143,7 +15143,7 @@ mod tests {
             .retag_authenticated_ingress = true;
         assert_eq!(
             adapter.preflight_runtime_command_admission(deferred_tag, &body_command),
-            super::v2_runtime::RuntimeCommandAdmissionPreflight::Admit,
+            super::super::v2_runtime::RuntimeCommandAdmissionPreflight::Admit,
             "preflight must project the exact rollback supported by dispatch"
         );
 

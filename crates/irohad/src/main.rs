@@ -12537,6 +12537,9 @@ pub fn read_config_and_genesis(
         .change_context(ConfigError::ReadConfig)?
         .parse()
         .change_context(ConfigError::ParseConfig)?;
+    if let Some(path) = args.genesis_manifest_json.as_ref() {
+        config.genesis.manifest_json = Some(WithOrigin::inline(path.clone()));
+    }
 
     if args.sora {
         let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
@@ -21048,6 +21051,29 @@ mod tests {
             table
         }
 
+        fn config_test_args(
+            config_path: PathBuf,
+            genesis_manifest_json: Option<PathBuf>,
+        ) -> Args {
+            Args {
+                config: Some(config_path),
+                genesis_manifest_json,
+                startup: StartupArgs {
+                    check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
+                    trace_config: false,
+                },
+                terminal_colors: false,
+                language: None,
+                sora: false,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            }
+        }
+
         fn load_config_with_overrides<F>(
             mut adjust: F,
         ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
@@ -21083,26 +21109,38 @@ mod tests {
             std::fs::write(&genesis_path, genesis.0.encode_wire()?)?;
             std::fs::write(&executor_path, "")?;
 
-            let (config, _genesis) = read_config_and_genesis(&Args {
-                config: Some(config_path.clone()),
-                genesis_manifest_json: None,
-                startup: StartupArgs {
-                    check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    trace_config: false,
-                },
-                terminal_colors: false,
-                language: None,
-                sora: false,
-                fastpq_execution_mode: None,
-                fastpq_poseidon_mode: None,
-                fastpq_device_class: None,
-                fastpq_chip_family: None,
-                fastpq_gpu_kind: None,
-            })
+            let (config, _genesis) =
+                read_config_and_genesis(&config_test_args(config_path.clone(), None))
             .map_err(|report| eyre::eyre!("{report:?}"))?;
 
             Ok((config, dir, config_path))
+        }
+
+        #[test]
+        fn cli_genesis_manifest_path_overrides_config() -> eyre::Result<()> {
+            let (_config, dir, config_path) = load_config_with_overrides(|table, _| {
+                iroha_config::base::toml::Writer::new(table)
+                    .write(["genesis", "manifest_json"], "./stale-manifest.json");
+            })?;
+            let manifest_path = dir.path().join("bound-genesis.json");
+            std::fs::write(&manifest_path, b"{}")?;
+
+            let (config, _genesis) = read_config_and_genesis(&config_test_args(
+                config_path,
+                Some(manifest_path.clone()),
+            ))
+            .map_err(|report| eyre::eyre!("{report:?}"))?;
+
+            assert_eq!(
+                config
+                    .genesis
+                    .manifest_json
+                    .as_ref()
+                    .expect("CLI manifest override should be retained")
+                    .resolve_relative_path(),
+                manifest_path
+            );
+            Ok(())
         }
 
         fn parse_config_with_overrides<F>(
@@ -21246,8 +21284,8 @@ mod tests {
                     iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
                 })?;
             let original_config = std::fs::read_to_string(&config_path)?;
-            assert_eq!(config.nexus.storage.local_budget_bytes, None);
-            assert_eq!(config.nexus.storage.effective_local_budget_bytes, None);
+            assert!(config.nexus.storage.local_budget_bytes.is_none());
+            assert!(config.nexus.storage.effective_local_budget_bytes.is_none());
 
             let filesystem_budget = NexusStorageFilesystemBudget {
                 budget_bytes: NonZeroU64::new(800).expect("non-zero budget"),
@@ -21258,10 +21296,14 @@ mod tests {
                 .expect("valid filesystem budget");
 
             assert_eq!(aggregate.get(), 800);
-            assert_eq!(config.nexus.storage.local_budget_bytes, None);
+            assert!(config.nexus.storage.local_budget_bytes.is_none());
             assert_eq!(
-                config.nexus.storage.effective_local_budget_bytes,
-                Some(iroha_config::base::util::Bytes(800))
+                config
+                    .nexus
+                    .storage
+                    .effective_local_budget_bytes
+                    .map(iroha_config::base::util::Bytes::get),
+                Some(800)
             );
             assert_eq!(config.kura.max_disk_usage_bytes.get(), 800);
             assert_eq!(std::fs::read_to_string(config_path)?, original_config);
@@ -21278,12 +21320,20 @@ mod tests {
                 })?;
 
             assert_eq!(
-                config.nexus.storage.local_budget_bytes,
-                Some(iroha_config::base::util::Bytes(4_096))
+                config
+                    .nexus
+                    .storage
+                    .local_budget_bytes
+                    .map(iroha_config::base::util::Bytes::get),
+                Some(4_096)
             );
             assert_eq!(
-                config.nexus.storage.effective_local_budget_bytes,
-                Some(iroha_config::base::util::Bytes(4_096))
+                config
+                    .nexus
+                    .storage
+                    .effective_local_budget_bytes
+                    .map(iroha_config::base::util::Bytes::get),
+                Some(4_096)
             );
 
             let persisted: toml::Value = toml::from_str(&std::fs::read_to_string(config_path)?)?;
@@ -21606,7 +21656,7 @@ mod tests {
 
         #[test]
         fn check_config_enforces_embedded_soracloud_runtime_feature() -> eyre::Result<()> {
-            let (mut config, _dir, _config_path) =
+            let (config, _dir, _config_path) =
                 load_config_with_overrides(|table, _genesis_key| {
                     iroha_config::base::toml::Writer::new(table)
                         .write(["soracloud_runtime", "production_mode"], true)

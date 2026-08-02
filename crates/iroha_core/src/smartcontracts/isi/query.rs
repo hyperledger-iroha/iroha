@@ -3789,22 +3789,6 @@ impl ValidQueryRequest {
         Ok(Self { request, limits })
     }
 
-    /// Validate a query for an API client using the provided Torii configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query validation fails.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn validate_for_client_parts_with_config(
-        request: QueryRequest,
-        authority: &AccountId,
-        state_ro: &impl StateReadOnly,
-        torii_cfg: &ToriiActual,
-    ) -> Result<Self, ValidationFail> {
-        let limits = QueryLimits::from_torii(torii_cfg);
-        Self::validate_for_client_parts(request, authority, state_ro, limits)
-    }
-
     /// Validate a query for an IVM program.
     ///
     /// NOTE: The previous API used `ivm::state` types directly which are no longer exposed.

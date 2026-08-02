@@ -3,7 +3,7 @@
   "chain_discriminant": 369,
   "consensus_fingerprint": "0x61a83b5a6a9956419e69bb4d5df522b98774991318608c72c8a2b717f0451f3c",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":22020096,"max_chunk_count":1024},"nexus_amx_context_hash":"FF1129DB002E7291DAA1903E4D8574B9BE9A082C3B01A5242063A3DB8AE8BC8F","execution_policy_hash":"DC2E70977C15AE195EC16C216B75053C75DADBECAB79B4462CD6D1F60AA81B89"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"FF1129DB002E7291DAA1903E4D8574B9BE9A082C3B01A5242063A3DB8AE8BC8F","execution_policy_hash":"DC2E70977C15AE195EC16C216B75053C75DADBECAB79B4462CD6D1F60AA81B89"},
   "crypto": {
     "allowed_curve_ids": [
       1,

@@ -1982,7 +1982,7 @@ fn minimal_config_snapshot() {
             },
             queue: Queue {
                 capacity: 262144,
-                capacity_per_user: 262144,
+                capacity_per_user: 16384,
                 max_retained_bytes: 134217728,
                 transaction_time_to_live: 86400s,
                 expired_cull_interval: 1s,
@@ -1992,12 +1992,8 @@ fn minimal_config_snapshot() {
             nexus: Nexus {
                 enabled: true,
                 storage: NexusStorage {
-                    local_budget_bytes: Some(Bytes(
-                        274877906944,
-                    )),
-                    effective_local_budget_bytes: Some(Bytes(
-                        274877906944,
-                    )),
+                    local_budget_bytes: None,
+                    effective_local_budget_bytes: None,
                     budget_enforce_interval_blocks: 10,
                     max_wsv_memory_bytes: Bytes(
                         8589934592,
@@ -4770,7 +4766,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         block
             .get("max_payload_bytes")
             .and_then(TomlValue::as_integer),
-        Some(16 * 1024 * 1024),
+        Some(21 * 1024 * 1024),
         "Taira profile should cap proposal payload bytes"
     );
     assert_eq!(
@@ -4796,14 +4792,14 @@ fn taira_config_enables_untrusted_cid_hosting() {
     );
     assert_eq!(
         queues.get("body_bytes").and_then(TomlValue::as_integer),
-        Some(231 * 1024 * 1024),
+        Some(301 * 1024 * 1024),
         "Taira aggregate canonical wire-byte budget should isolate its seven ingress source lanes"
     );
     assert_eq!(
         queues
             .get("body_source_bytes")
             .and_then(TomlValue::as_integer),
-        Some(33 * 1024 * 1024),
+        Some(43 * 1024 * 1024),
         "Taira should retain one canonical outer-ingress wire-byte quota per source"
     );
 

@@ -260,6 +260,9 @@ RUN <<EOT
     command -v curl >/dev/null
     command -v jq >/dev/null
     command -v bwrap >/dev/null
+    command -v cmp >/dev/null
+    command -v ln >/dev/null
+    command -v sync >/dev/null
     test -f /etc/ssl/certs/ca-certificates.crt
     if [ "$CONFIG_PROFILE" = "taira" ]; then
       command -v qemu-img >/dev/null
@@ -269,7 +272,7 @@ RUN <<EOT
     fi
   else
     apt-get update -y
-    apt-get install -y curl ca-certificates jq bubblewrap
+    apt-get install -y curl ca-certificates jq bubblewrap coreutils diffutils
     if [ "$CONFIG_PROFILE" = "taira" ]; then
       apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables
     fi

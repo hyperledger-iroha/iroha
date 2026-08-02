@@ -24260,7 +24260,7 @@ mod sorafs_pop_credential_service_tests {
             wallet_state_dir: PathBuf::from("/var/lib/iroha/sorafs/pop/wallet"),
             issuer_policy_digest_hex: Some("41".repeat(32)),
             issuer_id: Some("pop-issuer-sora-foundation".to_owned()),
-            issuer_hsm_key_id: Some("pkcs11:object=pop-issuer-v1".to_owned()),
+            issuer_hsm_key_id: Some("pkcs11://pop/issuer-v1".to_owned()),
             issuer_public_key_hex: Some(ed25519_public_hex(0x11)),
             enrollment_recipient_key_id: Some("kms://pop/enrollment/primary".to_owned()),
             enrollment_recipient_public_key_digest_hex: Some("61".repeat(32)),
@@ -28761,10 +28761,10 @@ mod sorafs_repair_gc_tests {
         let valid_without_height: toml::Table = toml::from_str(&format!(
             r#"
 submitter_signers = [{{
-    handle = "pkcs11://appeal-settlement"
-    authority = "{authority}"
-    public_key_hex = "{public_key_hex}"
-    revision = 1
+    handle = "pkcs11://appeal-settlement",
+    authority = "{authority}",
+    public_key_hex = "{public_key_hex}",
+    revision = 1,
     policy_digest_hex = "{}"
 }}]
 "#,
@@ -28780,12 +28780,12 @@ submitter_signers = [{{
         let nested: toml::Table = toml::from_str(&format!(
             r#"
 submitter_signers = [{{
-    handle = "pkcs11://appeal-settlement"
-    authority = "{authority}"
-    public_key_hex = "{}"
-    revision = 1
-    policy_digest_hex = "{}"
-    valid_from_block_height = 1
+    handle = "pkcs11://appeal-settlement",
+    authority = "{authority}",
+    public_key_hex = "{}",
+    revision = 1,
+    policy_digest_hex = "{}",
+    valid_from_block_height = 1,
     retired_private_key_hex = "{}"
 }}]
 "#,
@@ -32091,25 +32091,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("load minimal user config")
     }
 
-    fn native_signer_bindings_toml(context: &str, seeds: [u8; 4]) -> String {
-        [
-            ("proof_outcome", "proof-outcome"),
-            ("repair", "repair"),
-            ("reserve", "reserve"),
-            ("orderbook", "orderbook"),
-        ]
-        .into_iter()
-        .zip(seeds)
-        .map(|((role, handle_role), seed)| {
-            let signer =
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("native signer");
-            let public_key_hex = hex::encode(signer.public_key().to_bytes().1);
-            let authority = AccountId::new(signer.public_key().clone())
-                .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
-                .expect("native signer authority");
-            let policy_digest_hex = hex::encode([seed; 32]);
-            format!(
-                r#"
+    fn native_signer_binding_toml(
+        role: &str,
+        handle_role: &str,
+        context: &str,
+        seed: u8,
+    ) -> String {
+        let signer =
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("native signer");
+        let public_key_hex = hex::encode(signer.public_key().to_bytes().1);
+        let authority = AccountId::new(signer.public_key().clone())
+            .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
+            .expect("native signer authority");
+        let policy_digest_hex = hex::encode([seed; 32]);
+        format!(
+            r#"
 [storage.native_transaction_signers.{role}]
 handle = "hsm://sorafs/{handle_role}/{context}-primary"
 authority = "{authority}"
@@ -32118,10 +32114,28 @@ public_key_hex = "{public_key_hex}"
 revision = 1
 policy_digest_hex = "{policy_digest_hex}"
 "#
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("")
+        )
+    }
+
+    fn native_signer_bindings_toml(context: &str, seeds: [u8; 4]) -> String {
+        let mut source = String::new();
+        for ((role, handle_role), seed) in [
+            ("proof_outcome", "proof-outcome"),
+            ("repair", "repair"),
+            ("reserve", "reserve"),
+            ("orderbook", "orderbook"),
+        ]
+        .into_iter()
+        .zip(seeds)
+        {
+            source.push_str(&native_signer_binding_toml(
+                role,
+                handle_role,
+                context,
+                seed,
+            ));
+        }
+        source
     }
 
     fn table_with_soracloud_hf_values(values: &[(&str, i64)]) -> Table {
@@ -33311,7 +33325,7 @@ price_tick = "0"
         use defaults::sorafs::storage::orderbook_worker as worker_defaults;
 
         let mut table = base_table();
-        let sorafs: Table = toml::from_str(&format!(
+        let mut source = format!(
             r"
 [storage]
 enabled = false
@@ -33335,8 +33349,14 @@ checkpoint_max_bytes = {}
             worker_defaults::MAX_DEAD_LETTERS_LIMIT,
             worker_defaults::MAX_ATTEMPTS_LIMIT,
             worker_defaults::CHECKPOINT_MIN_BYTES,
-        ))
-        .expect("parse bounded orderbook worker policy");
+        );
+        source.push_str(&native_signer_binding_toml(
+            "orderbook",
+            "orderbook",
+            "resource-boundary",
+            0x71,
+        ));
+        let sorafs: Table = toml::from_str(&source).expect("parse bounded orderbook worker policy");
         table.insert("sorafs".into(), Value::Table(sorafs));
 
         let storage = load_root(table).torii.sorafs_storage;
@@ -33456,7 +33476,7 @@ checkpoint_max_bytes = {}
         use defaults::sorafs::storage::reserve_worker as worker_defaults;
 
         let mut table = base_table();
-        let sorafs: Table = toml::from_str(&format!(
+        let mut source = format!(
             r"
 [storage]
 enabled = false
@@ -33478,8 +33498,14 @@ checkpoint_max_bytes = {}
             worker_defaults::MAX_DEAD_LETTERS_LIMIT,
             worker_defaults::MAX_ATTEMPTS_LIMIT,
             worker_defaults::CHECKPOINT_MIN_BYTES,
-        ))
-        .expect("parse bounded reserve worker policy");
+        );
+        source.push_str(&native_signer_binding_toml(
+            "reserve",
+            "reserve",
+            "resource-boundary",
+            0x72,
+        ));
+        let sorafs: Table = toml::from_str(&source).expect("parse bounded reserve worker policy");
         table.insert("sorafs".into(), Value::Table(sorafs));
 
         let storage = load_root(table).torii.sorafs_storage;
@@ -35869,10 +35895,10 @@ publish_delay_seconds = 17
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("enabled HF bridge must require a provider binding");
+        let report = format!("{error:?}");
         assert!(
-            error
-                .to_string()
-                .contains("requires inference_credential_provider")
+            report.contains("requires inference_credential_provider"),
+            "{report}"
         );
     }
 

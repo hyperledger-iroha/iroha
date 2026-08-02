@@ -1481,20 +1481,21 @@ From `../iroha2-block-explorer-web`:
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
-     `max_transactions = 96`, `max_payload_bytes = 22020096`, and
+     `max_transactions = 96`, `max_payload_bytes = 16777216`, and
      `proposal_queue_scan_multiplier = 4` bounds, plus the
      `[sumeragi.queues]` canonical outer-ingress wire-byte baseline
-     `authenticated_non_validator_sources = 2`, `body_bytes = 315621376`, and
-     `body_source_bytes = 45088768`, before running public write canaries or
+     `authenticated_non_validator_sources = 2`, `body_bytes = 242221056`, and
+     `body_source_bytes = 34603008`, before running public write canaries or
      scenario sweeps. The four-validator baseline isolates every validator,
      both authenticated non-validator source lanes, and anonymous delivery;
      `render_taira_validator_bundle.py` raises `body_bytes` to at least
      `(validator_count + authenticated_non_validator_sources + 1) *
      body_source_bytes` for larger legal rosters.
-     The 21 MiB body is derived from two 10 MiB transaction-admission ceilings
-     (each carrying one 9 MiB privacy action) plus 1 MiB of canonical block
-     framing. The matching DA ceiling is `22020096`; the per-source queue
-     rounds the exact ordinary/completion/timeout minimum up to 43 MiB. Keep
+     The revision-4 protocol caps the complete canonical body at 16 MiB. This
+     admits one maximum 10 MiB transaction carrying one 9 MiB privacy action
+     while retaining 6 MiB for canonical block framing and context attachments;
+     smaller transactions can still share the block. The per-source queue
+     rounds the exact ordinary/completion/timeout minimum up to 33 MiB. Keep
      `[network] max_frame_bytes_tx_gossip = 11534336` (11 MiB plaintext),
      `[network] max_frame_bytes_block_sync = 23068672` (22 MiB plaintext) and
      `max_frame_bytes = 23068700` (the same ceiling plus 28 AEAD bytes) with

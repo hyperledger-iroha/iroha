@@ -383,6 +383,47 @@ final class SccpV1Tests: XCTestCase {
         )
     }
 
+    func testSubmitRequiresExactDefaultTransactionTimeToLive() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x56, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+
+        let defaultTimeToLive = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7
+        )
+        XCTAssertNoThrow(try SccpSubmitValidation.canonicalTransactionPayload(
+            defaultTimeToLive,
+            creationTimeMs: 7,
+            expectedAuthority: authority,
+            expectedFeePayment: nil
+        ))
+
+        let missingTimeToLive = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7,
+            timeToLiveMs: nil
+        )
+        XCTAssertThrowsError(try SccpSubmitValidation.canonicalTransactionPayload(
+            missingTimeToLive,
+            creationTimeMs: 7,
+            expectedAuthority: authority,
+            expectedFeePayment: nil
+        ))
+
+        let nonDefaultTimeToLive = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7,
+            timeToLiveMs: 99_999
+        )
+        XCTAssertThrowsError(try SccpSubmitValidation.canonicalTransactionPayload(
+            nonDefaultTimeToLive,
+            creationTimeMs: 7,
+            expectedAuthority: authority,
+            expectedFeePayment: nil
+        ))
+    }
+
     func testSubmitRejectsNonNfcSponsorProgramNameInRawCompactTransaction() throws {
         let authority = try AccountAddress
             .fromAccount(publicKey: Data(repeating: 0x55, count: 32))
@@ -1925,19 +1966,22 @@ final class SccpV1Tests: XCTestCase {
     private func canonicalSccpTransactionPayload(
         authority: String,
         creationTimeMs: UInt64,
-        feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil)
+        feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil),
+        timeToLiveMs: UInt64? = 100_000
     ) throws -> Data {
         try canonicalSccpTransactionPayload(
             authority: authority,
             creationTimeMs: creationTimeMs,
-            rawFeePayment: feePayment.compactNorito()
+            rawFeePayment: feePayment.compactNorito(),
+            timeToLiveMs: timeToLiveMs
         )
     }
 
     private func canonicalSccpTransactionPayload(
         authority: String,
         creationTimeMs: UInt64,
-        rawFeePayment: Data
+        rawFeePayment: Data,
+        timeToLiveMs: UInt64? = 100_000
     ) throws -> Data {
         var chain = CompactNoritoWriter()
         chain.writeField(CompactNorito.encodeString("sccp-test"))
@@ -1955,10 +1999,14 @@ final class SccpV1Tests: XCTestCase {
         payload.writeField(try address.compactNoritoAccountControllerPayload())
         payload.writeField(creation.data)
         payload.writeField(Data([1]))
-        payload.writeField(Data([0]))
+        payload.writeField(try CompactNorito.encodeOption(
+            timeToLiveMs,
+            encode: CompactNorito.encodeUInt64
+        ))
         payload.writeField(Data([0]))
         payload.writeField(rawFeePayment)
         payload.writeField(emptyMetadata.data)
+        payload.writeField(Data([0]))
         return payload.data
     }
 }

@@ -62,10 +62,6 @@ use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 
-/// Stable descriptor for the inactive first-release cross-trace bus.
-pub(crate) const ZK_X509_P256_CROSS_TRACE_BUS_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-p256-cross-trace-bus-v1:heterogeneous-minimal-native-domains:exactly2-factor-packed-writer-log19:source-attached-products:no-native-array-or-standalone-copy-oracle:no-unconstrained-host-lift:writer-and-external-endpoint-tags:verifier-fixed-addresses:four-post-base-commitment-products:lane-and-coordinate-specific-transcript-labels:all16-challenges-nonzero-canonical-distinct:writer-multiplicities-exactly1-64-65-129:eight-square-addition-chain:max-degree3:binder-three-slots-six-events:compiler-owned-constants-direct:canonical-padding:explicit-transcript-bound-first-final-claims:claims-constrained-in-source-native-domains:value-bus-to128-vertical-window-blocks-to2-reductions-to-wallet-low-s:verifier-checked-claim-equalities:first-release";
-
 /// Independent tagged-product lanes.
 pub(crate) const P256_CROSS_TRACE_LANES_V1: usize = 4;
 /// `beta`, endpoint, address, and value coefficients.
@@ -337,9 +333,6 @@ pub(crate) enum P256CrossTraceBusErrorV1 {
     /// A product, addition chain, boundary, or terminal constraint failed.
     #[error("zk-X509 P-256 cross-trace constraint failed")]
     Constraint,
-    /// Final chained source and sink products differ.
-    #[error("zk-X509 P-256 cross-trace terminal products differ")]
-    Terminal,
     /// A bounded allocation or checked index exceeded the release envelope.
     #[error("zk-X509 P-256 cross-trace resource bound is exceeded")]
     Resource,
@@ -1161,24 +1154,6 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
             return Err(P256CrossTraceBusErrorV1::Constraint);
         }
         Ok(Some(row))
-    }
-
-    /// Exact verifier-fixed row corresponding to one streamed ordinal.
-    pub(crate) fn fixed_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<P256CrossTraceWriterFixedRowV1, P256CrossTraceBusErrorV1> {
-        self.fixed.row_v1(row)
-    }
-
-    /// Verifier-fixed role.
-    pub(crate) fn role_v1(&self) -> P256EcdsaRoleV1 {
-        self.fixed.role
-    }
-
-    /// Number of rows not yet emitted.
-    pub(crate) const fn remaining_rows_v1(&self) -> usize {
-        P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 - self.next_row
     }
 
     /// Constant writer-source product terminal.

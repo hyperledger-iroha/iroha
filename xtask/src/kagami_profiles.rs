@@ -10,6 +10,7 @@ use std::{
 use blake2::{Blake2b512, digest::Digest};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
+    asset::AssetDefinitionId,
     block::{consensus_v2::is_valid_committee_size, decode_framed_signed_block},
     isi::SetParameter,
     parameter::{
@@ -69,6 +70,9 @@ struct StagedGenesis {
 type AnyResult<T> = Result<T, Box<dyn Error>>;
 const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
+const PROFILE_GENESIS_CREATION_TIME_MS: u64 = 1_700_000_000_000;
+const NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED: &str =
+    "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>";
 
 fn format_toml_integer_u64(value: u64) -> String {
     let digits = value.to_string();
@@ -100,6 +104,7 @@ fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: 
 
 pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
     let specs = resolve_requested_profiles(&options.profiles)?;
+    preflight_required_profile_inputs(&specs, options.nexus_xor_asset_definition_id.as_deref())?;
     let kagami_bin = resolve_kagami_path(options.kagami_override.as_deref())?;
     fs::create_dir_all(&options.output)?;
 
@@ -112,6 +117,24 @@ pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
         )?;
     }
 
+    Ok(())
+}
+
+fn preflight_required_profile_inputs(
+    specs: &[ProfileSpec],
+    nexus_xor_asset_definition_id: Option<&str>,
+) -> AnyResult<()> {
+    if specs.iter().any(|spec| spec.profile_flag == "iroha3-nexus") {
+        let Some(asset_definition_id) = nexus_xor_asset_definition_id else {
+            return Err(NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED.into());
+        };
+        AssetDefinitionId::parse_address_literal(asset_definition_id).map_err(|err| {
+            format!(
+                "invalid --nexus-xor-asset-definition-id `{asset_definition_id}`: {err}; \
+                 expected a canonical unprefixed Base58 asset definition id"
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -171,13 +194,8 @@ fn write_profile_bundle(
             render_peer_config(spec, &peers, peer_index, genesis_key.public_key()),
         )?;
     }
-    let staged_genesis = bind_staged_context(
-        spec,
-        kagami_bin,
-        &genesis_path,
-        &config_path,
-        &genesis_key,
-    )?;
+    let staged_genesis =
+        bind_staged_context(spec, kagami_bin, &genesis_path, &config_path, &genesis_key)?;
     write_json(&genesis_path, &staged_genesis.manifest)?;
     fs::write(
         bundle_root.join("genesis.signed.nrt"),
@@ -207,6 +225,7 @@ fn write_profile_bundle(
         &peers,
         genesis_key.public_key(),
         vrf_seed_hex.as_deref(),
+        nexus_xor_asset_definition_id,
     );
     fs::write(bundle_root.join("README.md"), readme)?;
 
@@ -239,10 +258,7 @@ fn generate_genesis(
     }
     if spec.profile_flag == "iroha3-nexus" {
         let Some(asset_definition_id) = nexus_xor_asset_definition_id else {
-            return Err(
-                "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>"
-                    .into(),
-            );
+            return Err(NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED.into());
         };
         command.args(["--xor-asset-definition-id", asset_definition_id]);
     }
@@ -301,6 +317,7 @@ fn bind_staged_context(
 ) -> AnyResult<StagedGenesis> {
     let private_key_hex = hex::encode(genesis_key.private_key().to_bytes().1);
     let expected_public_key = genesis_key.public_key().to_string();
+    let creation_time_ms = PROFILE_GENESIS_CREATION_TIME_MS.to_string();
     let output = Command::new(kagami_bin)
         .args([
             "genesis",
@@ -310,6 +327,8 @@ fn bind_staged_context(
             &private_key_hex,
             "--expected-public-key",
             &expected_public_key,
+            "--creation-time-ms",
+            &creation_time_ms,
             "--config",
             config_path.to_str().expect("config path utf-8"),
             "--bound-manifest-out",
@@ -543,6 +562,20 @@ allow_tool_prefixes = ["iroha."]
     };
     let max_payload_bytes =
         iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get();
+    let authenticated_non_validator_sources =
+        iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+            .get();
+    let body_source_bytes =
+        iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+    let source_partitions = peers
+        .len()
+        .checked_add(authenticated_non_validator_sources)
+        .and_then(|count| count.checked_add(1))
+        .expect("profile ingress source-partition count must fit usize");
+    let body_bytes = source_partitions
+        .checked_mul(body_source_bytes)
+        .expect("profile aggregate body-ingress bytes must fit usize")
+        .max(iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get());
     let p2p_port = node
         .address
         .rsplit_once(':')
@@ -585,6 +618,11 @@ max_transactions = {max_transactions}
 max_payload_bytes = {max_payload_bytes}
 proposal_queue_scan_multiplier = 4
 
+[sumeragi.queues]
+authenticated_non_validator_sources = {authenticated_non_validator_sources}
+body_bytes = {body_bytes}
+body_source_bytes = {body_source_bytes}
+
 [sumeragi.da]
 enabled = true
 
@@ -610,8 +648,8 @@ lane_count = 3
 
 [genesis]
 public_key = "{genesis_pk}"
-file = "/config/genesis.signed.nrt"
-manifest_json = "/config/genesis.json"
+file = "genesis.signed.nrt"
+manifest_json = "genesis.json"
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
@@ -622,6 +660,9 @@ manifest_json = "/config/genesis.json"
         trusted_peers_pop = trusted_peers_pop,
         max_transactions = max_transactions,
         max_payload_bytes = max_payload_bytes,
+        authenticated_non_validator_sources = authenticated_non_validator_sources,
+        body_bytes = body_bytes,
+        body_source_bytes = body_source_bytes,
         network_address = network_address,
         network_public_address = network_public_address,
         torii_address = torii_address,
@@ -709,6 +750,7 @@ fn render_readme(
     peers: &[PeerMaterial],
     genesis_public_key: &iroha_crypto::PublicKey,
     vrf_seed_hex: Option<&str>,
+    nexus_xor_asset_definition_id: Option<&str>,
 ) -> String {
     let peer_rows = peers
         .iter()
@@ -738,6 +780,14 @@ fn render_readme(
     } else {
         ""
     };
+    let nexus_regeneration_arg = if spec.profile_flag == "iroha3-nexus" {
+        format!(
+            " --nexus-xor-asset-definition-id {}",
+            nexus_xor_asset_definition_id.unwrap_or("<BASE58>")
+        )
+    } else {
+        String::new()
+    };
 
     format!(
         r#"# {slug} sample bundle
@@ -745,6 +795,7 @@ fn render_readme(
 - chain id: {chain}
 {chain_discriminant_line}
 - {vrf_line}
+- deterministic genesis creation-time base (ms): {creation_time_ms}
 - genesis public key: {genesis_pk}
 - peers:
 {peer_rows}
@@ -757,15 +808,17 @@ Files:
 {site_bindings_file}- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 
 Regenerate:
-- cargo xtask kagami-profiles --profile {profile}
+- cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg}
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
         chain_discriminant_line = chain_discriminant_line,
         vrf_line = vrf_line,
+        creation_time_ms = PROFILE_GENESIS_CREATION_TIME_MS,
         genesis_pk = genesis_public_key,
         peer_rows = peer_rows,
         profile = spec.profile_flag,
+        nexus_regeneration_arg = nexus_regeneration_arg,
         site_bindings_file = site_bindings_file,
     )
 }
@@ -1036,9 +1089,11 @@ mod tests {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("readme-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
-        let readme = render_readme(&PROFILES[0], &peers, genesis_key.public_key(), None);
+        let readme = render_readme(&PROFILES[0], &peers, genesis_key.public_key(), None, None);
         assert!(readme.contains(PROFILES[0].slug));
         assert!(readme.contains("Regenerate"));
+        assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-dev\n"));
+        assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }
 
     #[test]
@@ -1046,8 +1101,91 @@ mod tests {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("readme-taira-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
-        let readme = render_readme(&PROFILES[1], &peers, genesis_key.public_key(), Some("ABCD"));
+        let readme = render_readme(
+            &PROFILES[1],
+            &peers,
+            genesis_key.public_key(),
+            Some("ABCD"),
+            None,
+        );
         assert!(readme.contains("- chain discriminant: 369"));
+        assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-taira\n"));
+        assert!(!readme.contains("--nexus-xor-asset-definition-id"));
+    }
+
+    #[test]
+    fn nexus_readme_regeneration_includes_asset_definition_id() {
+        let peers = build_peers(&PROFILES[2]).expect("build deterministic peers");
+        let genesis_key = deterministic_keypair("readme-nexus-genesis", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
+        let readme = render_readme(
+            &PROFILES[2],
+            &peers,
+            genesis_key.public_key(),
+            Some("ABCD"),
+            Some("xor-definition-id"),
+        );
+        assert!(readme.contains(
+            "cargo xtask kagami-profiles --profile iroha3-nexus \
+             --nexus-xor-asset-definition-id xor-definition-id\n"
+        ));
+    }
+
+    #[test]
+    fn nexus_requirement_is_preflighted_before_all_profile_mutation() {
+        let temp = tempdir().expect("temp dir");
+        let output = temp.path().join("profiles");
+        let kagami = temp.path().join("kagami");
+        fs::write(&kagami, b"unused test executable").expect("write dummy kagami file");
+
+        for profile in PROFILES {
+            let bundle = output.join(profile.slug);
+            fs::create_dir_all(&bundle).expect("create existing profile bundle");
+            fs::write(bundle.join("sentinel"), profile.slug).expect("write profile sentinel");
+        }
+
+        let error = generate(KagamiProfileOptions {
+            output: output.clone(),
+            profiles: vec!["all".to_owned()],
+            kagami_override: Some(kagami),
+            nexus_xor_asset_definition_id: None,
+        })
+        .expect_err("all-profile generation without the Nexus XOR id must fail");
+        assert_eq!(error.to_string(), NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED);
+        for profile in PROFILES {
+            assert_eq!(
+                fs::read_to_string(output.join(profile.slug).join("sentinel"))
+                    .expect("pre-existing profile sentinel must remain"),
+                profile.slug
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_nexus_identity_is_preflighted_before_profile_mutation() {
+        let temp = tempdir().expect("temp dir");
+        let output = temp.path().join("profiles");
+        let bundle = output.join(PROFILES[2].slug);
+        fs::create_dir_all(&bundle).expect("create existing Nexus bundle");
+        fs::write(bundle.join("sentinel"), b"preserve").expect("write Nexus sentinel");
+
+        let error = generate(KagamiProfileOptions {
+            output: output.clone(),
+            profiles: vec![PROFILES[2].slug.to_owned()],
+            kagami_override: Some(temp.path().join("unused-kagami")),
+            nexus_xor_asset_definition_id: Some("xor#universal".to_owned()),
+        })
+        .expect_err("invalid Nexus XOR identity must fail before output mutation");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid --nexus-xor-asset-definition-id"),
+            "unexpected preflight error: {error}"
+        );
+        assert_eq!(
+            fs::read(bundle.join("sentinel")).expect("Nexus sentinel must remain"),
+            b"preserve"
+        );
     }
 
     #[test]
@@ -1109,6 +1247,45 @@ mod tests {
             assert!(
                 rendered.contains(&format!("address = \"{expected_torii}\"")),
                 "profile {} must render the canonical Torii listen literal",
+                profile.slug
+            );
+        }
+    }
+
+    #[test]
+    fn all_profile_configs_scale_body_ingress_for_the_complete_committee() {
+        let authenticated_non_validator_sources =
+            iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+                .get();
+        let body_source_bytes =
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+        let default_body_bytes =
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get();
+
+        for profile in PROFILES {
+            let peers = build_peers(profile).expect("build deterministic peers");
+            let genesis_key = deterministic_keypair(
+                &format!("config-{}-queue-genesis", profile.slug),
+                Algorithm::Ed25519,
+            )
+            .expect("derive deterministic genesis key");
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
+            let expected_body_bytes = peers
+                .len()
+                .checked_add(authenticated_non_validator_sources)
+                .and_then(|count| count.checked_add(1))
+                .and_then(|count| count.checked_mul(body_source_bytes))
+                .expect("test profile ingress geometry fits usize")
+                .max(default_body_bytes);
+
+            assert!(
+                rendered.contains(&format!(
+                    "[sumeragi.queues]\n\
+                     authenticated_non_validator_sources = {authenticated_non_validator_sources}\n\
+                     body_bytes = {expected_body_bytes}\n\
+                     body_source_bytes = {body_source_bytes}\n"
+                )),
+                "profile {} must allocate one isolated byte partition per validator, authenticated non-validator source, and anonymous source",
                 profile.slug
             );
         }
@@ -1188,7 +1365,13 @@ mod tests {
 
         let genesis_key = deterministic_keypair("readme-taira-sites", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
-        let readme = render_readme(&PROFILES[1], &peers, genesis_key.public_key(), Some("ABCD"));
+        let readme = render_readme(
+            &PROFILES[1],
+            &peers,
+            genesis_key.public_key(),
+            Some("ABCD"),
+            None,
+        );
         assert!(readme.contains("sorafs_sites.json"));
     }
 
@@ -1236,8 +1419,8 @@ mod tests {
             assert!(rendered.contains(&peer.streaming_public_key));
             assert!(rendered.contains(&peer.streaming_private_key));
             assert!(rendered.contains(&format!("0.0.0.0:{torii_port}")));
-            assert!(rendered.contains("file = \"/config/genesis.signed.nrt\""));
-            assert!(rendered.contains("manifest_json = \"/config/genesis.json\""));
+            assert!(rendered.contains("file = \"genesis.signed.nrt\""));
+            assert!(rendered.contains("manifest_json = \"genesis.json\""));
             for (other_index, other) in peers.iter().enumerate() {
                 if peer_index != other_index {
                     assert!(

@@ -3898,7 +3898,15 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
         Ok(())
     }
 
-    fn validate_admission_identity(&self) -> bool {
+    /// Validate the constant-size admission certificate retained by an
+    /// immutable queued command.
+    ///
+    /// Full command and ingress ownership validation happens before queue
+    /// publication (and again before dispatch). Scheduler rank scans only
+    /// need the cached result plus the fixed-size structural projection; in
+    /// particular they must not repeatedly decode and authenticate the same
+    /// retained network envelope while an exact Serve barrier is polling.
+    fn validate_cached_admission_identity(&self) -> bool {
         self.identity_deep_validated
             && self.identity.validate_exact()
             && self.candidate_semantic_statement.is_none_or(|statement| {
@@ -3908,6 +3916,15 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
                 self.lifecycle_ordinal.is_some()
                     && self.causal_origin.restored_producer_lifecycle_key.is_some()
             })
+            && match (&self.ingress_ownership, self.identity.kind) {
+                (Some(_), RuntimeCommandKind::Authenticated) => true,
+                (None, RuntimeCommandKind::Authenticated) | (Some(_), _) => false,
+                (None, _) => true,
+            }
+    }
+
+    fn validate_admission_identity(&self) -> bool {
+        self.validate_cached_admission_identity()
             && match self.identity.kind {
                 RuntimeCommandKind::Authenticated => {
                     self.ingress_ownership.as_ref().is_some_and(|ownership| {
@@ -3919,7 +3936,7 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
                             }
                     })
                 }
-                _ => self.ingress_ownership.is_none(),
+                _ => true,
             }
     }
 }
@@ -4753,7 +4770,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .iter()
             .map(|queued| {
                 let ordinal = queued.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
-                (queued.validate_admission_identity()
+                (queued.validate_cached_admission_identity()
                     && queued.causal_origin.validate_exact()
                     && queued.causal_origin.root_lifecycle_ordinal == Some(ordinal))
                 .then_some(ordinal)
@@ -6159,16 +6176,6 @@ impl BoundedIngress<AdapterCommand> {
         manifest: wire::PayloadManifest,
     ) -> Result<BodyAvailableReservation, EnqueueError> {
         self.reserve_canonical_body_available_internal(tag, manifest, None, None, None)
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn reserve_canonical_body_available_with_owner(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-        owner: &RuntimeLifecycleOwner,
-    ) -> Result<BodyAvailableReservation, EnqueueError> {
-        self.reserve_canonical_body_available_internal(tag, manifest, Some(owner), None, None)
     }
 
     fn reserve_canonical_body_available_internal(
@@ -16732,6 +16739,61 @@ mod tests {
         candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
         mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
         rejected(mutated);
+    }
+
+    #[test]
+    fn scheduler_minimum_uses_cached_admission_but_dispatch_revalidates_ingress() {
+        let directory = TempDir::new().expect("temporary cached-admission directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0xA6),
+            ));
+        let source = PeerId::new(keys[0].public_key().clone());
+
+        runtime
+            .enqueue_network_with_ingress_ownership(
+                message.clone(),
+                fair_network_ownership(&message, source),
+            )
+            .expect("deeply validated authenticated command enters the runtime FIFO");
+        let lifecycle_ordinal = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.lifecycle_ordinal)
+            .expect("published command owns a lifecycle ordinal");
+
+        // Model corruption after publication to prove the two validation
+        // boundaries are distinct. A rank scan consumes only the immutable
+        // cached admission certificate; dispatch still validates the full
+        // ingress carrier and therefore must fail closed before removal.
+        let queued = runtime
+            .ingress
+            .commands
+            .front_mut()
+            .expect("published command remains queued");
+        queued
+            .ingress_ownership
+            .as_mut()
+            .expect("authenticated command retains ingress ownership")
+            .projection_hash = Hash::new(b"invalid retained ingress projection");
+        assert!(!queued.validate_admission_identity());
+        assert_eq!(
+            runtime.ingress.oldest_lifecycle_ordinal(),
+            Ok(Some(lifecycle_ordinal)),
+            "scheduler rank scans must not repeat deep envelope validation"
+        );
+        assert!(matches!(
+            runtime.ingress.pop_next_with_ownership(),
+            Err(EnqueueError::FailClosed)
+        ));
+        assert_eq!(
+            runtime.ingress.commands.len(),
+            1,
+            "dispatch rejects corrupted ingress before consuming the cached owner"
+        );
     }
 
     #[test]

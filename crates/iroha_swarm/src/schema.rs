@@ -30,6 +30,14 @@ fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
         "API_ADDRESS".into(),
         Value::String(env.api_address.to_string()),
     );
+    map.insert(
+        "GENESIS".into(),
+        Value::String(CONTAINER_SIGNED_GENESIS.to_string()),
+    );
+    map.insert(
+        "GENESIS_MANIFEST_JSON".into(),
+        Value::String(CONTAINER_BOUND_GENESIS.to_string()),
+    );
     if !env.trusted_peers.is_empty() {
         let peers: Vec<String> = env
             .trusted_peers
@@ -204,6 +212,14 @@ mod json_value_tests {
         expected.insert(
             "API_ADDRESS".into(),
             Value::String(env.api_address.to_string()),
+        );
+        expected.insert(
+            "GENESIS".into(),
+            Value::String(CONTAINER_SIGNED_GENESIS.to_string()),
+        );
+        expected.insert(
+            "GENESIS_MANIFEST_JSON".into(),
+            Value::String(CONTAINER_BOUND_GENESIS.to_string()),
         );
         if !env.trusted_peers.is_empty() {
             let peers: Vec<String> = env
@@ -434,8 +450,6 @@ impl ComposeImageFields for BuildImage<'_> {
     }
 }
 
-const IROHAD0: &str = "irohad0";
-
 /// Image that has been built.
 #[derive(Copy, Clone, Debug)]
 struct BuiltImage<'a> {
@@ -454,7 +468,7 @@ struct PulledImage<'a> {
 impl<'a> BuiltImage<'a> {
     fn new(image: ImageId<'a>) -> Self {
         Self {
-            depends_on: [IROHAD0],
+            depends_on: [GENESIS_SIGNER_SERVICE],
             image,
             pull_policy: UseBuilt::UseCached,
         }
@@ -652,15 +666,20 @@ const CONFIG_FILE: Filename = Filename("client.toml");
 const GENESIS_SIGNED_NRT: Filename = Filename("genesis.signed.nrt");
 
 const CONTAINER_CONFIG_DIR: ContainerPath = ContainerPath("/config/");
-const CONTAINER_TMP_DIR: ContainerPath = ContainerPath("/tmp/");
+const CONTAINER_GENESIS_DIR: ContainerPath = ContainerPath("/genesis/");
 
 const CONTAINER_GENESIS_CONFIG: ContainerFile = ContainerFile(CONTAINER_CONFIG_DIR, GENESIS_FILE);
 const CONTAINER_CLIENT_CONFIG: ContainerFile = ContainerFile(CONTAINER_CONFIG_DIR, CONFIG_FILE);
 const CONTAINER_SIGNED_GENESIS: ContainerFile =
-    ContainerFile(CONTAINER_TMP_DIR, GENESIS_SIGNED_NRT);
+    ContainerFile(CONTAINER_GENESIS_DIR, GENESIS_SIGNED_NRT);
+const CONTAINER_BOUND_GENESIS: ContainerFile = ContainerFile(CONTAINER_GENESIS_DIR, GENESIS_FILE);
 
 const GENESIS_PUBLIC_KEY_SECRET: &str = "iroha_genesis_public_key";
 const GENESIS_PRIVATE_KEY_SECRET: &str = "iroha_genesis_private_key";
+const GENESIS_SIGNER_SERVICE: &str = "genesis-signer";
+const GENESIS_VOLUME_NAME: &str = "iroha_genesis";
+const GENESIS_VOLUME_MOUNT_READ_ONLY: &str = "iroha_genesis:/genesis:ro";
+const GENESIS_VOLUME_MOUNT_READ_WRITE: &str = "iroha_genesis:/genesis";
 const GENESIS_PUBLIC_KEY_FILE_SOURCE: &str = "${IROHA_GENESIS_PUBLIC_KEY_FILE:?set IROHA_GENESIS_PUBLIC_KEY_FILE to an owner-controlled genesis public-key file}";
 const GENESIS_PRIVATE_KEY_FILE_SOURCE: &str = "${IROHA_GENESIS_PRIVATE_KEY_FILE:?set IROHA_GENESIS_PRIVATE_KEY_FILE to an owner-held mode-0600 genesis private-key file}";
 
@@ -804,21 +823,28 @@ where
                     .collect(),
             ),
         );
-        map.insert(
-            "volumes".into(),
-            norito::json::Value::Array(
-                self.volumes
-                    .into_iter()
-                    .map(|mapping| {
-                        norito::json::Value::String(format!("{}:{}:ro", mapping.0, mapping.1))
-                    })
-                    .collect(),
-            ),
-        );
+        let mut volumes = self
+            .volumes
+            .into_iter()
+            .map(|mapping| norito::json::Value::String(format!("{}:{}:ro", mapping.0, mapping.1)))
+            .collect::<Vec<_>>();
+        volumes.push(Value::String(GENESIS_VOLUME_MOUNT_READ_ONLY.into()));
+        map.insert("volumes".into(), norito::json::Value::Array(volumes));
         map.insert(
             "command".into(),
             Value::String(LOAD_GENESIS_PUBLIC_KEY_AND_RUN.into()),
         );
+        let mut signer_dependency = Map::new();
+        signer_dependency.insert(
+            "condition".into(),
+            Value::String("service_completed_successfully".into()),
+        );
+        let mut depends_on = Map::new();
+        depends_on.insert(
+            GENESIS_SIGNER_SERVICE.into(),
+            Value::Object(signer_dependency),
+        );
+        map.insert("depends_on".into(), Value::Object(depends_on));
         map.insert("secrets".into(), secret_names(false));
         map.insert("init".into(), norito::json::Value::Bool(true));
         if let Some(healthcheck) = self.healthcheck {
@@ -828,9 +854,12 @@ where
     }
 }
 
-const SIGN_AND_SUBMIT_GENESIS: &str = r#"/bin/sh -eu -c "
+const SIGN_AND_PUBLISH_GENESIS: &str = r#"/bin/sh -eu -c "
     GENESIS_PUBLIC_KEY_FILE=/run/secrets/iroha_genesis_public_key && \\
     GENESIS_PRIVATE_KEY_SECRET_FILE=/run/secrets/iroha_genesis_private_key && \\
+    GENESIS_SIGNED_TMP=/genesis/.genesis.signed.nrt.tmp && \\
+    GENESIS_MANIFEST_TMP=/genesis/.genesis.json.tmp && \\
+    rm -f \"$$GENESIS_SIGNED_TMP\" \"$$GENESIS_MANIFEST_TMP\" && \\
     test -s \"$$GENESIS_PUBLIC_KEY_FILE\" && \\
     test \"$$(wc -l < \"$$GENESIS_PUBLIC_KEY_FILE\")\" -eq 1 && \\
     test -z \"$$(tail -c 1 < \"$$GENESIS_PUBLIC_KEY_FILE\")\" && \\
@@ -839,7 +868,8 @@ const SIGN_AND_SUBMIT_GENESIS: &str = r#"/bin/sh -eu -c "
     export GENESIS_PUBLIC_KEY && \\
     test -s \"$$GENESIS_PRIVATE_KEY_SECRET_FILE\" && \\
     GENESIS_PRIVATE_KEY_FILE=$$(mktemp /tmp/iroha-genesis-private-key.XXXXXX) && \\
-    trap 'rm -f \"$$GENESIS_PRIVATE_KEY_FILE\"' 0 && \\
+    cleanup() { rm -f \"$$GENESIS_PRIVATE_KEY_FILE\" \"$$GENESIS_SIGNED_TMP\" \"$$GENESIS_MANIFEST_TMP\"; } && \\
+    trap cleanup 0 && \\
     trap 'exit 129' HUP && \\
     trap 'exit 130' INT && \\
     trap 'exit 143' TERM && \\
@@ -857,28 +887,55 @@ const SIGN_AND_SUBMIT_GENESIS: &str = r#"/bin/sh -eu -c "
     kagami genesis sign /tmp/genesis.json \\
         --private-key-file \"$$GENESIS_PRIVATE_KEY_FILE\" \\
         --expected-public-key \"$$GENESIS_PUBLIC_KEY\" \\
+        --creation-time-ms 1700000000000 \\
         $${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
         $${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
         $${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
         --topology \"$$TOPOLOGY\" \\
         $${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
-        --out-file $$GENESIS \\
+        --bound-manifest-out \"$$GENESIS_MANIFEST_TMP\" \\
+        --out-file \"$$GENESIS_SIGNED_TMP\" \\
     && \\
+    test -s \"$$GENESIS_MANIFEST_TMP\" && \\
+    test -s \"$$GENESIS_SIGNED_TMP\" && \\
+    if test -e \"$$GENESIS_MANIFEST_JSON\" && ! cmp -s \"$$GENESIS_MANIFEST_TMP\" \"$$GENESIS_MANIFEST_JSON\"; then \\
+        echo 'persisted genesis manifest does not match the freshly signed bound manifest; refusing to replace the genesis trust root' >&2; \\
+        exit 1; \\
+    fi && \\
+    if test -e \"$$GENESIS\" && ! cmp -s \"$$GENESIS_SIGNED_TMP\" \"$$GENESIS\"; then \\
+        echo 'persisted signed genesis does not match the freshly signed genesis; refusing to replace the genesis trust root' >&2; \\
+        exit 1; \\
+    fi && \\
+    if test ! -e \"$$GENESIS_MANIFEST_JSON\"; then \\
+        chmod 0444 \"$$GENESIS_MANIFEST_TMP\" && \\
+        ln \"$$GENESIS_MANIFEST_TMP\" \"$$GENESIS_MANIFEST_JSON\" && \\
+        rm -f \"$$GENESIS_MANIFEST_TMP\"; \\
+    else \\
+        chmod 0444 \"$$GENESIS_MANIFEST_JSON\"; \\
+    fi && \\
+    if test ! -e \"$$GENESIS\"; then \\
+        chmod 0444 \"$$GENESIS_SIGNED_TMP\" && \\
+        ln \"$$GENESIS_SIGNED_TMP\" \"$$GENESIS\" && \\
+        rm -f \"$$GENESIS_SIGNED_TMP\"; \\
+    else \\
+        chmod 0444 \"$$GENESIS\"; \\
+    fi && \\
+    rm -f \"$$GENESIS_SIGNED_TMP\" \"$$GENESIS_MANIFEST_TMP\" && \\
+    sync && \\
     rm -f \"$$GENESIS_PRIVATE_KEY_FILE\" && \\
-    trap - 0 HUP INT TERM && \\
-    exec irohad
+    trap - 0 HUP INT TERM
 ""#;
 
-/// Configuration of the `irohad` service that submits genesis.
+/// One-shot root service that durably creates, but never replaces, shared genesis artifacts.
 #[derive(Debug)]
-struct Irohad0<'a, Image>
+struct GenesisSigner<'a, Image>
 where
     Image: ComposeImageFields,
 {
     base: Irohad<'a, Image, GenesisEnv<'a>>,
 }
 
-impl<'a, Image> Irohad0<'a, Image>
+impl<'a, Image> GenesisSigner<'a, Image>
 where
     Image: ComposeImageFields,
 {
@@ -897,10 +954,29 @@ where
 
     fn into_map(self) -> norito::json::Map {
         let mut map = self.base.into_map();
+        map.remove("ports");
+        map.remove("healthcheck");
+        map.remove("depends_on");
+        if let Some(Value::Object(environment)) = map.get_mut("environment") {
+            environment.retain(|key, _| {
+                key == "GENESIS"
+                    || key == "GENESIS_MANIFEST_JSON"
+                    || key == "TOPOLOGY"
+                    || key.starts_with("GENESIS_")
+            });
+        }
+        if let Some(Value::Array(volumes)) = map.get_mut("volumes") {
+            if let Some(shared) = volumes.iter_mut().find(|volume| {
+                matches!(volume, Value::String(value) if value == GENESIS_VOLUME_MOUNT_READ_ONLY)
+            }) {
+                *shared = Value::String(GENESIS_VOLUME_MOUNT_READ_WRITE.into());
+            }
+        }
         map.insert(
             "command".into(),
-            norito::json::Value::String(SIGN_AND_SUBMIT_GENESIS.into()),
+            norito::json::Value::String(SIGN_AND_PUBLISH_GENESIS.into()),
         );
+        map.insert("user".into(), Value::String("0:0".into()));
         map.insert("secrets".into(), secret_names(true));
         map
     }
@@ -919,11 +995,11 @@ impl IrohadRef {
 #[derive(Debug)]
 enum BuildOrPull<'a> {
     Build {
-        irohad0: Irohad0<'a, BuildImage<'a>>,
+        genesis_signer: GenesisSigner<'a, BuildImage<'a>>,
         irohads: std::collections::BTreeMap<IrohadRef, Irohad<'a, BuiltImage<'a>>>,
     },
     Pull {
-        irohad0: Irohad0<'a, PulledImage<'a>>,
+        genesis_signer: GenesisSigner<'a, PulledImage<'a>>,
         irohads: std::collections::BTreeMap<IrohadRef, Irohad<'a, PulledImage<'a>>>,
     },
 }
@@ -944,7 +1020,7 @@ impl<'a> BuildOrPull<'a> {
     ) -> Self {
         let trusted_peers_pop = trusted_peers_pop_map(network);
         Self::Pull {
-            irohad0: Self::irohad0(
+            genesis_signer: Self::genesis_signer(
                 image,
                 volumes,
                 healthcheck,
@@ -984,7 +1060,7 @@ impl<'a> BuildOrPull<'a> {
     ) -> Self {
         let trusted_peers_pop = trusted_peers_pop_map(network);
         Self::Build {
-            irohad0: Self::irohad0(
+            genesis_signer: Self::genesis_signer(
                 image,
                 volumes,
                 healthcheck,
@@ -1010,7 +1086,7 @@ impl<'a> BuildOrPull<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn irohad0<Image: ComposeImageFields + Copy>(
+    fn genesis_signer<Image: ComposeImageFields + Copy>(
         image: Image,
         volumes: Volumes<'a>,
         healthcheck: bool,
@@ -1022,9 +1098,9 @@ impl<'a> BuildOrPull<'a> {
         next_consensus_mode: Option<&'a str>,
         mode_activation_height: Option<u64>,
         peer_pops: Vec<String>,
-    ) -> Irohad0<'a, Image> {
+    ) -> GenesisSigner<'a, Image> {
         let (_, ports, key_pair, _) = network.get(&0).expect("irohad0 must be present");
-        Irohad0::new(
+        GenesisSigner::new(
             image,
             GenesisEnv::new(
                 key_pair,
@@ -1055,7 +1131,6 @@ impl<'a> BuildOrPull<'a> {
     ) -> std::collections::BTreeMap<IrohadRef, Irohad<'a, Image>> {
         network
             .iter()
-            .skip(1)
             .map(|(id, (_, ports, key_pair, _))| {
                 (
                     IrohadRef(*id),
@@ -1080,10 +1155,13 @@ impl<'a> BuildOrPull<'a> {
     fn into_services_map(self) -> norito::json::Map {
         let mut services = norito::json::Map::new();
         match self {
-            BuildOrPull::Build { irohad0, irohads } => {
+            BuildOrPull::Build {
+                genesis_signer,
+                irohads,
+            } => {
                 services.insert(
-                    "irohad0".into(),
-                    norito::json::Value::Object(irohad0.into_map()),
+                    GENESIS_SIGNER_SERVICE.into(),
+                    norito::json::Value::Object(genesis_signer.into_map()),
                 );
                 for (service_ref, service) in irohads {
                     services.insert(
@@ -1092,10 +1170,13 @@ impl<'a> BuildOrPull<'a> {
                     );
                 }
             }
-            BuildOrPull::Pull { irohad0, irohads } => {
+            BuildOrPull::Pull {
+                genesis_signer,
+                irohads,
+            } => {
                 services.insert(
-                    "irohad0".into(),
-                    norito::json::Value::Object(irohad0.into_map()),
+                    GENESIS_SIGNER_SERVICE.into(),
+                    norito::json::Value::Object(genesis_signer.into_map()),
                 );
                 for (service_ref, service) in irohads {
                     services.insert(
@@ -1186,6 +1267,9 @@ impl<'a> DockerCompose<'a> {
     fn into_value(self) -> norito::json::Value {
         let mut root = norito::json::Map::new();
         root.insert("secrets".into(), compose_secrets());
+        let mut volumes = Map::new();
+        volumes.insert(GENESIS_VOLUME_NAME.into(), Value::Object(Map::new()));
+        root.insert("volumes".into(), Value::Object(volumes));
         root.insert(
             "services".into(),
             norito::json::Value::Object(self.services.into_services_map()),

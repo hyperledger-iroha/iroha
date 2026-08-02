@@ -777,11 +777,6 @@ impl ConsensusSignTask {
     pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
         self.ownership.owner().lifecycle_ordinal()
     }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn ownership(&self) -> &RuntimeEffectOwnership {
-        &self.ownership
-    }
 }
 
 /// Body reconstruction or certified-fetch request.
@@ -2478,12 +2473,6 @@ pub(crate) trait EffectRuntime {
     ) -> Result<(), String> {
         Err("runtime does not support validated-body authority binding".to_owned())
     }
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn enqueue_body_available(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-    ) -> Result<(), EnqueueError>;
     /// Reserve an exact body completion without exposing it to the reducer.
     fn reserve_body_available(
         &mut self,
@@ -2781,14 +2770,6 @@ impl EffectRuntime for SerializedV2Runtime {
     ) -> Result<(), String> {
         SerializedV2Runtime::bind_validated_body(self, manifest, validated_receipt)
             .map_err(|error| error.to_string())
-    }
-
-    fn enqueue_body_available(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-    ) -> Result<(), EnqueueError> {
-        SerializedV2Runtime::enqueue_body_available(self, tag, manifest)
     }
 
     fn reserve_body_available(
@@ -3182,7 +3163,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             executor_output_guard,
             config,
         )?;
-        executor.validated_bodies = recovered_validations;
+        executor.install_recovered_validation_catalog(recovered_validations)?;
         construction.complete();
         Ok((executor, body_store))
     }
@@ -3724,6 +3705,40 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             retained_effect_batch: None,
             fatal_reason: None,
         })
+    }
+
+    /// Install the crash-recovered validation catalog together with the exact
+    /// durable receipts that authorize it.
+    ///
+    /// A persisted validation marker can let replay continue directly from a
+    /// recovered proposal to `Apply`, without re-emitting `FetchBody` and
+    /// `StoreBody`. Keep both executor catalogs hydrated at the same recovery
+    /// boundary so that path cannot mistake an authenticated durable body for
+    /// missing process-local state.
+    fn install_recovered_validation_catalog(
+        &mut self,
+        recovered_validations: BTreeMap<
+            (wire::ConsensusRound, wire::BlockSubject),
+            ValidatedBodyReceipt,
+        >,
+    ) -> Result<(), EffectExecutorError> {
+        let mut recovered_durable_bodies = BTreeMap::new();
+        for (key, validated_receipt) in &recovered_validations {
+            let Some((_, durable_receipt)) = self.recovered_bodies.get(key) else {
+                return Err(EffectExecutorError::BodyStore(
+                    "validated recovery marker has no exact durable body".to_owned(),
+                ));
+            };
+            if validated_receipt.durable() != durable_receipt {
+                return Err(EffectExecutorError::BodyStore(
+                    "validated recovery marker differs from its durable body".to_owned(),
+                ));
+            }
+            recovered_durable_bodies.insert(*key, durable_receipt.clone());
+        }
+        self.durable_bodies = recovered_durable_bodies;
+        self.validated_bodies = recovered_validations;
+        Ok(())
     }
 
     /// Whether a new local proposal can reserve its first exact-body work owner.
@@ -10441,16 +10456,14 @@ mod tests {
         let mut outcome = PostFinalityCleanupOutcome::default();
         outcome.record(PostFinalityCleanupTarget::SafetyWal, "WAL directory sync");
 
-        let mut storage_cleanup = PostFinalityCleanupOutcome::default();
-        storage_cleanup.record(
+        outcome.record(
             PostFinalityCleanupTarget::DurableBodies,
             "body worker disconnected",
         );
-        storage_cleanup.record(
+        outcome.record(
             PostFinalityCleanupTarget::PayloadChunks,
             "chunk root retained",
         );
-        outcome.append(storage_cleanup);
 
         assert_eq!(outcome.warnings().len(), 3);
         assert_eq!(
@@ -10813,14 +10826,6 @@ mod tests {
             self.bound_validations
                 .push((manifest.clone(), validated_receipt.clone()));
             Ok(())
-        }
-
-        fn enqueue_body_available(
-            &mut self,
-            tag: EventTag,
-            manifest: wire::PayloadManifest,
-        ) -> Result<(), EnqueueError> {
-            self.push(RuntimeCompletion::BodyAvailable(tag, manifest))
         }
 
         fn reserve_body_available(
@@ -20734,6 +20739,78 @@ mod tests {
         ));
         assert!(executor.pending_applications.is_empty());
         assert!(services.apply_tasks.is_empty());
+    }
+
+    #[test]
+    fn recovered_validation_catalog_hydrates_direct_apply_durability() {
+        let fixture = Fixture::new();
+        let directory = TempDir::new().expect("body-store directory");
+        let mut store = V2BodyStore::open_with_policy(
+            directory.path(),
+            fixture.context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+        )
+        .expect("open body store");
+        let durable = store
+            .store(fixture.manifest.clone(), fixture.body.clone())
+            .expect("persist exact body");
+        let validated = store
+            .validate(&durable, |_| {
+                Ok::<_, &'static str>(fixture_execution_commitment())
+            })
+            .expect("persist exact validation marker");
+        drop(store);
+
+        let reopened = V2BodyStore::open_with_policy(
+            directory.path(),
+            fixture.context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+        )
+        .expect("reopen exact body store");
+        let recovered_bodies = reopened.recovery_catalog().expect("recovery catalog");
+        let recovered_validations = reopened.validated_recovery_catalog();
+        let key = (fixture.manifest.round, fixture.manifest.subject);
+
+        let mut executor = V2EffectExecutor::with_runtime(
+            FakeRuntime {
+                round_tag: Some(tag(0)),
+                ..FakeRuntime::default()
+            },
+            recovered_bodies,
+            fixture.context.clone(),
+            PeerId::new(fixture.requester_key.public_key().clone()),
+            Some(0),
+            EffectQueueConfig::default(),
+        )
+        .expect("reopened effect executor");
+        executor
+            .runtime
+            .bind_validated_body(&fixture.manifest, &validated)
+            .expect("restore runtime validation authority");
+        executor
+            .install_recovered_validation_catalog(recovered_validations)
+            .expect("restore executor validation authority");
+
+        assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
+        assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
+
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        let mut services = fixture.services();
+        executor
+            .begin_apply(
+                tag(0),
+                fixture.manifest.subject,
+                commit.clone(),
+                RuntimeEffectOwnership::fresh_for_test(tag(0), 34),
+                &mut services,
+            )
+            .expect("replayed CommitQC applies without body-stage replay");
+
+        assert_eq!(services.apply_tasks.len(), 1);
+        assert_eq!(services.apply_tasks[0].certificate(), &commit);
+        assert_eq!(services.apply_tasks[0].validated_receipt(), &validated);
+        assert!(services.closed.is_empty());
+        assert!(!executor.status().fail_closed);
     }
 
     #[test]

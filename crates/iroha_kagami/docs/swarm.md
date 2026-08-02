@@ -10,7 +10,8 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
 
 ### Options
 
-- `-p, --peers <COUNT>`: Specifies the number of peer services in the configuration.
+- `-p, --peers <COUNT>`: Specifies an exact Sumeragi `3f + 1` validator
+  committee in the supported range 4 through 31.
 
 - `-s, --seed <SEED>`: Sets the UTF-8 seed for deterministic key-generation.
 
@@ -40,9 +41,12 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
     include the executor bytecode file and reference it from `genesis.json`.
 
 The generated Compose manifest intentionally contains no genesis signing key.
-Every service reads the verifier key from a Docker Compose secret, and only
-`irohad0` receives the signing-key secret. Before evaluating the manifest, set
-both source paths:
+Every validator reads the verifier key from a Docker Compose secret, while a
+one-shot `genesis-signer` service alone receives the signing-key secret. It
+atomically publishes the signed genesis and exact bound manifest into a shared
+volume, exits successfully, and only then may validators start with both
+artifacts mounted read-only. Before evaluating the manifest, set both source
+paths:
 
 ```bash
 export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/localnet/genesis.public_key"
@@ -56,7 +60,9 @@ file as one canonical private-key multihash plus a final newline with mode
 `0600`, and create the public file as its matching public-key multihash plus a
 final newline. Compose refuses to evaluate when either path is unset. The
 in-container signer also rejects a private key that does not derive the
-supplied public key. Never commit the private file.
+supplied public key. Every empty validator therefore starts from the same local
+genesis trust artifacts; genesis is not fetched over block sync. Never commit
+the private file.
 
 - `-i, --image <NAME>`: Specifies the Docker image used by the peer services. 
   - By default, the image is pulled from Docker Hub if not cached. 

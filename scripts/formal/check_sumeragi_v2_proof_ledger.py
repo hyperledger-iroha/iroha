@@ -41512,16 +41512,16 @@ queues.insert(
         (
             "taira_default",
             "max_transactions = 96\n"
-            "max_payload_bytes = 22020096\n"
+            "max_payload_bytes = 16777216\n"
             "proposal_queue_scan_multiplier = 4",
-            "default Taira profile admits two maximum privacy transactions and block framing",
+            "default Taira profile pins the revision-4 payload ceiling with privacy framing headroom",
         ),
         (
             "taira_default",
             "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 315621376\n"
-            "body_source_bytes = 45088768",
-            "default Taira profile pins H=2 and seven source partitions",
+            "body_bytes = 346030080\n"
+            "body_source_bytes = 34603008",
+            "default seven-validator Taira profile pins H=2 and ten source partitions",
         ),
         (
             "taira_default",
@@ -41540,21 +41540,21 @@ queues.insert(
         (
             "taira_config",
             "max_transactions = 96\n"
-            "max_payload_bytes = 22020096\n"
+            "max_payload_bytes = 16777216\n"
             "proposal_queue_scan_multiplier = 4",
-            "production Taira profile admits two maximum privacy transactions and block framing",
+            "production Taira profile pins the revision-4 payload ceiling with privacy framing headroom",
         ),
         (
             "taira_config",
             "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 315621376\n"
-            "body_source_bytes = 45088768",
+            "body_bytes = 242221056\n"
+            "body_source_bytes = 34603008",
             "production Taira profile pins H=2 and seven source partitions",
         ),
         (
             "taira_genesis",
-            '"max_payload_size_bytes":22020096',
-            "production Taira genesis DA admits the complete privacy block corridor",
+            '"max_payload_size_bytes":16777216',
+            "production Taira genesis DA pins the revision-4 protocol ceiling",
         ),
         (
             "taira_genesis",
@@ -41563,8 +41563,8 @@ queues.insert(
         ),
         (
             "taira_default_genesis",
-            '"max_payload_size_bytes":22020096',
-            "default Taira genesis DA admits the complete privacy block corridor",
+            '"max_payload_size_bytes":16777216',
+            "default Taira genesis DA pins the revision-4 protocol ceiling",
         ),
         (
             "taira_default_genesis",

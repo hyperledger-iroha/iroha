@@ -113,8 +113,9 @@ generated `README.md` into the output directory.
 - Protects validator/client configs and runtime signer/token sidecars with
   owner-only permissions and emits a bundle-wide `.gitignore`
 - Emits `genesis.public_key` and an owner-only `genesis.private_key`; generated
-  Compose files consume these through runtime secret-file paths and never
-  contain the signing key
+  Compose files give the private secret only to a one-shot signer, which
+  atomically publishes one signed block and exact bound manifest for every
+  validator without embedding the key
 - Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
   other files at `0600`, and lifecycle scripts enforce `umask 077` for new
   logs, pidfiles, and runtime state
