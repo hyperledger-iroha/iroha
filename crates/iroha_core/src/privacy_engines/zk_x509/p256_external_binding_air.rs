@@ -44,10 +44,6 @@ use super::{
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
-/// Stable descriptor for the aggregate-only external-binding AIR.
-pub(crate) const ZK_X509_P256_EXTERNAL_BINDING_AIR_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-p256-external-binding-air-v1-incompatible:one-signature:exact850-initial-values:457-verifier-owned-constants:393-owned-inputs:three-explicit-inverse-auxiliaries:typed-unresolved-qx-qy-r-s-digest-byte-io:128-windows-u1-then-u2:all-window-candidate-and-output-limbs:both-reduction-outputs:result-x-reduction-source:wallet-only-low-s:deterministic-pointwise-equality:three-equalities-per-row:canonical-inactive-padding:verifier-regenerated-addresses:integration=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
-
 /// Pointwise equalities packed into one physical row.
 pub(crate) const P256_EXTERNAL_BINDINGS_PER_ROW_V1: usize = 3;
 /// Canonical initial values emitted by the one-signature compiler.

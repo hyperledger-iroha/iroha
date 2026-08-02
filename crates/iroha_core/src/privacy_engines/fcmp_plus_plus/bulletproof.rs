@@ -231,12 +231,7 @@ pub(super) enum Variable {
     aL(usize),
     aR(usize),
     aO(usize),
-    CG {
-        commitment: usize,
-        index: usize,
-    },
-    #[cfg_attr(not(test), allow(dead_code))]
-    V(usize),
+    CG { commitment: usize, index: usize },
 }
 
 /// Sparse generalized-Bulletproof linear combination.
@@ -244,12 +239,10 @@ pub(super) enum Variable {
 pub(super) struct LinComb<F: ProofScalar> {
     pub(super) highest_a_index: Option<usize>,
     pub(super) highest_c_index: Option<usize>,
-    pub(super) highest_v_index: Option<usize>,
     pub(super) wl: Vec<(usize, F)>,
     pub(super) wr: Vec<(usize, F)>,
     pub(super) wo: Vec<(usize, F)>,
     pub(super) wcg: Vec<Vec<(usize, F)>>,
-    pub(super) wv: Vec<(usize, F)>,
     pub(super) c: F,
 }
 
@@ -264,7 +257,6 @@ impl<F: ProofScalar> Add<&Self> for LinComb<F> {
     fn add(mut self, other: &Self) -> Self {
         self.highest_a_index = self.highest_a_index.max(other.highest_a_index);
         self.highest_c_index = self.highest_c_index.max(other.highest_c_index);
-        self.highest_v_index = self.highest_v_index.max(other.highest_v_index);
         self.wl.extend(&other.wl);
         self.wr.extend(&other.wr);
         self.wo.extend(&other.wo);
@@ -273,7 +265,6 @@ impl<F: ProofScalar> Add<&Self> for LinComb<F> {
         for (ours, theirs) in self.wcg.iter_mut().zip(&other.wcg) {
             ours.extend(theirs);
         }
-        self.wv.extend(&other.wv);
         self.c += other.c;
         self
     }
@@ -284,7 +275,6 @@ impl<F: ProofScalar> Sub<&Self> for LinComb<F> {
     fn sub(mut self, other: &Self) -> Self {
         self.highest_a_index = self.highest_a_index.max(other.highest_a_index);
         self.highest_c_index = self.highest_c_index.max(other.highest_c_index);
-        self.highest_v_index = self.highest_v_index.max(other.highest_v_index);
         self.wl
             .extend(other.wl.iter().map(|(index, weight)| (*index, -*weight)));
         self.wr
@@ -296,8 +286,6 @@ impl<F: ProofScalar> Sub<&Self> for LinComb<F> {
         for (ours, theirs) in self.wcg.iter_mut().zip(&other.wcg) {
             ours.extend(theirs.iter().map(|(index, weight)| (*index, -*weight)));
         }
-        self.wv
-            .extend(other.wv.iter().map(|(index, weight)| (*index, -*weight)));
         self.c -= other.c;
         self
     }
@@ -320,9 +308,6 @@ impl<F: ProofScalar> Mul<F> for LinComb<F> {
                 *weight *= scalar;
             }
         }
-        for (_, weight) in &mut self.wv {
-            *weight *= scalar;
-        }
         self.c *= scalar;
         self
     }
@@ -333,12 +318,10 @@ impl<F: ProofScalar> LinComb<F> {
         Self {
             highest_a_index: None,
             highest_c_index: None,
-            highest_v_index: None,
             wl: Vec::new(),
             wr: Vec::new(),
             wo: Vec::new(),
             wcg: Vec::new(),
-            wv: Vec::new(),
             c: F::ZERO,
         }
     }
@@ -365,10 +348,6 @@ impl<F: ProofScalar> LinComb<F> {
                 }
                 self.wcg[commitment].push((index, scalar));
             }
-            Variable::V(index) => {
-                self.highest_v_index = self.highest_v_index.max(Some(index));
-                self.wv.push((index, scalar));
-            }
         }
         self
     }
@@ -390,7 +369,6 @@ pub(super) struct ArithmeticCircuitStatement<'a, S: ProofSuite> {
     generators: ProofGeneratorView<'a, S>,
     constraints: Vec<LinComb<S::Scalar>>,
     vector_commitments: Vec<S::Point>,
-    scalar_commitments: Vec<S::Point>,
 }
 
 impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
@@ -398,12 +376,10 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         generators: ProofGeneratorView<'a, S>,
         constraints: Vec<LinComb<S::Scalar>>,
         vector_commitments: Vec<S::Point>,
-        scalar_commitments: Vec<S::Point>,
     ) -> Result<Self, FcmpNativeErrorV1> {
         for constraint in &constraints {
             if Some(generators.g_bold.len()) <= constraint.highest_a_index
                 || Some(vector_commitments.len()) <= constraint.highest_c_index
-                || Some(scalar_commitments.len()) <= constraint.highest_v_index
             {
                 return Err(FcmpNativeErrorV1::ArithmeticInvariant);
             }
@@ -412,7 +388,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             generators,
             constraints,
             vector_commitments,
-            scalar_commitments,
         })
     }
 
@@ -444,7 +419,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         if witness.a_l.len() > n
             || witness.a_l.len() != witness.a_r.len()
             || witness.vector_commitments.len() != commitment_count
-            || !self.scalar_commitments.is_empty()
         {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
@@ -496,7 +470,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                     evaluation += witness.vector_commitments[commitment].values[*index] * *weight;
                 }
             }
-            if !constraint.wv.is_empty() || !evaluation.is_zero() {
+            if !evaluation.is_zero() {
                 return Err(FcmpNativeErrorV1::ArithmeticInvariant);
             }
         }
@@ -772,21 +746,8 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let mut polynomial = BatchVerifier::<S>::new();
         polynomial.g += t_caret;
         polynomial.h += tau_x;
-        let mut v_weights = ScalarVector::zero(self.scalar_commitments.len());
-        for (constraint, z) in self.constraints.iter().zip(&z.0) {
-            accumulate(&mut v_weights, &constraint.wv, -*z);
-        }
-        v_weights = v_weights * x[ni];
         polynomial.g -= x[ni]
             * (delta - z.inner_product(self.constraints.iter().map(|constraint| constraint.c)));
-        polynomial.additional.extend(
-            v_weights
-                .0
-                .iter()
-                .copied()
-                .zip(self.scalar_commitments.iter().copied())
-                .map(|(weight, point)| (-weight, point)),
-        );
         polynomial.additional.extend(
             t_before
                 .into_iter()
@@ -1114,15 +1075,9 @@ mod tests {
     fn verify_test_circuit(context: [u8; 32], proof: &[u8]) -> Result<(), FcmpNativeErrorV1> {
         let generators = selene_bp_generators().reduce(4)?;
         let mut transcript = VerifierTranscript::new(context, proof);
-        let (vector_commitments, scalar_commitments) =
-            transcript.read_commitments::<SeleneSuite>(2, 0)?;
-        ArithmeticCircuitStatement::new(
-            generators,
-            circuit_constraints(),
-            vector_commitments,
-            scalar_commitments,
-        )?
-        .verify(&mut transcript)?;
+        let (vector_commitments, _) = transcript.read_commitments::<SeleneSuite>(2, 0)?;
+        ArithmeticCircuitStatement::new(generators, circuit_constraints(), vector_commitments)?
+            .verify(&mut transcript)?;
         if transcript.consumed() != proof.len() {
             return Err(FcmpNativeErrorV1::TranscriptConsumption);
         }
@@ -1165,13 +1120,9 @@ mod tests {
         .expect("witness");
         let mut transcript = ProverTranscript::new(context);
         transcript.write_commitments::<SeleneSuite>(commitments.clone(), Vec::new());
-        let statement = ArithmeticCircuitStatement::new(
-            generators,
-            circuit_constraints(),
-            commitments.clone(),
-            Vec::new(),
-        )
-        .expect("statement");
+        let statement =
+            ArithmeticCircuitStatement::new(generators, circuit_constraints(), commitments.clone())
+                .expect("statement");
         let mut rng = StdRng::seed_from_u64(0xfca5_0001);
         statement
             .prove(&mut rng, &mut transcript, witness)
@@ -1210,7 +1161,6 @@ mod tests {
                 generators,
                 circuit_constraints(),
                 commitments.clone(),
-                Vec::new(),
             )
             .expect("statement")
             .prove(&mut rng, &mut bad_gate_transcript, invalid_gate_witness)
@@ -1228,19 +1178,14 @@ mod tests {
         let mut bad_opening_transcript = ProverTranscript::new(context);
         bad_opening_transcript.write_commitments::<SeleneSuite>(commitments.clone(), Vec::new());
         assert!(
-            ArithmeticCircuitStatement::new(
-                generators,
-                circuit_constraints(),
-                commitments,
-                Vec::new(),
-            )
-            .expect("statement")
-            .prove(
-                &mut rng,
-                &mut bad_opening_transcript,
-                invalid_opening_witness
-            )
-            .is_err()
+            ArithmeticCircuitStatement::new(generators, circuit_constraints(), commitments,)
+                .expect("statement")
+                .prove(
+                    &mut rng,
+                    &mut bad_opening_transcript,
+                    invalid_opening_witness
+                )
+                .is_err()
         );
     }
 

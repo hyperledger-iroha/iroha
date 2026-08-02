@@ -565,9 +565,6 @@ impl<S: ProofSuite> Circuit<S> {
                     * *weight;
             }
         }
-        if !lincomb.wv.is_empty() {
-            return Err(FcmpNativeErrorV1::ArithmeticInvariant);
-        }
         Ok(Some(result))
     }
 
@@ -772,12 +769,7 @@ impl<S: ProofSuite> Circuit<S> {
         if self.muls > generators.g_bold.len() || self.prover.is_some() {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        ArithmeticCircuitStatement::new(
-            generators,
-            self.constraints,
-            vector_commitments,
-            Vec::new(),
-        )
+        ArithmeticCircuitStatement::new(generators, self.constraints, vector_commitments)
     }
 
     pub(super) fn proving_statement<'a>(
@@ -798,12 +790,8 @@ impl<S: ProofSuite> Circuit<S> {
         if prover.a_l.len() != self.muls || prover.a_r.len() != self.muls {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        let statement = ArithmeticCircuitStatement::new(
-            generators,
-            self.constraints,
-            vector_commitments,
-            Vec::new(),
-        )?;
+        let statement =
+            ArithmeticCircuitStatement::new(generators, self.constraints, vector_commitments)?;
         let witness = ArithmeticCircuitWitness::new(
             core::mem::take(&mut prover.a_l),
             core::mem::take(&mut prover.a_r),
@@ -1223,7 +1211,7 @@ pub(super) fn discrete_log<S: ProofSuite>(
     .chain(&point.divisor.x_from_power_of_2)
     .chain(&point.dlog)
     {
-        if !matches!(variable, Variable::CG { .. } | Variable::V(_)) {
+        if !matches!(variable, Variable::CG { .. }) {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
     }

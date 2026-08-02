@@ -1448,8 +1448,6 @@ pub(crate) mod tests {
         merkle::{ca_membership_path_from_complete_spkis_v1, ca_root_from_complete_spkis_v1},
     };
 
-    const CERT_NOT_BEFORE: u64 = 1_640_995_200; // 2022-01-01T00:00:00Z
-    const CERT_NOT_AFTER: u64 = 1_893_456_000; // 2030-01-01T00:00:00Z
     const CRL_THIS_UPDATE: u64 = 1_672_531_200; // 2023-01-01T00:00:00Z
     const CRL_NEXT_UPDATE: u64 = CRL_THIS_UPDATE + 300;
     const VALIDATION_TIME: u64 = CRL_THIS_UPDATE + 60;

@@ -17,9 +17,6 @@ pub(crate) const CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1: usize = 16;
 pub(crate) const CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 = 11_881;
 pub(crate) const MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1: u32 = 64;
 pub(crate) const MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1: u32 = 256;
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1: &[u8] = b"lazer-10eafeca4cd53ff4fc54193dce904dbd0026fefd-polyvec-grandom-v1|ring:R64-q12289|shape:16x64|sigma:1.55*2|seed:32|rng:AES-256-CTR-domain-le64-zero64-counter-be128|domains:(outer<<32)|(poly+1)|rounding:8-bytes-lsb-first-per-poly|cdf155:21-pairs-u64le|berexp:fdlibm-exp-small-u64le|sign-cache:issuance-local-persistent-across-polynomials-and-vector-retries|norm2<=11881|vector-attempts:64|coefficient-proposals:256|aes:cpu-only-fixed-control-flow-algebraic-sbox";
-
 const DEGREE_V1: usize = 64;
 const CDF_155_V1: [(u64, u64); 21] = [
     (0x9731_fa96_ce33_beaa, 0x95f2_8503_ccbd_a2bd),

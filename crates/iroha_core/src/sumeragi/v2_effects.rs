@@ -761,11 +761,6 @@ impl ConsensusSignTask {
     pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
         self.ownership.owner().lifecycle_ordinal()
     }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn ownership(&self) -> &RuntimeEffectOwnership {
-        &self.ownership
-    }
 }
 
 /// Body reconstruction or certified-fetch request.
@@ -2380,12 +2375,6 @@ pub(crate) trait EffectRuntime {
     ) -> Result<(), String> {
         Err("runtime does not support validated-body authority binding".to_owned())
     }
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn enqueue_body_available(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-    ) -> Result<(), EnqueueError>;
     /// Reserve an exact body completion without exposing it to the reducer.
     fn reserve_body_available(
         &mut self,
@@ -2683,14 +2672,6 @@ impl EffectRuntime for SerializedV2Runtime {
     ) -> Result<(), String> {
         SerializedV2Runtime::bind_validated_body(self, manifest, validated_receipt)
             .map_err(|error| error.to_string())
-    }
-
-    fn enqueue_body_available(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-    ) -> Result<(), EnqueueError> {
-        SerializedV2Runtime::enqueue_body_available(self, tag, manifest)
     }
 
     fn reserve_body_available(
@@ -10494,14 +10475,6 @@ mod tests {
             self.bound_validations
                 .push((manifest.clone(), validated_receipt.clone()));
             Ok(())
-        }
-
-        fn enqueue_body_available(
-            &mut self,
-            tag: EventTag,
-            manifest: wire::PayloadManifest,
-        ) -> Result<(), EnqueueError> {
-            self.push(RuntimeCompletion::BodyAvailable(tag, manifest))
         }
 
         fn reserve_body_available(

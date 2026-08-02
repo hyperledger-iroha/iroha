@@ -2905,11 +2905,6 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
         })
     }
 
-    /// Exact combined fixed width in physical segment order.
-    pub(crate) const fn width_v1(&self) -> u16 {
-        ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1 as u16
-    }
-
     /// Common algebraic domain shared by all four segments.
     pub(crate) fn domain_v1(&self) -> ZkX509FixedAlgebraicDomainV1 {
         self.children[0].domain_v1()

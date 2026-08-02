@@ -16101,16 +16101,6 @@ impl<T: Ord> SortedUniqueVec<T> {
             }
         }
     }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn remove(&mut self, value: &T) -> bool {
-        if let Ok(pos) = self.inner.binary_search(value) {
-            self.inner.remove(pos);
-            true
-        } else {
-            false
-        }
-    }
 }
 
 impl<T> IntoIterator for SortedUniqueVec<T> {
@@ -16227,23 +16217,12 @@ pub(crate) struct DetachedStateTransactionDelta {
     domain_kv_set_domains: Vec<iroha_data_model::domain::DomainId>,
     domain_kv_set_key_ids: Vec<NameId>,
     domain_kv_set_vals: Vec<iroha_primitives::json::Json>,
-    domain_kv_del_domains: Vec<iroha_data_model::domain::DomainId>,
-    domain_kv_del_key_ids: Vec<NameId>,
     // NFT deltas
-    nft_create:
-        std::collections::BTreeMap<iroha_data_model::nft::NftId, iroha_data_model::nft::Nft>,
     nft_delete: std::collections::BTreeSet<iroha_data_model::nft::NftId>,
-    nft_kv_set_ids: Vec<iroha_data_model::nft::NftId>,
-    nft_kv_set_key_ids: Vec<NameId>,
-    nft_kv_set_vals: Vec<iroha_primitives::json::Json>,
-    nft_kv_del_ids: Vec<iroha_data_model::nft::NftId>,
-    nft_kv_del_key_ids: Vec<NameId>,
     // AssetDefinition metadata
     asset_def_kv_set_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
     asset_def_kv_set_key_ids: Vec<NameId>,
     asset_def_kv_set_vals: Vec<iroha_primitives::json::Json>,
-    asset_def_kv_del_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
-    asset_def_kv_del_key_ids: Vec<NameId>,
     // Account permissions and roles (maps for last-write checks)
     perm_ops: std::collections::BTreeMap<
         (
@@ -16271,7 +16250,6 @@ pub(crate) struct DetachedStateTransactionDelta {
     permission_ops: Vec<DetachedPermissionOp>,
     // Peer registrations
     peer_adds: SortedUniqueVec<iroha_data_model::peer::PeerId>,
-    peer_removes: SortedUniqueVec<iroha_data_model::peer::PeerId>,
     // Parameter updates (applied in order)
     param_updates: Vec<iroha_data_model::parameter::Parameter>,
     // By‑call trigger executions to apply at merge time
@@ -16356,26 +16334,15 @@ impl DetachedStateTransactionDelta {
             && self.domain_kv_set_domains.is_empty()
             && self.domain_kv_set_key_ids.is_empty()
             && self.domain_kv_set_vals.is_empty()
-            && self.domain_kv_del_domains.is_empty()
-            && self.domain_kv_del_key_ids.is_empty()
-            && self.nft_create.is_empty()
             && self.nft_delete.is_empty()
-            && self.nft_kv_set_ids.is_empty()
-            && self.nft_kv_set_key_ids.is_empty()
-            && self.nft_kv_set_vals.is_empty()
-            && self.nft_kv_del_ids.is_empty()
-            && self.nft_kv_del_key_ids.is_empty()
             && self.asset_def_kv_set_ids.is_empty()
             && self.asset_def_kv_set_key_ids.is_empty()
             && self.asset_def_kv_set_vals.is_empty()
-            && self.asset_def_kv_del_ids.is_empty()
-            && self.asset_def_kv_del_key_ids.is_empty()
             && self.perm_ops.is_empty()
             && self.role_ops.is_empty()
             && self.role_perm_ops.is_empty()
             && self.permission_ops.is_empty()
             && self.peer_adds.is_empty()
-            && self.peer_removes.is_empty()
             && self.param_updates.is_empty()
             && self.exec_by_call.is_empty();
         transfer_only.then(|| {
@@ -16486,50 +16453,10 @@ impl DetachedStateTransactionDelta {
         self.domain_kv_set_key_ids.push(key_id);
         self.domain_kv_set_vals.push(val);
     }
-    /// Record a key-value removal on a domain.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn remove_domain_kv(
-        &mut self,
-        id: iroha_data_model::domain::DomainId,
-        key: iroha_data_model::name::Name,
-    ) {
-        let key_id = self.name_intern.intern(key);
-        self.domain_kv_del_domains.push(id);
-        self.domain_kv_del_key_ids.push(key_id);
-    }
-    /// Record an NFT creation.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn register_nft(&mut self, nft: iroha_data_model::nft::Nft) {
-        self.nft_create.insert(nft.id().clone(), nft);
-    }
     /// Record an NFT deletion.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn unregister_nft(&mut self, id: iroha_data_model::nft::NftId) {
         self.nft_delete.insert(id);
-    }
-    /// Record a key-value insertion/update on an NFT.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn set_nft_kv(
-        &mut self,
-        id: iroha_data_model::nft::NftId,
-        key: iroha_data_model::name::Name,
-        val: iroha_primitives::json::Json,
-    ) {
-        let key_id = self.name_intern.intern(key);
-        self.nft_kv_set_ids.push(id);
-        self.nft_kv_set_key_ids.push(key_id);
-        self.nft_kv_set_vals.push(val);
-    }
-    /// Record a key-value removal on an NFT.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn remove_nft_kv(
-        &mut self,
-        id: iroha_data_model::nft::NftId,
-        key: iroha_data_model::name::Name,
-    ) {
-        let key_id = self.name_intern.intern(key);
-        self.nft_kv_del_ids.push(id);
-        self.nft_kv_del_key_ids.push(key_id);
     }
     /// Record a key-value insertion/update on an asset definition.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -16544,18 +16471,6 @@ impl DetachedStateTransactionDelta {
         self.asset_def_kv_set_key_ids.push(key_id);
         self.asset_def_kv_set_vals.push(val);
     }
-    /// Record a key-value removal on an asset definition.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn remove_asset_def_kv(
-        &mut self,
-        id: iroha_data_model::asset::AssetDefinitionId,
-        key: iroha_data_model::name::Name,
-    ) {
-        let key_id = self.name_intern.intern(key);
-        self.asset_def_kv_del_ids.push(id);
-        self.asset_def_kv_del_key_ids.push(key_id);
-    }
-
     /// Record a permission grant to an account.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn grant_permission(
@@ -16647,14 +16562,7 @@ impl DetachedStateTransactionDelta {
     /// Record a peer registration.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_peer(&mut self, id: iroha_data_model::peer::PeerId) {
-        let _ = self.peer_removes.remove(&id);
         self.peer_adds.insert(id);
-    }
-    /// Record a peer unregistration.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn unregister_peer(&mut self, id: iroha_data_model::peer::PeerId) {
-        let _ = self.peer_adds.remove(&id);
-        self.peer_removes.insert(id);
     }
 
     /// Check whether `authority` may modify metadata for `nft_id` under the current delta.
@@ -17010,21 +16918,11 @@ impl DetachedStateTransactionDelta {
                 &self.domain_kv_set_key_ids,
                 &self.domain_kv_set_vals,
             );
-            let domain_kv_dels =
-                gather_set_keyed(&self.domain_kv_del_domains, &self.domain_kv_del_key_ids);
-            let nft_kv_sets = gather_last_wins_keyed(
-                &self.nft_kv_set_ids,
-                &self.nft_kv_set_key_ids,
-                &self.nft_kv_set_vals,
-            );
-            let nft_kv_dels = gather_set_keyed(&self.nft_kv_del_ids, &self.nft_kv_del_key_ids);
             let asset_def_kv_sets = gather_last_wins_keyed(
                 &self.asset_def_kv_set_ids,
                 &self.asset_def_kv_set_key_ids,
                 &self.asset_def_kv_set_vals,
             );
-            let asset_def_kv_dels =
-                gather_set_keyed(&self.asset_def_kv_del_ids, &self.asset_def_kv_del_key_ids);
 
             // Apply transparent transfers through the same asset module path as sequential ISI
             // execution so policy gates, events, and FASTPQ transcripts stay identical.
@@ -17094,23 +16992,7 @@ impl DetachedStateTransactionDelta {
                         value: val.clone(),
                     })));
             }
-            for (dom, key_id) in &domain_kv_dels {
-                let key = self.name_intern.resolve(*key_id);
-                let val = stx.world.domain_mut(dom).and_then(|d| {
-                    d.metadata.remove(key.as_ref()).ok_or_else(|| {
-                        iroha_data_model::query::error::FindError::MetadataKey(key.clone())
-                    })
-                })?;
-                crate::sumeragi::witness::record_delete_domain_kv(dom, key, &val);
-                stx.world
-                    .emit_events(Some(DomainEvent::MetadataRemoved(MetadataChanged {
-                        target: dom.clone(),
-                        key: key.clone(),
-                        value: val,
-                    })));
-            }
-
-            // Apply AssetDefinition metadata sets/removes after domain/account metadata to mirror ISI order.
+            // Apply AssetDefinition metadata sets after domain/account metadata to mirror ISI order.
             for (ad, key_id, val) in &asset_def_kv_sets {
                 let key = self.name_intern.resolve(*key_id);
                 // Record read (pre) before mutation
@@ -17129,37 +17011,7 @@ impl DetachedStateTransactionDelta {
                     }),
                 )));
             }
-            for (ad, key_id) in &asset_def_kv_dels {
-                let key = self.name_intern.resolve(*key_id);
-                let val = stx.world.asset_definition_mut(ad).and_then(|def| {
-                    def.metadata_mut().remove(key.as_ref()).ok_or_else(|| {
-                        iroha_data_model::query::error::FindError::MetadataKey(key.clone())
-                    })
-                })?;
-                crate::sumeragi::witness::record_delete_asset_def_kv(ad, key, &val);
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::MetadataRemoved(MetadataChanged {
-                        target: ad.clone(),
-                        key: key.clone(),
-                        value: val,
-                    }),
-                )));
-            }
-
-            // Apply NFT creates/deletes
-            for (_id, nft) in self.nft_create {
-                // domain exists?
-                let _ = stx.world.domain(nft.id().domain())?;
-                let (id, val) = nft.clone().into_key_value();
-                if stx.world.nfts.get(&id).is_some() {
-                    return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                        "NFT already exists: {id}"
-                    )));
-                }
-                stx.world.insert_nft_entry(id.clone(), val);
-                stx.world
-                    .emit_events(Some(DomainEvent::Nft(NftEvent::Created(nft))));
-            }
+            // Apply NFT deletions.
             for id in self.nft_delete {
                 crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
                     &mut stx, &id,
@@ -17171,40 +17023,7 @@ impl DetachedStateTransactionDelta {
                 stx.world
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(id))));
             }
-            // Apply NFT metadata and transfers (canonical BTree order)
-            for (id, key_id, val) in &nft_kv_sets {
-                let key = self.name_intern.resolve(*key_id);
-                // Read pre-value
-                if let Ok(nft_ro) = stx.world.nft(id) {
-                    let pre = nft_ro.content.get(key).cloned();
-                    crate::sumeragi::witness::record_read_nft_kv(id, key, pre.as_ref());
-                }
-                let nft = stx.world.nft_mut(id)?;
-                nft.content.insert(key.clone(), val.clone());
-                crate::sumeragi::witness::record_write_nft_kv(id, key, val);
-                stx.world
-                    .emit_events(Some(NftEvent::MetadataInserted(MetadataChanged {
-                        target: id.clone(),
-                        key: key.clone(),
-                        value: val.clone(),
-                    })));
-            }
-            for (id, key_id) in &nft_kv_dels {
-                let key = self.name_intern.resolve(*key_id);
-                let val = stx.world.nft_mut(id).and_then(|n| {
-                    n.content.remove(key.as_ref()).ok_or_else(|| {
-                        iroha_data_model::query::error::FindError::MetadataKey(key.clone())
-                    })
-                })?;
-                crate::sumeragi::witness::record_delete_nft_kv(id, key, &val);
-                stx.world
-                    .emit_events(Some(NftEvent::MetadataRemoved(MetadataChanged {
-                        target: id.clone(),
-                        key: key.clone(),
-                        value: val,
-                    })));
-            }
-            // Apply peer registrations/removals
+            // Apply peer registrations.
             for pid in self.peer_adds {
                 use iroha_primitives::unique_vec::PushResult;
                 if let PushResult::Duplicate(_) = stx.world.peers.push(pid.clone()) {
@@ -17214,17 +17033,6 @@ impl DetachedStateTransactionDelta {
                 }
                 stx.world.emit_events(Some(PeerEvent::Added(pid)));
             }
-            for pid in self.peer_removes {
-                if let Some(index) = stx.world.peers.iter().position(|id| id == &pid) {
-                    stx.world.peers.remove(index);
-                    stx.world.emit_events(Some(PeerEvent::Removed(pid)));
-                } else {
-                    return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                        "peer not found: {pid}"
-                    )));
-                }
-            }
-
             // Replay permission/role operations in recorded order using the same ISI semantics.
             for op in self.permission_ops {
                 let result = match op {

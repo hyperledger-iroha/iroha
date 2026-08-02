@@ -41,8 +41,7 @@ use crate::privacy_engines::{
         PROOF_MANAGED_NOTE_SECURITY_LANES_V1, PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1,
         PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1, ProofManagedNoteStarkAdapterV1,
         ProofManagedNoteStarkErrorV1, ProofManagedNoteStarkProtocolV1,
-        prove_proof_managed_note_stark_v1, prove_proof_managed_note_stark_v1_with_rng,
-        verify_proof_managed_note_stark_v1,
+        prove_proof_managed_note_stark_v1_with_rng, verify_proof_managed_note_stark_v1,
     },
     transparent_stark::{GoldilocksFieldV1 as F, TransparentTranscriptV1, sha256_frame_v1},
 };
@@ -1639,21 +1638,6 @@ pub(super) fn prove_private_note_stark_v1_with_rng<R: TryRngCore>(
         &PrivateNoteStarkAdapterV1::new(statement, consensus_binding, consensus_limits),
         &base_columns,
         rng,
-    )
-}
-
-/// Construct the canonical private-note proof with operating-system entropy.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn prove_private_note_stark_v1(
-    statement: &IrohaIvmPrivateNoteStarkStatementV1,
-    consensus_binding: &PrivacyNativeConsensusBindingV1,
-    consensus_limits: &PrivacyConsensusLimitsV1,
-    witness: &IvmPrivateNoteWitnessV1,
-) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
-    let base_columns = compile_private_note_prover_columns_v1(statement, witness)?;
-    prove_proof_managed_note_stark_v1(
-        &PrivateNoteStarkAdapterV1::new(statement, consensus_binding, consensus_limits),
-        &base_columns,
     )
 }
 

@@ -1375,21 +1375,6 @@ enum FairV2IngressControlKind {
     TimeoutCertificate,
 }
 
-impl FairV2IngressControlKind {
-    #[cfg_attr(not(test), allow(dead_code))]
-    const fn leader_wire_phase(self) -> FairV2IngressLeaderWirePhase {
-        match self {
-            Self::Proposal => FairV2IngressLeaderWirePhase::Proposal,
-            Self::PrepareVote => FairV2IngressLeaderWirePhase::PrepareVote,
-            Self::CommitVote => FairV2IngressLeaderWirePhase::CommitVote,
-            Self::PrepareQc => FairV2IngressLeaderWirePhase::PrepareQc,
-            Self::CommitQc => FairV2IngressLeaderWirePhase::CommitQc,
-            Self::TimeoutVote => FairV2IngressLeaderWirePhase::TimeoutVote,
-            Self::TimeoutCertificate => FairV2IngressLeaderWirePhase::TimeoutCertificate,
-        }
-    }
-}
-
 fn fair_v2_ingress_control_kind(message: &BlockMessage) -> Option<FairV2IngressControlKind> {
     use iroha_data_model::block::consensus_v2::{ConsensusMessageV2Payload, GlobalPhase};
 
@@ -4808,36 +4793,6 @@ impl FairV2Ingress {
     /// Close admission before rollover or abnormal runner exit.
     pub(crate) fn close(&self) {
         self.state.lock().open = false;
-    }
-
-    /// Prior exact runtime owner which a reopened Dormant token must reuse.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn restored_leader_wire_runtime_owner(
-        &self,
-        token: &FairV2IngressLeaderWireToken,
-    ) -> Result<Option<serviced_candidate_store::LeaderWireRuntimeOwner>, String> {
-        let state = self.state.lock();
-        let record = state
-            .leader_wire_lifecycles
-            .get(&token.slot)
-            .ok_or_else(|| "leader-wire token has no bound lifecycle record".to_owned())?;
-        if record.token != *token {
-            return Err("leader-wire runtime rebind changed immutable token".to_owned());
-        }
-        Ok(record.restored_runtime_owner)
-    }
-
-    /// Durably transfer one physically drained token to its exact runtime owner.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn mark_leader_wire_runtime(
-        &self,
-        token: &FairV2IngressLeaderWireToken,
-        owner: serviced_candidate_store::LeaderWireRuntimeOwner,
-    ) -> Result<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt, String> {
-        let mut state = self.state.lock();
-        let receipt = Self::mark_leader_wire_runtime_locked(&mut state, token, owner)?;
-        self.debug_assert_consistent(&state);
-        Ok(receipt)
     }
 
     fn mark_leader_wire_runtime_locked(

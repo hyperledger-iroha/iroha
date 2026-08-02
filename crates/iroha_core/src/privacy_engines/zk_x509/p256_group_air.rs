@@ -7,9 +7,6 @@
 //! [`P256BaseFieldCircuitV1`], whose production implementation links each
 //! value to the exact integer arithmetic trace and its value-copy bus.
 
-/// Stable descriptor for the complete P-256 group formula layer.
-pub(crate) const ZK_X509_P256_GROUP_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-group-air-v1-incompatible:homogeneous-projective-x-over-z-y-over-z:identity-0-1-0:renes-costello-batina-2015-algorithm4-complete-add-43-field-ops:algorithm6-exception-free-double-34-field-ops:a-minus3:affine-and-projective-curve-equations:nonidentity-by-z-inverse:straus-64x4bit-two-scalar:variable-table-14-adds:14810-arithmetic-ops:473920-arithmetic-rows:no-host-branching:integration=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
-
 /// Exact arithmetic-operation count for one `[u1]G + [u2]Q` execution,
 /// including the fourteen-addition variable-base table.
 pub(crate) const P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1: usize = 14 * 43 + 64 * (4 * 34 + 2 * 43);
@@ -18,18 +15,6 @@ pub(crate) const P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1: usize = 14 * 43 + 64 
 pub(crate) const P256_CURVE_B_BE_V1: [u8; 32] = [
     0x5a, 0xc6, 0x35, 0xd8, 0xaa, 0x3a, 0x93, 0xe7, 0xb3, 0xeb, 0xbd, 0x55, 0x76, 0x98, 0x86, 0xbc,
     0x65, 0x1d, 0x06, 0xb0, 0xcc, 0x53, 0xb0, 0xf6, 0x3b, 0xce, 0x3c, 0x3e, 0x27, 0xd2, 0x60, 0x4b,
-];
-
-/// P-256 generator x-coordinate, in canonical big-endian form.
-pub(crate) const P256_GENERATOR_X_BE_V1: [u8; 32] = [
-    0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4, 0x40, 0xf2,
-    0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45, 0xd8, 0x98, 0xc2, 0x96,
-];
-
-/// P-256 generator y-coordinate, in canonical big-endian form.
-pub(crate) const P256_GENERATOR_Y_BE_V1: [u8; 32] = [
-    0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16,
-    0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
 ];
 
 const ZERO_BE_V1: [u8; 32] = [0; 32];
@@ -119,17 +104,6 @@ pub(crate) fn p256_projective_identity_v1<C: P256BaseFieldCircuitV1>(
         x: circuit.constant_v1(ZERO_BE_V1)?,
         y: circuit.constant_v1(ONE_BE_V1)?,
         z: circuit.constant_v1(ZERO_BE_V1)?,
-    })
-}
-
-/// Allocate the canonical affine P-256 generator `(Gx : Gy : 1)`.
-pub(crate) fn p256_projective_generator_v1<C: P256BaseFieldCircuitV1>(
-    circuit: &mut C,
-) -> Result<P256ProjectiveValueV1<C::Value>, C::Error> {
-    Ok(P256ProjectiveValueV1 {
-        x: circuit.constant_v1(P256_GENERATOR_X_BE_V1)?,
-        y: circuit.constant_v1(P256_GENERATOR_Y_BE_V1)?,
-        z: circuit.constant_v1(ONE_BE_V1)?,
     })
 }
 
