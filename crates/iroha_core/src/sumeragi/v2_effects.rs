@@ -105,6 +105,8 @@ use iroha_data_model::{
 #[cfg(test)]
 use norito::codec::Encode as _;
 
+#[cfg(test)]
+use super::v2_runtime::bind_adapter_effect_batch_ownership;
 use super::{
     FairV2IngressOwnershipEvidence,
     message::BlockMessage,
@@ -121,8 +123,7 @@ use super::{
         LeaderWireRuntimeTerminal, NetworkIngressError, RetiredBodyPipelineCompletions,
         RuntimeCandidateAdmissionDisposition, RuntimeClockError, RuntimeEffectOwnership,
         RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep,
-        SerializedV2Runtime,
-        production_adapter_effect_candidate_admission_disposition,
+        SerializedV2Runtime, production_adapter_effect_candidate_admission_disposition,
         production_adapter_effect_candidate_semantic_identity,
         production_adapter_effect_candidate_trace_projection,
     },
@@ -133,8 +134,6 @@ use super::{
         authenticate_certified_body_request, authenticate_payload_chunk,
     },
 };
-#[cfg(test)]
-use super::v2_runtime::bind_adapter_effect_batch_ownership;
 use crate::kura::KuraV2CommitReceipt;
 
 /// Stable identifier for one asynchronous effect invocation.
@@ -9446,49 +9445,48 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             })
             .transpose()?;
         let manifest_hash = HashOf::new(manifest);
-        let (reuses_existing_stage, ready_release) = if let Some(receipt) =
-            self.durable_bodies.get(&key).cloned()
-        {
-            let recovered_conflicts = self.recovered_bodies.get(&key).is_some_and(
-                |(recovered_manifest, recovered_receipt)| {
-                    recovered_manifest != manifest || recovered_receipt != &receipt
-                },
-            );
-            let ready_conflicts = self.ready_bodies.get(&key).is_some_and(|ready| {
-                &ready.manifest != manifest || ready.bytes.as_ref() != bytes.as_ref()
-            });
-            if receipt.context_id() != self.context.id()
-                || receipt.round() != task.round
-                || receipt.subject() != task.subject
-                || receipt.manifest_hash() != manifest_hash
-                || recovered_conflicts
-                || ready_conflicts
-            {
-                return Err(self.fail_closed_transport(
-                    "completed fetch conflicts with retained durable body identity",
-                    services,
-                ));
-            }
-            let ready_release = if self.ready_bodies.contains_key(&key) {
-                Some(
-                    self.plan_ready_body_release(key)
-                        .map_err(|error| self.fail_closed_transport(error, services))?,
-                )
+        let (reuses_existing_stage, ready_release) =
+            if let Some(receipt) = self.durable_bodies.get(&key).cloned() {
+                let recovered_conflicts = self.recovered_bodies.get(&key).is_some_and(
+                    |(recovered_manifest, recovered_receipt)| {
+                        recovered_manifest != manifest || recovered_receipt != &receipt
+                    },
+                );
+                let ready_conflicts = self.ready_bodies.get(&key).is_some_and(|ready| {
+                    &ready.manifest != manifest || ready.bytes.as_ref() != bytes.as_ref()
+                });
+                if receipt.context_id() != self.context.id()
+                    || receipt.round() != task.round
+                    || receipt.subject() != task.subject
+                    || receipt.manifest_hash() != manifest_hash
+                    || recovered_conflicts
+                    || ready_conflicts
+                {
+                    return Err(self.fail_closed_transport(
+                        "completed fetch conflicts with retained durable body identity",
+                        services,
+                    ));
+                }
+                let ready_release = if self.ready_bodies.contains_key(&key) {
+                    Some(
+                        self.plan_ready_body_release(key)
+                            .map_err(|error| self.fail_closed_transport(error, services))?,
+                    )
+                } else {
+                    None
+                };
+                (true, ready_release)
+            } else if let Some(ready) = self.ready_bodies.get(&key) {
+                if &ready.manifest != manifest || ready.bytes.as_ref() != bytes.as_ref() {
+                    return Err(self.fail_closed_transport(
+                        "completed fetch conflicts with retained ready body identity",
+                        services,
+                    ));
+                }
+                (true, None)
             } else {
-                None
+                (false, None)
             };
-            (true, ready_release)
-        } else if let Some(ready) = self.ready_bodies.get(&key) {
-            if &ready.manifest != manifest || ready.bytes.as_ref() != bytes.as_ref() {
-                return Err(self.fail_closed_transport(
-                    "completed fetch conflicts with retained ready body identity",
-                    services,
-                ));
-            }
-            (true, None)
-        } else {
-            (false, None)
-        };
         let runtime_manifest = manifest.clone();
         let ready = if reuses_existing_stage {
             let mut union = self

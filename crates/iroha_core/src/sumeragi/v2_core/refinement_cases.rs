@@ -46,14 +46,8 @@ fn valid_effect_candidate_projection() -> ProductionEffectToCandidateTraceProjec
             IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC,
             0x33,
         ),
-        incoming_candidate_identity: runtime_identity(
-            IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,
-            0x44,
-        ),
-        stored_candidate_identity: runtime_identity(
-            IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,
-            0x44,
-        ),
+        incoming_candidate_identity: runtime_identity(IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE, 0x44),
+        stored_candidate_identity: runtime_identity(IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE, 0x44),
         candidate_owner_count_before: 0,
         candidate_owner_count_after: 1,
         candidate_owner_admitted: true,
@@ -77,9 +71,7 @@ fn effect_to_candidate_kernel_rejects_identity_rank_and_owner_weakening() {
         candidate_owner_admitted: false,
         ..valid
     };
-    assert!(production_effect_to_candidate_refines_async_ownership_kernel(
-        coalesced_retry
-    ));
+    assert!(production_effect_to_candidate_refines_async_ownership_kernel(coalesced_retry));
 
     for mutant in [
         ProductionEffectToCandidateTraceProjection {
@@ -113,9 +105,7 @@ fn effect_to_candidate_kernel_rejects_identity_rank_and_owner_weakening() {
             ..valid
         },
     ] {
-        assert!(!production_effect_to_candidate_refines_async_ownership_kernel(
-            mutant
-        ));
+        assert!(!production_effect_to_candidate_refines_async_ownership_kernel(mutant));
         assert!(check_production_effect_to_candidate_transition(mutant).is_none());
     }
 
@@ -138,16 +128,14 @@ fn effect_to_candidate_kernel_rejects_identity_rank_and_owner_weakening() {
         candidate_owner_admitted: false,
         ..valid
     };
-    assert!(production_effect_to_candidate_refines_async_ownership_kernel(
-        diagnostic
-    ));
+    assert!(production_effect_to_candidate_refines_async_ownership_kernel(diagnostic));
     let forged_diagnostic_owner = ProductionEffectToCandidateTraceProjection {
         candidate_owner_count_after: 1,
         ..diagnostic
     };
-    assert!(!production_effect_to_candidate_refines_async_ownership_kernel(
-        forged_diagnostic_owner
-    ));
+    assert!(
+        !production_effect_to_candidate_refines_async_ownership_kernel(forged_diagnostic_owner)
+    );
 }
 
 fn in_flight_reservation_identity(byte: u8) -> CanonicalIdentityProjection {

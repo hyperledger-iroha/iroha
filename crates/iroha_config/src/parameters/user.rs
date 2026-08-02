@@ -32209,8 +32209,14 @@ policy_digest_hex = "{policy_digest_hex}"
                 ("private_key".into(), Value::String(private_key)),
                 ("minimum_xor_balance".into(), Value::String("1".into())),
                 ("max_tx_value".into(), Value::String("1000000000".into())),
-                ("operation_registry_max_entries".into(), Value::Integer(4096)),
-                ("operation_registry_max_bytes".into(), Value::Integer(524288)),
+                (
+                    "operation_registry_max_entries".into(),
+                    Value::Integer(4096),
+                ),
+                (
+                    "operation_registry_max_bytes".into(),
+                    Value::Integer(524288),
+                ),
             ])),
         );
 

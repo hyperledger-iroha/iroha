@@ -4039,13 +4039,15 @@ impl SumeragiV2Adapter {
         self.reducer.current_tag()
     }
 
-    /// Inspect the pure reducer body state without exposing its mutable core.
+    /// Return the reducer body state for one wire identity in seam tests.
     #[cfg(test)]
     pub(crate) fn body_state_for_test(
         &self,
-        round: reducer::Round,
-        subject: reducer::Subject,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
     ) -> reducer::BodyState {
+        let round = reducer::Round::new(round.height, round.view);
+        let subject = reducer::Subject::new(Hash::new(subject.encode()).into());
         self.reducer.body_state(round, subject)
     }
 

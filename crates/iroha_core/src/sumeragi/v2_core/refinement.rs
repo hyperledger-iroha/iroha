@@ -2783,8 +2783,7 @@ macro_rules! production_effect_to_candidate_trace_body {
             && $projection.incoming_effect_position == $projection.stored_effect_position
             && $projection.incoming_candidate_count <= 3u8
             && $projection.incoming_candidate_count == $projection.stored_candidate_count
-            && $projection.incoming_candidate_position
-                == $projection.stored_candidate_position;
+            && $projection.incoming_candidate_position == $projection.stored_candidate_position;
         let exact_candidate = if expected_candidate_kind == 0u8 {
             $projection.incoming_candidate_kind == 0u8
                 && $projection.stored_candidate_kind == 0u8
@@ -2792,9 +2791,7 @@ macro_rules! production_effect_to_candidate_trace_body {
                 && canonical_identity_is_zero_body!(
                     $projection.incoming_candidate_semantic_identity
                 )
-                && canonical_identity_is_zero_body!(
-                    $projection.stored_candidate_semantic_identity
-                )
+                && canonical_identity_is_zero_body!($projection.stored_candidate_semantic_identity)
                 && canonical_identity_is_zero_body!($projection.incoming_candidate_identity)
                 && canonical_identity_is_zero_body!($projection.stored_candidate_identity)
                 && $projection.candidate_owner_count_before == 0u8
@@ -2806,8 +2803,7 @@ macro_rules! production_effect_to_candidate_trace_body {
                 && $projection.stored_candidate_kind == expected_candidate_kind
                 && $projection.incoming_candidate_count >= 1u8
                 && $projection.incoming_candidate_position >= 1u8
-                && $projection.incoming_candidate_position
-                    <= $projection.incoming_candidate_count
+                && $projection.incoming_candidate_position <= $projection.incoming_candidate_count
                 && canonical_identity_is_typed_body!(
                     $projection.incoming_candidate_semantic_identity,
                     refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
@@ -2834,8 +2830,7 @@ macro_rules! production_effect_to_candidate_trace_body {
         expected_candidate_kind != 255u8
             && $projection.incoming_effect_kind == $projection.stored_effect_kind
             && $projection.incoming_lifecycle_ordinal > 0u128
-            && $projection.incoming_lifecycle_ordinal
-                == $projection.stored_lifecycle_ordinal
+            && $projection.incoming_lifecycle_ordinal == $projection.stored_lifecycle_ordinal
             && exact_effect_identity
             && exact_owner_identity
             && exact_causality

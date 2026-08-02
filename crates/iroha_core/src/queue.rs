@@ -46,8 +46,6 @@ use iroha_data_model::nexus::{
     FeeSponsorProgramId, FeeSponsorProgramRevisionKey, LaneCatalog, LaneId, LaneLifecyclePlan,
     LanePrivacyProof, LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
-#[cfg(test)]
-use iroha_data_model::state_path::StatePath;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
@@ -14490,6 +14488,7 @@ pub mod tests {
         prelude::*,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox},
         runtime::RuntimeUpgradeManifest,
+        state_path::StatePath,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
             compute_sealed_transaction_commitment,

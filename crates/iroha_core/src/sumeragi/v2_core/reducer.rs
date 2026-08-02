@@ -4099,11 +4099,25 @@ impl Reducer {
             return StepOutcome::applied(effects);
         }
 
-        if let Some(locked) = self.durable.locked().cloned()
-            && self.body_state(locked.round(), locked.subject()) == BodyState::Missing
-        {
-            effects.push(self.ensure_body_fetch(&locked));
-            return StepOutcome::applied(effects);
+        if let Some(locked) = self.durable.locked().cloned() {
+            let effect = match self.body_state(locked.round(), locked.subject()) {
+                BodyState::Missing => Some(self.ensure_body_fetch(&locked)),
+                BodyState::Available => Some(Effect::StoreBody {
+                    tag: self.current_tag(),
+                    round: locked.round(),
+                    subject: locked.subject(),
+                }),
+                BodyState::Durable => Some(Effect::ValidateBody {
+                    tag: self.current_tag(),
+                    round: locked.round(),
+                    subject: locked.subject(),
+                }),
+                BodyState::Validated | BodyState::Invalid => None,
+            };
+            if let Some(effect) = effect {
+                effects.push(effect);
+                return StepOutcome::applied(effects);
+            }
         }
 
         if let Some(proposal) = self.candidate.clone()

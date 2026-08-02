@@ -6184,6 +6184,159 @@ fn durable_lock_replay_retains_one_exact_certified_body_owner() {
 }
 
 #[test]
+fn retransmit_rebinds_durable_locked_validation_after_view_change() {
+    let context = context();
+    let subject = Subject::repeat(0x7c);
+    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let commit_vote = Vote::new(context.id(), prepare.round(), Phase::Commit, subject, id(4));
+    let entries = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::ObservePrepare(prepare.clone()),
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::LockAndCommit {
+                prepare: prepare.clone(),
+                vote: commit_vote.clone(),
+            },
+        ),
+    ];
+    let mut recovered =
+        Reducer::recover(context.clone(), Some(id(4)), Generation::new(25), entries).unwrap();
+
+    let resumed = resume_after_replay(&mut recovered);
+    assert!(matches!(
+        resumed.effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == commit_vote
+    ));
+    complete_signature(&mut recovered, 0x7c);
+
+    let available = recovered
+        .step(Event::BodyAvailable {
+            tag: recovered.current_tag(),
+            round: prepare.round(),
+            subject,
+        })
+        .expect("the locked body enters the durable pipeline");
+    assert!(matches!(available.effects(), [Effect::StoreBody { .. }]));
+    let stored = recovered
+        .step(Event::BodyStored {
+            tag: recovered.current_tag(),
+            round: prepare.round(),
+            subject,
+        })
+        .expect("the locked body starts validation in the original view");
+    assert!(matches!(stored.effects(), [Effect::ValidateBody { .. }]));
+    assert_eq!(
+        recovered.body_state(prepare.round(), subject),
+        BodyState::Durable
+    );
+
+    let old_tag = recovered.current_tag();
+    let timeout = tc_with_high(&context, 0, prepare.clone(), &[1, 2, 3]);
+    let install = only_persist(
+        recovered
+            .step(Event::TimeoutCertificateReceived {
+                tag: old_tag,
+                certificate: timeout,
+            })
+            .expect("the timeout certificate starts a certified view change"),
+    );
+    let entered = acknowledge(&mut recovered, &install);
+    let current_tag = recovered.current_tag();
+    assert_eq!(current_tag.view(), 1);
+    assert_ne!(current_tag.generation(), old_tag.generation());
+    assert!(entered.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::EnterView { tag, .. } if *tag == current_tag
+    )));
+    assert!(entered.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::FetchBody {
+            tag,
+            round,
+            subject: fetched_subject,
+            certificate: Some(certificate),
+            ..
+        } if *tag == current_tag
+            && *round == prepare.round()
+            && *fetched_subject == subject
+            && certificate == &prepare
+    )));
+    assert_eq!(
+        recovered.body_state(prepare.round(), subject),
+        BodyState::Missing
+    );
+
+    let rebound_available = recovered
+        .step(Event::BodyAvailable {
+            tag: current_tag,
+            round: prepare.round(),
+            subject,
+        })
+        .expect("the current view recovers the exact locked body");
+    assert!(matches!(
+        rebound_available.effects(),
+        [Effect::StoreBody { tag, .. }] if *tag == current_tag
+    ));
+    let rebound_stored = recovered
+        .step(Event::BodyStored {
+            tag: current_tag,
+            round: prepare.round(),
+            subject,
+        })
+        .expect("the current view restarts locked-body validation");
+    assert!(matches!(
+        rebound_stored.effects(),
+        [Effect::ValidateBody { tag, .. }] if *tag == current_tag
+    ));
+    assert_eq!(
+        recovered.body_state(prepare.round(), subject),
+        BodyState::Durable
+    );
+
+    let retransmitted = recovered
+        .step(Event::RetransmitElapsed { tag: current_tag })
+        .expect("retransmission rebinds durable locked validation to the current view");
+    assert_eq!(
+        retransmitted
+            .effects()
+            .iter()
+            .filter(|effect| matches!(effect, Effect::ValidateBody { .. }))
+            .count(),
+        1
+    );
+    assert!(retransmitted.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::ValidateBody {
+            tag,
+            round,
+            subject: validated_subject,
+        } if *tag == current_tag
+            && *round == prepare.round()
+            && *validated_subject == subject
+    )));
+
+    recovered
+        .step(Event::ValidationCompleted {
+            tag: current_tag,
+            round: prepare.round(),
+            subject,
+            valid: true,
+        })
+        .expect("the current-view validation completion is accepted");
+    assert_eq!(
+        recovered.body_state(prepare.round(), subject),
+        BodyState::Validated
+    );
+    assert_eq!(recovered.durable_state().locked(), Some(&prepare));
+}
+
+#[test]
 fn certificate_first_decision_validates_and_applies_without_a_proposal() {
     let context = context();
     let subject = Subject::repeat(0x85);

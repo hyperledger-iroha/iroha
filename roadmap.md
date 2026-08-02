@@ -17,9 +17,6 @@ commands and the final reconciliation pass are recorded.
 
 ## Repository structure follow-ups
 
-- Repair the current `iroha_core` library-test compile blockers in the Falcon
-  fixtures, query fallback, Kura sidecar fixture, and mixed `rand_core`
-  versions, then rerun the focused transcript and SHA word-row regressions.
 - Continue extracting cohesive production modules from the exact source-budget
   exceptions, prioritizing Kura, Torii routing/API, core state, and other files
   still above 20,000 lines. Preserve public facades and wire behavior; every
