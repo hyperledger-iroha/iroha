@@ -3401,9 +3401,12 @@ fn validate_sccp_bridge_transaction_payload(
             "SCCP transaction payload creation time does not match the explicit request or response"
         ));
     }
-    if payload.time_to_live_ms.is_some() || payload.nonce.is_some() {
+    if payload.time_to_live()
+        != Some(iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE)
+        || payload.nonce.is_some()
+    {
         return Err(eyre!(
-            "SCCP transaction payload must not contain a TTL or nonce"
+            "SCCP transaction payload must contain the default TTL and no nonce"
         ));
     }
     validate_sccp_transaction_metadata(&payload.metadata)?;
