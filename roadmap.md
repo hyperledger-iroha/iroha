@@ -180,10 +180,10 @@ atomic batch append. The checked Android instruction, builder, manifest,
 metadata, and hash-tree artifacts have been regenerated from the current
 113-entry schema. Focused data-model, Core, IVM, bridge, fixture, and SDK parity
 execution remains required before this audit item can close.
-The validator-only, prepared-bundle Compose redesign still needs execution of
-its focused `iroha_swarm` and Kagami positive/mismatch regressions plus
-generated-Compose consistency once the shared serialized Cargo/rustc lane is
-free.
+The validator-only, prepared-bundle Compose redesign passes its focused
+`iroha_swarm` suite (24 tests). Its Kagami positive/mismatch regressions,
+daemon config-digest checks, and generated-Compose consistency still need
+execution once the shared serialized Cargo/rustc lane is free.
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
 
@@ -26680,10 +26680,10 @@ runtime premise on the final signed source.
   aggregate release receipt.
 
 Transaction inclusion and censorship fairness are outside the consensus
-height-progress theorem. The proof permits a valid empty heartbeat while
-still requiring every certified body to be available, deterministically
-validated, durably applied, and independently advanced by each responsive
-validator.
+height-progress theorem. The proof permits a valid internal or
+recovery-heartbeat carrier when such work is armed while still requiring every
+certified body to be available, deterministically validated, durably applied,
+and independently advanced by each responsive validator.
 
 ## Community and Governance
 

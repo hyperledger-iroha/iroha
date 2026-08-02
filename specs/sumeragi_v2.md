@@ -648,8 +648,8 @@ lane body and ownership sidecars but WSV commit did not finish, restart does not
 planning. Recovery verifies the canonical block hash, exact ownership sidecars, active route and
 incarnation, QC tag, committee, expected global leader, replay material, and applied-or-snapshot
 predecessor, then still runs the normal complete block validator. Any drift fails closed. Missing
-lane or AMX work is fetched or requeued, and an honest leader can still propose an empty heartbeat
-when no transaction work is ready.
+lane or AMX work is fetched or requeued, and an honest leader can still propose
+a valid recovery-heartbeat carrier when no user transaction is ready.
 
 Fresh global proposal production is workload-driven. The signed block cadence is the earliest
 view-zero proposal time, not an instruction to manufacture a body at every idle height. A leader
@@ -973,6 +973,8 @@ paper argument assumes that, after GST:
   ticks coalesce and an untrusted normal-message flood cannot discard an already emitted timeout;
 - body transfer, reconstruction, validation, signing, certificate formation, application, and
   fsync terminate within the declared service bounds;
+- an honest leader can construct a deterministically valid non-empty proposal
+  from available user, internal, or recovery work;
 - correct nodes eventually recover with intact WAL state;
 - an honest leader recurs within one roster rotation;
 - honest Prepare signers continue serving their durable bodies; and
@@ -986,7 +988,9 @@ reaches an honest leader, and a safe round forms PrepareQC and CommitQC. Every r
 node independently persists the exact decision, fetches and validates the certified body, applies
 it, and advances its local certified prefix; no global all-node application barrier is required.
 FLP is the reason these post-GST premises are explicit. This targets consensus-height progress,
-including a valid empty heartbeat, not transaction-inclusion fairness or censorship resistance.
+when a valid non-empty proposal or armed recovery-heartbeat carrier is
+available, not idle-height production, transaction-inclusion fairness, or
+censorship resistance.
 
 Ten arbitrary-context Core safety wrappers are TLAPS-proved. This includes historical TC-lock
 Commit authorization, the dependent direct-or-installed-authorization timeout wrapper, and the

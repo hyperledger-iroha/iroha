@@ -4,7 +4,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use norito::json::{self, Map, Value};
 
 use crate::{
-    GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig, path, peer,
+    GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig,
+    PreparedRuntimeSource, path, peer,
 };
 
 fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
@@ -634,17 +635,11 @@ fn prepared_peer_config_name(runtime: &PreparedRuntimeConfig) -> String {
 }
 
 fn prepared_runtime_secret_name(runtime: &PreparedRuntimeConfig, index: usize) -> String {
-    format!(
-        "{}_runtime_secret_{index}",
-        runtime.compose_name_prefix
-    )
+    format!("{}_runtime_secret_{index}", runtime.compose_name_prefix)
 }
 
 fn prepared_runtime_file_name(file: &PreparedRuntimeSource) -> String {
-    format!(
-        "runtime_file_{}",
-        iroha_crypto::Hash::new(&file.content)
-    )
+    format!("runtime_file_{}", iroha_crypto::Hash::new(&file.content))
 }
 
 fn prepared_runtime_encoded_target(file: &PreparedRuntimeSource) -> String {
@@ -668,9 +663,9 @@ fn prepared_service_configs(runtime: &PreparedRuntimeConfig) -> Vec<Value> {
         .iter()
         .filter_map(|file| {
             let name = prepared_runtime_file_name(file);
-            names.insert(name.clone()).then(|| {
-                prepared_config_reference(name, &prepared_runtime_encoded_target(file))
-            })
+            names
+                .insert(name.clone())
+                .then(|| prepared_config_reference(name, &prepared_runtime_encoded_target(file)))
         })
         .collect()
 }
@@ -690,10 +685,7 @@ fn prepared_compose_configs(
             let name = prepared_runtime_file_name(file);
             let mut runtime_file = Map::new();
             let rendered_content = BASE64_STANDARD.encode(&file.content);
-            runtime_file.insert(
-                "content".into(),
-                Value::String(rendered_content.clone()),
-            );
+            runtime_file.insert("content".into(), Value::String(rendered_content.clone()));
             match configs.insert(name.clone(), Value::Object(runtime_file)) {
                 Some(Value::Object(existing))
                     if existing.get("content") != Some(&Value::String(rendered_content)) =>

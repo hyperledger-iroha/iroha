@@ -280,17 +280,15 @@ impl PeerSettings {
         !relative.is_empty()
             && !target.contains('\\')
             && !target.contains("//")
-            && relative
-                .split('/')
-                .all(|segment| {
-                    !segment.is_empty()
-                        && segment != "."
-                        && segment != ".."
-                        && segment.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-                        })
-                        && !segment.ends_with(".kagami-tmp")
-                })
+            && relative.split('/').all(|segment| {
+                !segment.is_empty()
+                    && segment != "."
+                    && segment != ".."
+                    && segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    })
+                    && !segment.ends_with(".kagami-tmp")
+            })
     }
 
     fn is_valid_secret_target(target: &str) -> bool {
@@ -298,6 +296,8 @@ impl PeerSettings {
             return false;
         };
         !name.is_empty()
+            && name != "."
+            && name != ".."
             && !name.starts_with("iroha_runtime_")
             && !matches!(
                 name,
@@ -655,13 +655,14 @@ impl From<path::Error> for Error {
 
 #[cfg(test)]
 mod tests {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-
     #![allow(clippy::too_many_lines, clippy::needless_raw_string_hashes)]
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
     use crate::{
         PreparedBuildLine, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
-        PreparedValidator, Swarm, peer::{self, PeerOverride},
+        PreparedValidator, Swarm,
+        peer::{self, PeerOverride},
     };
 
     const IMAGE: &str = "hyperledger/iroha:dev";
@@ -1208,6 +1209,336 @@ mod tests {
     }
 
     #[test]
+    fn prepared_mode_rejects_ancestor_overlapping_runtime_targets_in_either_order() {
+        for (case, targets) in [
+            (
+                "parent_first",
+                [
+                    "/config/runtime/policy",
+                    "/config/runtime/policy/admission.nrt",
+                ],
+            ),
+            (
+                "child_first",
+                [
+                    "/config/runtime/policy/admission.nrt",
+                    "/config/runtime/policy",
+                ],
+            ),
+        ] {
+            let temp = TempDir::new(case);
+            let bundle = temp.path().join("bundle");
+            let deployment = temp.path().join("deployment");
+            std::fs::create_dir_all(&bundle).expect("create prepared bundle directory");
+            std::fs::create_dir_all(&deployment).expect("create deployment directory");
+            let mut validators = (0_u16..4)
+                .map(|index| {
+                    let mut validator = prepared_validator(index);
+                    validator.runtime_config_path =
+                        bundle.join(format!("peer{index}.runtime.toml"));
+                    validator
+                })
+                .collect::<Vec<_>>();
+            validators[0]
+                .runtime_files
+                .extend(targets.map(|target| PreparedRuntimeFile {
+                    target: target.to_owned(),
+                    content: target.as_bytes().to_vec(),
+                }));
+
+            let result = Swarm::from_prepared(
+                peer::chain(),
+                validators,
+                PreparedGenesisArtifacts {
+                    signed_block: &bundle.join("genesis.signed.nrt"),
+                    public_key: &bundle.join("genesis.public_key"),
+                    expected_hash: &bundle.join("genesis.expected_hash"),
+                },
+                false,
+                IMAGE,
+                None,
+                false,
+                &deployment.join("docker-compose.yml"),
+            );
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::Error::OverlappingPreparedRuntimeTarget {
+                        index: 0,
+                        target,
+                        other,
+                    }) if (target == "/config/runtime/policy"
+                        && other == "/config/runtime/policy/admission.nrt")
+                        || (target == "/config/runtime/policy/admission.nrt"
+                            && other == "/config/runtime/policy")
+                ),
+                "{case} must reject an ancestor/descendant target pair"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_mode_rejects_invalid_and_reserved_secret_targets() {
+        for target in [
+            "/config/runtime/private.key",
+            "/run/secrets/nested/private.key",
+            "/run/secrets/.",
+            "/run/secrets/..",
+            "/run/secrets/private$key",
+            "/run/secrets/iroha_runtime_deadbeef.b64",
+            "/run/secrets/iroha_genesis_public_key",
+            "/run/secrets/iroha_genesis_expected_hash",
+        ] {
+            let temp = TempDir::new("prepared_secret_target");
+            let bundle = temp.path().join("bundle");
+            let deployment = temp.path().join("deployment");
+            std::fs::create_dir_all(&bundle).expect("create prepared bundle directory");
+            std::fs::create_dir_all(&deployment).expect("create deployment directory");
+            let mut validators = (0_u16..4)
+                .map(|index| {
+                    let mut validator = prepared_validator(index);
+                    validator.runtime_config_path =
+                        bundle.join(format!("peer{index}.runtime.toml"));
+                    validator
+                })
+                .collect::<Vec<_>>();
+            validators[0].secret_files.push(PreparedSecretFile {
+                target: target.to_owned(),
+                source_path: bundle.join("private.key"),
+            });
+
+            let result = Swarm::from_prepared(
+                peer::chain(),
+                validators,
+                PreparedGenesisArtifacts {
+                    signed_block: &bundle.join("genesis.signed.nrt"),
+                    public_key: &bundle.join("genesis.public_key"),
+                    expected_hash: &bundle.join("genesis.expected_hash"),
+                },
+                false,
+                IMAGE,
+                None,
+                false,
+                &deployment.join("docker-compose.yml"),
+            );
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::Error::InvalidPreparedSecretTarget {
+                        index: 0,
+                        target: rejected,
+                    }) if rejected == target
+                ),
+                "secret target {target} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_mode_rejects_duplicate_secret_targets() {
+        let temp = TempDir::new("prepared_secret_duplicate");
+        let bundle = temp.path().join("bundle");
+        let deployment = temp.path().join("deployment");
+        std::fs::create_dir_all(&bundle).expect("create prepared bundle directory");
+        std::fs::create_dir_all(&deployment).expect("create deployment directory");
+        let mut validators = (0_u16..4)
+            .map(|index| {
+                let mut validator = prepared_validator(index);
+                validator.runtime_config_path = bundle.join(format!("peer{index}.runtime.toml"));
+                validator
+            })
+            .collect::<Vec<_>>();
+        let target = "/run/secrets/iroha_peer0_private_key";
+        validators[0].secret_files.extend([
+            PreparedSecretFile {
+                target: target.to_owned(),
+                source_path: bundle.join("first.private"),
+            },
+            PreparedSecretFile {
+                target: target.to_owned(),
+                source_path: bundle.join("second.private"),
+            },
+        ]);
+
+        let result = Swarm::from_prepared(
+            peer::chain(),
+            validators,
+            PreparedGenesisArtifacts {
+                signed_block: &bundle.join("genesis.signed.nrt"),
+                public_key: &bundle.join("genesis.public_key"),
+                expected_hash: &bundle.join("genesis.expected_hash"),
+            },
+            false,
+            IMAGE,
+            None,
+            false,
+            &deployment.join("docker-compose.yml"),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::Error::DuplicatePreparedSecretTarget {
+                index: 0,
+                target: rejected,
+            }) if rejected == target
+        ));
+    }
+
+    #[test]
+    fn prepared_mode_mounts_secret_sources_without_leaking_contents() {
+        let temp = TempDir::new("prepared_secret_mount");
+        let bundle = temp.path().join("bundle");
+        let deployment = temp.path().join("deployment");
+        std::fs::create_dir_all(&bundle).expect("create prepared bundle directory");
+        std::fs::create_dir_all(&deployment).expect("create deployment directory");
+        let secret_source = bundle.join("peer0.private");
+        let secret_content = "secret-material-that-must-not-enter-compose";
+        std::fs::write(&secret_source, secret_content).expect("write private runtime input");
+        let mut validators = (0_u16..4)
+            .map(|index| {
+                let mut validator = prepared_validator(index);
+                validator.runtime_config_path = bundle.join(format!("peer{index}.runtime.toml"));
+                validator
+            })
+            .collect::<Vec<_>>();
+        validators[0].secret_files.push(PreparedSecretFile {
+            target: "/run/secrets/iroha_peer0_private_key".to_owned(),
+            source_path: secret_source,
+        });
+
+        let swarm = Swarm::from_prepared(
+            peer::chain(),
+            validators,
+            PreparedGenesisArtifacts {
+                signed_block: &bundle.join("genesis.signed.nrt"),
+                public_key: &bundle.join("genesis.public_key"),
+                expected_hash: &bundle.join("genesis.expected_hash"),
+            },
+            false,
+            IMAGE,
+            None,
+            false,
+            &deployment.join("docker-compose.yml"),
+        )
+        .expect("build prepared swarm");
+        let mut output = Vec::new();
+        swarm
+            .build()
+            .write(&mut output, None)
+            .expect("render prepared swarm");
+        let output = String::from_utf8(output).expect("Compose output is UTF-8");
+
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.trim() == "irohad0_runtime_secret_0:")
+                .count(),
+            1,
+            "the host secret source must have one top-level declaration"
+        );
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.trim() == "source: irohad0_runtime_secret_0")
+                .count(),
+            1,
+            "only peer 0 must mount its private runtime input"
+        );
+        assert!(output.contains("file: ../bundle/peer0.private"));
+        assert!(output.contains("target: /run/secrets/iroha_peer0_private_key"));
+        assert!(
+            !output.contains(secret_content),
+            "Compose must reference the owner-protected source file, never inline its bytes"
+        );
+    }
+
+    #[test]
+    fn prepared_mode_interns_equal_runtime_content_and_deduplicates_service_mounts() {
+        let temp = TempDir::new("prepared_runtime_interning");
+        let bundle = temp.path().join("bundle");
+        let deployment = temp.path().join("deployment");
+        std::fs::create_dir_all(&bundle).expect("create prepared bundle directory");
+        std::fs::create_dir_all(&deployment).expect("create deployment directory");
+        let shared_content = b"\0shared binary runtime policy\xff".to_vec();
+        let mut validators = (0_u16..4)
+            .map(|index| {
+                let mut validator = prepared_validator(index);
+                validator.runtime_config_path = bundle.join(format!("peer{index}.runtime.toml"));
+                validator.runtime_files.push(PreparedRuntimeFile {
+                    target: format!("/config/runtime/peer{index}/shared.nrt"),
+                    content: shared_content.clone(),
+                });
+                validator
+            })
+            .collect::<Vec<_>>();
+        validators[0].runtime_files.push(PreparedRuntimeFile {
+            target: "/config/runtime/peer0/second-copy.nrt".to_owned(),
+            content: shared_content.clone(),
+        });
+
+        let swarm = Swarm::from_prepared(
+            peer::chain(),
+            validators,
+            PreparedGenesisArtifacts {
+                signed_block: &bundle.join("genesis.signed.nrt"),
+                public_key: &bundle.join("genesis.public_key"),
+                expected_hash: &bundle.join("genesis.expected_hash"),
+            },
+            false,
+            IMAGE,
+            None,
+            false,
+            &deployment.join("docker-compose.yml"),
+        )
+        .expect("build prepared swarm");
+        let mut output = Vec::new();
+        swarm
+            .build()
+            .write(&mut output, None)
+            .expect("render prepared swarm");
+        let output = String::from_utf8(output).expect("Compose output is UTF-8");
+        let digest = iroha_crypto::Hash::new(&shared_content);
+        let config_name = format!("runtime_file_{digest}");
+        let encoded_target = format!("/run/secrets/iroha_runtime_{digest}.b64");
+        let config_declaration = format!("{config_name}:");
+        let config_source = format!("source: {config_name}");
+        let encoded_mount_target = format!("target: {encoded_target}");
+
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.trim() == config_declaration.as_str())
+                .count(),
+            1,
+            "equal byte content must have one top-level Compose config"
+        );
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.trim() == config_source.as_str())
+                .count(),
+            4,
+            "each service must mount the shared content exactly once"
+        );
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.trim() == encoded_mount_target.as_str())
+                .count(),
+            4,
+            "each service must use one digest-addressed encoded mount"
+        );
+        assert_eq!(
+            output
+                .matches(&BASE64_STANDARD.encode(&shared_content))
+                .count(),
+            1,
+            "the binary bytes must be encoded once at the top level"
+        );
+        assert!(output.contains("/config/runtime/peer0/shared.nrt"));
+        assert!(output.contains("/config/runtime/peer0/second-copy.nrt"));
+    }
+
+    #[test]
     fn prepared_mode_uses_concrete_read_only_genesis_artifacts() {
         let temp = TempDir::new("prepared_artifacts");
         let bundle = temp.path().join("bundle");
@@ -1284,17 +1615,15 @@ mod tests {
         assert_eq!(output.matches("IROHA_BUILD_LINE=iroha3").count(), 4);
         assert_eq!(output.matches("--config-blake3 ").count(), 4);
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
-        assert_eq!(
-            output
-                .matches("target: /run/secrets/iroha_peer")
-                .count(),
-            4
-        );
+        assert_eq!(output.matches("target: /run/secrets/iroha_peer").count(), 4);
         assert!(output.contains("../bundle/peer0.faucet.key"));
         assert!(!output.contains("private-0"));
         assert_eq!(
             output
-                .matches("target: /config/runtime/rans_seed0.toml")
+                .matches(&format!(
+                    "target: /run/secrets/iroha_runtime_{}.b64",
+                    iroha_crypto::Hash::new(b"# prepared shared rANS fixture\n")
+                ))
                 .count(),
             4
         );

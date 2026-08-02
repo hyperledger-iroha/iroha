@@ -49,6 +49,9 @@ VoteSigners(votes) ==
     {validator \in Validators :
         \E body \in Bodies : <<validator, body>> \in votes}
 
+QuorumSets ==
+    {signers \in SUBSET Validators : Cardinality(signers) >= Q}
+
 RouteSources(routes) ==
     {validator \in Validators :
         \E target \in Validators : <<validator, target>> \in routes}
@@ -410,6 +413,14 @@ CommitteeGeometry ==
     /\ SetA(view) \cup SetB(view) = Validators
     /\ Leader(view) \in SetA(view)
     /\ ProxyTail(view) \in SetA(view)
+
+\* This is the finite-set safety premise used with authenticated honest
+\* non-equivocation and the retained PrepareQC lock. It is checked independently
+\* of the compact routing trace so Byzantine quorum intersection is not hidden
+\* behind a non-equivocating action schedule.
+ByzantineQuorumIntersection ==
+    \A left, right \in QuorumSets :
+        (left \cap right) \cap Honest # {}
 
 ManifestCommitteeFanout ==
     /\ (proposal = NoBody => manifestTargets = {})

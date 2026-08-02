@@ -818,7 +818,8 @@ representative roster of at least four voting peers, a responsive dual quorum,
 deterministic terminating validation/fsync/application, and a representable
 service bound that some view-indexed timeout can exceed, deterministic
 consensus cannot guarantee progress. The paper argument derives
-height progress under those premises, including a valid empty heartbeat; it
+height progress under those premises, including a valid internal or
+recovery-heartbeat carrier when that work is armed; it
 does not prove transaction inclusion or censorship fairness. It is not a
 machine-checked liveness completion while the ledger reports
 `machine_checked_completion: false` and retains downstream asynchronous and
