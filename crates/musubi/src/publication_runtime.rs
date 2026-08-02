@@ -27,25 +27,39 @@ use iroha::musubi_runtime::{
     publication_service_origin, validate_publication_service_base_url,
 };
 use iroha_data_model::{
-    isi::musubi::AddMusubiArchiveLocationV1,
+    isi::{
+        InstructionBox,
+        musubi::{AddMusubiArchiveLocationV1, RegisterMusubiProviderBundleAttestationV1},
+    },
     musubi::{
-        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
-        MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1,
-        MusubiNamespaceDelegationV1, MusubiPageRequestV1, MusubiSeedIngressReceiptBindingV1,
-        MusubiSeedIngressReceiptV1,
+        ArchiveId, MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_PAGE_SIZE_V1,
+        MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1, MusubiArchiveLocationPageV1,
+        MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1, MusubiNamespaceDelegationV1,
+        MusubiPageRequestV1, MusubiProviderBundleAttestationDigestV1,
+        MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleAttestationRecordV1,
+        MusubiProviderBundleAttestationRefV1, MusubiProviderBundleAttestationSetDigestV1,
+        MusubiProviderBundleVerificationAttestationV1, MusubiSeedIngressReceiptBindingV1,
+        MusubiSeedIngressReceiptV1, musubi_provider_bundle_attestation_set_digest_v1,
     },
     sorafs::capacity::ProviderId,
+    sorafs::pin_registry::ReplicationOrderId,
+    transaction::{Executable, SignedTransaction},
 };
-use norito::DecodeLimits;
+use norito::{Decode, DecodeLimits, Encode};
 use url::Url;
 
 use crate::{
+    atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
     publish::{
-        PublicationArchiveLocationAdvanceV1, PublicationArchiveLocationIntentV1,
-        PublicationArchiveLocationTerminalReasonV1, PublicationArchiveLocationTerminalV1,
-        PublicationArchiveRegistrationV1, PublicationBackendError, PublicationOperationIdV1,
-        PublicationReadbackEvidenceV1, PublicationRegisteredArchiveV1, PublicationRequestV1,
-        PublicationValidationEvidenceV1, validate_archive_location_page,
+        MUSUBI_MAX_PROVIDER_REGISTRATION_ATTEMPTS_V1, PublicationArchiveLocationAdvanceV1,
+        PublicationArchiveLocationIntentV1, PublicationArchiveLocationTerminalReasonV1,
+        PublicationArchiveLocationTerminalV1, PublicationArchiveRegistrationV1,
+        PublicationBackendError, PublicationOperationIdV1,
+        PublicationProviderRegistrationCheckpointAdvanceV1,
+        PublicationProviderRegistrationCheckpointV1,
+        PublicationProviderRegistrationTransactionCheckpointV1, PublicationReadbackEvidenceV1,
+        PublicationRegisteredArchiveV1, PublicationRequestV1, PublicationValidationEvidenceV1,
+        validate_archive_location_page,
     },
     registry::{
         PublicationRuntimeServicesV1, RegistryFailureClassV1, RegistryReadClientV1,
@@ -59,8 +73,212 @@ const MAX_DELEGATION_BYTES: u64 = 256 * 1024;
 const MAX_DELEGATION_BYTES_USIZE: usize = 256 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
 const MAX_REQUEST_TIMEOUT_MS: u64 = 60_000;
+const PROVIDER_ATTESTATION_SET_CHECKPOINT_SCHEMA: &str =
+    "musubi-provider-attestation-set-checkpoint";
+const PROVIDER_ATTESTATION_CHECKPOINT_SCHEMA: &str = "musubi-provider-attestation-checkpoint";
+const PROVIDER_ATTESTATION_CHECKPOINT_VERSION: u8 = 1;
+const PROVIDER_ATTESTATION_SIDECAR_HASH_DOMAIN: &[u8] =
+    b"iroha.musubi.provider-attestation-sidecar.v1";
+const MAX_PROVIDER_ATTESTATION_REGISTRATION_ATTEMPTS: u8 =
+    MUSUBI_MAX_PROVIDER_REGISTRATION_ATTEMPTS_V1;
+const MAX_PROVIDER_ATTESTATION_SET_CHECKPOINT_BYTES: usize = 64 * 1024;
+const MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES: usize =
+    MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1 * 2;
 const DELEGATION_DECODE_LIMITS: DecodeLimits =
     DecodeLimits::new(64, MAX_DELEGATION_BYTES_USIZE, 256, 512 * 1024, 16);
+const PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
+    256,
+    MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES,
+    4_096,
+    MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES * 2,
+    64,
+);
+
+// The set checkpoint deliberately excludes the archive CAS revision. A finalized concurrent
+// location transition may require rebasing still-missing registration transactions, but it must
+// never permit the coordinator to substitute the archive/order/provider proof set for this
+// publication generation.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct PublicationProviderAttestationSetCheckpointV1 {
+    schema: String,
+    version: u8,
+    operation_id: PublicationOperationIdV1,
+    generation: u8,
+    archive_id: ArchiveId,
+    replication_order: ReplicationOrderId,
+    references: Vec<MusubiProviderBundleAttestationRefV1>,
+    set_digest: MusubiProviderBundleAttestationSetDigestV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct PublicationProviderAttestationCheckpointV1 {
+    schema: String,
+    version: u8,
+    operation_id: PublicationOperationIdV1,
+    generation: u8,
+    attempt: u8,
+    expected_location_revision: u64,
+    key: MusubiProviderBundleAttestationKeyV1,
+    attestation_digest: MusubiProviderBundleAttestationDigestV1,
+    signed_transaction: SignedTransaction,
+    transaction_hash: [u8; 32],
+}
+
+impl PublicationProviderAttestationSetCheckpointV1 {
+    fn new(
+        operation_id: PublicationOperationIdV1,
+        generation: u8,
+        archive_id: ArchiveId,
+        replication_order: ReplicationOrderId,
+        attestations: &[MusubiProviderBundleVerificationAttestationV1],
+    ) -> Result<Self, PublicationBackendError> {
+        if operation_id.as_bytes().iter().all(|byte| *byte == 0)
+            || generation == 0
+            || attestations.is_empty()
+            || attestations.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
+        {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_SET_CHECKPOINT_INVALID",
+            ));
+        }
+        for attestation in attestations {
+            attestation
+                .verify(&attestation.payload.binding)
+                .map_err(|_| {
+                    PublicationBackendError::permanent(
+                        "STORAGE_COORDINATOR_PROVIDER_ATTESTATION_INVALID",
+                    )
+                })?;
+            let key = attestation.key();
+            if key.archive_id != archive_id || key.replication_order != replication_order {
+                return Err(PublicationBackendError::permanent(
+                    "STORAGE_COORDINATOR_PROVIDER_ATTESTATION_INVALID",
+                ));
+            }
+        }
+        let references = attestations
+            .iter()
+            .map(MusubiProviderBundleVerificationAttestationV1::reference)
+            .collect::<Vec<_>>();
+        let set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+            archive_id,
+            replication_order,
+            &references,
+        )
+        .map_err(|_| {
+            PublicationBackendError::permanent("STORAGE_COORDINATOR_ATTESTATION_SET_INVALID")
+        })?;
+        Ok(Self {
+            schema: PROVIDER_ATTESTATION_SET_CHECKPOINT_SCHEMA.to_owned(),
+            version: PROVIDER_ATTESTATION_CHECKPOINT_VERSION,
+            operation_id,
+            generation,
+            archive_id,
+            replication_order,
+            references,
+            set_digest,
+        })
+    }
+
+    fn validate(&self) -> Result<(), PublicationBackendError> {
+        let expected = musubi_provider_bundle_attestation_set_digest_v1(
+            self.archive_id,
+            self.replication_order,
+            &self.references,
+        )
+        .map_err(|_| {
+            PublicationBackendError::permanent("PROVIDER_ATTESTATION_SET_CHECKPOINT_INVALID")
+        })?;
+        if self.schema != PROVIDER_ATTESTATION_SET_CHECKPOINT_SCHEMA
+            || self.version != PROVIDER_ATTESTATION_CHECKPOINT_VERSION
+            || self.operation_id.as_bytes().iter().all(|byte| *byte == 0)
+            || self.generation == 0
+            || self.set_digest != expected
+        {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_SET_CHECKPOINT_INVALID",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl PublicationProviderAttestationCheckpointV1 {
+    fn new(
+        operation_id: PublicationOperationIdV1,
+        generation: u8,
+        attempt: u8,
+        expected_location_revision: u64,
+        attestation: &MusubiProviderBundleVerificationAttestationV1,
+        signed_transaction: SignedTransaction,
+    ) -> Self {
+        let transaction_hash = *signed_transaction.hash().as_ref();
+        Self {
+            schema: PROVIDER_ATTESTATION_CHECKPOINT_SCHEMA.to_owned(),
+            version: PROVIDER_ATTESTATION_CHECKPOINT_VERSION,
+            operation_id,
+            generation,
+            attempt,
+            expected_location_revision,
+            key: attestation.key(),
+            attestation_digest: attestation.digest(),
+            signed_transaction,
+            transaction_hash,
+        }
+    }
+
+    fn validate_for(
+        &self,
+        operation_id: PublicationOperationIdV1,
+        generation: u8,
+        attempt: u8,
+        request: &PublicationRequestV1,
+        expected_location_revision: u64,
+        attestation: &MusubiProviderBundleVerificationAttestationV1,
+    ) -> Result<(), PublicationBackendError> {
+        let instruction = RegisterMusubiProviderBundleAttestationV1::new(
+            attestation.clone(),
+            expected_location_revision,
+        );
+        attestation
+            .verify(&attestation.payload.binding)
+            .map_err(|_| {
+                PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_INVALID")
+            })?;
+        instruction.validate().map_err(|_| {
+            PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_INVALID")
+        })?;
+        let expected_instruction: InstructionBox = instruction.into();
+        let exact_instruction = matches!(
+            self.signed_transaction.instructions(),
+            Executable::Instructions(instructions)
+                if instructions.len() == 1
+                    && instructions.iter().next() == Some(&expected_instruction)
+        );
+        if self.schema != PROVIDER_ATTESTATION_CHECKPOINT_SCHEMA
+            || self.version != PROVIDER_ATTESTATION_CHECKPOINT_VERSION
+            || self.operation_id != operation_id
+            || self.generation != generation
+            || self.attempt != attempt
+            || attempt == 0
+            || attempt > MAX_PROVIDER_ATTESTATION_REGISTRATION_ATTEMPTS
+            || self.expected_location_revision != expected_location_revision
+            || self.key != attestation.key()
+            || self.attestation_digest != attestation.digest()
+            || self.transaction_hash.iter().all(|byte| *byte == 0)
+            || self.transaction_hash != *self.signed_transaction.hash().as_ref()
+            || self.signed_transaction.chain() != &request.chain_id
+            || self.signed_transaction.authority() != &request.publisher
+            || self.signed_transaction.verify_signature().is_err()
+            || !exact_instruction
+        {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_CHECKPOINT_INVALID",
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Public request bindings selected by the production platform configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +397,8 @@ pub struct ProductionPublicationRuntimeV1<V> {
     storage_coordinator_url: Url,
     provider_gateways: BTreeMap<ProviderId, Url>,
     bindings: ProductionPublicationBindingsV1,
+    checkpoint_root: Option<AtomicWriteRoot>,
+    verified_provider_checkpoint: Option<PublicationProviderRegistrationCheckpointV1>,
 }
 
 impl<V> fmt::Debug for ProductionPublicationRuntimeV1<V> {
@@ -199,6 +419,33 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         &self.bindings
     }
 
+    /// Bind immutable provider-attestation transaction checkpoints to the publication state root.
+    ///
+    /// The journal store must already have created its private `publication-v1` directory. An
+    /// identical root may be rebound idempotently; switching roots after a runtime was loaded is
+    /// rejected so an operation can never split its replay evidence across directories.
+    pub fn bind_publication_state_root(
+        &mut self,
+        user_state_root: &Path,
+    ) -> Result<(), ProductionPublicationConfigurationErrorV1> {
+        let root = AtomicWriteRoot::new(user_state_root).map_err(|_| {
+            ProductionPublicationConfigurationErrorV1::new(
+                "MUSUBI_PUBLICATION_CHECKPOINT_ROOT_INVALID",
+            )
+        })?;
+        if self
+            .checkpoint_root
+            .as_ref()
+            .is_some_and(|existing| existing.path() != root.path())
+        {
+            return Err(ProductionPublicationConfigurationErrorV1::new(
+                "MUSUBI_PUBLICATION_CHECKPOINT_ROOT_CONFLICT",
+            ));
+        }
+        self.checkpoint_root = Some(root);
+        Ok(())
+    }
+
     fn validate_request(
         &self,
         request: &PublicationRequestV1,
@@ -215,6 +462,475 @@ impl<V> ProductionPublicationRuntimeV1<V> {
             ));
         }
         Ok(())
+    }
+
+    fn checkpoint_root(&self) -> Result<&AtomicWriteRoot, PublicationBackendError> {
+        self.checkpoint_root.as_ref().ok_or_else(|| {
+            PublicationBackendError::permanent("PUBLICATION_CHECKPOINT_STORE_NOT_BOUND")
+        })
+    }
+
+    fn persist_attestation_set_checkpoint(
+        &self,
+        checkpoint: &PublicationProviderAttestationSetCheckpointV1,
+    ) -> Result<[u8; 32], PublicationBackendError> {
+        checkpoint.validate()?;
+        let encoded = encode_attestation_set_checkpoint(checkpoint)?;
+        let sidecar_hash = provider_attestation_sidecar_hash(&encoded);
+        self.checkpoint_root()?
+            .install_immutable(
+                &provider_attestation_set_checkpoint_relative_path(
+                    checkpoint.operation_id,
+                    checkpoint.generation,
+                ),
+                &encoded,
+            )
+            .map_err(map_provider_checkpoint_io)?;
+        Ok(sidecar_hash)
+    }
+
+    fn validate_anchored_attestation_set_checkpoint(
+        &self,
+        checkpoint: &PublicationProviderAttestationSetCheckpointV1,
+        expected_sidecar_hash: [u8; 32],
+    ) -> Result<(), PublicationBackendError> {
+        checkpoint.validate()?;
+        let expected_bytes = encode_attestation_set_checkpoint(checkpoint)?;
+        if expected_sidecar_hash.iter().all(|byte| *byte == 0)
+            || provider_attestation_sidecar_hash(&expected_bytes) != expected_sidecar_hash
+        {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_SET_CHECKPOINT_INVALID",
+            ));
+        }
+        let relative = provider_attestation_set_checkpoint_relative_path(
+            checkpoint.operation_id,
+            checkpoint.generation,
+        );
+        let observed = self
+            .checkpoint_root()?
+            .load_immutable(&relative, MAX_PROVIDER_ATTESTATION_SET_CHECKPOINT_BYTES)
+            .map_err(map_provider_checkpoint_io)?
+            .ok_or_else(|| {
+                PublicationBackendError::permanent("PROVIDER_ATTESTATION_SET_CHECKPOINT_MISSING")
+            })?;
+        if observed != expected_bytes
+            || provider_attestation_sidecar_hash(&observed) != expected_sidecar_hash
+        {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_SET_CHECKPOINT_INVALID",
+            ));
+        }
+        Ok(())
+    }
+
+    fn load_or_prepare_provider_checkpoint(
+        &self,
+        operation_id: PublicationOperationIdV1,
+        generation: u8,
+        attempt: u8,
+        request: &PublicationRequestV1,
+        expected_location_revision: u64,
+        attestation: &MusubiProviderBundleVerificationAttestationV1,
+    ) -> Result<PublicationProviderAttestationCheckpointV1, PublicationBackendError> {
+        let relative = provider_attestation_checkpoint_relative_path(
+            operation_id,
+            generation,
+            attempt,
+            expected_location_revision,
+            attestation.key().provider_id,
+            attestation.digest(),
+        );
+        if let Some(encoded) = self
+            .checkpoint_root()?
+            .load_immutable(&relative, MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES)
+            .map_err(map_provider_checkpoint_io)?
+        {
+            let checkpoint: PublicationProviderAttestationCheckpointV1 =
+                norito::decode_canonical_with_limits(
+                    &encoded,
+                    PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS,
+                )
+                .map_err(|_| {
+                    PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_INVALID")
+                })?;
+            checkpoint.validate_for(
+                operation_id,
+                generation,
+                attempt,
+                request,
+                expected_location_revision,
+                attestation,
+            )?;
+            return Ok(checkpoint);
+        }
+
+        let instruction = RegisterMusubiProviderBundleAttestationV1::new(
+            attestation.clone(),
+            expected_location_revision,
+        );
+        instruction.validate().map_err(|_| {
+            PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_INVALID")
+        })?;
+        let payload = self
+            .signing
+            .prebuild_v1(instruction)
+            .map_err(map_registry_error)?;
+        let signed_transaction = self
+            .signing
+            .quote_and_sign_v1(payload)
+            .map_err(map_registry_error)?;
+        let checkpoint = PublicationProviderAttestationCheckpointV1::new(
+            operation_id,
+            generation,
+            attempt,
+            expected_location_revision,
+            attestation,
+            signed_transaction,
+        );
+        checkpoint.validate_for(
+            operation_id,
+            generation,
+            attempt,
+            request,
+            expected_location_revision,
+            attestation,
+        )?;
+        let encoded = encode_provider_attestation_checkpoint(&checkpoint)?;
+        self.checkpoint_root()?
+            .install_immutable(&relative, &encoded)
+            .map_err(map_provider_checkpoint_io)?;
+
+        let installed = self
+            .checkpoint_root()?
+            .load_immutable(&relative, MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES)
+            .map_err(map_provider_checkpoint_io)?
+            .ok_or_else(|| {
+                PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_MISSING")
+            })?;
+        let installed: PublicationProviderAttestationCheckpointV1 =
+            norito::decode_canonical_with_limits(
+                &installed,
+                PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS,
+            )
+            .map_err(|_| {
+                PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_INVALID")
+            })?;
+        installed.validate_for(
+            operation_id,
+            generation,
+            attempt,
+            request,
+            expected_location_revision,
+            attestation,
+        )?;
+        Ok(installed)
+    }
+
+    fn load_anchored_provider_checkpoint(
+        &self,
+        operation_id: PublicationOperationIdV1,
+        generation: u8,
+        attempt: u8,
+        request: &PublicationRequestV1,
+        expected_location_revision: u64,
+        attestation: &MusubiProviderBundleVerificationAttestationV1,
+        expected_sidecar_hash: [u8; 32],
+    ) -> Result<PublicationProviderAttestationCheckpointV1, PublicationBackendError> {
+        if expected_sidecar_hash.iter().all(|byte| *byte == 0) {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_CHECKPOINT_INVALID",
+            ));
+        }
+        let relative = provider_attestation_checkpoint_relative_path(
+            operation_id,
+            generation,
+            attempt,
+            expected_location_revision,
+            attestation.key().provider_id,
+            attestation.digest(),
+        );
+        let encoded = self
+            .checkpoint_root()?
+            .load_immutable(&relative, MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES)
+            .map_err(map_provider_checkpoint_io)?
+            .ok_or_else(|| {
+                PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_MISSING")
+            })?;
+        if provider_attestation_sidecar_hash(&encoded) != expected_sidecar_hash {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_CHECKPOINT_INVALID",
+            ));
+        }
+        let checkpoint: PublicationProviderAttestationCheckpointV1 =
+            norito::decode_canonical_with_limits(
+                &encoded,
+                PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS,
+            )
+            .map_err(|_| {
+                PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_INVALID")
+            })?;
+        checkpoint.validate_for(
+            operation_id,
+            generation,
+            attempt,
+            request,
+            expected_location_revision,
+            attestation,
+        )?;
+        let expected_bytes = encode_provider_attestation_checkpoint(&checkpoint)?;
+        if encoded != expected_bytes {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_CHECKPOINT_INVALID",
+            ));
+        }
+        Ok(checkpoint)
+    }
+
+    fn exact_provider_attestation_registered(
+        &self,
+        registered: &PublicationRegisteredArchiveV1,
+        attestation: &MusubiProviderBundleVerificationAttestationV1,
+    ) -> Result<bool, PublicationBackendError> {
+        let key = attestation.key();
+        let Some(record) = self
+            .read
+            .provider_bundle_attestation(key)
+            .map_err(map_registry_error)?
+        else {
+            return Ok(false);
+        };
+        validate_exact_provider_attestation_record(registered, attestation, &record)?;
+        Ok(true)
+    }
+
+    fn coordinate_absent_archive_location(
+        &self,
+        operation_id: PublicationOperationIdV1,
+        request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
+        generation: u8,
+        prior_location_ids: &[iroha_data_model::musubi::MusubiArchiveLocationIdV1],
+    ) -> Result<
+        (
+            MusubiStorageCoordinationResponseV1,
+            MusubiArchiveLocationPageV1,
+            PublicationProviderAttestationSetCheckpointV1,
+        ),
+        PublicationBackendError,
+    > {
+        if generation == 0
+            || usize::from(generation) > MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
+            || prior_location_ids.len() + 1 != usize::from(generation)
+            || prior_location_ids.iter().any(|location| location.is_zero())
+        {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_GENERATION_INVALID",
+            ));
+        }
+        let mut sorted_prior_location_ids = prior_location_ids.to_vec();
+        sorted_prior_location_ids.sort();
+        if sorted_prior_location_ids
+            .windows(2)
+            .any(|pair| pair[0] == pair[1])
+        {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_GENERATION_INVALID",
+            ));
+        }
+
+        let coordination_request = MusubiStorageCoordinationRequestV1 {
+            version: 1,
+            operation_id: *operation_id.as_bytes(),
+            generation,
+            prior_location_ids: sorted_prior_location_ids,
+            chain_id: request.chain_id.clone(),
+            genesis_block_hash: request.genesis_block_hash,
+            publisher: request.publisher.clone(),
+            commitment: request.archive_commitment.clone(),
+            verification_lock_digest: request.publication.manifest.verification_lock_digest,
+            staging_receipt: registered.archive.staging_receipt.clone(),
+            expected_policy_revision: request.expected_policy_revision,
+            finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
+                version: 1,
+                chain_id: registered.chain_id.clone(),
+                genesis_block_hash: registered.genesis_block_hash,
+                transaction_hash: registered.finalized_transaction_hash,
+                snapshot: registered.snapshot,
+                registration: registered.archive.registration_projection(),
+            },
+        };
+        let response = self
+            .http
+            .coordinate_storage(
+                &self.storage_coordinator_url,
+                &coordination_request,
+                current_time_ms()?,
+            )
+            .map_err(map_transport_error)?;
+        if response.archive.registration_projection()
+            != registered.archive.registration_projection()
+        {
+            return Err(PublicationBackendError::permanent(
+                "STORAGE_COORDINATOR_ARCHIVE_CONFLICT",
+            ));
+        }
+        let FinalizedLocationStateV1::Absent { page } =
+            self.finalized_location_state(request, registered, &response)?
+        else {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
+            ));
+        };
+        let MusubiStorageLocationDispositionV1::NeedsRegistration {
+            provider_attestations,
+            expected_location_revision,
+        } = &response.disposition
+        else {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
+            ));
+        };
+        if *expected_location_revision != page.archive.location_revision {
+            return Err(PublicationBackendError::retryable(
+                "STORAGE_COORDINATOR_LOCATION_REVISION_STALE",
+            ));
+        }
+        let attestation_set = PublicationProviderAttestationSetCheckpointV1::new(
+            operation_id,
+            generation,
+            response.archive.archive_id,
+            response.replication_order,
+            provider_attestations,
+        )?;
+        if attestation_set.set_digest != coordination_provider_attestation_set_digest(&response)? {
+            return Err(PublicationBackendError::permanent(
+                "STORAGE_COORDINATOR_ATTESTATION_SET_INVALID",
+            ));
+        }
+        Ok((response, page, attestation_set))
+    }
+
+    fn validate_provider_registration_checkpoint(
+        &self,
+        operation_id: PublicationOperationIdV1,
+        generation: u8,
+        request: &PublicationRequestV1,
+        attestation_set: &PublicationProviderAttestationSetCheckpointV1,
+        provider_attestations: &[MusubiProviderBundleVerificationAttestationV1],
+        checkpoint: &PublicationProviderRegistrationCheckpointV1,
+    ) -> Result<(), PublicationBackendError> {
+        checkpoint.validate_for(request, generation).map_err(|_| {
+            PublicationBackendError::permanent("PROVIDER_REGISTRATION_CHECKPOINT_INVALID")
+        })?;
+        if checkpoint.generation != generation
+            || checkpoint.archive_id != attestation_set.archive_id
+            || checkpoint.replication_order != attestation_set.replication_order
+            || checkpoint.provider_attestation_set_digest != attestation_set.set_digest
+        {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_REGISTRATION_CHECKPOINT_INVALID",
+            ));
+        }
+        self.validate_anchored_attestation_set_checkpoint(
+            attestation_set,
+            checkpoint.set_sidecar_hash,
+        )?;
+        for transaction in &checkpoint.transactions {
+            let attestation = provider_attestations
+                .iter()
+                .find(|attestation| {
+                    attestation.key() == transaction.key
+                        && attestation.digest() == transaction.attestation_digest
+                })
+                .ok_or_else(|| {
+                    PublicationBackendError::permanent("PROVIDER_REGISTRATION_CHECKPOINT_INVALID")
+                })?;
+            let loaded = self.load_anchored_provider_checkpoint(
+                operation_id,
+                generation,
+                transaction.attempt,
+                request,
+                transaction.expected_location_revision,
+                attestation,
+                transaction.sidecar_hash,
+            )?;
+            if loaded.transaction_hash != transaction.transaction_hash {
+                return Err(PublicationBackendError::permanent(
+                    "PROVIDER_REGISTRATION_CHECKPOINT_INVALID",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn append_provider_registration_transaction_checkpoint(
+        &self,
+        operation_id: PublicationOperationIdV1,
+        generation: u8,
+        request: &PublicationRequestV1,
+        checkpoint: &PublicationProviderRegistrationCheckpointV1,
+        attempt: u8,
+        expected_location_revision: u64,
+        attestation: &MusubiProviderBundleVerificationAttestationV1,
+    ) -> Result<PublicationProviderRegistrationCheckpointAdvanceV1, PublicationBackendError> {
+        let sidecar = self.load_or_prepare_provider_checkpoint(
+            operation_id,
+            generation,
+            attempt,
+            request,
+            expected_location_revision,
+            attestation,
+        )?;
+        let encoded = encode_provider_attestation_checkpoint(&sidecar)?;
+        let mut updated = checkpoint.clone();
+        updated
+            .transactions
+            .push(PublicationProviderRegistrationTransactionCheckpointV1 {
+                attempt,
+                expected_location_revision,
+                key: attestation.key(),
+                attestation_digest: attestation.digest(),
+                transaction_hash: sidecar.transaction_hash,
+                sidecar_hash: provider_attestation_sidecar_hash(&encoded),
+            });
+        updated.validate_for(request, generation).map_err(|_| {
+            PublicationBackendError::permanent("PROVIDER_REGISTRATION_CHECKPOINT_INVALID")
+        })?;
+        Ok(PublicationProviderRegistrationCheckpointAdvanceV1::Updated(
+            updated,
+        ))
+    }
+
+    fn provider_attestation_rejection_rebase_revision(
+        &self,
+        request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
+        signed_expected_location_revision: u64,
+        rejection_height: Option<u64>,
+    ) -> Result<u64, PublicationBackendError> {
+        let Some(rejection_height) = rejection_height else {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_TRANSACTION_STATUS_INVALID",
+            ));
+        };
+        if rejection_height <= registered.snapshot.finalized_height {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_TRANSACTION_STATUS_INVALID",
+            ));
+        }
+        let page = self.finalized_archive_page(request, registered)?;
+        if page.snapshot.finalized_height < rejection_height {
+            return Err(PublicationBackendError::retryable(
+                "PROVIDER_ATTESTATION_FINALIZED_QUERY_PENDING",
+            ));
+        }
+        if page.archive.location_revision <= signed_expected_location_revision {
+            return Err(PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_REGISTRATION_TERMINAL",
+            ));
+        }
+        Ok(page.archive.location_revision)
     }
 
     fn finalized_archive_page(
@@ -442,6 +1158,32 @@ enum FinalizedLocationStateV1 {
     Absent { page: MusubiArchiveLocationPageV1 },
 }
 
+fn validate_exact_provider_attestation_record(
+    registered: &PublicationRegisteredArchiveV1,
+    expected: &MusubiProviderBundleVerificationAttestationV1,
+    record: &MusubiProviderBundleAttestationRecordV1,
+) -> Result<(), PublicationBackendError> {
+    record.validate().map_err(|_| {
+        PublicationBackendError::permanent("PROVIDER_ATTESTATION_FINALIZED_RECORD_INVALID")
+    })?;
+    record
+        .attestation
+        .verify(&record.attestation.payload.binding)
+        .map_err(|_| {
+            PublicationBackendError::permanent("PROVIDER_ATTESTATION_FINALIZED_RECORD_INVALID")
+        })?;
+    if record.key != expected.key()
+        || record.attestation_digest != expected.digest()
+        || record.attestation != *expected
+        || record.registered_at_height <= registered.archive.registered_at_height
+    {
+        return Err(PublicationBackendError::permanent(
+            "PROVIDER_ATTESTATION_FINALIZED_RECORD_CONFLICT",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_finalized_archive_page(
     request: &PublicationRequestV1,
     registered: &PublicationRegisteredArchiveV1,
@@ -496,15 +1238,30 @@ fn validate_finalized_archive_page(
     Ok(())
 }
 
-fn coordination_provider_attestations(
+fn coordination_provider_attestation_set_digest(
     response: &MusubiStorageCoordinationResponseV1,
-) -> &[iroha_data_model::musubi::MusubiProviderBundleVerificationAttestationV1] {
+) -> Result<MusubiProviderBundleAttestationSetDigestV1, PublicationBackendError> {
     match &response.disposition {
         MusubiStorageLocationDispositionV1::NeedsRegistration {
             provider_attestations,
             ..
-        } => provider_attestations,
-        MusubiStorageLocationDispositionV1::Registered(location) => &location.provider_attestations,
+        } => {
+            let references = provider_attestations
+                .iter()
+                .map(|attestation| attestation.reference())
+                .collect::<Vec<_>>();
+            musubi_provider_bundle_attestation_set_digest_v1(
+                response.archive.archive_id,
+                response.replication_order,
+                &references,
+            )
+            .map_err(|_| {
+                PublicationBackendError::permanent("STORAGE_COORDINATOR_ATTESTATION_SET_INVALID")
+            })
+        }
+        MusubiStorageLocationDispositionV1::Registered(location) => {
+            Ok(location.provider_attestation_set_digest)
+        }
     }
 }
 
@@ -512,11 +1269,16 @@ fn location_matches_coordination_response(
     location: &iroha_data_model::musubi::MusubiArchiveLocationV1,
     response: &MusubiStorageCoordinationResponseV1,
 ) -> bool {
+    let Ok(provider_attestation_set_digest) =
+        coordination_provider_attestation_set_digest(response)
+    else {
+        return false;
+    };
     location.location_id == response.location_id
         && location.archive_id == response.archive.archive_id
         && location.pin_manifest == response.pin_manifest
         && location.replication_order == response.replication_order
-        && location.provider_attestations == coordination_provider_attestations(response)
+        && location.provider_attestation_set_digest == provider_attestation_set_digest
         && location.renew_after_epoch == response.renew_after_epoch
         && location.expires_at_epoch == response.expires_at_epoch
 }
@@ -524,16 +1286,110 @@ fn location_matches_coordination_response(
 fn location_add_instruction(
     response: &MusubiStorageCoordinationResponseV1,
     expected_location_revision: u64,
-) -> AddMusubiArchiveLocationV1 {
-    AddMusubiArchiveLocationV1 {
+) -> Result<AddMusubiArchiveLocationV1, PublicationBackendError> {
+    Ok(AddMusubiArchiveLocationV1 {
         archive_id: response.archive.archive_id,
         location_id: response.location_id,
         pin_manifest: response.pin_manifest,
         replication_order: response.replication_order,
-        provider_attestations: coordination_provider_attestations(response).to_vec(),
+        provider_attestation_set_digest: coordination_provider_attestation_set_digest(response)?,
         renew_after_epoch: response.renew_after_epoch,
         expires_at_epoch: response.expires_at_epoch,
         expected_location_revision,
+    })
+}
+
+fn provider_attestation_set_checkpoint_relative_path(
+    operation_id: PublicationOperationIdV1,
+    generation: u8,
+) -> PathBuf {
+    Path::new("publication-v1").join(format!(
+        "{operation_id}.location-{generation:02}.provider-set.norito"
+    ))
+}
+
+fn encode_attestation_set_checkpoint(
+    checkpoint: &PublicationProviderAttestationSetCheckpointV1,
+) -> Result<Vec<u8>, PublicationBackendError> {
+    let encoded = norito::encode_canonical(checkpoint).map_err(|_| {
+        PublicationBackendError::permanent("PROVIDER_ATTESTATION_SET_CHECKPOINT_INVALID")
+    })?;
+    if encoded.is_empty() || encoded.len() > MAX_PROVIDER_ATTESTATION_SET_CHECKPOINT_BYTES {
+        return Err(PublicationBackendError::permanent(
+            "PROVIDER_ATTESTATION_SET_CHECKPOINT_INVALID",
+        ));
+    }
+    Ok(encoded)
+}
+
+fn encode_provider_attestation_checkpoint(
+    checkpoint: &PublicationProviderAttestationCheckpointV1,
+) -> Result<Vec<u8>, PublicationBackendError> {
+    let encoded = norito::encode_canonical(checkpoint).map_err(|_| {
+        PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_INVALID")
+    })?;
+    if encoded.is_empty() || encoded.len() > MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES {
+        return Err(PublicationBackendError::permanent(
+            "PROVIDER_ATTESTATION_CHECKPOINT_INVALID",
+        ));
+    }
+    Ok(encoded)
+}
+
+fn provider_attestation_sidecar_hash(encoded: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(
+        &u64::try_from(PROVIDER_ATTESTATION_SIDECAR_HASH_DOMAIN.len())
+            .expect("provider checkpoint hash domain length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(PROVIDER_ATTESTATION_SIDECAR_HASH_DOMAIN);
+    hasher.update(
+        &u64::try_from(encoded.len())
+            .expect("bounded provider checkpoint length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(encoded);
+    *hasher.finalize().as_bytes()
+}
+
+fn provider_attestation_checkpoint_relative_path(
+    operation_id: PublicationOperationIdV1,
+    generation: u8,
+    attempt: u8,
+    expected_location_revision: u64,
+    provider_id: ProviderId,
+    attestation_digest: MusubiProviderBundleAttestationDigestV1,
+) -> PathBuf {
+    // Unlike the stable set anchor, an exact registration instruction includes the current CAS
+    // revision. Keep revision-specific signed transactions disjoint so a safe rebase cannot
+    // collide with an immutable checkpoint prepared against an older finalized revision.
+    Path::new("publication-v1").join(format!(
+        "{operation_id}.l{generation:02}.t{attempt:02}.r{expected_location_revision:016x}.p{}.a{}.norito",
+        hex::encode(provider_id.as_bytes()),
+        hex::encode(attestation_digest.as_bytes())
+    ))
+}
+
+fn next_provider_attestation_registration_attempt(
+    attempt: u8,
+) -> Result<u8, PublicationBackendError> {
+    attempt
+        .checked_add(1)
+        .filter(|next| *next <= MAX_PROVIDER_ATTESTATION_REGISTRATION_ATTEMPTS)
+        .ok_or_else(|| {
+            PublicationBackendError::permanent(
+                "PROVIDER_ATTESTATION_REGISTRATION_ATTEMPTS_EXHAUSTED",
+            )
+        })
+}
+
+fn map_provider_checkpoint_io(error: AtomicWriteError) -> PublicationBackendError {
+    match error.code() {
+        AtomicWriteErrorCode::ImmutableConflict => {
+            PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_CONFLICT")
+        }
+        _ => PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_IO"),
     }
 }
 
@@ -576,6 +1432,177 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
             .map_err(map_transport_error)
     }
 
+    fn checkpoint_archive_location_provider_registrations(
+        &mut self,
+        operation_id: PublicationOperationIdV1,
+        request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
+        generation: u8,
+        prior_location_ids: &[iroha_data_model::musubi::MusubiArchiveLocationIdV1],
+        checkpoint: Option<&PublicationProviderRegistrationCheckpointV1>,
+    ) -> Result<PublicationProviderRegistrationCheckpointAdvanceV1, PublicationBackendError> {
+        self.verified_provider_checkpoint = None;
+        self.validate_request(request)?;
+        let (response, page, attestation_set) = self.coordinate_absent_archive_location(
+            operation_id,
+            request,
+            registered,
+            generation,
+            prior_location_ids,
+        )?;
+        let MusubiStorageLocationDispositionV1::NeedsRegistration {
+            provider_attestations,
+            ..
+        } = &response.disposition
+        else {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
+            ));
+        };
+
+        let Some(checkpoint) = checkpoint else {
+            let set_sidecar_hash = self.persist_attestation_set_checkpoint(&attestation_set)?;
+            let checkpoint = PublicationProviderRegistrationCheckpointV1 {
+                generation,
+                archive_id: attestation_set.archive_id,
+                replication_order: attestation_set.replication_order,
+                provider_attestation_set_digest: attestation_set.set_digest,
+                set_sidecar_hash,
+                transactions: Vec::new(),
+            };
+            checkpoint.validate_for(request, generation).map_err(|_| {
+                PublicationBackendError::permanent("PROVIDER_REGISTRATION_CHECKPOINT_INVALID")
+            })?;
+            return Ok(PublicationProviderRegistrationCheckpointAdvanceV1::Updated(
+                checkpoint,
+            ));
+        };
+        self.validate_provider_registration_checkpoint(
+            operation_id,
+            generation,
+            request,
+            &attestation_set,
+            provider_attestations,
+            checkpoint,
+        )?;
+
+        for attestation in provider_attestations {
+            if self.exact_provider_attestation_registered(registered, attestation)? {
+                continue;
+            }
+            let Some(transaction) = checkpoint.transactions.iter().rev().find(|transaction| {
+                transaction.key == attestation.key()
+                    && transaction.attestation_digest == attestation.digest()
+            }) else {
+                return self.append_provider_registration_transaction_checkpoint(
+                    operation_id,
+                    generation,
+                    request,
+                    checkpoint,
+                    1,
+                    page.archive.location_revision,
+                    attestation,
+                );
+            };
+            let sidecar = self.load_anchored_provider_checkpoint(
+                operation_id,
+                generation,
+                transaction.attempt,
+                request,
+                transaction.expected_location_revision,
+                attestation,
+                transaction.sidecar_hash,
+            )?;
+            if sidecar.transaction_hash != transaction.transaction_hash {
+                return Err(PublicationBackendError::permanent(
+                    "PROVIDER_REGISTRATION_CHECKPOINT_INVALID",
+                ));
+            }
+
+            let mut state = self
+                .signing
+                .transaction_application_state_v1(&sidecar.signed_transaction)
+                .map_err(map_registry_error)?;
+            let mut submission = None;
+            if state == RegistryTransactionStateV1::Absent {
+                submission = Some(self.signing.submit_signed_v1(&sidecar.signed_transaction));
+                if let Some(Ok(transaction_hash)) = submission.as_ref()
+                    && *transaction_hash != sidecar.transaction_hash
+                {
+                    return Err(PublicationBackendError::permanent(
+                        "PROVIDER_ATTESTATION_TRANSACTION_HASH_MISMATCH",
+                    ));
+                }
+                if self.exact_provider_attestation_registered(registered, attestation)? {
+                    continue;
+                }
+                state = self
+                    .signing
+                    .transaction_application_state_v1(&sidecar.signed_transaction)
+                    .map_err(map_registry_error)?;
+            }
+
+            match state {
+                RegistryTransactionStateV1::Absent => {
+                    return match submission.expect("absent state is submitted exactly once") {
+                        Ok(_) => Err(PublicationBackendError::retryable(
+                            "PROVIDER_ATTESTATION_REGISTRATION_PENDING",
+                        )),
+                        Err(error) => Err(map_registry_error(error)),
+                    };
+                }
+                RegistryTransactionStateV1::Pending
+                | RegistryTransactionStateV1::Applied { .. } => {
+                    return Err(PublicationBackendError::retryable(
+                        "PROVIDER_ATTESTATION_FINALIZED_QUERY_PENDING",
+                    ));
+                }
+                RegistryTransactionStateV1::Terminal {
+                    kind: RegistryTerminalTransactionStateV1::Expired,
+                    ..
+                } => {
+                    let attempt =
+                        next_provider_attestation_registration_attempt(transaction.attempt)?;
+                    return self.append_provider_registration_transaction_checkpoint(
+                        operation_id,
+                        generation,
+                        request,
+                        checkpoint,
+                        attempt,
+                        transaction.expected_location_revision,
+                        attestation,
+                    );
+                }
+                RegistryTransactionStateV1::Terminal {
+                    kind: RegistryTerminalTransactionStateV1::Rejected,
+                    block_height,
+                } => {
+                    let expected_location_revision = self
+                        .provider_attestation_rejection_rebase_revision(
+                            request,
+                            registered,
+                            transaction.expected_location_revision,
+                            block_height,
+                        )?;
+                    let attempt =
+                        next_provider_attestation_registration_attempt(transaction.attempt)?;
+                    return self.append_provider_registration_transaction_checkpoint(
+                        operation_id,
+                        generation,
+                        request,
+                        checkpoint,
+                        attempt,
+                        expected_location_revision,
+                        attestation,
+                    );
+                }
+            }
+        }
+
+        self.verified_provider_checkpoint = Some(checkpoint.clone());
+        Ok(PublicationProviderRegistrationCheckpointAdvanceV1::Ready)
+    }
+
     fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -584,82 +1611,43 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         generation: u8,
         prior_location_ids: &[iroha_data_model::musubi::MusubiArchiveLocationIdV1],
     ) -> Result<PublicationArchiveLocationIntentV1, PublicationBackendError> {
+        let checkpoint = self.verified_provider_checkpoint.take().ok_or_else(|| {
+            PublicationBackendError::permanent("PROVIDER_REGISTRATION_CHECKPOINT_NOT_VERIFIED")
+        })?;
         self.validate_request(request)?;
-        if generation == 0
-            || usize::from(generation) > MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
-            || prior_location_ids.len() + 1 != usize::from(generation)
-            || prior_location_ids.iter().any(|location| location.is_zero())
-        {
-            return Err(PublicationBackendError::permanent(
-                "ARCHIVE_LOCATION_GENERATION_INVALID",
-            ));
-        }
-        let mut sorted_prior_location_ids = prior_location_ids.to_vec();
-        sorted_prior_location_ids.sort();
-        if sorted_prior_location_ids
-            .windows(2)
-            .any(|pair| pair[0] == pair[1])
-        {
-            return Err(PublicationBackendError::permanent(
-                "ARCHIVE_LOCATION_GENERATION_INVALID",
-            ));
-        }
-
-        let coordination_request = MusubiStorageCoordinationRequestV1 {
-            version: 1,
-            operation_id: *operation_id.as_bytes(),
+        let (response, page, attestation_set) = self.coordinate_absent_archive_location(
+            operation_id,
+            request,
+            registered,
             generation,
-            prior_location_ids: sorted_prior_location_ids,
-            chain_id: request.chain_id.clone(),
-            genesis_block_hash: request.genesis_block_hash,
-            publisher: request.publisher.clone(),
-            commitment: request.archive_commitment.clone(),
-            verification_lock_digest: request.publication.manifest.verification_lock_digest,
-            staging_receipt: registered.archive.staging_receipt.clone(),
-            expected_policy_revision: request.expected_policy_revision,
-            finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
-                version: 1,
-                chain_id: registered.chain_id.clone(),
-                genesis_block_hash: registered.genesis_block_hash,
-                transaction_hash: registered.finalized_transaction_hash,
-                snapshot: registered.snapshot,
-                registration: registered.archive.registration_projection(),
-            },
-        };
-        let response = self
-            .http
-            .coordinate_storage(
-                &self.storage_coordinator_url,
-                &coordination_request,
-                current_time_ms()?,
-            )
-            .map_err(map_transport_error)?;
-        if response.archive.registration_projection()
-            != registered.archive.registration_projection()
-        {
+            prior_location_ids,
+        )?;
+        let MusubiStorageLocationDispositionV1::NeedsRegistration {
+            provider_attestations,
+            ..
+        } = &response.disposition
+        else {
             return Err(PublicationBackendError::permanent(
-                "STORAGE_COORDINATOR_ARCHIVE_CONFLICT",
+                "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
             ));
+        };
+        self.validate_provider_registration_checkpoint(
+            operation_id,
+            generation,
+            request,
+            &attestation_set,
+            provider_attestations,
+            &checkpoint,
+        )?;
+        for attestation in provider_attestations {
+            if !self.exact_provider_attestation_registered(registered, attestation)? {
+                return Err(PublicationBackendError::retryable(
+                    "PROVIDER_ATTESTATION_FINALIZED_QUERY_PENDING",
+                ));
+            }
         }
 
-        let FinalizedLocationStateV1::Absent { page } =
-            self.finalized_location_state(request, registered, &response)?
-        else {
-            // A location must never be adopted without first journaling the exact signed CAS that
-            // created it. An identical retry reaches this branch only after journal loss, which is
-            // intentionally fail-closed.
-            return Err(PublicationBackendError::permanent(
-                "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
-            ));
-        };
-        let MusubiStorageLocationDispositionV1::NeedsRegistration { .. } = &response.disposition
-        else {
-            return Err(PublicationBackendError::permanent(
-                "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
-            ));
-        };
-
-        let instruction = location_add_instruction(&response, page.archive.location_revision);
+        let instruction = location_add_instruction(&response, page.archive.location_revision)?;
         let payload = self
             .signing
             .prebuild_v1(instruction.clone())
@@ -839,6 +1827,8 @@ where
         storage_coordinator_url: parsed.storage_coordinator_url,
         provider_gateways: parsed.provider_gateways,
         bindings: bindings.clone(),
+        checkpoint_root: None,
+        verified_provider_checkpoint: None,
     };
     Ok(LoadedProductionPublicationRuntimeV1 {
         signing,
@@ -1267,12 +2257,12 @@ mod tests {
         ChainId,
         account::address::ChainDiscriminantGuard,
         musubi::{
-            MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveCommitmentV1,
-            MusubiArchiveLocationIdV1, MusubiArchiveLocationV1, MusubiArchiveRecordV1,
-            MusubiContentDigestV1, MusubiKotodamaEditionV1, MusubiNamespaceBindingDigestV1,
-            MusubiNamespaceDelegationApprovalV1, MusubiNamespaceDelegationPayloadV1,
-            MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageScopeV1,
-            MusubiProviderBundleVerificationApprovalV1,
+            MUSUBI_MIN_HEALTHY_REPLICAS_V1, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1,
+            MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationV1,
+            MusubiArchiveRecordV1, MusubiContentDigestV1, MusubiKotodamaEditionV1,
+            MusubiNamespaceBindingDigestV1, MusubiNamespaceDelegationApprovalV1,
+            MusubiNamespaceDelegationPayloadV1, MusubiNamespaceV1, MusubiPackageIdV1,
+            MusubiPackageScopeV1, MusubiProviderBundleVerificationApprovalV1,
             MusubiProviderBundleVerificationAttestationV1,
             MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
             MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
@@ -1638,6 +2628,8 @@ mod tests {
             storage_coordinator_url: parsed.storage_coordinator_url,
             provider_gateways: parsed.provider_gateways,
             bindings: parsed.bindings,
+            checkpoint_root: None,
+            verified_provider_checkpoint: None,
         };
         RebaseFixture {
             runtime,
@@ -1649,23 +2641,39 @@ mod tests {
     }
 
     fn coordinator_location(fixture: &RebaseFixture) -> MusubiArchiveLocationV1 {
-        let attestations = coordination_provider_attestations(&fixture.response).to_vec();
+        let provider_attestations = coordinator_provider_attestations(fixture);
         MusubiArchiveLocationV1 {
             location_id: fixture.response.location_id,
             archive_id: fixture.response.archive.archive_id,
             pin_manifest: fixture.response.pin_manifest,
             replication_order: fixture.response.replication_order,
-            providers: attestations
+            providers: provider_attestations
                 .iter()
                 .map(|attestation| attestation.payload.binding.provider_id)
                 .collect(),
-            provider_attestations: attestations,
+            provider_attestation_set_digest: coordination_provider_attestation_set_digest(
+                &fixture.response,
+            )
+            .expect("coordinator attestation set digest"),
             renew_after_epoch: fixture.response.renew_after_epoch,
             expires_at_epoch: fixture.response.expires_at_epoch,
             finalized_height: 61,
             revision: 1,
             state: MusubiArchiveLocationStateV1::Healthy,
         }
+    }
+
+    fn coordinator_provider_attestations(
+        fixture: &RebaseFixture,
+    ) -> &[MusubiProviderBundleVerificationAttestationV1] {
+        let MusubiStorageLocationDispositionV1::NeedsRegistration {
+            provider_attestations,
+            ..
+        } = &fixture.response.disposition
+        else {
+            panic!("coordinator fixture requires unregistered provider attestations")
+        };
+        provider_attestations
     }
 
     fn serve_rebase_fixture_page(fixture: &mut RebaseFixture) -> thread::JoinHandle<Vec<u8>> {
@@ -1688,7 +2696,8 @@ mod tests {
 
     fn rebase_location_intent(fixture: &RebaseFixture) -> PublicationArchiveLocationIntentV1 {
         let instruction =
-            location_add_instruction(&fixture.response, fixture.page.archive.location_revision);
+            location_add_instruction(&fixture.response, fixture.page.archive.location_revision)
+                .expect("compact location instruction");
         let publisher_key =
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("publisher key");
         let mut builder = TransactionBuilder::new(
@@ -1705,6 +2714,638 @@ mod tests {
             instruction,
             builder.sign(publisher_key.private_key()),
         )
+    }
+
+    fn signed_provider_attestation_transaction(
+        request: &PublicationRequestV1,
+        instruction: RegisterMusubiProviderBundleAttestationV1,
+        signer_seed: u8,
+    ) -> SignedTransaction {
+        let signer = KeyPair::try_from_seed(vec![signer_seed; 32], Algorithm::Ed25519)
+            .expect("provider checkpoint signer");
+        let mut builder = TransactionBuilder::new(
+            request.chain_id.clone(),
+            request.publisher.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction]);
+        builder.set_creation_time(Duration::from_millis(1_000));
+        builder.sign(signer.private_key())
+    }
+
+    #[test]
+    fn provider_attestation_set_checkpoint_is_deterministic_and_rejects_substitution() {
+        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let operation_id = fixture.request.operation_id();
+        let attestations = coordinator_provider_attestations(&fixture);
+        let checkpoint = PublicationProviderAttestationSetCheckpointV1::new(
+            operation_id,
+            1,
+            fixture.response.archive.archive_id,
+            fixture.response.replication_order,
+            attestations,
+        )
+        .expect("canonical provider set checkpoint");
+        let repeated = PublicationProviderAttestationSetCheckpointV1::new(
+            operation_id,
+            1,
+            fixture.response.archive.archive_id,
+            fixture.response.replication_order,
+            attestations,
+        )
+        .expect("repeated provider set checkpoint");
+        checkpoint.validate().expect("checkpoint validates");
+        assert_eq!(checkpoint, repeated);
+        assert_eq!(
+            norito::encode_canonical(&checkpoint).expect("encode checkpoint"),
+            norito::encode_canonical(&repeated).expect("encode repeated checkpoint")
+        );
+
+        let mut substituted_reference = checkpoint.clone();
+        substituted_reference.references[0].digest =
+            MusubiProviderBundleAttestationDigestV1::new([0xee; 32]);
+        assert!(
+            substituted_reference.validate().is_err(),
+            "the aggregate digest must reject a substituted provider reference"
+        );
+
+        let mut reordered_references = checkpoint.clone();
+        reordered_references.references.reverse();
+        assert!(
+            reordered_references.validate().is_err(),
+            "the aggregate digest must reject a reordered provider set"
+        );
+
+        let mut substituted_order = checkpoint;
+        substituted_order.replication_order = ReplicationOrderId::new([0xef; 32]);
+        assert!(
+            substituted_order.validate().is_err(),
+            "the aggregate digest must bind the exact replication order"
+        );
+    }
+
+    #[test]
+    fn provider_attestation_transaction_checkpoint_binds_exact_instruction_and_signature() {
+        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let operation_id = fixture.request.operation_id();
+        let expected_location_revision = fixture.page.archive.location_revision;
+        let attestation = coordinator_provider_attestations(&fixture)[0].clone();
+        let exact_instruction = RegisterMusubiProviderBundleAttestationV1::new(
+            attestation.clone(),
+            expected_location_revision,
+        );
+        let exact_transaction = signed_provider_attestation_transaction(
+            &fixture.request,
+            exact_instruction.clone(),
+            0x51,
+        );
+        let checkpoint = PublicationProviderAttestationCheckpointV1::new(
+            operation_id,
+            1,
+            1,
+            expected_location_revision,
+            &attestation,
+            exact_transaction,
+        );
+        checkpoint
+            .validate_for(
+                operation_id,
+                1,
+                1,
+                &fixture.request,
+                expected_location_revision,
+                &attestation,
+            )
+            .expect("exact signed provider checkpoint");
+
+        let mut invalid_provider_attestation = attestation.clone();
+        let unrelated_provider_key =
+            KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("unrelated provider");
+        invalid_provider_attestation.approvals[0].signature = SignatureOf::try_from_hash(
+            unrelated_provider_key.private_key(),
+            invalid_provider_attestation.payload.signing_hash(),
+        )
+        .expect("structurally valid unrelated provider signature");
+        let invalid_provider_instruction = RegisterMusubiProviderBundleAttestationV1::new(
+            invalid_provider_attestation.clone(),
+            expected_location_revision,
+        );
+        let invalid_provider_transaction = signed_provider_attestation_transaction(
+            &fixture.request,
+            invalid_provider_instruction,
+            0x51,
+        );
+        let invalid_provider_checkpoint = PublicationProviderAttestationCheckpointV1::new(
+            operation_id,
+            1,
+            1,
+            expected_location_revision,
+            &invalid_provider_attestation,
+            invalid_provider_transaction,
+        );
+        assert!(
+            invalid_provider_checkpoint
+                .validate_for(
+                    operation_id,
+                    1,
+                    1,
+                    &fixture.request,
+                    expected_location_revision,
+                    &invalid_provider_attestation,
+                )
+                .is_err(),
+            "a checkpoint must verify the provider-owner attestation signature"
+        );
+
+        let substituted_instruction = RegisterMusubiProviderBundleAttestationV1::new(
+            attestation.clone(),
+            expected_location_revision + 1,
+        );
+        let mut instruction_substitution = checkpoint.clone();
+        instruction_substitution.signed_transaction = signed_provider_attestation_transaction(
+            &fixture.request,
+            substituted_instruction,
+            0x51,
+        );
+        instruction_substitution.transaction_hash =
+            *instruction_substitution.signed_transaction.hash().as_ref();
+        assert!(
+            instruction_substitution
+                .validate_for(
+                    operation_id,
+                    1,
+                    1,
+                    &fixture.request,
+                    expected_location_revision,
+                    &attestation,
+                )
+                .is_err(),
+            "a validly signed transaction for another instruction must be rejected"
+        );
+
+        let mut signature_substitution = checkpoint;
+        signature_substitution.signed_transaction =
+            signed_provider_attestation_transaction(&fixture.request, exact_instruction, 0x52);
+        signature_substitution.transaction_hash =
+            *signature_substitution.signed_transaction.hash().as_ref();
+        assert!(
+            signature_substitution
+                .validate_for(
+                    operation_id,
+                    1,
+                    1,
+                    &fixture.request,
+                    expected_location_revision,
+                    &attestation,
+                )
+                .is_err(),
+            "a signature outside the publication authority must be rejected"
+        );
+    }
+
+    #[test]
+    fn exact_provider_attestation_accepts_another_managers_original_audit_actor() {
+        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let attestation = coordinator_provider_attestations(&fixture)[0].clone();
+        let other_manager = KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519)
+            .expect("other archive manager");
+        let record = MusubiProviderBundleAttestationRecordV1 {
+            key: attestation.key(),
+            attestation_digest: attestation.digest(),
+            attestation: attestation.clone(),
+            registered_by: iroha_data_model::account::AccountId::new(
+                other_manager.public_key().clone(),
+            ),
+            registered_at_height: fixture.registered.archive.registered_at_height + 1,
+        };
+        validate_exact_provider_attestation_record(&fixture.registered, &attestation, &record)
+            .expect("registered_by is immutable audit provenance, not proof identity");
+
+        let mut preexisting = record;
+        preexisting.registered_at_height = fixture.registered.archive.registered_at_height;
+        let error = validate_exact_provider_attestation_record(
+            &fixture.registered,
+            &attestation,
+            &preexisting,
+        )
+        .expect_err("a proof cannot predate the publication archive registration");
+        assert_eq!(
+            error.code(),
+            "PROVIDER_ATTESTATION_FINALIZED_RECORD_CONFLICT"
+        );
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+    }
+
+    #[test]
+    fn provider_attestation_checkpoint_restart_loads_exact_attempt_and_rejects_substitution() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let operation_id = fixture.request.operation_id();
+        let expected_location_revision = fixture.page.archive.location_revision;
+        let attestation = coordinator_provider_attestations(&fixture)[0].clone();
+        let instruction = RegisterMusubiProviderBundleAttestationV1::new(
+            attestation.clone(),
+            expected_location_revision,
+        );
+        let signed_transaction =
+            signed_provider_attestation_transaction(&fixture.request, instruction, 0x51);
+        let checkpoint = PublicationProviderAttestationCheckpointV1::new(
+            operation_id,
+            1,
+            1,
+            expected_location_revision,
+            &attestation,
+            signed_transaction,
+        );
+        let state = tempdir().expect("checkpoint state root");
+        fs::create_dir(state.path().join("publication-v1"))
+            .expect("private publication checkpoint directory");
+        let writer = AtomicWriteRoot::new(state.path()).expect("bind checkpoint state root");
+        let attempt_one_path = provider_attestation_checkpoint_relative_path(
+            operation_id,
+            1,
+            1,
+            expected_location_revision,
+            attestation.key().provider_id,
+            attestation.digest(),
+        );
+        writer
+            .install_immutable(
+                &attempt_one_path,
+                &norito::encode_canonical(&checkpoint).expect("encode exact checkpoint"),
+            )
+            .expect("install exact checkpoint");
+        fixture
+            .runtime
+            .bind_publication_state_root(state.path())
+            .expect("bind runtime checkpoint root");
+        assert_eq!(
+            fixture
+                .runtime
+                .load_or_prepare_provider_checkpoint(
+                    operation_id,
+                    1,
+                    1,
+                    &fixture.request,
+                    expected_location_revision,
+                    &attestation,
+                )
+                .expect("restart loads exact immutable checkpoint"),
+            checkpoint
+        );
+
+        let substituted_attempt_path = provider_attestation_checkpoint_relative_path(
+            operation_id,
+            1,
+            2,
+            expected_location_revision,
+            attestation.key().provider_id,
+            attestation.digest(),
+        );
+        writer
+            .install_immutable(
+                &substituted_attempt_path,
+                &norito::encode_canonical(&checkpoint).expect("encode substituted checkpoint"),
+            )
+            .expect("install substituted checkpoint fixture");
+        let error = fixture
+            .runtime
+            .load_or_prepare_provider_checkpoint(
+                operation_id,
+                1,
+                2,
+                &fixture.request,
+                expected_location_revision,
+                &attestation,
+            )
+            .expect_err("an attempt-one checkpoint cannot occupy the attempt-two path");
+        assert_eq!(error.code(), "PROVIDER_ATTESTATION_CHECKPOINT_INVALID");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+    }
+
+    #[test]
+    fn anchored_provider_set_sidecar_deletion_is_permanent_on_reopen() {
+        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let operation_id = fixture.request.operation_id();
+        let checkpoint = PublicationProviderAttestationSetCheckpointV1::new(
+            operation_id,
+            1,
+            fixture.response.archive.archive_id,
+            fixture.response.replication_order,
+            coordinator_provider_attestations(&fixture),
+        )
+        .expect("provider set checkpoint");
+        let state = tempdir().expect("checkpoint state root");
+        fs::create_dir(state.path().join("publication-v1"))
+            .expect("private publication checkpoint directory");
+        fixture
+            .runtime
+            .bind_publication_state_root(state.path())
+            .expect("bind checkpoint state root");
+        let sidecar_hash = fixture
+            .runtime
+            .persist_attestation_set_checkpoint(&checkpoint)
+            .expect("install provider set sidecar");
+
+        let mut reopened = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        reopened
+            .runtime
+            .bind_publication_state_root(state.path())
+            .expect("reopen checkpoint state root");
+        reopened
+            .runtime
+            .validate_anchored_attestation_set_checkpoint(&checkpoint, sidecar_hash)
+            .expect("reopened runtime validates the exact anchored set sidecar");
+
+        let relative = provider_attestation_set_checkpoint_relative_path(operation_id, 1);
+        fs::remove_file(state.path().join(relative)).expect("delete anchored set sidecar fixture");
+        let mut deleted_reopen = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        deleted_reopen
+            .runtime
+            .bind_publication_state_root(state.path())
+            .expect("reopen checkpoint root after set-sidecar deletion");
+        let error = deleted_reopen
+            .runtime
+            .validate_anchored_attestation_set_checkpoint(&checkpoint, sidecar_hash)
+            .expect_err("an anchored set sidecar must never be recreated after deletion");
+        assert_eq!(error.code(), "PROVIDER_ATTESTATION_SET_CHECKPOINT_MISSING");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+    }
+
+    #[test]
+    fn anchored_provider_transaction_sidecar_deletion_is_permanent_on_reopen() {
+        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let operation_id = fixture.request.operation_id();
+        let expected_location_revision = fixture.page.archive.location_revision;
+        let attestation = coordinator_provider_attestations(&fixture)[0].clone();
+        let instruction = RegisterMusubiProviderBundleAttestationV1::new(
+            attestation.clone(),
+            expected_location_revision,
+        );
+        let signed_transaction =
+            signed_provider_attestation_transaction(&fixture.request, instruction, 0x51);
+        let checkpoint = PublicationProviderAttestationCheckpointV1::new(
+            operation_id,
+            1,
+            1,
+            expected_location_revision,
+            &attestation,
+            signed_transaction,
+        );
+        let encoded =
+            encode_provider_attestation_checkpoint(&checkpoint).expect("encode provider sidecar");
+        let sidecar_hash = provider_attestation_sidecar_hash(&encoded);
+        let relative = provider_attestation_checkpoint_relative_path(
+            operation_id,
+            1,
+            1,
+            expected_location_revision,
+            attestation.key().provider_id,
+            attestation.digest(),
+        );
+        let state = tempdir().expect("checkpoint state root");
+        fs::create_dir(state.path().join("publication-v1"))
+            .expect("private publication checkpoint directory");
+        AtomicWriteRoot::new(state.path())
+            .expect("bind checkpoint writer")
+            .install_immutable(&relative, &encoded)
+            .expect("install provider transaction sidecar");
+
+        let mut reopened = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        reopened
+            .runtime
+            .bind_publication_state_root(state.path())
+            .expect("reopen checkpoint state root");
+        assert_eq!(
+            reopened
+                .runtime
+                .load_anchored_provider_checkpoint(
+                    operation_id,
+                    1,
+                    1,
+                    &fixture.request,
+                    expected_location_revision,
+                    &attestation,
+                    sidecar_hash,
+                )
+                .expect("reopened runtime validates the exact anchored transaction sidecar"),
+            checkpoint
+        );
+
+        fs::remove_file(state.path().join(&relative))
+            .expect("delete anchored transaction sidecar fixture");
+        let mut deleted_reopen = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        deleted_reopen
+            .runtime
+            .bind_publication_state_root(state.path())
+            .expect("reopen checkpoint root after transaction-sidecar deletion");
+        let error = deleted_reopen
+            .runtime
+            .load_anchored_provider_checkpoint(
+                operation_id,
+                1,
+                1,
+                &fixture.request,
+                expected_location_revision,
+                &attestation,
+                sidecar_hash,
+            )
+            .expect_err("an anchored transaction sidecar must never be recreated after deletion");
+        assert_eq!(error.code(), "PROVIDER_ATTESTATION_CHECKPOINT_MISSING");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+    }
+
+    #[test]
+    fn provider_attestation_checkpoint_attempt_chain_is_bounded() {
+        for attempt in 1..MAX_PROVIDER_ATTESTATION_REGISTRATION_ATTEMPTS {
+            assert_eq!(
+                next_provider_attestation_registration_attempt(attempt)
+                    .expect("a bounded successor attempt"),
+                attempt + 1
+            );
+        }
+        let error = next_provider_attestation_registration_attempt(
+            MAX_PROVIDER_ATTESTATION_REGISTRATION_ATTEMPTS,
+        )
+        .expect_err("the immutable attempt chain must be bounded");
+        assert_eq!(
+            error.code(),
+            "PROVIDER_ATTESTATION_REGISTRATION_ATTEMPTS_EXHAUSTED"
+        );
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+    }
+
+    #[test]
+    fn provider_attestation_rejection_rebases_only_from_a_covering_advanced_snapshot() {
+        let mut lagging = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let rejection_height = lagging.page.snapshot.finalized_height + 1;
+        let server = serve_rebase_fixture_page(&mut lagging);
+        let error = lagging
+            .runtime
+            .provider_attestation_rejection_rebase_revision(
+                &lagging.request,
+                &lagging.registered,
+                lagging.page.archive.location_revision,
+                Some(rejection_height),
+            )
+            .expect_err("a page below the rejection height cannot authorize a rebase");
+        assert_eq!(error.code(), "PROVIDER_ATTESTATION_FINALIZED_QUERY_PENDING");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Retryable);
+        server.join().expect("lagging finalized query server");
+
+        let mut unchanged = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let signed_revision = unchanged.page.archive.location_revision;
+        advance_rebase_page(&mut unchanged, signed_revision);
+        let rejection_height = unchanged.page.snapshot.finalized_height;
+        let server = serve_rebase_fixture_page(&mut unchanged);
+        let error = unchanged
+            .runtime
+            .provider_attestation_rejection_rebase_revision(
+                &unchanged.request,
+                &unchanged.registered,
+                signed_revision,
+                Some(rejection_height),
+            )
+            .expect_err("an unchanged CAS revision makes the rejection permanent");
+        assert_eq!(error.code(), "PROVIDER_ATTESTATION_REGISTRATION_TERMINAL");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        server.join().expect("unchanged finalized query server");
+
+        let mut advanced = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let signed_revision = advanced.page.archive.location_revision;
+        advance_rebase_page(&mut advanced, signed_revision + 1);
+        let rejection_height = advanced.page.snapshot.finalized_height;
+        let server = serve_rebase_fixture_page(&mut advanced);
+        assert_eq!(
+            advanced
+                .runtime
+                .provider_attestation_rejection_rebase_revision(
+                    &advanced.request,
+                    &advanced.registered,
+                    signed_revision,
+                    Some(rejection_height),
+                )
+                .expect("a covering advanced snapshot authorizes a revision-specific retry"),
+            signed_revision + 1
+        );
+        server.join().expect("advanced finalized query server");
+
+        let missing_height = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let error = missing_height
+            .runtime
+            .provider_attestation_rejection_rebase_revision(
+                &missing_height.request,
+                &missing_height.registered,
+                missing_height.page.archive.location_revision,
+                None,
+            )
+            .expect_err("a rejection without a finalized height cannot authorize a retry");
+        assert_eq!(
+            error.code(),
+            "PROVIDER_ATTESTATION_TRANSACTION_STATUS_INVALID"
+        );
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+    }
+
+    #[test]
+    fn provider_attestation_sidecar_paths_are_deterministic_and_disjoint() {
+        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let operation_id = fixture.request.operation_id();
+        let attestation = &coordinator_provider_attestations(&fixture)[0];
+        let provider_id = attestation.key().provider_id;
+        let attestation_digest = attestation.digest();
+
+        let set_path = provider_attestation_set_checkpoint_relative_path(operation_id, 3);
+        assert_eq!(
+            set_path,
+            PathBuf::from(format!(
+                "publication-v1/{operation_id}.location-03.provider-set.norito"
+            ))
+        );
+        assert_eq!(
+            set_path,
+            provider_attestation_set_checkpoint_relative_path(operation_id, 3)
+        );
+
+        let provider_path = provider_attestation_checkpoint_relative_path(
+            operation_id,
+            3,
+            1,
+            17,
+            provider_id,
+            attestation_digest,
+        );
+        assert_eq!(
+            provider_path,
+            PathBuf::from(format!(
+                "publication-v1/{operation_id}.l03.t01.r0000000000000011.p{}.a{}.norito",
+                hex::encode(provider_id.as_bytes()),
+                hex::encode(attestation_digest.as_bytes())
+            ))
+        );
+        assert_ne!(provider_path, set_path);
+        assert_ne!(
+            provider_path,
+            provider_attestation_checkpoint_relative_path(
+                operation_id,
+                3,
+                2,
+                17,
+                provider_id,
+                attestation_digest,
+            )
+        );
+        assert_ne!(
+            provider_path,
+            provider_attestation_checkpoint_relative_path(
+                operation_id,
+                4,
+                1,
+                17,
+                provider_id,
+                attestation_digest,
+            )
+        );
+        assert_ne!(
+            provider_path,
+            provider_attestation_checkpoint_relative_path(
+                operation_id,
+                3,
+                1,
+                18,
+                provider_id,
+                attestation_digest,
+            )
+        );
+        assert_ne!(
+            provider_path,
+            provider_attestation_checkpoint_relative_path(
+                operation_id,
+                3,
+                1,
+                17,
+                provider_id,
+                MusubiProviderBundleAttestationDigestV1::new([0xed; 32]),
+            )
+        );
+        assert!(
+            provider_path
+                .file_name()
+                .expect("provider checkpoint file name")
+                .as_encoded_bytes()
+                .len()
+                <= 255,
+            "one checkpoint component must remain within the portable filename ceiling"
+        );
+        assert!(set_path.is_relative());
+        assert!(provider_path.is_relative());
+        assert!(set_path.components().all(|component| !matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        )));
+        assert!(provider_path.components().all(|component| !matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        )));
     }
 
     #[test]
@@ -1778,20 +3419,11 @@ mod tests {
     }
 
     #[test]
-    fn finalized_rebase_rejects_same_id_provider_evidence_for_another_chain() {
+    fn finalized_rebase_rejects_same_id_with_another_attestation_set() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let mut location = coordinator_location(&fixture);
-        for (index, attestation) in location.provider_attestations.iter_mut().enumerate() {
-            let index = u8::try_from(index).expect("provider fixture index fits u8");
-            let provider_key = KeyPair::try_from_seed(vec![0x88 + index; 32], Algorithm::Ed25519)
-                .expect("provider key");
-            attestation.payload.binding.chain_id = ChainId::from("other-chain");
-            attestation.approvals[0].signature = SignatureOf::try_from_hash(
-                provider_key.private_key(),
-                attestation.payload.signing_hash(),
-            )
-            .expect("replacement provider signature");
-        }
+        location.provider_attestation_set_digest =
+            MusubiProviderBundleAttestationSetDigestV1::new([0xee; 32]);
         advance_rebase_page(&mut fixture, 2);
         fixture.page.archive.location_ids = vec![location.location_id];
         fixture.page.items = vec![location];
@@ -1800,7 +3432,7 @@ mod tests {
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
-            .expect_err("same-id evidence for another chain must conflict");
+            .expect_err("same-id location with another proof set must conflict");
         assert_eq!(error.code(), "ARCHIVE_LOCATION_ID_CONFLICT");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
@@ -1846,7 +3478,8 @@ mod tests {
             fixture.page.snapshot.finalized_height
         );
         let instruction =
-            location_add_instruction(&fixture.response, page.archive.location_revision);
+            location_add_instruction(&fixture.response, page.archive.location_revision)
+                .expect("rebased compact location instruction");
         assert_eq!(instruction.expected_location_revision, 7);
         assert_ne!(
             instruction.expected_location_revision,
@@ -1877,6 +3510,83 @@ mod tests {
         assert_eq!(error.code(), "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
+    }
+
+    #[test]
+    fn finalized_rebase_rejects_every_immutable_archive_projection_substitution() {
+        enum ProjectionMutation {
+            Chain,
+            Genesis,
+            Commitment,
+            Receipt,
+            Registrant,
+        }
+
+        for mutation in [
+            ProjectionMutation::Chain,
+            ProjectionMutation::Genesis,
+            ProjectionMutation::Commitment,
+            ProjectionMutation::Receipt,
+            ProjectionMutation::Registrant,
+        ] {
+            let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+            advance_rebase_page(&mut fixture, 2);
+            match mutation {
+                ProjectionMutation::Chain => {
+                    fixture.page.chain_id = ChainId::from("another-chain");
+                }
+                ProjectionMutation::Genesis => {
+                    fixture.page.genesis_hash = [0x91; 32];
+                }
+                ProjectionMutation::Commitment => {
+                    fixture.page.archive.commitment.root_cid =
+                        ManifestRootCid::from_blake3_digest([0x92; 32])
+                            .expect("replacement root CID");
+                    let replacement_archive_id = fixture.page.archive.commitment.archive_id();
+                    fixture.page.archive.archive_id = replacement_archive_id;
+                    fixture
+                        .page
+                        .archive
+                        .staging_receipt
+                        .payload
+                        .binding
+                        .archive_id = replacement_archive_id;
+                }
+                ProjectionMutation::Receipt => {
+                    fixture.page.archive.staging_receipt.payload.issued_at_ms += 1;
+                    fixture.page.archive.staging_receipt.payload.expires_at_ms += 1;
+                }
+                ProjectionMutation::Registrant => {
+                    let replacement_key =
+                        KeyPair::try_from_seed(vec![0x93; 32], Algorithm::Ed25519)
+                            .expect("replacement registrant key");
+                    let replacement = iroha_data_model::account::AccountId::new(
+                        replacement_key.public_key().clone(),
+                    );
+                    fixture.page.archive.registered_by = replacement.clone();
+                    fixture
+                        .page
+                        .archive
+                        .staging_receipt
+                        .payload
+                        .binding
+                        .publisher = replacement;
+                }
+            }
+            fixture
+                .page
+                .validate()
+                .expect("substituted projection remains structurally valid");
+            let server = serve_rebase_fixture_page(&mut fixture);
+
+            let error = fixture
+                .runtime
+                .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
+                .expect_err("a later snapshot must reproduce the immutable projection exactly");
+            assert_eq!(error.code(), "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT");
+            assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+            server.join().expect("finalized query server");
+        }
     }
 
     #[test]

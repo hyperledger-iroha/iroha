@@ -43,6 +43,11 @@ portal-only upload path:
    }
    ```
 
+   The draft request and every nested proposal object are closed schemas.
+   Unknown fields and any recursive private-key alias are rejected before
+   authority lookup or instruction construction. `authority` is an exact
+   non-empty token, not a trim-and-accept convenience value.
+
 4. Present `signable_transaction_b64` to the user’s wallet (for example through
    IrohaConnect) and collect a detached Ed25519 signature.
 5. Assemble the signed transaction locally and submit it through the normal
@@ -73,14 +78,14 @@ transaction pipeline.
 | Field | Type | Requirements |
 |-------|------|--------------|
 | `version` | `1` (u16) | Must equal `AGENDA_PROPOSAL_VERSION_V1`. |
-| `proposal_id` | string (`AC-YYYY-###`) | Stable identifier; enforced during validation. |
-| `submitted_at_unix_ms` | u64 | Milliseconds since Unix epoch. |
-| `language` | string | BCP‑47 tag (`"en"`, `"ja-JP"`, etc.). |
+| `proposal_id` | string (`AC-YYYY-###`) | Exact 11-character stable identifier; surrounding whitespace and alternate digit counts are rejected. |
+| `submitted_at_unix_ms` | u64 | Non-zero milliseconds since Unix epoch; JSON clients must preserve the complete `1..=18446744073709551615` range losslessly. |
+| `language` | string | Exact 2–32 byte BCP‑47-style ASCII tag (`"en"`, `"ja-JP"`, etc.); surrounding whitespace is rejected. |
 | `action` | enum (`add-to-denylist`, `remove-from-denylist`, `amend-policy`) | Requested Ministry action. |
 | `summary.title` | string | ≤256 chars recommended. |
 | `summary.motivation` | string | Why the action is required. |
 | `summary.expected_impact` | string | Outcomes if the action is accepted. |
-| `tags[]` | lowercase strings | Optional triage labels. Allowed values: `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, `terrorism`, `spam`. |
+| `tags[]` | exact lowercase strings | Optional triage labels. Allowed values: `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, `terrorism`, `spam`; aliases and surrounding whitespace are rejected. |
 | `targets[]` | objects | One or more hash family entries (see below). |
 | `evidence[]` | objects | One or more evidence attachments (see below). |
 | `submitter.name` | string | Display name or organization. |

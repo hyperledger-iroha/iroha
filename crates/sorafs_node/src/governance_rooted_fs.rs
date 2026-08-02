@@ -25,6 +25,16 @@ unsafe extern "C" {
 }
 
 const DEFAULT_CHILD_ENTRY_LIMIT: usize = 1_000_000;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+const ATOMIC_RETAINED_SUFFIX_V1: &str = ".retained-v1-";
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+/// Number of canonical V1 predecessor slots reserved per atomic target.
+pub(super) const ATOMIC_RETAINED_SLOT_COUNT_V1: usize = 1_024;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+const ATOMIC_RETAINED_SLOT_WIDTH_V1: usize = 4;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+/// Aggregate retained-predecessor byte ceiling for one directory.
+pub(super) const ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
 
 #[cfg(any(windows, test))]
 mod windows_dacl {
@@ -925,7 +935,16 @@ impl RootedDirectory {
         name: &OsStr,
         max_bytes: usize,
     ) -> io::Result<Option<FileBinding>> {
-        self.file_binding_with_policy(name, max_bytes, false)
+        self.file_binding_with_policy_and_access(name, max_bytes, false, false)
+    }
+
+    /// Retain one direct regular child with deletion access to its exact handle.
+    pub(super) fn removal_file_binding(
+        &self,
+        name: &OsStr,
+        max_bytes: usize,
+    ) -> io::Result<Option<FileBinding>> {
+        self.file_binding_with_policy_and_access(name, max_bytes, false, true)
     }
 
     /// Retain one private direct child and its exact name binding, if present.
@@ -934,18 +953,77 @@ impl RootedDirectory {
         name: &OsStr,
         max_bytes: usize,
     ) -> io::Result<Option<FileBinding>> {
-        self.file_binding_with_policy(name, max_bytes, true)
+        self.file_binding_with_policy_and_access(name, max_bytes, true, false)
     }
 
-    fn file_binding_with_policy(
+    /// Validate one canonical retained predecessor for an exact target.
+    ///
+    /// A malformed name that claims this target's retained namespace is an
+    /// error. A canonical retained name for another target is not a match.
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    pub(super) fn atomic_retained_file_len(
+        &self,
+        name: &OsStr,
+        target_name: &str,
+        max_bytes: usize,
+        private: bool,
+    ) -> io::Result<Option<u64>> {
+        validate_component(OsStr::new(target_name))?;
+        validate_component(name)?;
+        let Some(name_utf8) = name.to_str() else {
+            return Ok(None);
+        };
+        let Some((retained_target, _slot)) = atomic_retained_target_and_slot(name_utf8) else {
+            if is_atomic_retained_candidate_for(name_utf8, target_name) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "governance atomic retention name `{}` is not canonical; offline inspection is required",
+                        self.display_path.join(name).display()
+                    ),
+                ));
+            }
+            return Ok(None);
+        };
+        if retained_target != target_name {
+            return Ok(None);
+        }
+
+        let binding = if private {
+            self.private_file_binding(name, max_bytes)?
+        } else {
+            self.file_binding(name, max_bytes)?
+        }
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance atomic retained generation disappeared during inventory",
+            )
+        })?;
+        let before = binding.handle.metadata()?;
+        validate_file_metadata(&self.display_path.join(name), &before, max_bytes, private)?;
+        binding.verify()?;
+        let after = binding.handle.metadata()?;
+        validate_file_metadata(&self.display_path.join(name), &after, max_bytes, private)?;
+        if !metadata_stable_during_read(&before, &after) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance atomic retained generation changed during inventory",
+            ));
+        }
+        Ok(Some(after.len()))
+    }
+
+    fn file_binding_with_policy_and_access(
         &self,
         name: &OsStr,
         max_bytes: usize,
         private: bool,
+        delete_access: bool,
     ) -> io::Result<Option<FileBinding>> {
         validate_component(name)?;
         self.verify()?;
-        let handle = match platform::open_file(&self.handle, name, false) {
+        let handle = match platform::open_file(&self.handle, name, delete_access) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 self.verify()?;
@@ -1002,6 +1080,13 @@ impl RootedDirectory {
     }
 
     /// Atomically replace the target only if its stable identity is unchanged.
+    ///
+    /// Linux/macOS exchange both bindings before retaining the predecessor.
+    /// Windows supports create-only installation and exact-byte no-ops, but
+    /// fails changed existing-target replacement closed because it has no
+    /// rooted atomic exchange that preserves every raced object. Retained
+    /// generations are immutable online; saturation requires offline archival
+    /// or cleanup while the writer is stopped.
     pub(super) fn atomic_write(
         &self,
         name: &OsStr,
@@ -1014,21 +1099,24 @@ impl RootedDirectory {
             temporary_name,
             data,
             expected,
+            || Ok(()),
             |file| file.sync_all(),
             |directory| directory.sync_all(),
         )
     }
 
-    fn atomic_write_with_sync<FileSync, DirectorySync>(
+    fn atomic_write_with_sync<BeforePromote, FileSync, DirectorySync>(
         &self,
         name: &OsStr,
         temporary_name: &OsStr,
         data: &[u8],
         expected: ExpectedFile,
+        before_promote: BeforePromote,
         mut sync_file: FileSync,
         mut sync_directory: DirectorySync,
     ) -> io::Result<()>
     where
+        BeforePromote: FnOnce() -> io::Result<()>,
         FileSync: FnMut(&File) -> io::Result<()>,
         DirectorySync: FnMut(&File) -> io::Result<()>,
     {
@@ -1064,6 +1152,42 @@ impl RootedDirectory {
                 ),
             )
         })?;
+        if let ExpectedFile::Identity(expected_binding) = &expected {
+            let current = if expected_binding.private {
+                self.read_private_file(name, expected_binding.max_bytes)?
+            } else {
+                self.read_file(name, expected_binding.max_bytes)?
+            };
+            if current.binding.identity != expected_binding.identity {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!(
+                        "governance atomic predecessor `{}` changed before exact-byte comparison",
+                        self.display_path.join(name).display()
+                    ),
+                ));
+            }
+            if current.bytes == data {
+                expected_binding.verify()?;
+                current.binding.verify()?;
+                self.verify()?;
+                return Ok(());
+            }
+            #[cfg(windows)]
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Windows governance existing-target replacement is disabled because the platform has no rooted atomic exchange that preserves every raced object",
+            ));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let retained_name = match &expected {
+            ExpectedFile::Identity(binding) => {
+                let metadata = binding.handle.metadata()?;
+                validate_regular_file_metadata(&self.display_path.join(name), &metadata)?;
+                Some(self.available_atomic_retained_name(name, metadata.len(), binding.private)?)
+            }
+            ExpectedFile::Missing => None,
+        };
         let mut temporary =
             platform::create_file(&self.handle, temporary_name).map_err(|error| {
                 io::Error::new(
@@ -1075,6 +1199,7 @@ impl RootedDirectory {
                 )
             })?;
         let temporary_path = self.display_path.join(temporary_name);
+        #[cfg(windows)]
         let mut renamed = false;
         let result = (|| {
             temporary.write_all(data).map_err(|error| {
@@ -1096,18 +1221,7 @@ impl RootedDirectory {
                 )
             })?;
             let temporary_metadata = temporary.metadata()?;
-            validate_regular_file_metadata(&temporary_path, &temporary_metadata)?;
-            #[cfg(unix)]
-            if temporary_metadata.mode() & 0o600 != 0o600 {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "governance atomic temporary `{}` lacks owner read/write mode: {:o}",
-                        temporary_path.display(),
-                        temporary_metadata.mode() & 0o7777
-                    ),
-                ));
-            }
+            validate_private_regular_file_metadata(&temporary_path, &temporary_metadata)?;
             let temporary_identity = file_identity(&temporary_metadata)?;
             verify_expected_file(self, name, &expected).map_err(|error| {
                 io::Error::new(
@@ -1127,13 +1241,13 @@ impl RootedDirectory {
                     ),
                 )
             })?;
-            platform::rename_open_file(
-                &self.handle,
-                &temporary,
-                temporary_name,
-                name,
-                matches!(&expected, ExpectedFile::Identity(_)),
-            )
+            before_promote()?;
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            if retained_name.is_some() {
+                platform::exchange_open_file(&self.handle, &temporary, temporary_name, name)
+            } else {
+                platform::rename_open_file(&self.handle, &temporary, temporary_name, name)
+            }
             .map_err(|error| {
                 io::Error::new(
                     error.kind(),
@@ -1144,7 +1258,47 @@ impl RootedDirectory {
                     ),
                 )
             })?;
-            renamed = true;
+            #[cfg(windows)]
+            {
+                platform::rename_open_file(
+                    &self.handle,
+                    &temporary,
+                    temporary_name,
+                    name,
+                )
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "promote governance atomic temporary `{}` to `{}` without replacement: {error}",
+                            temporary_path.display(),
+                            self.display_path.join(name).display()
+                        ),
+                    )
+                })?;
+                renamed = true;
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+            platform::rename_open_file(&self.handle, &temporary, temporary_name, name)
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "promote governance atomic temporary `{}` to `{}`: {error}",
+                            temporary_path.display(),
+                            self.display_path.join(name).display()
+                        ),
+                    )
+                })?;
+            sync_directory(&self.handle).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "sync governance atomic directory `{}`: {error}",
+                        self.display_path.display()
+                    ),
+                )
+            })?;
             let promoted = platform::open_file(&self.handle, name, false).map_err(|error| {
                 io::Error::new(
                     error.kind(),
@@ -1155,22 +1309,95 @@ impl RootedDirectory {
                 )
             })?;
             let promoted_metadata = promoted.metadata()?;
-            validate_regular_file_metadata(&self.display_path.join(name), &promoted_metadata)?;
+            validate_private_regular_file_metadata(
+                &self.display_path.join(name),
+                &promoted_metadata,
+            )?;
             if file_identity(&promoted_metadata)? != temporary_identity {
                 return Err(io::Error::other(format!(
                     "governance atomic target `{}` is not the promoted temporary object",
                     self.display_path.join(name).display()
                 )));
             }
-            sync_directory(&self.handle).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "sync governance atomic directory `{}`: {error}",
-                        self.display_path.display()
-                    ),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            if let Some(retained_name) = retained_name.as_deref() {
+                let (expected_identity, expected_max_bytes, expected_private) = match &expected {
+                    ExpectedFile::Identity(binding) => {
+                        (binding.identity, binding.max_bytes, binding.private)
+                    }
+                    ExpectedFile::Missing => unreachable!("retained replacement has an identity"),
+                };
+                let predecessor = platform::open_file(&self.handle, temporary_name, false)
+                    .map_err(|error| {
+                        io::Error::new(
+                            error.kind(),
+                            format!(
+                                "open exchanged governance atomic predecessor `{}`: {error}",
+                                temporary_path.display()
+                            ),
+                        )
+                    })?;
+                let predecessor_metadata = predecessor.metadata()?;
+                validate_file_metadata(
+                    &temporary_path,
+                    &predecessor_metadata,
+                    expected_max_bytes,
+                    expected_private,
+                )?;
+                if file_identity(&predecessor_metadata)? != expected_identity {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        format!(
+                            "governance atomic predecessor `{}` was substituted during exchange; both objects were preserved",
+                            self.display_path.join(name).display()
+                        ),
+                    ));
+                }
+                platform::rename_exclusive(
+                    &self.handle,
+                    temporary_name,
+                    &self.handle,
+                    retained_name,
                 )
-            })?;
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "retain governance atomic predecessor `{}` as `{}`: {error}; the predecessor remains preserved for offline recovery",
+                            temporary_path.display(),
+                            self.display_path.join(retained_name).display()
+                        ),
+                    )
+                })?;
+                sync_directory(&self.handle).map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "sync governance atomic predecessor retention directory `{}`: {error}",
+                            self.display_path.display()
+                        ),
+                    )
+                })?;
+                let retained_path = self.display_path.join(retained_name);
+                let retained = platform::open_file(&self.handle, retained_name, false)?;
+                let retained_metadata = retained.metadata()?;
+                validate_file_metadata(
+                    &retained_path,
+                    &retained_metadata,
+                    expected_max_bytes,
+                    expected_private,
+                )?;
+                if file_identity(&retained_metadata)? != expected_identity
+                    || file_identity(&predecessor.metadata()?)? != expected_identity
+                    || retained_metadata.len() != predecessor_metadata.len()
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "retained governance atomic predecessor was substituted; every observed object remains preserved for offline inspection",
+                    ));
+                }
+                self.require_file_name_absent(temporary_name)?;
+            }
             self.verify().map_err(|error| {
                 io::Error::new(
                     error.kind(),
@@ -1190,7 +1417,10 @@ impl RootedDirectory {
                 )
             })?;
             let durable_metadata = durable.metadata()?;
-            validate_regular_file_metadata(&self.display_path.join(name), &durable_metadata)?;
+            validate_private_regular_file_metadata(
+                &self.display_path.join(name),
+                &durable_metadata,
+            )?;
             if file_identity(&durable_metadata)? != temporary_identity {
                 return Err(io::Error::other(format!(
                     "governance atomic target `{}` changed before durable readback",
@@ -1199,6 +1429,7 @@ impl RootedDirectory {
             }
             Ok(())
         })();
+        #[cfg(windows)]
         if result.is_err() && !renamed {
             let _ = platform::remove_open_file(
                 &self.handle,
@@ -1207,7 +1438,106 @@ impl RootedDirectory {
                 file_identity(&temporary.metadata()?).ok(),
             );
         }
+        // POSIX has no conditional unlink-by-descriptor, so a failed
+        // transaction keeps every ambiguous object available for recovery.
+        // Successful replacement retains the exact predecessor in a bounded
+        // V1 slot. Windows never enters existing-target replacement.
         result
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn available_atomic_retained_name(
+        &self,
+        target_name: &OsStr,
+        predecessor_bytes: u64,
+        private: bool,
+    ) -> io::Result<OsString> {
+        let target_name = target_name.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance atomic retention target is not canonical UTF-8",
+            )
+        })?;
+        let mut occupied = [false; ATOMIC_RETAINED_SLOT_COUNT_V1];
+        let mut retained_bytes = 0_u64;
+        for name in self.child_names_bounded(DEFAULT_CHILD_ENTRY_LIMIT)? {
+            let Some(name_utf8) = name.to_str() else {
+                continue;
+            };
+            let Some((retained_target, slot)) = atomic_retained_target_and_slot(name_utf8) else {
+                if is_atomic_retained_candidate_for(name_utf8, target_name) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "governance atomic retention name `{}` is not canonical; offline inspection is required",
+                            self.display_path.join(&name).display()
+                        ),
+                    ));
+                }
+                continue;
+            };
+            let retained = platform::open_file(&self.handle, &name, false)?;
+            let metadata = retained.metadata()?;
+            validate_file_metadata(
+                &self.display_path.join(&name),
+                &metadata,
+                usize::MAX,
+                private && retained_target == target_name,
+            )?;
+            let identity = file_identity(&metadata)?;
+            let linked = platform::open_file(&self.handle, &name, false)?;
+            let linked_metadata = linked.metadata()?;
+            validate_file_metadata(
+                &self.display_path.join(&name),
+                &linked_metadata,
+                usize::MAX,
+                private && retained_target == target_name,
+            )?;
+            if file_identity(&linked_metadata)? != identity {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "governance atomic retained generation changed during bounded inventory",
+                ));
+            }
+            retained_bytes = retained_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance atomic retained-generation byte total overflowed",
+                )
+            })?;
+            if retained_target == target_name {
+                occupied[slot] = true;
+            }
+        }
+        let total = retained_bytes
+            .checked_add(predecessor_bytes)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance atomic retained-generation byte total overflowed",
+                )
+            })?;
+        if total > ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1 {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "governance atomic retained generations would exceed the {}-byte V1 aggregate bound; stop the writer and archive or clear retained generations offline",
+                    ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1
+                ),
+            ));
+        }
+        let slot = occupied
+            .iter()
+            .position(|occupied| !occupied)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!(
+                        "all {ATOMIC_RETAINED_SLOT_COUNT_V1} V1 predecessor slots for `{target_name}` are occupied; stop the writer and archive or clear them offline"
+                    ),
+                )
+            })?;
+        atomic_retained_name(OsStr::new(target_name), slot)
     }
 
     /// Atomically write, binding replacement to the currently opened target.
@@ -1245,6 +1575,7 @@ impl RootedDirectory {
     }
 
     /// Remove matching atomic crash temporaries below this exact directory.
+    #[cfg(any(windows, test))]
     pub(super) fn remove_atomic_temps_for(&self, target_name: &str) -> io::Result<usize> {
         validate_component(OsStr::new(target_name))?;
         self.remove_atomic_temps_matching(DEFAULT_CHILD_ENTRY_LIMIT, |candidate| {
@@ -1253,6 +1584,7 @@ impl RootedDirectory {
     }
 
     /// Remove bounded atomic crash temporaries whose decoded target is allowed.
+    #[cfg(any(windows, test))]
     pub(super) fn remove_atomic_temps_matching<Allowed>(
         &self,
         max_entries: usize,
@@ -1299,7 +1631,139 @@ impl RootedDirectory {
         Ok(removed)
     }
 
+    /// Atomically isolate one exact regular-file binding without unlinking it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn isolate_file_binding(
+        &self,
+        binding: FileBinding,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+    ) -> io::Result<FileSnapshot> {
+        self.isolate_file_binding_with(binding, quarantine, quarantine_name, || Ok(()))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn isolate_file_binding_with<BeforeRename>(
+        &self,
+        binding: FileBinding,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+        before_rename: BeforeRename,
+    ) -> io::Result<FileSnapshot>
+    where
+        BeforeRename: FnOnce() -> io::Result<()>,
+    {
+        self.isolate_file_binding_with_sync(
+            binding,
+            quarantine,
+            quarantine_name,
+            before_rename,
+            |directory| directory.sync_all(),
+            |directory| directory.sync_all(),
+        )
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn isolate_file_binding_with_sync<BeforeRename, SyncSource, SyncQuarantine>(
+        &self,
+        binding: FileBinding,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+        before_rename: BeforeRename,
+        sync_source: SyncSource,
+        sync_quarantine: SyncQuarantine,
+    ) -> io::Result<FileSnapshot>
+    where
+        BeforeRename: FnOnce() -> io::Result<()>,
+        SyncSource: FnOnce(&File) -> io::Result<()>,
+        SyncQuarantine: FnOnce(&File) -> io::Result<()>,
+    {
+        validate_component(quarantine_name)?;
+        if !self.writable || !quarantine.writable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "read-only governance directory cannot isolate recovery children",
+            ));
+        }
+        self.verify()?;
+        quarantine.verify()?;
+        binding.verify()?;
+        if binding.parent.identity != self.identity
+            || !Arc::ptr_eq(&binding.parent.handle, &self.handle)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "planned governance file binding belongs to a different parent",
+            ));
+        }
+        if self.identity == quarantine.identity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance recovery quarantine must be a distinct directory",
+            ));
+        }
+        let FileBinding {
+            handle,
+            identity,
+            name,
+            max_bytes,
+            private,
+            ..
+        } = binding;
+        before_rename()?;
+        platform::rename_exclusive(&self.handle, &name, &quarantine.handle, quarantine_name)?;
+        let source_sync = sync_source(&self.handle);
+        let quarantine_sync = sync_quarantine(&quarantine.handle);
+        source_sync?;
+        quarantine_sync?;
+
+        let snapshot = quarantine.read_file_with_policy(quarantine_name, max_bytes, private)?;
+        if snapshot.binding.identity != identity || file_identity(&handle.metadata()?)? != identity
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance recovery quarantine captured a substituted file; the preserved entry requires offline inspection",
+            ));
+        }
+        self.require_file_name_absent(&name)?;
+        snapshot.binding.verify()?;
+        self.verify()?;
+        quarantine.verify()?;
+        Ok(snapshot)
+    }
+
     /// Remove one direct regular child by exact opened identity.
+    #[cfg(any(windows, test))]
+    pub(super) fn remove_file_binding(&self, binding: FileBinding) -> io::Result<()> {
+        self.verify()?;
+        binding.verify()?;
+        if binding.parent.identity != self.identity
+            || !Arc::ptr_eq(&binding.parent.handle, &self.handle)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "planned governance file binding belongs to a different parent",
+            ));
+        }
+        let FileBinding {
+            handle,
+            identity,
+            name,
+            ..
+        } = binding;
+        platform::remove_open_file(&self.handle, &handle, &name, Some(identity))?;
+        drop(handle);
+        self.require_file_name_absent(&name)?;
+        self.handle.sync_all()?;
+        self.verify()
+    }
+
+    /// Remove one direct regular child resolved at deletion time.
+    ///
+    /// This is unsuitable for a retained recovery identity: Windows recovery
+    /// uses exact-handle disposition, while Linux/macOS recovery atomically
+    /// isolates the current binding into a retained quarantine.
+    #[cfg(any(windows, test))]
     pub(super) fn remove_file_if_exists(&self, name: &OsStr) -> io::Result<bool> {
         validate_component(name)?;
         self.verify()?;
@@ -1346,9 +1810,135 @@ impl RootedDirectory {
         }
     }
 
+    /// Atomically isolate one exact empty directory without unlinking it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn isolate_empty_directory_binding(
+        &self,
+        child: Self,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+    ) -> io::Result<()> {
+        self.isolate_empty_directory_binding_with(child, quarantine, quarantine_name, || Ok(()))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn isolate_empty_directory_binding_with<BeforeRename>(
+        &self,
+        child: Self,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+        before_rename: BeforeRename,
+    ) -> io::Result<()>
+    where
+        BeforeRename: FnOnce() -> io::Result<()>,
+    {
+        self.isolate_empty_directory_binding_with_sync(
+            child,
+            quarantine,
+            quarantine_name,
+            before_rename,
+            |directory| directory.sync_all(),
+            |directory| directory.sync_all(),
+        )
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn isolate_empty_directory_binding_with_sync<BeforeRename, SyncSource, SyncQuarantine>(
+        &self,
+        child: Self,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+        before_rename: BeforeRename,
+        sync_source: SyncSource,
+        sync_quarantine: SyncQuarantine,
+    ) -> io::Result<()>
+    where
+        BeforeRename: FnOnce() -> io::Result<()>,
+        SyncSource: FnOnce(&File) -> io::Result<()>,
+        SyncQuarantine: FnOnce(&File) -> io::Result<()>,
+    {
+        validate_component(quarantine_name)?;
+        let binding = child.binding.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance root cannot be isolated as a retained child",
+            )
+        })?;
+        validate_component(&binding.name)?;
+        if !self.writable || !quarantine.writable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "read-only governance directory cannot isolate recovery children",
+            ));
+        }
+        self.verify()?;
+        child.verify()?;
+        quarantine.verify()?;
+        if binding.parent_identity != self.identity || !Arc::ptr_eq(&binding.parent, &self.handle) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "planned governance directory binding belongs to a different parent",
+            ));
+        }
+        if self.identity == quarantine.identity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance recovery quarantine must be a distinct directory",
+            ));
+        }
+        if !child.child_names_bounded(1)?.is_empty() {
+            return Err(io::Error::other(format!(
+                "governance directory `{}` is not empty",
+                child.display_path.display()
+            )));
+        }
+        let name = binding.name.clone();
+        let identity = child.identity;
+        before_rename()?;
+        platform::rename_exclusive(&self.handle, &name, &quarantine.handle, quarantine_name)?;
+        let source_sync = sync_source(&self.handle);
+        let quarantine_sync = sync_quarantine(&quarantine.handle);
+        source_sync?;
+        quarantine_sync?;
+
+        let isolated = quarantine.open_directory(quarantine_name)?;
+        if isolated.identity != identity || file_identity(&child.handle.metadata()?)? != identity {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance recovery quarantine captured a substituted directory; the preserved entry requires offline inspection",
+            ));
+        }
+        if !isolated.child_names_bounded(1)?.is_empty() {
+            return Err(io::Error::other(
+                "isolated governance recovery directory changed after quarantine",
+            ));
+        }
+        match self.open_directory(&name) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(replacement) => {
+                drop(replacement);
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "governance directory was replaced during recovery isolation",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+        isolated.verify()?;
+        self.verify()?;
+        quarantine.verify()
+    }
+
     /// Remove one direct empty child directory by its exact retained identity.
-    pub(super) fn remove_empty_directory_if_exists(&self, name: &OsStr) -> io::Result<bool> {
-        validate_component(name)?;
+    #[cfg(any(windows, test))]
+    pub(super) fn remove_empty_directory_binding(&self, child: Self) -> io::Result<()> {
+        let binding = child.binding.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance root cannot be removed as a retained child",
+            )
+        })?;
+        validate_component(&binding.name)?;
         if !self.writable {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -1356,23 +1946,24 @@ impl RootedDirectory {
             ));
         }
         self.verify()?;
-        let child = match self.open_directory(name) {
-            Ok(child) => child,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error),
-        };
+        child.verify()?;
+        if binding.parent_identity != self.identity || !Arc::ptr_eq(&binding.parent, &self.handle) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "planned governance directory binding belongs to a different parent",
+            ));
+        }
         if !child.child_names_bounded(1)?.is_empty() {
             return Err(io::Error::other(format!(
                 "governance directory `{}` is not empty",
                 child.display_path.display()
             )));
         }
-        self.verify()?;
-        child.verify()?;
+        let name = binding.name.clone();
         let identity = child.identity;
-        platform::remove_open_directory(&self.handle, &child.handle, name, Some(identity))?;
+        platform::remove_open_directory(&self.handle, &child.handle, &name, Some(identity))?;
         drop(child);
-        match self.open_directory(name) {
+        match self.open_directory(&name) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Ok(replacement) => {
                 drop(replacement);
@@ -1380,15 +1971,14 @@ impl RootedDirectory {
                     io::ErrorKind::WouldBlock,
                     format!(
                         "governance directory `{}` was replaced during removal",
-                        self.display_path.join(name).display()
+                        self.display_path.join(&name).display()
                     ),
                 ));
             }
             Err(error) => return Err(error),
         }
         self.handle.sync_all()?;
-        self.verify()?;
-        Ok(true)
+        self.verify()
     }
 
     #[cfg(test)]
@@ -1405,11 +1995,39 @@ impl RootedDirectory {
         FileSync: FnMut(&File) -> io::Result<()>,
         DirectorySync: FnMut(&File) -> io::Result<()>,
     {
+        self.atomic_write_with_test_hooks(
+            name,
+            temporary_name,
+            data,
+            expected,
+            || Ok(()),
+            sync_file,
+            sync_directory,
+        )
+    }
+
+    #[cfg(test)]
+    fn atomic_write_with_test_hooks<BeforePromote, FileSync, DirectorySync>(
+        &self,
+        name: &OsStr,
+        temporary_name: &OsStr,
+        data: &[u8],
+        expected: ExpectedFile,
+        before_promote: BeforePromote,
+        sync_file: FileSync,
+        sync_directory: DirectorySync,
+    ) -> io::Result<()>
+    where
+        BeforePromote: FnOnce() -> io::Result<()>,
+        FileSync: FnMut(&File) -> io::Result<()>,
+        DirectorySync: FnMut(&File) -> io::Result<()>,
+    {
         self.atomic_write_with_sync(
             name,
             temporary_name,
             data,
             expected,
+            before_promote,
             sync_file,
             sync_directory,
         )
@@ -1480,6 +2098,13 @@ fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::R
     }
     #[cfg(unix)]
     if metadata.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "governance state `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    #[cfg(windows)]
+    if metadata.number_of_links() != Some(1) {
         return Err(io::Error::other(format!(
             "governance state `{}` must have exactly one hard link",
             path.display()
@@ -1601,6 +2226,55 @@ fn atomic_temp_target_name(name: &str) -> Option<&str> {
     Some(target_name)
 }
 
+/// Return one bounded V1 sibling slot used to retain an exact Unix predecessor.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn atomic_retained_name(name: &OsStr, slot: usize) -> io::Result<OsString> {
+    if slot >= ATOMIC_RETAINED_SLOT_COUNT_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance atomic retained-generation slot exceeds the V1 bound",
+        ));
+    }
+    let name = name.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance atomic retention target is not canonical UTF-8",
+        )
+    })?;
+    validate_component(OsStr::new(name))?;
+    let retained = OsString::from(format!(".{name}{ATOMIC_RETAINED_SUFFIX_V1}{slot:04}"));
+    validate_component(&retained)?;
+    Ok(retained)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn atomic_retained_target_and_slot(name: &str) -> Option<(&str, usize)> {
+    let name = name.strip_prefix('.')?;
+    let (target, slot) = name.rsplit_once(ATOMIC_RETAINED_SUFFIX_V1)?;
+    if target.is_empty()
+        || slot.len() != ATOMIC_RETAINED_SLOT_WIDTH_V1
+        || !slot.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let slot = slot.parse::<usize>().ok()?;
+    (slot < ATOMIC_RETAINED_SLOT_COUNT_V1).then_some((target, slot))
+}
+
+/// Decode the logical target of one bounded retained Unix predecessor.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+pub(super) fn atomic_retained_target_name(name: &str) -> Option<&str> {
+    atomic_retained_target_and_slot(name).map(|(target, _slot)| target)
+}
+
+/// Return whether a name claims the V1 retained namespace for `target`.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+pub(super) fn is_atomic_retained_candidate_for(name: &str, target: &str) -> bool {
+    name.strip_prefix('.')
+        .and_then(|name| name.strip_prefix(target))
+        .is_some_and(|suffix| suffix.starts_with(ATOMIC_RETAINED_SUFFIX_V1))
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform {
     #[cfg(target_os = "macos")]
@@ -1617,7 +2291,9 @@ mod platform {
         path::Path,
     };
 
-    use super::{FileIdentity, RootedDirectory, file_identity};
+    #[cfg(test)]
+    use super::FileIdentity;
+    use super::{RootedDirectory, file_identity};
 
     #[cfg(target_os = "linux")]
     const O_CREATE: c_int = 0x40;
@@ -1641,24 +2317,23 @@ mod platform {
     const O_DIRECTORY: c_int = 0x10_0000;
     const O_READ_ONLY: c_int = 0;
     const O_READ_WRITE: c_int = 2;
-    #[cfg(target_os = "linux")]
+    #[cfg(all(test, target_os = "linux"))]
     const AT_REMOVE_DIRECTORY: c_int = 0x200;
-    #[cfg(target_os = "macos")]
+    #[cfg(all(test, target_os = "macos"))]
     const AT_REMOVE_DIRECTORY: c_int = 0x80;
     #[cfg(target_os = "linux")]
-    const RENAME_NO_REPLACE: c_uint = 1;
+    const RENAME_NOREPLACE: c_uint = 1;
+    #[cfg(target_os = "linux")]
+    const RENAME_EXCHANGE: c_uint = 2;
     #[cfg(target_os = "macos")]
-    const RENAME_EXCLUSIVE: c_uint = 0x0000_0004;
+    const RENAME_EXCL: c_uint = 0x0000_0004;
+    #[cfg(target_os = "macos")]
+    const RENAME_SWAP: c_uint = 0x0000_0002;
 
     unsafe extern "C" {
         fn openat(directory: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
         fn mkdirat(directory: c_int, path: *const c_char, mode: c_uint) -> c_int;
-        fn renameat(
-            source_directory: c_int,
-            source: *const c_char,
-            destination_directory: c_int,
-            destination: *const c_char,
-        ) -> c_int;
+        #[cfg(test)]
         fn unlinkat(directory: c_int, path: *const c_char, flags: c_int) -> c_int;
     }
 
@@ -2057,50 +2732,40 @@ mod platform {
         _temporary: &File,
         temporary_name: &OsStr,
         target_name: &OsStr,
-        replace: bool,
+    ) -> io::Result<()> {
+        rename_exclusive(parent, temporary_name, parent, target_name)
+    }
+
+    pub(super) fn exchange_open_file(
+        parent: &File,
+        _temporary: &File,
+        temporary_name: &OsStr,
+        target_name: &OsStr,
     ) -> io::Result<()> {
         let temporary_name = c_name(temporary_name)?;
         let target_name = c_name(target_name)?;
-        let result = if replace {
-            // SAFETY: both names are direct components below the retained
-            // directory descriptor and remain valid for the call.
-            unsafe {
-                renameat(
-                    parent.as_raw_fd(),
-                    temporary_name.as_ptr(),
-                    parent.as_raw_fd(),
-                    target_name.as_ptr(),
-                )
-            }
-        } else {
-            #[cfg(target_os = "linux")]
-            {
-                // SAFETY: as above; RENAME_NOREPLACE gives atomic create-only
-                // promotion when recovery expects an absent destination.
-                unsafe {
-                    renameat2(
-                        parent.as_raw_fd(),
-                        temporary_name.as_ptr(),
-                        parent.as_raw_fd(),
-                        target_name.as_ptr(),
-                        RENAME_NO_REPLACE,
-                    )
-                }
-            }
-            #[cfg(target_os = "macos")]
-            {
-                // SAFETY: as above; RENAME_EXCL is the macOS create-only
-                // counterpart of Linux RENAME_NOREPLACE.
-                unsafe {
-                    renameatx_np(
-                        parent.as_raw_fd(),
-                        temporary_name.as_ptr(),
-                        parent.as_raw_fd(),
-                        target_name.as_ptr(),
-                        RENAME_EXCLUSIVE,
-                    )
-                }
-            }
+        #[cfg(target_os = "linux")]
+        // SAFETY: both names are direct components below the same retained
+        // directory descriptor. RENAME_EXCHANGE preserves both bindings.
+        let result = unsafe {
+            renameat2(
+                parent.as_raw_fd(),
+                temporary_name.as_ptr(),
+                parent.as_raw_fd(),
+                target_name.as_ptr(),
+                RENAME_EXCHANGE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        // SAFETY: as above; RENAME_SWAP is the macOS atomic exchange primitive.
+        let result = unsafe {
+            renameatx_np(
+                parent.as_raw_fd(),
+                temporary_name.as_ptr(),
+                parent.as_raw_fd(),
+                target_name.as_ptr(),
+                RENAME_SWAP,
+            )
         };
         if result == 0 {
             Ok(())
@@ -2109,18 +2774,66 @@ mod platform {
         }
     }
 
+    pub(super) fn rename_exclusive(
+        source_parent: &File,
+        source_name: &OsStr,
+        destination_parent: &File,
+        destination_name: &OsStr,
+    ) -> io::Result<()> {
+        let source_name = c_name(source_name)?;
+        let destination_name = c_name(destination_name)?;
+        #[cfg(target_os = "linux")]
+        // SAFETY: both names are direct components below retained directory
+        // descriptors. RENAME_NOREPLACE prevents destination substitution or
+        // overwrite while atomically isolating the current source binding.
+        let result = unsafe {
+            renameat2(
+                source_parent.as_raw_fd(),
+                source_name.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination_name.as_ptr(),
+                RENAME_NOREPLACE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        // SAFETY: as above; RENAME_EXCL is the macOS create-only counterpart
+        // of Linux RENAME_NOREPLACE.
+        let result = unsafe {
+            renameatx_np(
+                source_parent.as_raw_fd(),
+                source_name.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination_name.as_ptr(),
+                RENAME_EXCL,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn remove_open_file(
         parent: &File,
-        _file: &File,
+        file: &File,
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let linked = open_file(parent, name, false)?;
-        let linked_identity = file_identity(&linked.metadata()?)?;
-        if expected.is_some_and(|expected| expected != linked_identity) {
+        let actual = file_identity(&file.metadata()?)?;
+        if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
-                "governance temporary changed before unlink",
+                "retained governance file changed before unlink",
+            ));
+        }
+        let linked = open_file(parent, name, false)?;
+        let linked_identity = file_identity(&linked.metadata()?)?;
+        if linked_identity != actual {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance file binding changed before unlink",
             ));
         }
         let name = c_name(name)?;
@@ -2133,6 +2846,7 @@ mod platform {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn remove_open_directory(
         parent: &File,
         directory: &File,
@@ -2747,6 +3461,24 @@ mod platform {
         disposition: u32,
         options: u32,
     ) -> io::Result<File> {
+        nt_open_relative_with_share(
+            parent,
+            name,
+            desired_access,
+            disposition,
+            options,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        )
+    }
+
+    fn nt_open_relative_with_share(
+        parent: &File,
+        name: &OsStr,
+        desired_access: u32,
+        disposition: u32,
+        options: u32,
+        share_access: u32,
+    ) -> io::Result<File> {
         validate_component(name)?;
         let mut name_wide = name.encode_wide().collect::<Vec<_>>();
         let byte_len = name_wide
@@ -2788,7 +3520,7 @@ mod platform {
                 &mut status_block,
                 ptr::null_mut(),
                 FILE_ATTRIBUTE_NORMAL,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                share_access,
                 disposition,
                 options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT,
                 ptr::null_mut(),
@@ -2870,7 +3602,6 @@ mod platform {
         temporary: &File,
         _temporary_name: &OsStr,
         target_name: &OsStr,
-        replace: bool,
     ) -> io::Result<()> {
         validate_component(target_name)?;
         let target_wide = target_name.encode_wide().collect::<Vec<_>>();
@@ -2899,7 +3630,7 @@ mod platform {
         // SAFETY: `storage` is aligned for every field, has at least
         // `total_bytes`, and `file_name_offset` is the actual repr(C) offset.
         unsafe {
-            (*info).replace_or_flags = u32::from(replace);
+            (*info).replace_or_flags = 0;
             (*info).root_directory = parent.as_raw_handle();
             (*info).file_name_length = target_byte_len;
             ptr::copy_nonoverlapping(
@@ -3381,7 +4112,6 @@ mod platform {
         _temporary: &File,
         _temporary_name: &OsStr,
         _target_name: &OsStr,
-        _replace: bool,
     ) -> io::Result<()> {
         Err(unsupported())
     }
@@ -3416,9 +4146,12 @@ mod platform {
 mod tests {
     use std::{
         ffi::{OsStr, OsString},
-        fs, io,
+        fs,
+        io::{self, Seek as _, SeekFrom, Write as _},
     };
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    use std::cell::Cell;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
     #[cfg(target_os = "macos")]
@@ -3515,6 +4248,17 @@ mod tests {
         assert!(source.contains("handle.as_raw_handle(),"));
         let pathname_api = ["GetNamed", "SecurityInfo"].concat();
         assert!(!source.contains(&pathname_api));
+    }
+
+    #[test]
+    fn windows_atomic_replacement_source_contract_is_non_destructive() {
+        let source = include_str!("governance_rooted_fs.rs");
+        assert!(source.contains("(*info).replace_or_flags = 0;"));
+        assert!(source.contains("without replacement: {error}"));
+        assert!(source.contains("Windows governance existing-target replacement is disabled"));
+        assert!(source.contains("metadata.number_of_links() != Some(1)"));
+        let destructive_match = ["matches!(&expected, ExpectedFile::", "Identity(_))"].concat();
+        assert!(!source.contains(&destructive_match));
     }
 
     #[test]
@@ -3684,6 +4428,32 @@ mod tests {
     }
 
     #[test]
+    fn rooted_atomic_exact_bytes_are_storage_idempotent() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"unchanged").expect("seed exact state");
+        let snapshot = root
+            .read_file(OsStr::new("state"), 32)
+            .expect("bind exact state");
+
+        root.atomic_write(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-9"),
+            b"unchanged",
+            ExpectedFile::Identity(snapshot.binding()),
+        )
+        .expect("exact-byte retry is a verified no-op");
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read exact state"),
+            b"unchanged"
+        );
+        assert!(!temp.path().join(".state.tmp-1-9").exists());
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        assert!(!temp.path().join(".state.retained-v1-0000").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
     fn rooted_atomic_write_replaces_the_exact_existing_destination() {
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());
@@ -3703,6 +4473,211 @@ mod tests {
             b"successor"
         );
         assert!(!temp.path().join(".state.tmp-1-10").exists());
+        assert_eq!(
+            fs::read(temp.path().join(".state.retained-v1-0000"))
+                .expect("read exact retained predecessor"),
+            b"predecessor"
+        );
+        let successor = root
+            .read_file(OsStr::new("state"), 32)
+            .expect("retain first successor");
+        root.atomic_write(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-11"),
+            b"second-successor",
+            ExpectedFile::Identity(successor.binding()),
+        )
+        .expect("use the next bounded retained-generation slot");
+        assert_eq!(
+            fs::read(temp.path().join(".state.retained-v1-0001"))
+                .expect("read second retained predecessor"),
+            b"successor"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rooted_atomic_write_fails_closed_for_changed_windows_target() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 32)
+            .expect("bind Windows predecessor");
+
+        let error = root
+            .atomic_write(
+                OsStr::new("state"),
+                OsStr::new(".state.tmp-1-10"),
+                b"successor",
+                ExpectedFile::Identity(predecessor.binding()),
+            )
+            .expect_err("Windows changed-target replacement must fail before mutation");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read untouched predecessor"),
+            b"predecessor"
+        );
+        assert!(!temp.path().join(".state.tmp-1-10").exists());
+        assert!(!temp.path().join(".state.retained-v1-0000").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_exchange_preserves_a_substituted_target_and_predecessor() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("state");
+        let detached = temp.path().join("detached-predecessor");
+        let temporary = temp.path().join(".state.tmp-1-20");
+        fs::write(&target, b"expected-predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        let error = root
+            .atomic_write_with_test_hooks(
+                OsStr::new("state"),
+                OsStr::new(".state.tmp-1-20"),
+                b"prepared-successor",
+                ExpectedFile::Identity(predecessor.binding()),
+                || {
+                    fs::rename(&target, &detached).expect("detach expected predecessor");
+                    fs::write(&target, b"racing-replacement").expect("install replacement");
+                    Ok(())
+                },
+                |file| file.sync_all(),
+                |directory| directory.sync_all(),
+            )
+            .expect_err("exchange must detect the substituted predecessor");
+        assert!(error.to_string().contains("substituted during exchange"));
+        assert_eq!(
+            fs::read(&target).expect("read target"),
+            b"prepared-successor"
+        );
+        assert_eq!(
+            fs::read(&temporary).expect("read preserved replacement"),
+            b"racing-replacement"
+        );
+        assert_eq!(
+            fs::read(&detached).expect("read detached predecessor"),
+            b"expected-predecessor"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_exchange_preserves_a_substituted_prepared_object() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("state");
+        let temporary = temp.path().join(".state.tmp-1-21");
+        let detached_prepared = temp.path().join("detached-prepared");
+        fs::write(&target, b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        root.atomic_write_with_test_hooks(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-21"),
+            b"prepared-successor",
+            ExpectedFile::Identity(predecessor.binding()),
+            || {
+                fs::rename(&temporary, &detached_prepared).expect("detach prepared object");
+                fs::write(&temporary, b"racing-replacement").expect("replace prepared name");
+                Ok(())
+            },
+            |file| file.sync_all(),
+            |directory| directory.sync_all(),
+        )
+        .expect_err("promoted identity substitution must fail closed");
+        assert_eq!(
+            fs::read(&target).expect("read target"),
+            b"racing-replacement"
+        );
+        assert_eq!(
+            fs::read(&temporary).expect("read preserved predecessor"),
+            b"predecessor"
+        );
+        assert_eq!(
+            fs::read(&detached_prepared).expect("read detached prepared bytes"),
+            b"prepared-successor"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_retention_never_overwrites_a_prepopulated_slot() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("state");
+        let retained = temp.path().join(".state.retained-v1-0000");
+        let temporary = temp.path().join(".state.tmp-1-22");
+        fs::write(&target, b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        root.atomic_write_with_test_hooks(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-22"),
+            b"successor",
+            ExpectedFile::Identity(predecessor.binding()),
+            || {
+                fs::write(&retained, b"prepopulated-slot").expect("race retention slot");
+                Ok(())
+            },
+            |file| file.sync_all(),
+            |directory| directory.sync_all(),
+        )
+        .expect_err("exclusive retention must reject a populated destination");
+        assert_eq!(fs::read(&target).expect("read target"), b"successor");
+        assert_eq!(
+            fs::read(&temporary).expect("read preserved predecessor"),
+            b"predecessor"
+        );
+        assert_eq!(
+            fs::read(&retained).expect("read prepopulated slot"),
+            b"prepopulated-slot"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_retention_does_not_mutate_a_racing_hardlink() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("state");
+        let external = temp.path().join("external-predecessor-link");
+        let temporary = temp.path().join(".state.tmp-1-23");
+        fs::write(&target, b"predecessor-bytes").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        root.atomic_write_with_test_hooks(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-23"),
+            b"successor-bytes",
+            ExpectedFile::Identity(predecessor.binding()),
+            || {
+                fs::hard_link(&target, &external).expect("race an external hard link");
+                Ok(())
+            },
+            |file| file.sync_all(),
+            |directory| directory.sync_all(),
+        )
+        .expect_err("post-check hard link must stop retention");
+        assert_eq!(fs::read(&target).expect("read target"), b"successor-bytes");
+        assert_eq!(
+            fs::read(&temporary).expect("read exchanged predecessor"),
+            b"predecessor-bytes"
+        );
+        assert_eq!(
+            fs::read(&external).expect("read external predecessor link"),
+            b"predecessor-bytes"
+        );
     }
 
     #[test]
@@ -3760,6 +4735,182 @@ mod tests {
             error
                 .to_string()
                 .contains("injected directory sync failure")
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_replacement_preserves_both_generations_when_exchange_sync_fails() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+        let sync_calls = Cell::new(0_usize);
+
+        root.atomic_write_with_test_sync(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-30"),
+            b"successor",
+            ExpectedFile::Identity(predecessor.binding()),
+            |file| file.sync_all(),
+            |_directory| {
+                let call = sync_calls.get() + 1;
+                sync_calls.set(call);
+                if call == 1 {
+                    Err(io::Error::other("injected exchange sync failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect_err("exchange directory sync failure must propagate");
+        assert_eq!(sync_calls.get(), 1);
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read successor"),
+            b"successor"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(".state.tmp-1-30"))
+                .expect("read preserved predecessor temporary"),
+            b"predecessor"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_replacement_preserves_retained_generation_when_retention_sync_fails() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+        let sync_calls = Cell::new(0_usize);
+
+        root.atomic_write_with_test_sync(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-31"),
+            b"successor",
+            ExpectedFile::Identity(predecessor.binding()),
+            |file| file.sync_all(),
+            |_directory| {
+                let call = sync_calls.get() + 1;
+                sync_calls.set(call);
+                if call == 2 {
+                    Err(io::Error::other("injected retention sync failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect_err("retention directory sync failure must propagate");
+        assert_eq!(sync_calls.get(), 2);
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read successor"),
+            b"successor"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(".state.retained-v1-0000"))
+                .expect("read retained predecessor"),
+            b"predecessor"
+        );
+        assert!(!temp.path().join(".state.tmp-1-31").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_replacement_fails_closed_when_retention_slots_are_saturated() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        for slot in 0..super::ATOMIC_RETAINED_SLOT_COUNT_V1 {
+            fs::write(
+                temp.path().join(format!(".state.retained-v1-{slot:04}")),
+                b"retained",
+            )
+            .expect("fill retained-generation slot");
+        }
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        let error = root
+            .atomic_write(
+                OsStr::new("state"),
+                OsStr::new(".state.tmp-1-32"),
+                b"must-not-land",
+                ExpectedFile::Identity(predecessor.binding()),
+            )
+            .expect_err("saturated retention must fail before creating a successor");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(error.to_string().contains("offline"));
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read unchanged predecessor"),
+            b"predecessor"
+        );
+        assert!(!temp.path().join(".state.tmp-1-32").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_replacement_enforces_retention_aggregate_byte_bound() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        let mut retained = fs::File::create(temp.path().join(".other.retained-v1-0000"))
+            .expect("seed sparse retained generation");
+        retained
+            .seek(SeekFrom::Start(
+                super::ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1 - 1,
+            ))
+            .expect("seek sparse retained generation");
+        retained
+            .write_all(&[0])
+            .expect("extend sparse retained generation");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        let error = root
+            .atomic_write(
+                OsStr::new("state"),
+                OsStr::new(".state.tmp-1-33"),
+                b"must-not-land",
+                ExpectedFile::Identity(predecessor.binding()),
+            )
+            .expect_err("aggregate retention bound must fail before exchange");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(error.to_string().contains("aggregate bound"));
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read unchanged predecessor"),
+            b"predecessor"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_write_preserves_a_pre_rename_temporary_after_failure() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let temporary_name = OsStr::new(".state.tmp-1-4");
+        let error = root
+            .atomic_write_with_test_sync(
+                OsStr::new("state"),
+                temporary_name,
+                b"preserved-for-recovery",
+                ExpectedFile::Missing,
+                |_file| Err(io::Error::other("injected file sync failure")),
+                |_directory| Ok(()),
+            )
+            .expect_err("file sync failure must stop before rename");
+        assert!(error.to_string().contains("injected file sync failure"));
+        assert!(!temp.path().join("state").exists());
+        assert_eq!(
+            fs::read(temp.path().join(temporary_name))
+                .expect("failed transaction temporary remains recoverable"),
+            b"preserved-for-recovery"
         );
     }
 
@@ -3828,20 +4979,346 @@ mod tests {
     }
 
     #[test]
-    fn rooted_empty_directory_removal_is_identity_bound_and_idempotent() {
+    fn rooted_empty_directory_binding_removes_empty_child() {
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());
         fs::create_dir(temp.path().join("orphan")).expect("seed empty orphan directory");
+        let retained = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain empty orphan directory");
 
-        assert!(
-            root.remove_empty_directory_if_exists(OsStr::new("orphan"))
-                .expect("remove exact empty orphan")
+        root.remove_empty_directory_binding(retained)
+            .expect("remove exact empty orphan");
+        assert!(!temp.path().join("orphan").exists());
+    }
+
+    #[test]
+    fn rooted_exact_file_removal_preserves_a_name_substitution() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("orphan");
+        let original = temp.path().join("original");
+        fs::write(&target, b"planned-orphan").expect("seed planned orphan");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain planned orphan")
+            .expect("planned orphan exists");
+        fs::rename(&target, &original).expect("detach planned orphan");
+        fs::write(&target, b"replacement").expect("install replacement");
+
+        root.remove_file_binding(binding)
+            .expect_err("exact removal must reject a substituted name");
+        assert_eq!(
+            fs::read(&target).expect("replacement remains"),
+            b"replacement"
         );
+        assert_eq!(
+            fs::read(&original).expect("planned orphan remains detached"),
+            b"planned-orphan"
+        );
+    }
+
+    #[test]
+    fn rooted_exact_directory_removal_preserves_a_name_substitution() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("orphan");
+        let original = temp.path().join("original");
+        fs::create_dir(&target).expect("seed planned directory");
+        let retained = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain planned directory");
+        fs::rename(&target, &original).expect("detach planned directory");
+        fs::create_dir(&target).expect("install replacement directory");
+
+        root.remove_empty_directory_binding(retained)
+            .expect_err("exact removal must reject a substituted directory name");
+        assert!(target.is_dir(), "replacement directory must remain");
+        assert!(original.is_dir(), "planned directory must remain detached");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_file_isolation_preserves_a_replacement_installed_at_the_destructive_gap() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create retained quarantine");
+        let target = temp.path().join("orphan");
+        let detached = temp.path().join("detached");
+        fs::write(&target, b"planned-orphan").expect("seed planned orphan");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain planned orphan")
+            .expect("planned orphan exists");
+
+        root.isolate_file_binding_with(binding, &quarantine, OsStr::new("file-slot"), || {
+            fs::rename(&target, &detached).expect("detach checked inode in race hook");
+            fs::write(&target, b"replacement").expect("install racing replacement");
+            Ok(())
+        })
+        .expect_err("post-check name substitution must fail after preserving both files");
+        assert_eq!(
+            fs::read(&detached).expect("checked inode remains detached"),
+            b"planned-orphan"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(".quarantine").join("file-slot"))
+                .expect("replacement remains quarantined"),
+            b"replacement"
+        );
+        assert!(
+            !target.exists(),
+            "the raced name was isolated, not unlinked"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_file_isolation_never_overwrites_a_prepopulated_destination() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::write(temp.path().join("orphan"), b"planned-orphan").expect("seed source");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain source")
+            .expect("source exists");
+
+        root.isolate_file_binding_with(binding, &quarantine, OsStr::new("file-slot"), || {
+            fs::write(
+                temp.path().join(".quarantine").join("file-slot"),
+                b"prepopulated",
+            )
+            .expect("prepopulate destination slot");
+            Ok(())
+        })
+        .expect_err("exclusive isolation must reject a populated destination");
+        assert_eq!(
+            fs::read(temp.path().join("orphan")).expect("read unchanged source"),
+            b"planned-orphan"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(".quarantine").join("file-slot")).expect("read destination"),
+            b"prepopulated"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_file_isolation_attempts_both_parent_syncs_when_source_sync_fails() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::write(temp.path().join("orphan"), b"planned-orphan").expect("seed source");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain source")
+            .expect("source exists");
+        let source_syncs = Cell::new(0_usize);
+        let quarantine_syncs = Cell::new(0_usize);
+
+        let error = root
+            .isolate_file_binding_with_sync(
+                binding,
+                &quarantine,
+                OsStr::new("file-slot"),
+                || Ok(()),
+                |_directory| {
+                    source_syncs.set(source_syncs.get() + 1);
+                    Err(io::Error::other("injected source-parent sync failure"))
+                },
+                |_directory| {
+                    quarantine_syncs.set(quarantine_syncs.get() + 1);
+                    Ok(())
+                },
+            )
+            .expect_err("source-parent sync failure must propagate");
+        assert!(error.to_string().contains("source-parent sync failure"));
+        assert_eq!(source_syncs.get(), 1);
+        assert_eq!(quarantine_syncs.get(), 1);
+        assert!(!temp.path().join("orphan").exists());
+        assert_eq!(
+            fs::read(temp.path().join(".quarantine").join("file-slot"))
+                .expect("read preserved quarantined source"),
+            b"planned-orphan"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_file_isolation_propagates_quarantine_parent_sync_failure() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::write(temp.path().join("orphan"), b"planned-orphan").expect("seed source");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain source")
+            .expect("source exists");
+        let source_syncs = Cell::new(0_usize);
+        let quarantine_syncs = Cell::new(0_usize);
+
+        let error = root
+            .isolate_file_binding_with_sync(
+                binding,
+                &quarantine,
+                OsStr::new("file-slot"),
+                || Ok(()),
+                |_directory| {
+                    source_syncs.set(source_syncs.get() + 1);
+                    Ok(())
+                },
+                |_directory| {
+                    quarantine_syncs.set(quarantine_syncs.get() + 1);
+                    Err(io::Error::other("injected quarantine-parent sync failure"))
+                },
+            )
+            .expect_err("quarantine-parent sync failure must propagate");
+        assert!(error.to_string().contains("quarantine-parent sync failure"));
+        assert_eq!(source_syncs.get(), 1);
+        assert_eq!(quarantine_syncs.get(), 1);
+        assert!(!temp.path().join("orphan").exists());
+        assert_eq!(
+            fs::read(temp.path().join(".quarantine").join("file-slot"))
+                .expect("read preserved quarantined source"),
+            b"planned-orphan"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_directory_isolation_preserves_a_replacement_installed_at_the_destructive_gap() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create retained quarantine");
+        let target = temp.path().join("orphan");
+        let detached = temp.path().join("detached");
+        fs::create_dir(&target).expect("seed planned directory");
+        let retained = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain planned directory");
+
+        root.isolate_empty_directory_binding_with(
+            retained,
+            &quarantine,
+            OsStr::new("directory-slot"),
+            || {
+                fs::rename(&target, &detached).expect("detach checked directory in race hook");
+                fs::create_dir(&target).expect("install racing replacement directory");
+                Ok(())
+            },
+        )
+        .expect_err("post-check directory substitution must preserve both directories");
+        assert!(detached.is_dir(), "checked directory remains detached");
+        assert!(
+            temp.path()
+                .join(".quarantine")
+                .join("directory-slot")
+                .is_dir(),
+            "replacement directory remains quarantined"
+        );
+        assert!(!target.exists(), "the raced directory was never unlinked");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_directory_isolation_attempts_both_parent_syncs_when_source_sync_fails() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::create_dir(temp.path().join("orphan")).expect("seed source directory");
+        let child = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain source directory");
+        let source_syncs = Cell::new(0_usize);
+        let quarantine_syncs = Cell::new(0_usize);
+
+        let error = root
+            .isolate_empty_directory_binding_with_sync(
+                child,
+                &quarantine,
+                OsStr::new("directory-slot"),
+                || Ok(()),
+                |_directory| {
+                    source_syncs.set(source_syncs.get() + 1);
+                    Err(io::Error::other("injected directory-source sync failure"))
+                },
+                |_directory| {
+                    quarantine_syncs.set(quarantine_syncs.get() + 1);
+                    Ok(())
+                },
+            )
+            .expect_err("directory source-parent sync failure must propagate");
+        assert!(error.to_string().contains("directory-source sync failure"));
+        assert_eq!(source_syncs.get(), 1);
+        assert_eq!(quarantine_syncs.get(), 1);
         assert!(!temp.path().join("orphan").exists());
         assert!(
-            !root
-                .remove_empty_directory_if_exists(OsStr::new("orphan"))
-                .expect("missing orphan removal is idempotent")
+            temp.path()
+                .join(".quarantine")
+                .join("directory-slot")
+                .is_dir()
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_directory_isolation_propagates_quarantine_parent_sync_failure() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::create_dir(temp.path().join("orphan")).expect("seed source directory");
+        let child = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain source directory");
+        let source_syncs = Cell::new(0_usize);
+        let quarantine_syncs = Cell::new(0_usize);
+
+        let error = root
+            .isolate_empty_directory_binding_with_sync(
+                child,
+                &quarantine,
+                OsStr::new("directory-slot"),
+                || Ok(()),
+                |_directory| {
+                    source_syncs.set(source_syncs.get() + 1);
+                    Ok(())
+                },
+                |_directory| {
+                    quarantine_syncs.set(quarantine_syncs.get() + 1);
+                    Err(io::Error::other(
+                        "injected directory-quarantine sync failure",
+                    ))
+                },
+            )
+            .expect_err("directory quarantine-parent sync failure must propagate");
+        assert!(
+            error
+                .to_string()
+                .contains("directory-quarantine sync failure")
+        );
+        assert_eq!(source_syncs.get(), 1);
+        assert_eq!(quarantine_syncs.get(), 1);
+        assert!(!temp.path().join("orphan").exists());
+        assert!(
+            temp.path()
+                .join(".quarantine")
+                .join("directory-slot")
+                .is_dir()
         );
     }
 
@@ -3852,8 +5329,11 @@ mod tests {
         let retained = temp.path().join("retained");
         fs::create_dir(&retained).expect("seed retained directory");
         fs::write(retained.join("state"), b"retained").expect("seed retained child");
+        let retained_binding = root
+            .open_directory(OsStr::new("retained"))
+            .expect("retain nonempty directory");
 
-        root.remove_empty_directory_if_exists(OsStr::new("retained"))
+        root.remove_empty_directory_binding(retained_binding)
             .expect_err("nonempty retained directory must not be removed");
         assert_eq!(
             fs::read(retained.join("state")).expect("read retained child"),
@@ -3875,6 +5355,22 @@ mod tests {
             .read_file(OsStr::new("state"), 4)
             .expect_err("oversized state must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rooted_read_rejects_windows_hardlinks() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let state = temp.path().join("state");
+        fs::write(&state, b"linked-state").expect("seed Windows state");
+        fs::hard_link(&state, temp.path().join("state-link"))
+            .expect("create Windows governance hardlink");
+
+        let error = root
+            .read_file(OsStr::new("state"), 32)
+            .expect_err("Windows governance files with multiple links must fail closed");
+        assert!(error.to_string().contains("exactly one hard link"));
     }
 
     #[test]

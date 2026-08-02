@@ -1469,13 +1469,15 @@ client = create_torii_client(
 )
 
 client.set_protected_namespaces(["apps", "system"])
+# Namespace labels are exact printable-ASCII tokens; whitespace and non-ASCII
+# aliases are rejected before dispatch rather than trimmed.
 protected = client.get_protected_namespaces()
 governed_contract = client.get_governance_contract_typed(
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
 )
 council = client.get_governance_council_current()
 audit = client.get_governance_council_audit(epoch=42)
-proposal = client.get_governance_proposal_typed("deadbeef")
+proposal = client.get_governance_proposal_typed("ab" * 32)
 referendum = client.get_governance_referendum_typed("ref-1")
 tally = client.get_governance_tally_typed("ref-1")
 assert proposal.found is False
@@ -1489,6 +1491,10 @@ print("Expired locks:", unlock_stats_typed.expired_locks_now)
 print("Governed contract:", governed_contract.contract_address, governed_contract.code_hash_hex)
 print("Protected namespaces:", protected)
 ```
+
+Governance mutation mappings are closed and validated before dispatch.
+Parliament ballot decisions use only the exact lowercase labels `approve`,
+`reject`, and `abstain`; case or whitespace aliases are rejected.
 
 ## Runtime upgrades and ABI helpers
 

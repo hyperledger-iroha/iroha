@@ -288,6 +288,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiArchiveV1>,
+    dispatch_instruction::<
+        iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1,
+    >,
     dispatch_instruction::<iroha_data_model::isi::musubi::AddMusubiArchiveLocationV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RetireMusubiArchiveLocationV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiReleaseV1>,

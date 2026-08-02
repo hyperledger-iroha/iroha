@@ -25,6 +25,7 @@ import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RecoverMusubiPa
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RegisterMusubiArchiveV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RegisterMusubiAliasV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RegisterMusubiNamespaceBindingV1;
+import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RemoveMusubiPackageMaintainerV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RetargetMusubiAliasV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RetireMusubiArchiveLocationV1;
@@ -55,6 +56,7 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageName;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageRole;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageScope;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PrereleaseIdentifier;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationSetDigest;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationApproval;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationAttestation;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationBinding;
@@ -170,6 +172,15 @@ public final class MusubiInstructionsV1FixtureTests {
             new RegisterMusubiArchiveV1(
                 register.commitment(), register.stagingReceipt(), BigInteger.ZERO));
 
+    final RegisterMusubiProviderBundleAttestationV1 registerProviderAttestation =
+        (RegisterMusubiProviderBundleAttestationV1)
+            instruction(fixtureCase("register-provider-bundle-attestation"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new RegisterMusubiProviderBundleAttestationV1(
+                registerProviderAttestation.attestation(), BigInteger.ZERO));
+
     final AddMusubiArchiveLocationV1 add =
         (AddMusubiArchiveLocationV1)
             instruction(fixtureCase("add-location-three-signed-providers"));
@@ -181,7 +192,7 @@ public final class MusubiInstructionsV1FixtureTests {
                 add.locationId(),
                 add.pinManifest(),
                 add.replicationOrder(),
-                add.providerAttestations(),
+                add.providerAttestationSetDigest(),
                 add.renewAfterEpoch(),
                 add.expiresAtEpoch(),
                 BigInteger.ZERO));
@@ -303,7 +314,7 @@ public final class MusubiInstructionsV1FixtureTests {
         () -> digest(Collections.<Object>singletonList(invalidDigestOctets)));
 
     final List<Object> cases = array(fixture.get("cases"));
-    assertEquals(18, cases.size());
+    assertEquals(19, cases.size());
     final List<String> caseIds = new ArrayList<>();
     for (final Object rawCase : cases) {
       caseIds.add(string(object(rawCase).get("id")));
@@ -324,6 +335,7 @@ public final class MusubiInstructionsV1FixtureTests {
             "retarget-one-character-alias-high-revision",
             "takedown-max-major-prerelease",
             "register-archive-max-bounds-signed-receipt",
+            "register-provider-bundle-attestation",
             "add-location-three-signed-providers",
             "publish-delegated-domain-release",
             "replace-domain-metadata-high-revision",
@@ -646,9 +658,9 @@ public final class MusubiInstructionsV1FixtureTests {
         TransferWirePayloadEncoder.encodeAccountIdPayload(reverse));
 
     final Map<String, Object> semantic =
-        object(fixtureCase("add-location-three-signed-providers").get("semantic"));
+        object(fixtureCase("register-provider-bundle-attestation").get("semantic"));
     final ProviderBundleVerificationBinding template =
-        providerAttestation(array(semantic.get("provider_attestations")).get(0))
+        providerAttestation(semantic.get("attestation"))
             .payload()
             .binding();
     final ProviderCompletionAuthority equivalentAuthority =
@@ -862,6 +874,12 @@ public final class MusubiInstructionsV1FixtureTests {
           seedIngressReceipt(semantic.get("staging_receipt")),
           unsigned(semantic.get("expected_policy_revision")));
     }
+    if ("register-provider-bundle-attestation".equals(id)) {
+      assertSemanticKeys(semantic, "attestation", "expected_location_revision");
+      return new RegisterMusubiProviderBundleAttestationV1(
+          providerAttestation(semantic.get("attestation")),
+          unsigned(semantic.get("expected_location_revision")));
+    }
     if ("add-location-three-signed-providers".equals(id)) {
       assertSemanticKeys(
           semantic,
@@ -869,20 +887,17 @@ public final class MusubiInstructionsV1FixtureTests {
           "location_id",
           "pin_manifest",
           "replication_order",
-          "provider_attestations",
+          "provider_attestation_set_digest",
           "renew_after_epoch",
           "expires_at_epoch",
           "expected_location_revision");
-      final List<ProviderBundleVerificationAttestation> attestations = new ArrayList<>();
-      for (final Object value : array(semantic.get("provider_attestations"))) {
-        attestations.add(providerAttestation(value));
-      }
       return new AddMusubiArchiveLocationV1(
           digest(semantic.get("archive_id")),
           digest(semantic.get("location_id")),
           digest(semantic.get("pin_manifest")),
           digest(semantic.get("replication_order")),
-          attestations,
+          ProviderBundleAttestationSetDigest.fromBytes(
+              digest(semantic.get("provider_attestation_set_digest")).bytes()),
           unsigned(semantic.get("renew_after_epoch")),
           unsigned(semantic.get("expires_at_epoch")),
           unsigned(semantic.get("expected_location_revision")));

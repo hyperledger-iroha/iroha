@@ -651,7 +651,7 @@ class MusubiReleaseIdV1(
 }
 
 /** Canonical Norito JSON wrapper for any Musubi 32-byte digest newtype. */
-class MusubiDigest32V1(bytes: ByteArray) : MusubiWireValueV1() {
+open class MusubiDigest32V1(bytes: ByteArray) : MusubiWireValueV1() {
     private val value: ByteArray = bytes.copyOf()
 
     init {
@@ -674,6 +674,20 @@ class MusubiDigest32V1(bytes: ByteArray) : MusubiWireValueV1() {
                 body.substring(index * 2, index * 2 + 2).toInt(16).toByte()
             })
         }
+    }
+}
+
+/** Domain-separated digest of one complete provider bundle attestation. */
+class MusubiProviderBundleAttestationDigestV1(bytes: ByteArray) : MusubiDigest32V1(bytes) {
+    init {
+        MusubiValidationV1.requireNonZeroDigest(this, "provider bundle attestation digest")
+    }
+}
+
+/** Archive/order-bound digest of a provider-sorted attestation set. */
+class MusubiProviderBundleAttestationSetDigestV1(bytes: ByteArray) : MusubiDigest32V1(bytes) {
+    init {
+        MusubiValidationV1.requireNonZeroDigest(this, "provider bundle attestation set digest")
     }
 }
 
@@ -1534,12 +1548,25 @@ class MusubiPackageRecordV1(
 
 /** Exact release response with a fully validated release identity and strict wire document. */
 class MusubiReleaseRecordV1 internal constructor(
-    @JvmField val release: MusubiReleaseIdV1,
+    @JvmField val manifest: MusubiReleaseManifestV1,
+    @JvmField val releaseDigest: MusubiDigest32V1,
     @JvmField val publishedBy: String,
     @JvmField val publishedAtHeight: BigInteger,
     raw: Map<String, Any?>,
 ) : MusubiWireValueV1() {
-    private val rawValue = MusubiJsonV1.immutableObject(raw)
+    @JvmField val release: MusubiReleaseIdV1 = manifest.release
+    internal val rawValue = MusubiJsonV1.immutableObject(raw)
+
+    init {
+        MusubiValidationV1.canonicalAccountPayload(publishedBy, "release publisher")
+        MusubiValidationV1.requireU64(publishedAtHeight, "publishedAtHeight")
+        require(publishedAtHeight > BigInteger.ZERO) {
+            "Musubi publication height must be non-zero"
+        }
+        require(
+            releaseDigest.bytes().contentEquals(musubiReleaseManifestDigestV1(manifest)),
+        ) { "Musubi release digest does not match its canonical manifest" }
+    }
 
     /** Rejects an exact-release response for a different immutable release. */
     fun requireMatches(request: MusubiExactReleaseQueryV1) {
@@ -1555,10 +1582,60 @@ class MusubiReleaseRecordV1 internal constructor(
 class MusubiResolverReleaseRowV1 internal constructor(
     @JvmField val release: MusubiReleaseIdV1,
     @JvmField val indexRevision: BigInteger,
+    @JvmField val storageIndexRevision: BigInteger,
     raw: Map<String, Any?>,
 ) : MusubiWireValueV1() {
-    private val rawValue = MusubiJsonV1.immutableObject(raw)
+    internal val rawValue = MusubiJsonV1.immutableObject(raw)
     override fun wireValue(): Any = rawValue
+}
+
+/** Finalized paired view of one release from its home dataspace and universal index. */
+class MusubiExactReleaseSnapshotV1 internal constructor(
+    @JvmField val chainId: String,
+    genesisHash: ByteArray,
+    @JvmField val snapshot: MusubiRegistrySnapshotV1,
+    @JvmField val homeRelease: MusubiReleaseRecordV1,
+    @JvmField val universalRelease: MusubiResolverReleaseRowV1,
+) : MusubiWireValueV1() {
+    private val genesisHashValue = genesisHash.copyOf()
+
+    init {
+        MusubiValidationV1.requireChainId(chainId, "exact release chain ID")
+        MusubiValidationV1.requireNonZeroFixed32(
+            genesisHashValue,
+            "exact release genesis hash",
+        )
+        require(homeRelease.release == universalRelease.release &&
+            homeRelease.publishedAtHeight <= snapshot.finalizedHeight &&
+            universalRelease.storageIndexRevision <= universalRelease.indexRevision &&
+            universalRelease.indexRevision <= snapshot.indexRevision) {
+            "Musubi exact release projections are inconsistent with their finalized snapshot"
+        }
+        MusubiJsonV1.validateExactReleaseSnapshot(
+            homeRelease.rawValue,
+            universalRelease.rawValue,
+            genesisHashValue,
+            snapshot,
+        )
+    }
+
+    fun genesisHash(): ByteArray = genesisHashValue.copyOf()
+
+    /** Rejects an exact-release response for a different immutable release. */
+    fun requireMatches(request: MusubiExactReleaseQueryV1) {
+        require(homeRelease.release == request.release &&
+            universalRelease.release == request.release) {
+            "Musubi exact-release snapshot does not match the request"
+        }
+    }
+
+    override fun wireValue(): Any = linkedMapOf(
+        "chain_id" to chainId,
+        "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
+        "snapshot" to snapshot.wireValue(),
+        "home_release" to homeRelease.wireValue(),
+        "universal_release" to universalRelease.wireValue(),
+    )
 }
 
 /** Accepted package member response. */
@@ -1625,12 +1702,28 @@ sealed class MusubiMaintainerDirectoryEntryV1 : MusubiWireValueV1() {
 class MusubiArchiveLocationV1 internal constructor(
     @JvmField val locationId: MusubiDigest32V1,
     @JvmField val archiveId: MusubiDigest32V1,
+    providers: List<String>,
+    @JvmField val providerAttestationSetDigest: MusubiProviderBundleAttestationSetDigestV1,
     @JvmField val finalizedHeight: BigInteger,
     @JvmField val revision: BigInteger,
     @JvmField val stateKind: String,
     raw: Map<String, Any?>,
 ) : MusubiWireValueV1() {
+    @JvmField val providers: List<String> = providers.toList()
     private val rawValue = MusubiJsonV1.immutableObject(raw)
+
+    init {
+        require(this.providers.size in 1..64) {
+            "Musubi archive location needs between 1 and 64 providers"
+        }
+        val providerIds = this.providers.map {
+            MusubiValidationV1.canonicalFixed32Hex(it, "archive location provider ID")
+        }
+        require(providerIds.zipWithNext().all { (left, right) ->
+            MusubiValidationV1.compareUnsignedBytes(left, right) < 0
+        }) { "Musubi archive location providers must be sorted and distinct" }
+    }
+
     override fun wireValue(): Any = rawValue
 }
 
@@ -2067,6 +2160,83 @@ class MusubiProviderBundleVerificationAttestationV1(
     override fun wireValue(): Any = linkedMapOf(
         "payload" to payload.wireValue(),
         "approvals" to approvals.map { it.wireValue() },
+    )
+}
+
+/** Immutable archive/order/provider identity of one registered provider proof. */
+class MusubiProviderBundleAttestationKeyV1(
+    @JvmField val archiveId: MusubiDigest32V1,
+    @JvmField val replicationOrder: MusubiDigest32V1,
+    @JvmField val providerId: String,
+) : MusubiWireValueV1() {
+    internal val providerIdPayload = MusubiValidationV1.canonicalFixed32Hex(
+        providerId,
+        "provider attestation key provider ID",
+    )
+
+    init {
+        MusubiValidationV1.requireNonZeroDigest(archiveId, "provider attestation archive ID")
+        MusubiValidationV1.requireNonZeroDigest(
+            replicationOrder,
+            "provider attestation replication order",
+        )
+    }
+
+    override fun wireValue(): Any = linkedMapOf(
+        "archive_id" to archiveId.wireValue(),
+        "replication_order" to replicationOrder.wireValue(),
+        "provider_id" to listOf(providerId),
+    )
+}
+
+/** Complete immutable provider proof stored under its exact archive/order/provider key. */
+class MusubiProviderBundleAttestationRecordV1(
+    @JvmField val key: MusubiProviderBundleAttestationKeyV1,
+    @JvmField val attestationDigest: MusubiProviderBundleAttestationDigestV1,
+    @JvmField val attestation: MusubiProviderBundleVerificationAttestationV1,
+    @JvmField val registeredBy: String,
+    @JvmField val registeredAtHeight: BigInteger,
+) : MusubiWireValueV1() {
+    init {
+        val binding = attestation.payload.binding
+        require(key.archiveId == binding.archiveId &&
+            key.replicationOrder == binding.replicationOrder &&
+            key.providerIdPayload.contentEquals(binding.providerIdPayload)) {
+            "Musubi provider attestation record key disagrees with its signed binding"
+        }
+        require(
+            attestationDigest.bytes().contentEquals(
+                musubiProviderBundleAttestationDigestV1(attestation),
+            ),
+        ) {
+            "Musubi provider attestation digest disagrees with its canonical attestation bytes"
+        }
+        MusubiValidationV1.canonicalAccountPayload(
+            registeredBy,
+            "providerAttestationRecord.registeredBy",
+        )
+        MusubiValidationV1.requireU64(
+            registeredAtHeight,
+            "providerAttestationRecord.registeredAtHeight",
+        )
+        require(registeredAtHeight > BigInteger.ZERO) {
+            "Musubi provider attestation registration height must be non-zero"
+        }
+    }
+
+    /** Rejects an audit response for a different archive/order/provider identity. */
+    fun requireMatches(request: MusubiProviderBundleAttestationKeyV1) {
+        require(key == request) {
+            "Musubi provider attestation response does not match the request"
+        }
+    }
+
+    override fun wireValue(): Any = linkedMapOf(
+        "key" to key.wireValue(),
+        "attestation_digest" to attestationDigest.wireValue(),
+        "attestation" to attestation.wireValue(),
+        "registered_by" to registeredBy,
+        "registered_at_height" to registeredAtHeight,
     )
 }
 

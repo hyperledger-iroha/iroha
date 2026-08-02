@@ -345,12 +345,11 @@ final class TransactionEncoderValidationTests: XCTestCase {
             from: signingKey,
             networkPrefix: SccpV1.tairaI105DiscriminantV1
         )
-        let publicInputs = try NoritoJSON(["owner": owner])
         let request = CastZkBallotRequest(chainId: "chain",
                                           authority: authority,
                                           electionId: "election-1",
                                           proofB64: "AAAA",
-                                          publicInputs: publicInputs,
+                                          publicInputs: .init(owner: owner),
                                           feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                           ttlMs: nil)
 
@@ -359,8 +358,10 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                            signingKey: signingKey,
                                                            creationTimeMs: 1)
         ) { error in
-            XCTAssertEqual(error as? TransactionInputError,
-                           .invalidZkBallotPublicInputs("lock hints must include owner, amount, duration_blocks"))
+            guard case let TransactionInputError.invalidZkBallotPublicInputs(reason) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(reason.contains("owner, amount, and duration_blocks"))
         }
     }
 
@@ -404,17 +405,16 @@ final class TransactionEncoderValidationTests: XCTestCase {
             from: signingKey,
             networkPrefix: SccpV1.tairaI105DiscriminantV1
         )
-        let publicInputs = try NoritoJSON.fromJSONObject([
-            "owner": owner,
-            "amount": "1",
-            "duration_blocks": 1,
-            "root_hint": "not-hex",
-        ])
         let request = CastZkBallotRequest(chainId: "chain",
                                           authority: authority,
                                           electionId: "election-1",
                                           proofB64: "AAAA",
-                                          publicInputs: publicInputs,
+                                          publicInputs: .init(
+                                            rootHint: "not-hex",
+                                            owner: owner,
+                                            amount: "1",
+                                            durationBlocks: 1
+                                          ),
                                           feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                           ttlMs: nil)
 
@@ -423,8 +423,10 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                            signingKey: signingKey,
                                                            creationTimeMs: 1)
         ) { error in
-            XCTAssertEqual(error as? TransactionInputError,
-                           .invalidZkBallotPublicInputs("root_hint must be 32-byte hex"))
+            guard case let TransactionInputError.invalidZkBallotPublicInputs(reason) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(reason.contains("root_hint must be a 32-byte hex string"))
         }
     }
 
@@ -433,22 +435,17 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
         let overflowing = String(repeating: "9", count: 155)
-        let invalidAmounts: [Any] = [
-            1, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing,
+        let invalidAmounts = [
+            "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing,
         ]
 
         for amount in invalidAmounts {
-            let publicInputs = try NoritoJSON.fromJSONObject([
-                "owner": owner,
-                "amount": amount,
-                "duration_blocks": 1,
-            ])
             let request = CastZkBallotRequest(
                 chainId: "chain",
                 authority: authority,
                 electionId: "election-1",
                 proofB64: "AAAA",
-                publicInputs: publicInputs,
+                publicInputs: .init(owner: owner, amount: amount, durationBlocks: 1),
                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
                 ttlMs: nil
             )
@@ -460,39 +457,68 @@ final class TransactionEncoderValidationTests: XCTestCase {
                     creationTimeMs: 1
                 )
             ) { error in
-                XCTAssertEqual(
-                    error as? TransactionInputError,
-                    .invalidZkBallotPublicInputs(
-                        "amount must be a canonical non-negative Kotodama V1 Quantity string"
-                    )
+                guard case let TransactionInputError.invalidZkBallotPublicInputs(reason) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertTrue(
+                    reason.contains("canonical non-negative Kotodama V1 Quantity"),
+                    "\(amount): \(reason)"
                 )
             }
         }
     }
 
-    func testCastZkBallotRejectsDeprecatedAliases() throws {
+    func testCastZkBallotPublicInputsEncodeOnlyCanonicalFieldsAndLosslessUInt64() throws {
         let owner = try canonicalOwnerLiteral()
-        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
-        let authority = try canonicalAuthorityLiteral(from: signingKey)
-        let publicInputs = try NoritoJSON.fromJSONObject([
-            "owner": owner,
-            "amount": "18446744073709551616.25",
-            "duration_blocks": 1,
-            "root_hint_hex": "0x" + String(repeating: "Cc", count: 32),
-        ])
-        let request = CastZkBallotRequest(chainId: "chain",
-                                          authority: authority,
-                                          electionId: "election-1",
-                                          proofB64: "AAAA",
-                                          publicInputs: publicInputs,
-                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                          ttlMs: nil)
-
-        XCTAssertThrowsError(
-            try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
-                                                           signingKey: signingKey,
-                                                           creationTimeMs: 1)
+        let data = try SwiftTransactionEncoder.normalizeZkBallotPublicInputs(
+            .init(
+                rootHint: "0x" + String(repeating: "Cc", count: 32),
+                owner: owner,
+                amount: "18446744073709551616.25",
+                durationBlocks: UInt64.max,
+                direction: .nay,
+                nullifier: "blake2b32:" + String(repeating: "DD", count: 32)
+            )
         )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(object.keys),
+            Set(["root_hint", "owner", "amount", "duration_blocks", "direction", "nullifier"])
+        )
+        XCTAssertEqual(object["root_hint"] as? String, String(repeating: "cc", count: 32))
+        XCTAssertEqual(object["owner"] as? String, owner)
+        XCTAssertEqual(object["amount"] as? String, "18446744073709551616.25")
+        XCTAssertEqual(object["direction"] as? String, "Nay")
+        XCTAssertEqual(object["nullifier"] as? String, String(repeating: "dd", count: 32))
+        XCTAssertTrue(
+            String(decoding: data, as: UTF8.self)
+                .contains("\"duration_blocks\":18446744073709551615")
+        )
+    }
+
+    func testGovernanceSecretAliasGuardRejectsEveryAliasRecursively() throws {
+        let aliases = [
+            "private_key", "privateKey", "private_key_hex", "privateKeyHex",
+            "private_key_bytes", "privateKeyBytes", "private_key_seed", "privateKeySeed",
+            "private_key_multihash", "privateKeyMultihash", "private_key_algorithm",
+            "privateKeyAlgorithm",
+        ]
+        for alias in aliases {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "outer": [["safe": [alias: "secret"]]],
+            ])
+            XCTAssertThrowsError(
+                try SwiftTransactionEncoder.rejectGovernancePrivateKeyAliases(inJSONData: data)
+            ) { error in
+                guard case let TransactionInputError.invalidZkBallotPublicInputs(reason) = error else {
+                    return XCTFail("unexpected error for \(alias): \(error)")
+                }
+                XCTAssertTrue(reason.contains(alias))
+                XCTAssertTrue(reason.contains("public_inputs.outer[0].safe"))
+            }
+        }
     }
 
     func testCastZkBallotAcceptsCanonicalHints() throws {
@@ -508,18 +534,18 @@ final class TransactionEncoderValidationTests: XCTestCase {
             from: signingKey,
             networkPrefix: SccpV1.tairaI105DiscriminantV1
         )
-        let publicInputs = try NoritoJSON.fromJSONObject([
-            "owner": owner,
-            "amount": "18446744073709551616.25",
-            "duration_blocks": 1,
-            "root_hint": "0x" + String(repeating: "Cc", count: 32),
-            "nullifier": "blake2b32:" + String(repeating: "DD", count: 32),
-        ])
         let request = CastZkBallotRequest(chainId: "chain",
                                           authority: authority,
                                           electionId: "election-1",
                                           proofB64: "AAAA",
-                                          publicInputs: publicInputs,
+                                          publicInputs: .init(
+                                            rootHint: "0x" + String(repeating: "Cc", count: 32),
+                                            owner: owner,
+                                            amount: "18446744073709551616.25",
+                                            durationBlocks: 1,
+                                            direction: .aye,
+                                            nullifier: "blake2b32:" + String(repeating: "DD", count: 32)
+                                          ),
                                           feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                           ttlMs: nil)
 
@@ -542,16 +568,15 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let owner = try noncanonicalOwnerLiteral()
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
-        let publicInputs = try NoritoJSON.fromJSONObject([
-            "owner": owner,
-            "amount": "1",
-            "duration_blocks": 1,
-        ])
         let request = CastZkBallotRequest(chainId: "chain",
                                           authority: authority,
                                           electionId: "election-1",
                                           proofB64: "AAAA",
-                                          publicInputs: publicInputs,
+                                          publicInputs: .init(
+                                            owner: owner,
+                                            amount: "1",
+                                            durationBlocks: 1
+                                          ),
                                           feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                           ttlMs: nil)
 
@@ -560,8 +585,10 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                            signingKey: signingKey,
                                                            creationTimeMs: 1)
         ) { error in
-            XCTAssertEqual(error as? TransactionInputError,
-                           .invalidZkBallotPublicInputs("owner must be a canonical I105 account id"))
+            guard case let TransactionInputError.invalidZkBallotPublicInputs(reason) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(reason.contains("owner must be a canonical I105 account id"))
         }
     }
 }

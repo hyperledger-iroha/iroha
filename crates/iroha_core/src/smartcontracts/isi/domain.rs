@@ -3650,8 +3650,8 @@ mod tests {
         },
         asset::definition::AssetConfidentialPolicy,
         asset::{
-            Asset, AssetBalanceScope, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId,
-            AssetId, Mintable, NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
+            Asset, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId, Mintable,
+            NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
         },
         block::BlockHeader,
         events::data::space_directory::{
@@ -3662,12 +3662,8 @@ mod tests {
             ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         isi::{
-            SetAssetHoldingLimit,
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
-            error::{
-                AssetTransferAdmissionError, InstructionExecutionError, InvalidParameterError,
-                RepetitionError,
-            },
+            error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
             governance::{CouncilDerivationKind, VotingMode},
         },
         metadata::Metadata,
@@ -10400,7 +10396,7 @@ mod tests {
 
     #[test]
     fn register_restricted_asset_definition_requires_explicit_owning_domain() {
-        let mut state = test_state();
+        let state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
         let definition_id = AssetDefinitionId::from_uuid_bytes([
@@ -10957,8 +10953,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-universal", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id =
-            AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "unit".parse().expect("name"),
+        );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();

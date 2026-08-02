@@ -5321,19 +5321,15 @@ function buildGovernancePlainBallotPayload(overrides) {
   if (!isPlainObject(overrides)) {
     return null;
   }
-  const referendumId = normalizeIntegrationString(
-    overrides.referendumId ?? overrides.referendum_id,
-  );
+  const referendumId = normalizeIntegrationString(overrides.referendumId);
   if (!referendumId) {
     return null;
   }
   const authority =
     normalizeIntegrationString(overrides.authority) ?? AUTHORITY_ACCOUNT_ID;
   const owner = normalizeIntegrationString(overrides.owner) ?? AUTHORITY_ACCOUNT_ID;
-  const chainId =
-    normalizeIntegrationString(overrides.chainId ?? overrides.chain_id) ?? CHAIN_ID;
-  const durationBlocksRaw =
-    overrides.durationBlocks ?? overrides.duration_blocks ?? overrides.duration ?? 10;
+  const chainId = normalizeIntegrationString(overrides.chainId) ?? CHAIN_ID;
+  const durationBlocksRaw = overrides.durationBlocks ?? 10;
   const durationBlocks =
     typeof durationBlocksRaw === "number"
       ? durationBlocksRaw
@@ -5353,11 +5349,11 @@ function buildGovernancePlainBallotPayload(overrides) {
     normalizeIntegrationString(overrides.direction ?? "Aye") ?? "Aye";
   return {
     authority,
-    chain_id: chainId,
-    referendum_id: referendumId,
+    chainId,
+    referendumId,
     owner,
     amount: amountText,
-    duration_blocks: durationBlocks,
+    durationBlocks,
     direction,
   };
 }

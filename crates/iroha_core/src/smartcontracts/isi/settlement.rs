@@ -1280,7 +1280,7 @@ mod tests {
         block::BlockHeader,
         common::Owned,
         domain::{Domain, DomainId},
-        events::data::prelude::{AccountEvent, AssetEvent, DataEvent, DomainEvent},
+        events::data::prelude::{AssetEvent, DataEvent, DomainEvent},
         isi::SetAssetHoldingLimit,
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata},

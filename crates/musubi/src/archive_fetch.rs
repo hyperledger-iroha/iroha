@@ -20,12 +20,8 @@ use iroha_data_model::{
         ArchiveId, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
         MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationQueryV1,
         MusubiArchiveLocationStateV1, MusubiArchiveLocationV1, MusubiPageRequestV1,
-        MusubiRegistrySnapshotV1,
     },
-    sorafs::{
-        capacity::ProviderId,
-        pin_registry::{ManifestDigest, ProviderIngestFinalizedAnchorV1},
-    },
+    sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
 use sorafs_car::{
     CarBuildPlan, CarStreamingWriter, CarWriteError, ProfileId, compute_chunk_plan_digest_sha3,
@@ -679,7 +675,11 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
         commitment.validate().map_err(|_| invalid_evidence())?;
         let mut candidates = Vec::new();
         for location in &page.items {
-            validate_location_evidence(&page, location, &commitment)?;
+            validate_location_evidence(
+                page.archive.archive_id,
+                page.snapshot.finalized_height,
+                location,
+            )?;
             let rank = match location.state {
                 MusubiArchiveLocationStateV1::Healthy => {
                     if location.providers.len() < usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1) {
@@ -709,45 +709,15 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
 }
 
 fn validate_location_evidence(
-    page: &iroha_data_model::musubi::MusubiArchiveLocationPageV1,
+    expected_archive: ArchiveId,
+    snapshot_height: u64,
     location: &MusubiArchiveLocationV1,
-    commitment: &MusubiArchiveCommitmentV1,
 ) -> Result<(), ArchiveFetchErrorV1> {
-    if location.finalized_height > page.snapshot.finalized_height {
+    location.validate().map_err(|_| invalid_evidence())?;
+    if location.archive_id != expected_archive || location.finalized_height > snapshot_height {
         return Err(invalid_evidence());
     }
-    for attestation in &location.provider_attestations {
-        let binding = &attestation.payload.binding;
-        if binding.chain_id != page.chain_id
-            || binding.genesis_block_hash != page.genesis_hash
-            || !finalized_anchor_is_compatible(
-                &binding.finalized_anchor,
-                location.finalized_height,
-                &page.snapshot,
-            )
-            || binding.bundle_digest != commitment.bundle_digest
-            || binding.descriptor_digest != commitment.descriptor_digest
-            || binding.source_tree_digest != commitment.source_tree_digest
-            || binding.completion_epoch >= location.expires_at_epoch
-        {
-            return Err(invalid_evidence());
-        }
-        attestation
-            .verify(binding)
-            .map_err(|_| invalid_evidence())?;
-    }
     Ok(())
-}
-
-fn finalized_anchor_is_compatible(
-    anchor: &ProviderIngestFinalizedAnchorV1,
-    location_finalized_height: u64,
-    snapshot: &MusubiRegistrySnapshotV1,
-) -> bool {
-    anchor.height <= location_finalized_height
-        && anchor.height <= snapshot.finalized_height
-        && (anchor.height != snapshot.finalized_height
-            || anchor.block_hash == snapshot.finalized_block_hash)
 }
 
 fn prioritize_distinct_providers(
@@ -940,8 +910,8 @@ mod tests {
     };
 
     use iroha_data_model::{
-        musubi::MusubiContentDigestV1,
-        sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
+        musubi::{MusubiContentDigestV1, MusubiProviderBundleAttestationSetDigestV1},
+        sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid, ReplicationOrderId},
     };
     use sorafs_car::FileEntry;
 
@@ -986,6 +956,24 @@ mod tests {
             descriptor_digest: MusubiContentDigestV1::new([7; 32]),
             file_count: 1,
             chunk_count: 1,
+        }
+    }
+
+    fn compact_location(archive_id: ArchiveId) -> MusubiArchiveLocationV1 {
+        MusubiArchiveLocationV1 {
+            location_id: MusubiArchiveLocationIdV1::new([0x31; 32]),
+            archive_id,
+            pin_manifest: ManifestDigest::new([0x32; 32]),
+            replication_order: ReplicationOrderId::new([0x33; 32]),
+            providers: vec![ProviderId::new([0x34; 32])],
+            provider_attestation_set_digest: MusubiProviderBundleAttestationSetDigestV1::new(
+                [0x35; 32],
+            ),
+            renew_after_epoch: 10,
+            expires_at_epoch: 20,
+            finalized_height: 7,
+            revision: 1,
+            state: MusubiArchiveLocationStateV1::Healthy,
         }
     }
 
@@ -1178,27 +1166,24 @@ mod tests {
     }
 
     #[test]
-    fn provider_completion_anchor_must_precede_location_and_match_snapshot_fork() {
-        let snapshot = MusubiRegistrySnapshotV1 {
-            finalized_height: 100,
-            finalized_block_hash: [9; 32],
-            index_revision: 1,
-        };
-        let mut anchor = ProviderIngestFinalizedAnchorV1 {
-            height: 99,
-            block_hash: [8; 32],
-        };
-        assert!(finalized_anchor_is_compatible(&anchor, 100, &snapshot));
-        anchor.height = 100;
-        anchor.block_hash = snapshot.finalized_block_hash;
-        assert!(finalized_anchor_is_compatible(&anchor, 100, &snapshot));
-        anchor.block_hash = [7; 32];
-        assert!(!finalized_anchor_is_compatible(&anchor, 100, &snapshot));
-        anchor.height = 101;
-        assert!(!finalized_anchor_is_compatible(&anchor, 101, &snapshot));
-        anchor.height = 100;
-        anchor.block_hash = snapshot.finalized_block_hash;
-        assert!(!finalized_anchor_is_compatible(&anchor, 99, &snapshot));
+    fn compact_location_evidence_binds_archive_and_finalized_height() {
+        let archive_id = ArchiveId::new([0x41; 32]);
+        let location = compact_location(archive_id);
+        validate_location_evidence(archive_id, location.finalized_height, &location)
+            .expect("matching compact finalized location");
+
+        let error = validate_location_evidence(
+            ArchiveId::new([0x42; 32]),
+            location.finalized_height,
+            &location,
+        )
+        .expect_err("a location from another archive must fail");
+        assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
+
+        let error =
+            validate_location_evidence(archive_id, location.finalized_height - 1, &location)
+                .expect_err("a location newer than the query snapshot must fail");
+        assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
     }
 
     #[test]

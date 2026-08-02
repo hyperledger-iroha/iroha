@@ -15156,24 +15156,6 @@ async fn handler_webhooks_delete(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_gov_ballot_zk(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::ZkBallotDto>,
-) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(&app, &headers, Some(remote_ip), "v1/gov/ballots/zk", true).await?;
-    crate::gov::handle_gov_ballot_zk(
-        app.chain_id.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
 async fn handler_gov_ballot_zk_v1(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -50437,6 +50419,10 @@ impl Torii {
             catalog_post(musubi::handler_find_exact_release),
         );
         builder.route(
+            &route_catalog::musubi::PROVIDER_BUNDLE_ATTESTATION,
+            catalog_post(musubi::handler_find_provider_bundle_attestation),
+        );
+        builder.route(
             &route_catalog::musubi::RESOLVER_INDEX,
             catalog_post(musubi::handler_find_resolver_index),
         );
@@ -50479,6 +50465,10 @@ impl Torii {
         builder.route(
             &route_catalog::musubi::ARCHIVE_REGISTER,
             catalog_post(musubi::handler_build_archive_register),
+        );
+        builder.route(
+            &route_catalog::musubi::PROVIDER_BUNDLE_ATTESTATION_REGISTER,
+            catalog_post(musubi::handler_build_provider_bundle_attestation_register),
         );
         builder.route(
             &route_catalog::musubi::ARCHIVE_LOCATION_ADD,
@@ -52925,7 +52915,6 @@ impl Torii {
             mount_get!(GOV_LOCKS_GET, handler_gov_locks_get);
             mount_get!(GOV_REFERENDUM_GET, handler_gov_referendum_get);
             mount_get!(GOV_TALLY_GET, handler_gov_tally_get);
-            mount_post!(GOV_BALLOT_ZK, handler_gov_ballot_zk);
             mount_post!(GOV_BALLOT_ZK_V1, handler_gov_ballot_zk_v1);
             mount_post!(
                 GOV_BALLOT_ZK_V1_PROOF,
@@ -55974,7 +55963,7 @@ fn build_sorafs_gateway_security(
     let policy_config = GatewayPolicyConfig {
         require_manifest_envelope: config.require_manifest_envelope,
         enforce_admission: config.enforce_admission,
-        rate_limit: rate_limit.clone(),
+        rate_limit,
     };
     let rate_limiter = GatewayRateLimiter::new(rate_limit);
     let policy = Arc::new(GatewayPolicy::new(policy_config, admission, rate_limiter));

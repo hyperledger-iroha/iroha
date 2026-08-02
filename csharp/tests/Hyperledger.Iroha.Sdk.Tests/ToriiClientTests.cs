@@ -6730,6 +6730,35 @@ public sealed class ToriiClientTests
     }
 
     [Theory]
+    [InlineData("profile")]
+    [InlineData("quote")]
+    [InlineData("session-create")]
+    [InlineData("session-get")]
+    [InlineData("receipt-submit")]
+    [InlineData("receipt-list")]
+    [InlineData("receipt-delete")]
+    public async Task VpnRoutesRequireHttpsBeforeDispatch(string operation)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("insecure VPN request reached HTTP dispatch"));
+        using var client = new ToriiClient(
+            new Uri("http://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            });
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            InvokeVpnResponseOperationAsync(client, operation));
+
+        Assert.Contains("HTTPS Torii base URI", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
     [InlineData("profile", 201)]
     [InlineData("quote", 200)]
     [InlineData("session-create", 200)]

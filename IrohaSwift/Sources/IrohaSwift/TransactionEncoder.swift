@@ -15,6 +15,8 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
     case malformedLabel(field: String, value: String)
     case emptyAssetId
     case malformedAssetId(String)
+    case invalidGovernanceWindow(lower: UInt64, upper: UInt64)
+    case invalidGovernanceAbiVersion(String)
     case invalidZkBallotPublicInputs(String)
 
     public var errorDescription: String? {
@@ -47,6 +49,10 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
             return "Asset id must use canonical unprefixed Base58 form with no whitespace (received '\(value)')."
+        case let .invalidGovernanceWindow(lower, upper):
+            return "Governance window upper bound \(upper) must not precede lower bound \(lower)."
+        case let .invalidGovernanceAbiVersion(value):
+            return "Governance ABI version must be exactly '1' in the first release (received '\(value)')."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -1341,7 +1347,7 @@ struct SwiftTransactionEncoder {
         let ids = try TransactionInputValidator.validate(chainId: request.chainId,
                                                          authorityId: request.authority)
         let privateKey = try privateKeyBytes(from: signingKey)
-        let publicInputs = try normalizeZkBallotPublicInputs(request.publicInputs.data)
+        let publicInputs = try normalizeZkBallotPublicInputs(request.publicInputs)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceCastZkBallot(
                 chainId: ids.chainId,
@@ -1359,166 +1365,70 @@ struct SwiftTransactionEncoder {
         return try wrap(native: native)
     }
 
-    private static func normalizeZkBallotPublicInputs(_ data: Data) throws -> Data {
-        let decoded: ToriiJSONValue
-        do {
-            decoded = try JSONDecoder().decode(ToriiJSONValue.self, from: data)
-        } catch {
-            throw TransactionInputError.invalidZkBallotPublicInputs("public_inputs_json must be valid JSON.")
-        }
-        guard case let .object(map) = decoded else {
-            throw TransactionInputError.invalidZkBallotPublicInputs("public_inputs_json must be a JSON object.")
-        }
-        var normalized = map
-        try rejectZkBallotPublicInputKey(&normalized,
-                                         key: "durationBlocks",
-                                         canonicalKey: "duration_blocks")
-        try rejectZkBallotPublicInputKey(&normalized,
-                                         key: "root_hint_hex",
-                                         canonicalKey: "root_hint")
-        try rejectZkBallotPublicInputKey(&normalized,
-                                         key: "rootHintHex",
-                                         canonicalKey: "root_hint")
-        try rejectZkBallotPublicInputKey(&normalized,
-                                         key: "rootHint",
-                                         canonicalKey: "root_hint")
-        try rejectZkBallotPublicInputKey(&normalized,
-                                         key: "nullifier_hex",
-                                         canonicalKey: "nullifier")
-        try rejectZkBallotPublicInputKey(&normalized,
-                                         key: "nullifierHex",
-                                         canonicalKey: "nullifier")
-        try normalizeZkBallotPublicInputHex(&normalized, key: "root_hint")
-        try normalizeZkBallotPublicInputHex(&normalized, key: "nullifier")
-        let hasOwner = zkHintPresent(normalized["owner"])
-        let hasAmount = zkHintPresent(normalized["amount"])
-        let hasDuration = zkHintPresent(normalized["duration_blocks"])
-        let hasAnyHint = hasOwner || hasAmount || hasDuration
-        if hasAnyHint && !(hasOwner && hasAmount && hasDuration) {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "lock hints must include owner, amount, duration_blocks"
-            )
-        }
-        if hasAmount {
-            guard case let .string(amount)? = normalized["amount"] else {
-                throw TransactionInputError.invalidZkBallotPublicInputs(
-                    "amount must be a canonical non-negative Kotodama V1 Quantity string"
-                )
-            }
-            do {
-                normalized["amount"] = .string(
-                    try KotodamaNumericV1Codec.decodeQuantityJSON(amount).canonicalString
-                )
-            } catch {
-                throw TransactionInputError.invalidZkBallotPublicInputs(
-                    "amount must be a canonical non-negative Kotodama V1 Quantity string"
-                )
-            }
-        }
-        try ensureZkBallotOwnerCanonical(normalized)
+    static func normalizeZkBallotPublicInputs(
+        _ inputs: GovernanceZkBallotPublicInputs
+    ) throws -> Data {
         let encoder = JSONEncoder()
         if #available(iOS 11.0, macOS 10.13, *) {
             encoder.outputFormatting.insert(.sortedKeys)
         }
-        return try encoder.encode(ToriiJSONValue.object(normalized))
-    }
-
-    private static func rejectZkBallotPublicInputKey(_ inputs: inout [String: ToriiJSONValue],
-                                                     key: String,
-                                                     canonicalKey: String) throws {
-        guard inputs[key] != nil else { return }
-        throw TransactionInputError.invalidZkBallotPublicInputs(
-            "public_inputs_json must use \(canonicalKey) (unsupported key \(key))"
-        )
-    }
-
-    private static func normalizeZkBallotPublicInputHex(_ inputs: inout [String: ToriiJSONValue],
-                                                        key: String) throws {
-        guard let value = inputs[key] else { return }
-        if case .null = value { return }
-        guard case let .string(raw) = value else {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "\(key) must be 32-byte hex"
-            )
-        }
-        let canonical = try canonicalizeZkBallotHexHint(raw, field: key)
-        inputs[key] = .string(canonical)
-    }
-
-    private static func canonicalizeZkBallotHexHint(_ raw: String, field: String) throws -> String {
-        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let colonIndex = trimmed.firstIndex(of: ":") {
-            let scheme = String(trimmed[..<colonIndex])
-            let rest = String(trimmed[trimmed.index(after: colonIndex)...])
-            if !scheme.isEmpty && scheme.lowercased() != "blake2b32" {
-                throw TransactionInputError.invalidZkBallotPublicInputs(
-                    "\(field) must be 32-byte hex"
-                )
-            }
-            trimmed = rest.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-            trimmed = String(trimmed.dropFirst(2))
-        }
-        guard trimmed.count == 64, Data(hexString: trimmed) != nil else {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "\(field) must be 32-byte hex"
-            )
-        }
-        return trimmed.lowercased()
-    }
-
-    private static func ensureZkBallotOwnerCanonical(_ inputs: [String: ToriiJSONValue]) throws {
-        guard let value = inputs["owner"] else { return }
-        if case .null = value { return }
-        guard case let .string(owner) = value else {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical I105 account id"
-            )
-        }
-        let canonical = try canonicalizeZkBallotOwnerLiteral(owner)
-        if canonical != owner {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must use canonical I105 account id form"
-            )
-        }
-    }
-
-    private static func canonicalizeZkBallotOwnerLiteral(_ raw: String) throws -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed == raw else {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical I105 account id"
-            )
-        }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical I105 account id"
-            )
-        }
-        if trimmed.contains("@") {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical I105 account id"
-            )
-        }
+        let encoded: Data
         do {
-            return try TransactionInputValidator.sanitizeAccountId(
-                trimmed,
-                field: "owner"
-            )
+            encoded = try encoder.encode(inputs)
+        } catch let ToriiClientError.invalidPayload(reason) {
+            throw TransactionInputError.invalidZkBallotPublicInputs(reason)
         } catch {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical I105 account id"
+                "public inputs could not be encoded canonically"
             )
         }
+        try rejectGovernancePrivateKeyAliases(inJSONData: encoded)
+        return encoded
     }
 
-    private static func zkHintPresent(_ value: ToriiJSONValue?) -> Bool {
-        guard let value else { return false }
-        if case .null = value {
-            return false
+    private static let governancePrivateKeyAliases: Set<String> = [
+        "private_key", "privateKey", "private_key_hex", "privateKeyHex",
+        "private_key_bytes", "privateKeyBytes", "private_key_seed", "privateKeySeed",
+        "private_key_multihash", "privateKeyMultihash", "private_key_algorithm",
+        "privateKeyAlgorithm",
+    ]
+
+    static func rejectGovernancePrivateKeyAliases(inJSONData data: Data) throws {
+        let value: Any
+        do {
+            value = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "public inputs must be valid JSON"
+            )
         }
-        return true
+        try rejectGovernancePrivateKeyAliases(in: value, path: "public_inputs")
+    }
+
+    private static func rejectGovernancePrivateKeyAliases(in value: Any,
+                                                           path: String) throws {
+        if let object = value as? [String: Any] {
+            for key in object.keys.sorted() {
+                if governancePrivateKeyAliases.contains(key) {
+                    throw TransactionInputError.invalidZkBallotPublicInputs(
+                        "\(path) does not accept private-key field \(key)"
+                    )
+                }
+                if let nested = object[key] {
+                    try rejectGovernancePrivateKeyAliases(
+                        in: nested,
+                        path: "\(path).\(key)"
+                    )
+                }
+            }
+        } else if let array = value as? [Any] {
+            for (index, nested) in array.enumerated() {
+                try rejectGovernancePrivateKeyAliases(
+                    in: nested,
+                    path: "\(path)[\(index)]"
+                )
+            }
+        }
     }
 
     static func encodeEnactReferendum(request: EnactReferendumRequest,

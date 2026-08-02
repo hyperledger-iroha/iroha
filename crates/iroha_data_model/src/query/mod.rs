@@ -1197,8 +1197,12 @@ mod model {
         FindDataspaceNameOwnerById(sns::prelude::FindDataspaceNameOwnerById),
         /// Fetch one exact Musubi V1 package record.
         FindMusubiExactPackageV1(musubi::prelude::FindMusubiExactPackageV1),
-        /// Fetch one exact Musubi V1 release record.
+        /// Fetch one paired finalized Musubi V1 home/universal release view.
         FindMusubiExactReleaseV1(musubi::prelude::FindMusubiExactReleaseV1),
+        /// Fetch one exact immutable Musubi V1 provider bundle-attestation record.
+        FindMusubiProviderBundleAttestationV1(
+            musubi::prelude::FindMusubiProviderBundleAttestationV1,
+        ),
         /// Fetch a finalized page from the universal Musubi V1 resolver index.
         FindMusubiResolverIndexV1(musubi::prelude::FindMusubiResolverIndexV1),
         /// Fetch a finalized page of structured Musubi V1 versions.
@@ -1405,8 +1409,10 @@ mod model {
         FxCorridorPolicy(crate::isi::settlement::FxCorridorPolicy),
         /// Exact authoritative Musubi V1 package payload.
         MusubiPackage(crate::musubi::MusubiPackageRecordV1),
-        /// Exact immutable Musubi V1 release payload.
-        MusubiRelease(crate::musubi::MusubiReleaseRecordV1),
+        /// Paired finalized home/universal view of one exact Musubi V1 release.
+        MusubiRelease(crate::musubi::MusubiExactReleaseSnapshotV1),
+        /// Exact immutable provider bundle-attestation audit record.
+        MusubiProviderBundleAttestation(crate::musubi::MusubiProviderBundleAttestationRecordV1),
         /// Finalized universal resolver-index page.
         MusubiResolverIndexPage(crate::musubi::MusubiResolverIndexPageV1),
         /// Finalized structured-version page.
@@ -4309,7 +4315,8 @@ impl_singular_queries! {
     settlement::prelude::FindFxCorridorPolicyById => crate::isi::settlement::FxCorridorPolicy,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
     musubi::prelude::FindMusubiExactPackageV1 => crate::musubi::MusubiPackageRecordV1,
-    musubi::prelude::FindMusubiExactReleaseV1 => crate::musubi::MusubiReleaseRecordV1,
+    musubi::prelude::FindMusubiExactReleaseV1 => crate::musubi::MusubiExactReleaseSnapshotV1,
+    musubi::prelude::FindMusubiProviderBundleAttestationV1 => crate::musubi::MusubiProviderBundleAttestationRecordV1,
     musubi::prelude::FindMusubiResolverIndexV1 => crate::musubi::MusubiResolverIndexPageV1,
     musubi::prelude::FindMusubiVersionsV1 => crate::musubi::MusubiVersionPageV1,
     musubi::prelude::FindMusubiMaintainersV1 => crate::musubi::MusubiMaintainerPageV1,
@@ -6816,7 +6823,7 @@ pub mod musubi {
     use crate::musubi::{
         MusubiAliasQueryV1, MusubiArchiveLocationQueryV1, MusubiArchiveRetentionQueryV1,
         MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1, MusubiOrderedPrefixQueryV1,
-        MusubiPackagePageQueryV1, MusubiResolverIndexQueryV1,
+        MusubiPackagePageQueryV1, MusubiProviderBundleAttestationKeyV1, MusubiResolverIndexQueryV1,
     };
 
     pub use self::model::*;
@@ -6840,7 +6847,7 @@ pub mod musubi {
             pub request: MusubiExactPackageQueryV1,
         }
 
-        /// Fetch one exact immutable Musubi V1 release record.
+        /// Fetch one paired finalized Musubi V1 home/universal release view.
         #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
         #[cfg_attr(
             feature = "json",
@@ -6852,6 +6859,20 @@ pub mod musubi {
         pub struct FindMusubiExactReleaseV1 {
             /// Exact structural release request.
             pub request: MusubiExactReleaseQueryV1,
+        }
+
+        /// Fetch one exact immutable Musubi V1 provider bundle-attestation audit record.
+        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
+        #[repr(transparent)]
+        pub struct FindMusubiProviderBundleAttestationV1 {
+            /// Exact archive/order/provider attestation key.
+            pub key: MusubiProviderBundleAttestationKeyV1,
         }
 
         /// Fetch a finalized page from the universal Musubi V1 resolver index.
@@ -6987,6 +7008,16 @@ pub mod musubi {
         }
     }
 
+    impl fmt::Display for FindMusubiProviderBundleAttestationV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "Find exact Musubi V1 provider bundle attestation for archive `{:?}`, order `{:?}`, provider `{:?}`",
+                self.key.archive_id, self.key.replication_order, self.key.provider_id
+            )
+        }
+    }
+
     impl fmt::Display for FindMusubiResolverIndexV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
@@ -7072,8 +7103,8 @@ pub mod musubi {
         pub use super::{
             FindMusubiAliasHistoryV1, FindMusubiAliasV1, FindMusubiArchiveLocationsV1,
             FindMusubiArchiveRetentionV1, FindMusubiExactPackageV1, FindMusubiExactReleaseV1,
-            FindMusubiMaintainersV1, FindMusubiOrderedPrefixV1, FindMusubiResolverIndexV1,
-            FindMusubiVersionsV1,
+            FindMusubiMaintainersV1, FindMusubiOrderedPrefixV1,
+            FindMusubiProviderBundleAttestationV1, FindMusubiResolverIndexV1, FindMusubiVersionsV1,
         };
     }
 
@@ -7087,15 +7118,17 @@ pub mod musubi {
                 ArchiveId, MusubiAliasNameV1, MusubiAliasQueryV1, MusubiArchiveLocationPageV1,
                 MusubiArchiveLocationQueryV1, MusubiArchiveRetentionPageV1,
                 MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1,
-                MusubiExactReleaseQueryV1, MusubiMaintainerPageV1, MusubiOrderedPackagePageV1,
-                MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1, MusubiPackageIdV1,
-                MusubiPackageNameV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
-                MusubiPackageScopeV1, MusubiPageRequestV1, MusubiReleaseIdV1,
-                MusubiReleaseRecordV1, MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1,
+                MusubiExactReleaseQueryV1, MusubiExactReleaseSnapshotV1, MusubiMaintainerPageV1,
+                MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
+                MusubiPackageIdV1, MusubiPackageNameV1, MusubiPackagePageQueryV1,
+                MusubiPackageRecordV1, MusubiPackageScopeV1, MusubiPageRequestV1,
+                MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleAttestationRecordV1,
+                MusubiReleaseIdV1, MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1,
                 MusubiVersionPageV1, MusubiVersionV1,
             },
             nexus::DataSpaceId,
             query::{SingularQuery, SingularQueryBox, SingularQueryOutputBox},
+            sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
         };
 
         fn package() -> MusubiPackageIdV1 {
@@ -7127,6 +7160,12 @@ pub mod musubi {
                 })
                 .into(),
                 FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 { release }).into(),
+                FindMusubiProviderBundleAttestationV1::new(MusubiProviderBundleAttestationKeyV1 {
+                    archive_id: ArchiveId::new([0xA4; 32]),
+                    replication_order: ReplicationOrderId::new([0xA5; 32]),
+                    provider_id: ProviderId::new([0xA6; 32]),
+                })
+                .into(),
                 FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
                     package: package.clone(),
                     requirement: None,
@@ -7190,7 +7229,11 @@ pub mod musubi {
             fn assert_output_variant<O: Into<SingularQueryOutputBox>>() {}
 
             assert_query_output::<FindMusubiExactPackageV1, MusubiPackageRecordV1>();
-            assert_query_output::<FindMusubiExactReleaseV1, MusubiReleaseRecordV1>();
+            assert_query_output::<FindMusubiExactReleaseV1, MusubiExactReleaseSnapshotV1>();
+            assert_query_output::<
+                FindMusubiProviderBundleAttestationV1,
+                MusubiProviderBundleAttestationRecordV1,
+            >();
             assert_query_output::<FindMusubiResolverIndexV1, MusubiResolverIndexPageV1>();
             assert_query_output::<FindMusubiVersionsV1, MusubiVersionPageV1>();
             assert_query_output::<FindMusubiMaintainersV1, MusubiMaintainerPageV1>();
@@ -7202,7 +7245,8 @@ pub mod musubi {
             assert_query_output::<FindMusubiOrderedPrefixV1, MusubiOrderedPackagePageV1>();
 
             assert_output_variant::<MusubiPackageRecordV1>();
-            assert_output_variant::<MusubiReleaseRecordV1>();
+            assert_output_variant::<MusubiExactReleaseSnapshotV1>();
+            assert_output_variant::<MusubiProviderBundleAttestationRecordV1>();
             assert_output_variant::<MusubiResolverIndexPageV1>();
             assert_output_variant::<MusubiVersionPageV1>();
             assert_output_variant::<MusubiMaintainerPageV1>();

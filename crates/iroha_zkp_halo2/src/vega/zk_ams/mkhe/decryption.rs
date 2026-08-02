@@ -2525,6 +2525,10 @@ fn decryption_challenge_seed(
     Ok(hash.finalize())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the proof boundary keeps every public relation and private witness input explicit"
+)]
 fn prove_decryption_relation<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -3515,6 +3519,7 @@ fn wide_from_be(bytes: &[u8]) -> Result<WideUint, ZkAmsMkheErrorV1> {
     Ok(value)
 }
 
+#[cfg(test)]
 fn wide_from_u64(value: u64) -> WideUint {
     let mut output = WideUint::zero();
     output.limbs[0] = value;

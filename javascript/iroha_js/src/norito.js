@@ -17,13 +17,19 @@ import {
 } from "./curveRegistry.js";
 import { MultisigSpec } from "./multisig.js";
 import {
+  ensureCanonicalAccountId,
   normalizeAccountId,
   normalizeAssetHoldingId,
   normalizeAssetId,
 } from "./normalizers.js";
+import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { getNativeBinding } from "./native.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
+import {
+  parseStrictLosslessIntegerJson,
+  stringifyStrictLosslessIntegerJson,
+} from "./strictLosslessJson.js";
 import {
   LANE_PRIVACY_MERKLE_MAX_DEPTH,
   PROOF_BOX_MAX_ENCODED_BYTES,
@@ -50,6 +56,28 @@ const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const UINT128_MASK = (1n << 128n) - 1n;
+const GOVERNANCE_PRIVATE_KEY_FIELDS = new Set([
+  "private_key",
+  "privateKey",
+  "private_key_hex",
+  "privateKeyHex",
+  "private_key_bytes",
+  "privateKeyBytes",
+  "private_key_seed",
+  "privateKeySeed",
+  "private_key_multihash",
+  "privateKeyMultihash",
+  "private_key_algorithm",
+  "privateKeyAlgorithm",
+]);
+const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS = Object.freeze([
+  "root_hint",
+  "owner",
+  "amount",
+  "duration_blocks",
+  "direction",
+  "nullifier",
+]);
 const HASH_LITERAL_RE = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/;
 const CANONICAL_HASH_LITERAL_RE = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/;
 const MULTIHASH_LITERAL_RE = /^([0-9a-fA-F]+)$/;
@@ -518,18 +546,284 @@ function shouldUsePureJsInstructionFallback(error) {
   return isNativeBindingUnavailable(error) || isNativeBindingUnsupportedInstruction(error);
 }
 
-function encodeNormalizedInstruction(normalized) {
-  const deployProposal = normalized?.ProposeDeployContract;
-  if (
-    isPlainObject(deployProposal) &&
-    deployProposal.mode !== undefined &&
-    deployProposal.mode !== null
-  ) {
-    // Rust's JSON bridge has historically accepted case-folded enum text.
-    // Bind the public JS wire contract to the exact canonical spellings before
-    // native dispatch so non-canonical JSON cannot acquire canonical bytes.
-    encodeVotingModeValue(deployProposal.mode, "ProposeDeployContract.mode");
+function isStrictGovernanceInstructionCandidate(value) {
+  return (
+    isPlainObject(value) &&
+    (
+      Object.prototype.hasOwnProperty.call(value, "ProposeDeployContract") ||
+      Object.prototype.hasOwnProperty.call(value, "CastZkBallot")
+    )
+  );
+}
+
+function rejectGovernancePrivateKeyFieldsDeep(value, context) {
+  const pending = [{ value, path: context }];
+  const visited = new WeakSet();
+  while (pending.length > 0) {
+    const { value: candidate, path } = pending.pop();
+    if (candidate === null || typeof candidate !== "object") {
+      continue;
+    }
+    if (visited.has(candidate)) {
+      continue;
+    }
+    visited.add(candidate);
+    if (!Array.isArray(candidate) && !isPlainObject(candidate)) {
+      continue;
+    }
+    for (const key of Object.keys(candidate)) {
+      if (GOVERNANCE_PRIVATE_KEY_FIELDS.has(key)) {
+        throw new TypeError(
+          `${path} does not accept private-key field ${key}; sign the transaction locally`,
+        );
+      }
+      pending.push({ value: candidate[key], path: `${path}.${key}` });
+    }
   }
+}
+
+function assertExactGovernanceObjectKeys(value, allowed, required, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, allowed, context);
+  for (const field of required) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`${context}.${field} is required`);
+    }
+  }
+}
+
+function normalizeGovernanceHex32(value, context) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${context} must be exactly 32-byte hexadecimal`);
+  }
+  let body = value;
+  const separator = value.indexOf(":");
+  if (separator !== -1) {
+    const scheme = value.slice(0, separator);
+    if (scheme.length === 0 || scheme.toLowerCase() !== "blake2b32") {
+      throw new TypeError(`${context} must use the optional blake2b32: scheme`);
+    }
+    body = value.slice(separator + 1);
+  }
+  if (body.startsWith("0x") || body.startsWith("0X")) {
+    body = body.slice(2);
+  }
+  if (body.length !== 64 || !/^[0-9A-Fa-f]{64}$/u.test(body)) {
+    throw new TypeError(
+      `${context} must be exactly 32-byte hexadecimal with no whitespace`,
+    );
+  }
+  return body.toLowerCase();
+}
+
+function normalizeGovernanceU64(value, context) {
+  let integer;
+  if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new TypeError(`${context} must be a lossless unsigned 64-bit integer`);
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "string") {
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+      throw new TypeError(`${context} must be a canonical unsigned 64-bit integer`);
+    }
+    integer = BigInt(value);
+  } else {
+    throw new TypeError(`${context} must be a lossless unsigned 64-bit integer`);
+  }
+  if (integer < 0n || integer > UINT64_MASK) {
+    throw new RangeError(`${context} must fit in an unsigned 64-bit integer`);
+  }
+  return integer;
+}
+
+function normalizeGovernanceWindowValue(value, context) {
+  assertExactGovernanceObjectKeys(
+    value,
+    ["lower", "upper"],
+    ["lower", "upper"],
+    context,
+  );
+  const lower = normalizeGovernanceU64(value.lower, `${context}.lower`);
+  const upper = normalizeGovernanceU64(value.upper, `${context}.upper`);
+  if (upper < lower) {
+    throw new RangeError(`${context}.upper must be greater than or equal to lower`);
+  }
+  return { lower: lower.toString(10), upper: upper.toString(10) };
+}
+
+function normalizeGovernanceQuantity(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical Kotodama V1 quantity string`);
+  }
+  try {
+    return NumericV1.decodeQuantityJson(value).toString();
+  } catch {
+    throw new TypeError(`${context} must be a canonical non-negative Kotodama V1 quantity`);
+  }
+}
+
+function normalizeGovernanceBallotDirection(value, context) {
+  if (value === "Aye" || value === "Nay" || value === "Abstain") {
+    return value;
+  }
+  throw new TypeError(`${context} must be exactly Aye, Nay, or Abstain`);
+}
+
+function normalizeGovernanceZkPublicInputsJson(value, context) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${context} must be a non-empty JSON object string`);
+  }
+  const parsed = parseStrictLosslessIntegerJson(value, context);
+  if (!isPlainObject(parsed)) {
+    throw new TypeError(`${context} must encode a JSON object`);
+  }
+  rejectGovernancePrivateKeyFieldsDeep(parsed, context);
+  assertOnlyObjectKeys(parsed, GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS, context);
+
+  const normalized = {};
+  for (const field of GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, field)) {
+      continue;
+    }
+    const entry = parsed[field];
+    if (entry === null) {
+      normalized[field] = null;
+      continue;
+    }
+    switch (field) {
+      case "root_hint":
+      case "nullifier":
+        normalized[field] = normalizeGovernanceHex32(entry, `${context}.${field}`);
+        break;
+      case "owner":
+        normalized.owner = ensureCanonicalAccountId(entry, `${context}.owner`);
+        break;
+      case "amount":
+        normalized.amount = normalizeGovernanceQuantity(entry, `${context}.amount`);
+        break;
+      case "duration_blocks":
+        normalized.duration_blocks = normalizeGovernanceU64(
+          entry,
+          `${context}.duration_blocks`,
+        );
+        break;
+      case "direction":
+        normalized.direction = normalizeGovernanceBallotDirection(
+          entry,
+          `${context}.direction`,
+        );
+        break;
+      default:
+        throw new Error(`unhandled governance public input ${field}`);
+    }
+  }
+
+  const hasOwner = normalized.owner !== undefined && normalized.owner !== null;
+  const hasAmount = normalized.amount !== undefined && normalized.amount !== null;
+  const hasDuration =
+    normalized.duration_blocks !== undefined && normalized.duration_blocks !== null;
+  if ((hasOwner || hasAmount || hasDuration) && !(hasOwner && hasAmount && hasDuration)) {
+    throw new TypeError(
+      `${context} must include owner, amount, and duration_blocks when providing lock hints`,
+    );
+  }
+  return stringifyStrictLosslessIntegerJson(normalized, context);
+}
+
+function validateProposeDeployContractPayload(value) {
+  const context = "ProposeDeployContract";
+  assertExactGovernanceObjectKeys(
+    value,
+    [
+      "contract_address",
+      "code_hash_hex",
+      "abi_hash_hex",
+      "abi_version",
+      "window",
+      "mode",
+      "manifest_provenance",
+    ],
+    ["contract_address", "code_hash_hex", "abi_hash_hex", "abi_version"],
+    context,
+  );
+  const contractAddress = assertExactNonEmptyString(
+    value.contract_address,
+    `${context}.contract_address`,
+  );
+  parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
+  value.code_hash_hex = normalizeGovernanceHex32(
+    value.code_hash_hex,
+    `${context}.code_hash_hex`,
+  );
+  value.abi_hash_hex = normalizeGovernanceHex32(
+    value.abi_hash_hex,
+    `${context}.abi_hash_hex`,
+  );
+  if (value.abi_version !== "1") {
+    throw new TypeError(`${context}.abi_version must be exactly '1'`);
+  }
+  if (value.window !== undefined && value.window !== null) {
+    value.window = normalizeGovernanceWindowValue(value.window, `${context}.window`);
+  }
+  if (value.mode !== undefined && value.mode !== null) {
+    encodeVotingModeValue(value.mode, `${context}.mode`);
+  }
+  if (value.manifest_provenance !== undefined && value.manifest_provenance !== null) {
+    value.manifest_provenance = decodeManifestProvenanceValue(
+      encodeManifestProvenanceValue(
+        value.manifest_provenance,
+        `${context}.manifest_provenance`,
+      ),
+      `${context}.manifest_provenance`,
+    );
+  }
+  return value;
+}
+
+function validateCastZkBallotPayload(value) {
+  const context = "CastZkBallot";
+  assertExactGovernanceObjectKeys(
+    value,
+    ["election_id", "proof_b64", "public_inputs_json"],
+    ["election_id", "proof_b64", "public_inputs_json"],
+    context,
+  );
+  const electionId = assertExactNonEmptyString(
+    value.election_id,
+    `${context}.election_id`,
+  );
+  if (electionId.trim().length === 0 || electionId.trim() !== electionId) {
+    throw new TypeError(`${context}.election_id must be exact non-blank text`);
+  }
+  decodeExactStandardBase64(value.proof_b64, `${context}.proof_b64`);
+  value.public_inputs_json = normalizeGovernanceZkPublicInputsJson(
+    value.public_inputs_json,
+    `${context}.public_inputs_json`,
+  );
+  return value;
+}
+
+function validateGovernanceInstructionBoundary(instruction) {
+  if (!isStrictGovernanceInstructionCandidate(instruction)) {
+    return;
+  }
+  rejectGovernancePrivateKeyFieldsDeep(instruction, "governance instruction");
+  if (Object.prototype.hasOwnProperty.call(instruction, "ProposeDeployContract")) {
+    assertOnlyObjectKeys(instruction, ["ProposeDeployContract"], "governance instruction");
+    validateProposeDeployContractPayload(instruction.ProposeDeployContract);
+    return;
+  }
+  assertOnlyObjectKeys(instruction, ["CastZkBallot"], "governance instruction");
+  validateCastZkBallotPayload(instruction.CastZkBallot);
+}
+
+function encodeNormalizedInstruction(normalized) {
+  validateGovernanceInstructionBoundary(normalized);
   let encoded;
   try {
     const native = resolveNative("noritoEncodeInstruction");
@@ -618,7 +912,10 @@ export function noritoEncodeInstruction(instruction) {
     const trimmed = instruction.trim();
     try {
       const parsed = JSON.parse(trimmed);
-      const normalized = normalizeInstructionJsonValue(parsed);
+      const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
+        ? parseStrictLosslessIntegerJson(trimmed, "governance instruction")
+        : parsed;
+      const normalized = normalizeInstructionJsonValue(exactParsed);
       return encodeNormalizedInstruction(normalized);
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -3785,7 +4082,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         "abi_version",
         "window",
         "mode",
-        "limits",
+        "manifest_provenance",
       ]);
       const decoded = {
         contract_address: decodeStringValue(
@@ -3798,15 +4095,19 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
       };
       const window = decodeOptionValue(fields.window, decodeAtWindowValue, "ProposeDeployContract.window");
       const mode = decodeOptionValue(fields.mode, decodeVotingModeValue, "ProposeDeployContract.mode");
-      const limits = decodeOptionValue(fields.limits, decodeJsonValue, "ProposeDeployContract.limits");
+      const manifestProvenance = decodeOptionValue(
+        fields.manifest_provenance,
+        decodeManifestProvenanceValue,
+        "ProposeDeployContract.manifest_provenance",
+      );
       if (window !== null) {
         decoded.window = window;
       }
       if (mode !== null) {
         decoded.mode = mode;
       }
-      if (limits !== null) {
-        decoded.limits = limits;
+      if (manifestProvenance !== null) {
+        decoded.manifest_provenance = manifestProvenance;
       }
       return { ProposeDeployContract: decoded };
     }
@@ -6207,6 +6508,7 @@ function encodeSmartContractInstructionCompact(instruction) {
 }
 
 function encodeProposeDeployContractPayload(value) {
+  validateProposeDeployContractPayload(value);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, "ProposeDeployContract.contract_address"))],
     [encodeNoritoStringValue(assertNonEmptyString(value.code_hash_hex, "ProposeDeployContract.code_hash_hex"))],
@@ -6214,14 +6516,19 @@ function encodeProposeDeployContractPayload(value) {
     [encodeNoritoStringValue(assertNonEmptyString(value.abi_version, "ProposeDeployContract.abi_version"))],
     [encodeOptionValue(value.window ?? null, encodeAtWindowValue, "ProposeDeployContract.window")],
     [encodeOptionValue(value.mode ?? null, encodeVotingModeValue, "ProposeDeployContract.mode")],
-    [encodeOptionValue(value.limits ?? null, encodeNoritoJsonValue, "ProposeDeployContract.limits")],
+    [encodeOptionValue(
+      value.manifest_provenance ?? null,
+      encodeManifestProvenanceValue,
+      "ProposeDeployContract.manifest_provenance",
+    )],
   ]);
 }
 
 function encodeCastZkBallotPayload(value) {
+  validateCastZkBallotPayload(value);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "CastZkBallot.election_id"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.proof_b64, "CastZkBallot.proof_b64"))],
+    [encodeExactBase64StringValue(value.proof_b64, "CastZkBallot.proof_b64")],
     [encodeNoritoStringValue(
       assertNonEmptyString(value.public_inputs_json ?? "{}", "CastZkBallot.public_inputs_json"),
     )],
@@ -6275,8 +6582,8 @@ function encodeAtWindowValue(value, context) {
 function decodeAtWindowValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["lower", "upper"]);
   return {
-    lower: decodeU64NumberValue(fields.lower, `${context}.lower`),
-    upper: decodeU64NumberValue(fields.upper, `${context}.upper`),
+    lower: decodeU64Value(fields.lower, `${context}.lower`),
+    upper: decodeU64Value(fields.upper, `${context}.upper`),
   };
 }
 

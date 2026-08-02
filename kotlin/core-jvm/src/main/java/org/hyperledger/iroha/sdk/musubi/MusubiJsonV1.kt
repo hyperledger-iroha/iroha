@@ -12,6 +12,7 @@ internal object MusubiJsonV1 {
     private val QUERY_PATHS = setOf(
         "/v1/musubi/queries/exact-package",
         "/v1/musubi/queries/exact-release",
+        "/v1/musubi/queries/provider-bundle-attestation",
         "/v1/musubi/queries/resolver-index",
         "/v1/musubi/queries/versions",
         "/v1/musubi/queries/maintainers",
@@ -38,8 +39,142 @@ internal object MusubiJsonV1 {
     fun parseExactPackage(payload: ByteArray): MusubiPackageRecordV1 =
         parsePackageRecord(parse(payload, "Musubi exact-package response"), "response")
 
-    fun parseExactRelease(payload: ByteArray): MusubiReleaseRecordV1 =
-        parseReleaseRecord(parse(payload, "Musubi exact-release response"), "response")
+    fun parseExactRelease(payload: ByteArray): MusubiExactReleaseSnapshotV1 {
+        val root = exactObject(
+            parse(payload, "Musubi exact-release response"),
+            "response",
+            setOf(
+                "chain_id", "genesis_hash", "snapshot", "home_release", "universal_release",
+            ),
+        )
+        val genesisHash = fixedBytes(root["genesis_hash"], "response.genesis_hash")
+        val snapshot = parseSnapshot(root["snapshot"], "response.snapshot")
+        val homeRelease = parseReleaseRecord(root["home_release"], "response.home_release")
+        val universalRelease = parseResolverRow(
+            root["universal_release"],
+            "response.universal_release",
+        )
+        return MusubiExactReleaseSnapshotV1(
+            string(root["chain_id"], "response.chain_id"),
+            genesisHash,
+            snapshot,
+            homeRelease,
+            universalRelease,
+        )
+    }
+
+    internal fun validateExactReleaseSnapshot(
+        home: Map<String, Any?>,
+        universal: Map<String, Any?>,
+        genesisHash: ByteArray,
+        snapshot: MusubiRegistrySnapshotV1,
+    ) {
+        val manifest = objectMap(home["manifest"], "response.home_release.manifest")
+        val yank = objectMap(home["yank"], "response.home_release.yank")
+        val governance = objectMap(
+            home["artifact_governance"],
+            "response.home_release.artifact_governance",
+        )
+        val revisions = objectMap(home["revisions"], "response.home_release.revisions")
+        val selection = objectMap(
+            universal["selection"],
+            "response.universal_release.selection",
+        )
+        val storage = objectMap(
+            selection["storage"],
+            "response.universal_release.selection.storage",
+        )
+
+        val publishedAtHeight = nonZeroU64(
+            home["published_at_height"],
+            "response.home_release.published_at_height",
+        )
+        val yankChangedAtHeight = nonZeroU64(
+            yank["changed_at_height"],
+            "response.home_release.yank.changed_at_height",
+        )
+        val yankRevision = nonZeroU64(
+            yank["revision"],
+            "response.home_release.yank.revision",
+        )
+        val homeYankRevision = nonZeroU64(
+            revisions["yank"],
+            "response.home_release.revisions.yank",
+        )
+        val homeGovernanceRevision = nonZeroU64(
+            revisions["artifact_governance"],
+            "response.home_release.revisions.artifact_governance",
+        )
+        val universalRevision = nonZeroU64(
+            universal["index_revision"],
+            "response.universal_release.index_revision",
+        )
+        val storageRevision = nonZeroU64(
+            storage["index_revision"],
+            "response.universal_release.selection.storage.index_revision",
+        )
+        val storageFinalizedHeight = nonZeroU64(
+            storage["finalized_height"],
+            "response.universal_release.selection.storage.finalized_height",
+        )
+        val storageFinalizedHash = fixedBytes(
+            storage["finalized_block_hash"],
+            "response.universal_release.selection.storage.finalized_block_hash",
+        )
+        val governanceKind = string(
+            governance["kind"],
+            "response.home_release.artifact_governance.kind",
+        )
+        val takedownHeight = if (governanceKind == "TakenDown") {
+            val takedown = objectMap(
+                governance["value"],
+                "response.home_release.artifact_governance.value",
+            )
+            nonZeroU64(
+                takedown["applied_at_height"],
+                "response.home_release.artifact_governance.value.applied_at_height",
+            )
+        } else {
+            BigInteger.ZERO
+        }
+
+        require(
+            home["release_digest"] == universal["release_digest"] &&
+                manifest["archive_id"] == universal["archive_id"] &&
+                manifest["archive_id"] == storage["archive_id"] &&
+                manifest["interface_digest"] == universal["interface_digest"] &&
+                manifest["abi"] == universal["abi"] &&
+                manifest["dependencies"] == universal["dependencies"] &&
+                home["yank"] == selection["yank"] &&
+                home["artifact_governance"] == selection["governance"] &&
+                yankRevision == homeYankRevision &&
+                homeYankRevision <= snapshot.indexRevision &&
+                homeGovernanceRevision <= snapshot.indexRevision &&
+                universalRevision <= snapshot.indexRevision &&
+                storageRevision <= universalRevision &&
+                storageRevision <= snapshot.indexRevision &&
+                publishedAtHeight <= snapshot.finalizedHeight &&
+                yankChangedAtHeight >= publishedAtHeight &&
+                yankChangedAtHeight <= snapshot.finalizedHeight &&
+                (takedownHeight == BigInteger.ZERO || takedownHeight >= publishedAtHeight) &&
+                takedownHeight <= snapshot.finalizedHeight &&
+                storageFinalizedHeight <= snapshot.finalizedHeight &&
+                (snapshot.finalizedHeight != BigInteger.ONE ||
+                    genesisHash.contentEquals(snapshot.finalizedBlockHash())) &&
+                (storageFinalizedHeight != snapshot.finalizedHeight ||
+                    storageFinalizedHash.contentEquals(snapshot.finalizedBlockHash())),
+        ) {
+            "Musubi exact release snapshot is inconsistent or not finalized"
+        }
+    }
+
+    fun parseProviderBundleAttestation(
+        payload: ByteArray,
+    ): MusubiProviderBundleAttestationRecordV1 =
+        parseProviderBundleAttestationRecord(
+            parse(payload, "Musubi provider-bundle-attestation response"),
+            "response",
+        )
 
     fun parseResolverPage(payload: ByteArray): MusubiResolverIndexPageV1 {
         val root = exactObject(
@@ -209,6 +344,8 @@ internal object MusubiJsonV1 {
                 val root = exactObject(value, "request", setOf("release"))
                 MusubiExactReleaseQueryV1(parseRelease(root["release"], "request.release"))
             }
+            "/v1/musubi/queries/provider-bundle-attestation" ->
+                parseProviderBundleAttestationKey(value, "request")
             "/v1/musubi/queries/resolver-index" -> {
                 val root = exactObject(value, "request", setOf("package", "requirement", "page"))
                 MusubiResolverIndexQueryV1(
@@ -275,6 +412,8 @@ internal object MusubiJsonV1 {
         return when (path) {
             "/v1/musubi/queries/exact-package" -> parseExactPackage(payload)
             "/v1/musubi/queries/exact-release" -> parseExactRelease(payload)
+            "/v1/musubi/queries/provider-bundle-attestation" ->
+                parseProviderBundleAttestation(payload)
             "/v1/musubi/queries/resolver-index" -> parseResolverPage(payload)
             "/v1/musubi/queries/versions" -> parseVersionPage(payload)
             "/v1/musubi/queries/maintainers" -> parseMaintainerPage(payload)
@@ -541,11 +680,11 @@ internal object MusubiJsonV1 {
                 "artifact_governance", "revisions",
             ),
         )
-        val release = validateManifest(root["manifest"], "$field.manifest")
-        digest(root["release_digest"], "$field.release_digest")
+        val manifest = parseManifest(root["manifest"], "$field.manifest")
+        val releaseDigest = digest(root["release_digest"], "$field.release_digest")
         val publisher = string(root["published_by"], "$field.published_by")
-        val height = u64(root["published_at_height"], "$field.published_at_height")
-        validateYank(root["yank"], "$field.yank", release)
+        val height = nonZeroU64(root["published_at_height"], "$field.published_at_height")
+        validateYank(root["yank"], "$field.yank", manifest.release)
         validateGovernance(root["artifact_governance"], "$field.artifact_governance")
         val revisions = exactObject(
             root["revisions"],
@@ -554,10 +693,10 @@ internal object MusubiJsonV1 {
         )
         nonZeroU64(revisions["yank"], "$field.revisions.yank")
         nonZeroU64(revisions["artifact_governance"], "$field.revisions.artifact_governance")
-        return MusubiReleaseRecordV1(release, publisher, height, root)
+        return MusubiReleaseRecordV1(manifest, releaseDigest, publisher, height, root)
     }
 
-    private fun validateManifest(value: Any?, field: String): MusubiReleaseIdV1 {
+    private fun parseManifest(value: Any?, field: String): MusubiReleaseManifestV1 {
         val root = exactObject(
             value,
             field,
@@ -568,52 +707,64 @@ internal object MusubiJsonV1 {
         )
         val release = parseRelease(root["release"], "$field.release")
         taggedUnit(root["edition"], "$field.edition", setOf("V1"))
-        validateAbi(root["abi"], "$field.abi")
-        list(root["dependencies"], "$field.dependencies").forEachIndexed { index, item ->
-            validateDependency(item, "$field.dependencies[$index]")
-        }
-        stringList(root["exports"], "$field.exports").forEach {
+        val abi = parseAbi(root["abi"], "$field.abi")
+        val dependencies =
+            list(root["dependencies"], "$field.dependencies").mapIndexed { index, item ->
+                parseDependency(item, "$field.dependencies[$index]")
+            }
+        val exports = stringList(root["exports"], "$field.exports")
+        exports.forEach {
             MusubiValidationV1.requireName(it, "Musubi export")
         }
-        digest(root["interface_digest"], "$field.interface_digest")
-        validateMetadata(root["metadata"], "$field.metadata")
-        digest(root["archive_id"], "$field.archive_id")
-        digest(root["verification_lock_digest"], "$field.verification_lock_digest")
-        return release
+        return MusubiReleaseManifestV1(
+            release,
+            MusubiKotodamaEditionV1.V1,
+            abi,
+            dependencies,
+            exports,
+            digest(root["interface_digest"], "$field.interface_digest"),
+            parseMetadata(root["metadata"], "$field.metadata"),
+            digest(root["archive_id"], "$field.archive_id"),
+            digest(root["verification_lock_digest"], "$field.verification_lock_digest"),
+        )
     }
 
-    private fun validateAbi(value: Any?, field: String) {
+    private fun parseAbi(value: Any?, field: String): MusubiAbiBindingV1 {
         val root = exactObject(value, field, setOf("abi_version", "abi_hash"))
         require(u16(root["abi_version"], "$field.abi_version") == 1) {
             "$field.abi_version is unsupported; Musubi only supports IVM ABI V1"
         }
-        fixedBytes(root["abi_hash"], "$field.abi_hash")
+        return MusubiAbiBindingV1(fixedBytes(root["abi_hash"], "$field.abi_hash"))
     }
 
-    private fun validateDependency(value: Any?, field: String) {
+    private fun parseDependency(value: Any?, field: String): MusubiDependencyReqV1 {
         val root = exactObject(value, field, setOf("alias", "package", "requirement"))
-        MusubiValidationV1.requireName(string(root["alias"], "$field.alias"), "$field.alias")
-        parsePackage(root["package"], "$field.package")
-        parseRequirement(root["requirement"], "$field.requirement")
+        return MusubiDependencyReqV1(
+            string(root["alias"], "$field.alias"),
+            parsePackage(root["package"], "$field.package"),
+            parseRequirement(root["requirement"], "$field.requirement"),
+        )
     }
 
-    private fun validateMetadata(value: Any?, field: String) {
+    private fun parseMetadata(value: Any?, field: String): MusubiReleaseMetadataV1 {
         val root = exactObject(
             value,
             field,
             setOf("description", "readme", "license", "repository", "keywords"),
         )
-        root["description"]?.let { newtypeText(it, "$field.description") }
-        root["readme"]?.let { newtypeText(it, "$field.readme") }
-        root["license"]?.let { newtypeText(it, "$field.license") }
-        root["repository"]?.let { newtypeText(it, "$field.repository") }
-        list(root["keywords"], "$field.keywords").forEachIndexed { index, item ->
-            MusubiValidationV1.requireAsciiKebab(
-                newtypeText(item, "$field.keywords[$index]"),
-                64,
-                "keyword",
-            )
-        }
+        return MusubiReleaseMetadataV1(
+            root["description"]?.let {
+                MusubiDescriptionV1(newtypeText(it, "$field.description"))
+            },
+            root["readme"]?.let { MusubiDocumentRefV1(newtypeText(it, "$field.readme")) },
+            root["license"]?.let { MusubiDocumentRefV1(newtypeText(it, "$field.license")) },
+            root["repository"]?.let {
+                MusubiDocumentRefV1(newtypeText(it, "$field.repository"))
+            },
+            list(root["keywords"], "$field.keywords").mapIndexed { index, item ->
+                MusubiKeywordV1(newtypeText(item, "$field.keywords[$index]"))
+            },
+        )
     }
 
     private fun validateYank(value: Any?, field: String, expected: MusubiReleaseIdV1) {
@@ -663,16 +814,20 @@ internal object MusubiJsonV1 {
         listOf("release_digest", "archive_id", "source_digest", "interface_digest").forEach {
             digest(root[it], "$field.$it")
         }
-        validateAbi(root["abi"], "$field.abi")
+        parseAbi(root["abi"], "$field.abi")
         list(root["dependencies"], "$field.dependencies").forEachIndexed { index, item ->
-            validateDependency(item, "$field.dependencies[$index]")
+            parseDependency(item, "$field.dependencies[$index]")
         }
-        validateSelection(root["selection"], "$field.selection", release)
+        val storageRevision = validateSelection(root["selection"], "$field.selection", release)
         val revision = nonZeroU64(root["index_revision"], "$field.index_revision")
-        return MusubiResolverReleaseRowV1(release, revision, root)
+        return MusubiResolverReleaseRowV1(release, revision, storageRevision, root)
     }
 
-    private fun validateSelection(value: Any?, field: String, release: MusubiReleaseIdV1) {
+    private fun validateSelection(
+        value: Any?,
+        field: String,
+        release: MusubiReleaseIdV1,
+    ): BigInteger {
         val root = exactObject(value, field, setOf("yank", "storage", "governance"))
         validateYank(root["yank"], "$field.yank", release)
         val storage = exactObject(
@@ -693,8 +848,10 @@ internal object MusubiJsonV1 {
         u8(storage["active_locations"], "$field.storage.active_locations")
         nonZeroU64(storage["finalized_height"], "$field.storage.finalized_height")
         fixedBytes(storage["finalized_block_hash"], "$field.storage.finalized_block_hash")
-        nonZeroU64(storage["index_revision"], "$field.storage.index_revision")
+        val storageRevision =
+            nonZeroU64(storage["index_revision"], "$field.storage.index_revision")
         validateGovernance(root["governance"], "$field.governance")
+        return storageRevision
     }
 
     private fun parseMaintainerDirectoryEntry(
@@ -868,14 +1025,21 @@ internal object MusubiJsonV1 {
             field,
             setOf(
                 "location_id", "archive_id", "pin_manifest", "replication_order", "providers",
-                "provider_attestations", "renew_after_epoch", "expires_at_epoch",
+                "provider_attestation_set_digest", "renew_after_epoch", "expires_at_epoch",
                 "finalized_height", "revision", "state",
             ),
         )
         val location = digest(root["location_id"], "$field.location_id")
         val archive = digest(root["archive_id"], "$field.archive_id")
-        list(root["providers"], "$field.providers")
-        list(root["provider_attestations"], "$field.provider_attestations")
+        val providers = list(root["providers"], "$field.providers").mapIndexed { index, item ->
+            newtypeText(item, "$field.providers[$index]")
+        }
+        val providerAttestationSetDigest = MusubiProviderBundleAttestationSetDigestV1(
+            digest(
+                root["provider_attestation_set_digest"],
+                "$field.provider_attestation_set_digest",
+            ).bytes(),
+        )
         u64(root["renew_after_epoch"], "$field.renew_after_epoch")
         u64(root["expires_at_epoch"], "$field.expires_at_epoch")
         val finalizedHeight = nonZeroU64(root["finalized_height"], "$field.finalized_height")
@@ -892,6 +1056,8 @@ internal object MusubiJsonV1 {
         return MusubiArchiveLocationV1(
             location,
             archive,
+            providers,
+            providerAttestationSetDigest,
             finalizedHeight,
             revision,
             state,
@@ -1010,6 +1176,166 @@ internal object MusubiJsonV1 {
             )
         }
         return MusubiSeedIngressReceiptV1(typedPayload, approvals)
+    }
+
+    private fun parseProviderBundleAttestationKey(
+        value: Any?,
+        field: String,
+    ): MusubiProviderBundleAttestationKeyV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf("archive_id", "replication_order", "provider_id"),
+        )
+        return MusubiProviderBundleAttestationKeyV1(
+            digest(root["archive_id"], "$field.archive_id"),
+            digest(root["replication_order"], "$field.replication_order"),
+            newtypeText(root["provider_id"], "$field.provider_id"),
+        )
+    }
+
+    private fun parseProviderBundleAttestationRecord(
+        value: Any?,
+        field: String,
+    ): MusubiProviderBundleAttestationRecordV1 {
+        val root = exactObject(
+            value,
+            field,
+            setOf(
+                "key", "attestation_digest", "attestation", "registered_by",
+                "registered_at_height",
+            ),
+        )
+        return MusubiProviderBundleAttestationRecordV1(
+            parseProviderBundleAttestationKey(root["key"], "$field.key"),
+            MusubiProviderBundleAttestationDigestV1(
+                digest(root["attestation_digest"], "$field.attestation_digest").bytes(),
+            ),
+            parseProviderBundleAttestation(root["attestation"], "$field.attestation"),
+            string(root["registered_by"], "$field.registered_by"),
+            nonZeroU64(root["registered_at_height"], "$field.registered_at_height"),
+        )
+    }
+
+    private fun parseProviderBundleAttestation(
+        value: Any?,
+        field: String,
+    ): MusubiProviderBundleVerificationAttestationV1 {
+        val root = exactObject(value, field, setOf("payload", "approvals"))
+        val payload = exactObject(
+            root["payload"],
+            "$field.payload",
+            setOf("version", "binding"),
+        )
+        require(u8(payload["version"], "$field.payload.version") == 1) {
+            "$field.payload.version is unsupported in Musubi V1"
+        }
+        val binding = exactObject(
+            payload["binding"],
+            "$field.payload.binding",
+            setOf(
+                "chain_id", "genesis_block_hash", "provider_id", "completed_by",
+                "completion_authority", "replication_order", "assignment_revision",
+                "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
+                "descriptor_digest", "semantic_release_manifest_digest",
+                "verification_lock_digest", "source_tree_digest",
+            ),
+        )
+        val authority = exactObject(
+            binding["completion_authority"],
+            "$field.payload.binding.completion_authority",
+            setOf("provider_owner", "signer_policy"),
+        )
+        val signerPolicy = exactObject(
+            authority["signer_policy"],
+            "$field.payload.binding.completion_authority.signer_policy",
+            setOf("policy_id", "revision", "predecessor_digest", "policy_digest"),
+        )
+        val finalizedAnchor = exactObject(
+            binding["finalized_anchor"],
+            "$field.payload.binding.finalized_anchor",
+            setOf("height", "block_hash"),
+        )
+        val typedBinding = MusubiProviderBundleVerificationBindingV1(
+            string(binding["chain_id"], "$field.payload.binding.chain_id"),
+            fixedBytes(
+                binding["genesis_block_hash"],
+                "$field.payload.binding.genesis_block_hash",
+            ),
+            newtypeText(binding["provider_id"], "$field.payload.binding.provider_id"),
+            string(binding["completed_by"], "$field.payload.binding.completed_by"),
+            MusubiProviderIngestCompletionAuthorityV1(
+                string(
+                    authority["provider_owner"],
+                    "$field.payload.binding.completion_authority.provider_owner",
+                ),
+                MusubiProviderIngestCompletionSignerPolicyV1(
+                    fixedBytes(
+                        signerPolicy["policy_id"],
+                        "$field.payload.binding.completion_authority.signer_policy.policy_id",
+                    ),
+                    nonZeroU64(
+                        signerPolicy["revision"],
+                        "$field.payload.binding.completion_authority.signer_policy.revision",
+                    ),
+                    signerPolicy["predecessor_digest"]?.let {
+                        fixedBytes(
+                            it,
+                            "$field.payload.binding.completion_authority.signer_policy." +
+                                "predecessor_digest",
+                        )
+                    },
+                    fixedBytes(
+                        signerPolicy["policy_digest"],
+                        "$field.payload.binding.completion_authority.signer_policy.policy_digest",
+                    ),
+                ),
+            ),
+            digest(binding["replication_order"], "$field.payload.binding.replication_order"),
+            nonZeroU64(
+                binding["assignment_revision"],
+                "$field.payload.binding.assignment_revision",
+            ),
+            nonZeroU64(binding["completion_epoch"], "$field.payload.binding.completion_epoch"),
+            MusubiProviderIngestFinalizedAnchorV1(
+                nonZeroU64(
+                    finalizedAnchor["height"],
+                    "$field.payload.binding.finalized_anchor.height",
+                ),
+                fixedBytes(
+                    finalizedAnchor["block_hash"],
+                    "$field.payload.binding.finalized_anchor.block_hash",
+                ),
+            ),
+            digest(binding["archive_id"], "$field.payload.binding.archive_id"),
+            digest(binding["bundle_digest"], "$field.payload.binding.bundle_digest"),
+            digest(binding["descriptor_digest"], "$field.payload.binding.descriptor_digest"),
+            digest(
+                binding["semantic_release_manifest_digest"],
+                "$field.payload.binding.semantic_release_manifest_digest",
+            ),
+            digest(
+                binding["verification_lock_digest"],
+                "$field.payload.binding.verification_lock_digest",
+            ),
+            digest(binding["source_tree_digest"], "$field.payload.binding.source_tree_digest"),
+        )
+        val approvals = list(root["approvals"], "$field.approvals").mapIndexed { index, item ->
+            val approvalField = "$field.approvals[$index]"
+            val approval = exactObject(
+                item,
+                approvalField,
+                setOf("public_key", "signature"),
+            )
+            MusubiProviderBundleVerificationApprovalV1(
+                string(approval["public_key"], "$approvalField.public_key"),
+                string(approval["signature"], "$approvalField.signature"),
+            )
+        }
+        return MusubiProviderBundleVerificationAttestationV1(
+            MusubiProviderBundleVerificationPayloadV1(typedBinding),
+            approvals,
+        )
     }
 
     private fun parseAliasRecord(value: Any?, field: String): MusubiAliasRecordV1 {

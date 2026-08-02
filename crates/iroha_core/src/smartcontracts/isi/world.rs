@@ -48,11 +48,17 @@ pub mod isi {
         },
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
         executor::CanUpgradeExecutor,
-        governance::{CanEnactGovernance, CanManageVerifyingKeys},
+        governance::{
+            CanEnactGovernance, CanManageParliament, CanManageVerifyingKeys,
+            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
+            CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+        },
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
         },
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
+        peer::CanManageLaneRelayEmergency,
+        sccp::{CanManageSccpGovernance, CanProposeSccpRouteGovernance},
         smart_contract::CanRegisterSmartContractCode,
     };
     // Governance ISIs
@@ -728,7 +734,35 @@ pub mod isi {
         Ok(())
     }
 
-    fn has_permission(world: &WorldTransaction<'_, '_>, who: &AccountId, name: &str) -> bool {
+    /// Intentionally untyped legacy unit capabilities that have no executor-data-model token.
+    #[derive(Clone, Copy)]
+    enum LegacyUnscopedPermission {
+        RuntimeUpgrades,
+        ConsensusKeys,
+        ConfidentialParams,
+    }
+
+    impl LegacyUnscopedPermission {
+        const fn name(self) -> &'static str {
+            match self {
+                Self::RuntimeUpgrades => "CanManageRuntimeUpgrades",
+                Self::ConsensusKeys => "CanManageConsensusKeys",
+                Self::ConfidentialParams => "CanManageConfidentialParams",
+            }
+        }
+    }
+
+    /// Match one sealed, intentionally untyped legacy unit capability by name.
+    ///
+    /// Typed permissions, including unit structs, must use [`has_exact_permission`] so an
+    /// attacker-controlled same-name payload cannot authorize an operation. Taking the private
+    /// enum instead of `&str` prevents new typed-token checks from accidentally using this path.
+    fn has_legacy_unscoped_permission(
+        world: &WorldTransaction<'_, '_>,
+        who: &AccountId,
+        permission: LegacyUnscopedPermission,
+    ) -> bool {
+        let name = permission.name();
         if world
             .account_permissions
             .get(who)
@@ -1777,19 +1811,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn zk_binding_record(
-        state_transaction: &StateTransaction<'_, '_>,
-        binding: Option<&crate::state::ZkAssetVerifierBinding>,
-    ) -> Option<VerifyingKeyRecord> {
-        binding.and_then(|binding| {
-            state_transaction
-                .world
-                .verifying_keys
-                .get(&binding.id)
-                .cloned()
-        })
-    }
-
     pub(in crate::smartcontracts::isi) fn push_confidential_commitment_for_asset(
         st: &mut crate::state::ZkAssetState,
         commitment: [u8; 32],
@@ -2780,6 +2801,37 @@ pub mod isi {
         ))
     }
 
+    fn ensure_exact_governance_ballot_permission(
+        authority: &AccountId,
+        referendum_id: &str,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let required: Permission = CanSubmitGovernanceBallot {
+            referendum_id: referendum_id.to_owned(),
+        }
+        .into();
+        ensure_exact_governance_permission(
+            authority,
+            &required,
+            "CanSubmitGovernanceBallot",
+            state_transaction,
+        )
+    }
+
+    fn ensure_exact_governance_permission(
+        authority: &AccountId,
+        required: &Permission,
+        permission_name: &str,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if has_exact_permission(&state_transaction.world, authority, required) {
+            return Ok(());
+        }
+        Err(InstructionExecutionError::InvariantViolation(
+            format!("not permitted: exact {permission_name} target required").into(),
+        ))
+    }
+
     struct GovernanceSlashRequest<'a> {
         referendum_id: &'a str,
         owner: &'a AccountId,
@@ -3436,6 +3488,93 @@ pub mod isi {
         }
     }
 
+    const GOVERNANCE_HASH_SCHEME_V1: &str = "blake2b32";
+    const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS_V1: [&str; 6] = [
+        "root_hint",
+        "owner",
+        "amount",
+        "duration_blocks",
+        "direction",
+        "nullifier",
+    ];
+    const GOVERNANCE_PRIVATE_KEY_FIELD_ALIASES: [&str; 12] = [
+        "private_key",
+        "privateKey",
+        "private_key_hex",
+        "privateKeyHex",
+        "private_key_bytes",
+        "privateKeyBytes",
+        "private_key_seed",
+        "privateKeySeed",
+        "private_key_multihash",
+        "privateKeyMultihash",
+        "private_key_algorithm",
+        "privateKeyAlgorithm",
+    ];
+
+    fn canonical_governance_hex32(value: &str, field: &str) -> Result<(String, [u8; 32]), String> {
+        let without_scheme = if let Some((scheme, rest)) = value.split_once(':') {
+            if scheme.is_empty() || !scheme.eq_ignore_ascii_case(GOVERNANCE_HASH_SCHEME_V1) {
+                return Err(format!(
+                    "{field} must use the optional {GOVERNANCE_HASH_SCHEME_V1}: scheme"
+                ));
+            }
+            rest
+        } else {
+            value
+        };
+        let body = without_scheme
+            .strip_prefix("0x")
+            .or_else(|| without_scheme.strip_prefix("0X"))
+            .unwrap_or(without_scheme);
+        if body.len() != 64 || !body.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+            return Err(format!(
+                "{field} must be exactly 32-byte hexadecimal with no whitespace"
+            ));
+        }
+        let canonical = body.to_ascii_lowercase();
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(&canonical, &mut bytes)
+            .map_err(|_| format!("{field} must be exactly 32-byte hexadecimal"))?;
+        Ok((canonical, bytes))
+    }
+
+    fn invalid_governance_parameter(reason: impl Into<String>) -> Error {
+        let reason = reason.into();
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
+    }
+
+    fn validate_governance_deploy_contract_input(
+        proposal: &gov::ProposeDeployContract,
+    ) -> Result<((String, [u8; 32]), (String, [u8; 32])), Error> {
+        if proposal.abi_version != "1" {
+            return Err(invalid_governance_parameter(
+                "abi_version must be the exact string `1`",
+            ));
+        }
+        if proposal
+            .window
+            .is_some_and(|window| window.upper < window.lower)
+        {
+            return Err(invalid_governance_parameter(
+                "window.upper must be greater than or equal to window.lower",
+            ));
+        }
+        if let Some(provenance) = proposal.manifest_provenance.as_ref() {
+            Signature::try_from_bytes(provenance.signature.payload()).map_err(|_| {
+                invalid_governance_parameter(
+                    "manifest_provenance.signature must be a non-empty non-zero signature",
+                )
+            })?;
+        }
+
+        let code_hash = canonical_governance_hex32(&proposal.code_hash_hex, "code_hash")
+            .map_err(invalid_governance_parameter)?;
+        let abi_hash = canonical_governance_hex32(&proposal.abi_hash_hex, "abi_hash")
+            .map_err(invalid_governance_parameter)?;
+        Ok((code_hash, abi_hash))
+    }
+
     // ---------------- Governance (stubs) ----------------
     impl Execute for gov::ProposeDeployContract {
         #[allow(clippy::too_many_lines)]
@@ -3444,76 +3583,31 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let canonical_hex32 = |value: &str, field: &str| -> Result<(String, [u8; 32]), Error> {
-                let trimmed = value.trim();
-                let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
-                    if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
-                        rest
-                    } else {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "unsupported {field} scheme"
-                            )),
-                        ));
-                    }
-                } else {
-                    trimmed
-                };
-                let body = without_scheme
-                    .trim()
-                    .strip_prefix("0x")
-                    .unwrap_or_else(|| without_scheme.trim());
-                if body.len() != 64 || !body.as_bytes().iter().all(u8::is_ascii_hexdigit) {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "{field} must be 32-byte hex"
-                        )),
-                    ));
-                }
-                let canonical = body.to_ascii_lowercase();
-                let mut out = [0u8; 32];
-                hex::decode_to_slice(&canonical, &mut out).map_err(|_| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!("invalid {field} hex")),
-                    )
-                })?;
-                Ok((canonical, out))
-            };
-
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanProposeContractDeployment",
-            ) {
+            let required_permission: Permission = CanProposeContractDeployment {
+                contract_address: self.contract_address.clone(),
+            }
+            .into();
+            if !has_exact_permission(&state_transaction.world, authority, &required_permission) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanProposeContractDeployment".into(),
+                    "not permitted: exact CanProposeContractDeployment target required".into(),
                 ));
             }
             let contract_address = self.contract_address.clone();
             let contract_address_literal = contract_address.as_str();
 
-            let (code_hash_hex_str, code_hash_bytes) =
-                canonical_hex32(&self.code_hash_hex, "code_hash")?;
-            let (abi_hash_hex_str, abi_hash_bytes) =
-                canonical_hex32(&self.abi_hash_hex, "abi_hash")?;
+            let ((code_hash_hex_str, code_hash_bytes), (abi_hash_hex_str, abi_hash_bytes)) =
+                validate_governance_deploy_contract_input(&self)?;
             let code_hash_hex = ContractCodeHash::from_hex_str(&code_hash_hex_str)
-                .expect("canonical_hex32 guarantees valid hex");
+                .expect("canonical_governance_hex32 guarantees valid hex");
             let abi_hash_hex = ContractAbiHash::from_hex_str(&abi_hash_hex_str)
-                .expect("canonical_hex32 guarantees valid hex");
+                .expect("canonical_governance_hex32 guarantees valid hex");
 
-            let abi_version_trimmed = self.abi_version.trim();
-            if abi_version_trimmed != "1" {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "unsupported abi_version: {abi_version_trimmed}"
-                    )),
-                ));
-            }
             let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
             if abi_hash_bytes != expected_abi_hash {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
-                        "abi_hash does not match canonical hash for abi_version {abi_version_trimmed}"
+                        "abi_hash does not match canonical hash for abi_version {}",
+                        self.abi_version
                     )),
                 ));
             }
@@ -3555,13 +3649,6 @@ pub mod isi {
             let h_now = state_transaction._curr_block.height().get();
             let min_start = h_now.saturating_add(state_transaction.gov.min_enactment_delay);
             let (start, end) = if let Some(win) = self.window {
-                if win.upper < win.lower {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "window.upper must be >= window.lower".into(),
-                        ),
-                    ));
-                }
                 if win.lower < min_start {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -3734,11 +3821,8 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if has_permission(
-            &state_transaction.world,
-            authority,
-            "CanProposeSccpRouteGovernance",
-        ) {
+        let required: Permission = CanProposeSccpRouteGovernance.into();
+        if has_exact_permission(&state_transaction.world, authority, &required) {
             return Ok(());
         }
 
@@ -3760,13 +3844,14 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanProposeContractDeployment",
-            ) {
+            let required_permission: Permission = CanProposeRuntimeUpgrade {
+                abi_version: self.manifest.abi_version,
+                abi_hash: self.manifest.abi_hash,
+            }
+            .into();
+            if !has_exact_permission(&state_transaction.world, authority, &required_permission) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanProposeContractDeployment".into(),
+                    "not permitted: exact CanProposeRuntimeUpgrade ABI target required".into(),
                 ));
             }
 
@@ -4687,29 +4772,146 @@ pub mod isi {
         }
     }
 
-    fn parse_hex32_hint(raw: &str) -> Option<[u8; 32]> {
-        let trimmed = raw.trim();
-        let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
-            if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
-                rest
-            } else {
-                return None;
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct GovernanceZkPublicInputsV1 {
+        lock_owner: Option<AccountId>,
+        lock_amount: Option<Quantity>,
+        lock_duration: Option<u64>,
+        lock_direction: Option<u8>,
+        root_hint: Option<[u8; 32]>,
+        nullifier_hint: Option<[u8; 32]>,
+    }
+
+    fn is_governance_private_key_field_alias(field: &str) -> bool {
+        GOVERNANCE_PRIVATE_KEY_FIELD_ALIASES.contains(&field)
+    }
+
+    fn reject_governance_private_key_fields_deep(
+        value: &norito::json::Value,
+    ) -> Result<(), String> {
+        let mut pending = vec![(value, "public_inputs".to_owned())];
+        while let Some((current, path)) = pending.pop() {
+            match current {
+                norito::json::Value::Object(map) => {
+                    for (field, nested) in map {
+                        let nested_path = format!("{path}.{field}");
+                        if is_governance_private_key_field_alias(field) {
+                            return Err(format!(
+                                "public inputs must not contain private signing field `{field}` at {nested_path}"
+                            ));
+                        }
+                        pending.push((nested, nested_path));
+                    }
+                }
+                norito::json::Value::Array(values) => {
+                    for (index, nested) in values.iter().enumerate() {
+                        pending.push((nested, format!("{path}[{index}]")));
+                    }
+                }
+                _ => {}
             }
-        } else {
-            trimmed
-        };
-        let body = without_scheme.trim();
-        let body = body
-            .strip_prefix("0x")
-            .or_else(|| body.strip_prefix("0X"))
-            .unwrap_or(body)
-            .trim();
-        if body.len() != 64 || !body.as_bytes().iter().all(u8::is_ascii_hexdigit) {
-            return None;
         }
-        let mut out = [0u8; 32];
-        hex::decode_to_slice(body, &mut out).ok()?;
-        Some(out)
+        Ok(())
+    }
+
+    fn parse_canonical_governance_ballot_amount(value: &norito::json::Value) -> Option<Quantity> {
+        let amount = value.as_str()?;
+        let parsed = amount.parse::<Quantity>().ok()?;
+        (parsed.to_string() == amount).then_some(parsed)
+    }
+
+    fn parse_governance_zk_public_inputs_v1(
+        encoded: &str,
+    ) -> Result<GovernanceZkPublicInputsV1, String> {
+        if encoded.is_empty() {
+            return Err("public inputs must be a non-empty JSON object".to_owned());
+        }
+        let value = norito::json::from_str::<norito::json::Value>(encoded)
+            .map_err(|_| "public inputs must be valid JSON".to_owned())?;
+        let map = value
+            .as_object()
+            .ok_or_else(|| "public inputs must be a JSON object".to_owned())?;
+
+        for field in map.keys() {
+            if is_governance_private_key_field_alias(field) {
+                return Err(format!(
+                    "public inputs must not contain private signing field `{field}`"
+                ));
+            }
+            if !GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS_V1.contains(&field.as_str()) {
+                return Err(format!("public inputs contain unknown field `{field}`"));
+            }
+        }
+        reject_governance_private_key_fields_deep(&value)?;
+
+        let parse_hash_hint = |field: &str| -> Result<Option<[u8; 32]>, String> {
+            let Some(raw) = map.get(field) else {
+                return Ok(None);
+            };
+            if matches!(raw, norito::json::Value::Null) {
+                return Ok(None);
+            }
+            let literal = raw
+                .as_str()
+                .ok_or_else(|| format!("{field} must be 32-byte hexadecimal"))?;
+            canonical_governance_hex32(literal, field).map(|(_, bytes)| Some(bytes))
+        };
+
+        let lock_owner = match map.get("owner") {
+            None | Some(norito::json::Value::Null) => None,
+            Some(value) => {
+                let literal = value
+                    .as_str()
+                    .ok_or_else(|| "owner must be a canonical I105 account id".to_owned())?;
+                let owner = iroha_data_model::account::AccountId::parse_encoded(literal)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| "owner must be a canonical I105 account id".to_owned())?;
+                if owner.to_string() != literal {
+                    return Err("owner must use canonical I105 account id form".to_owned());
+                }
+                Some(owner)
+            }
+        };
+        let lock_amount = match map.get("amount") {
+            None | Some(norito::json::Value::Null) => None,
+            Some(value) => Some(parse_canonical_governance_ballot_amount(value).ok_or_else(
+                || {
+                    "amount must be an exact canonical non-negative Kotodama V1 quantity string"
+                        .to_owned()
+                },
+            )?),
+        };
+        let lock_duration = match map.get("duration_blocks") {
+            None | Some(norito::json::Value::Null) => None,
+            Some(value) => Some(value.as_u64().ok_or_else(|| {
+                "duration_blocks must be a canonical JSON u64 integer".to_owned()
+            })?),
+        };
+        let lock_direction = match map.get("direction") {
+            None | Some(norito::json::Value::Null) => None,
+            Some(value) => Some(match value.as_str() {
+                Some("Aye") => 0,
+                Some("Nay") => 1,
+                Some("Abstain") => 2,
+                _ => return Err("direction must be exactly Aye, Nay, or Abstain".to_owned()),
+            }),
+        };
+
+        let has_owner = lock_owner.is_some();
+        let has_amount = lock_amount.is_some();
+        let has_duration = lock_duration.is_some();
+        if (has_owner || has_amount || has_duration) && !(has_owner && has_amount && has_duration) {
+            return Err("lock hints must include owner, amount, and duration_blocks".to_owned());
+        }
+
+        Ok(GovernanceZkPublicInputsV1 {
+            lock_owner,
+            lock_amount,
+            lock_duration,
+            lock_direction,
+            root_hint: parse_hash_hint("root_hint")?,
+            nullifier_hint: parse_hash_hint("nullifier")?,
+        })
     }
 
     impl Execute for gov::CastZkBallot {
@@ -4719,45 +4921,33 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let parse_ballot_amount = |value: &norito::json::Value| -> Option<u128> {
-                if let Some(n) = value.as_u64() {
-                    return Some(u128::from(n));
-                }
-                value.as_str().and_then(|s| s.trim().parse::<u128>().ok())
-            };
-
-            let parse_duration_blocks = |value: &norito::json::Value| -> Option<u64> {
-                value
-                    .as_u64()
-                    .or_else(|| value.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
-            };
-            let parse_ballot_direction = |value: &norito::json::Value| -> Option<u8> {
-                if let Some(n) = value.as_u64() {
-                    return u8::try_from(n).ok().filter(|v| *v <= 2);
-                }
-                let raw = value.as_str()?.trim();
-                if raw.eq_ignore_ascii_case("aye") {
-                    return Some(0);
-                }
-                if raw.eq_ignore_ascii_case("nay") {
-                    return Some(1);
-                }
-                if raw.eq_ignore_ascii_case("abstain") {
-                    return Some(2);
-                }
-                raw.parse::<u8>().ok().filter(|v| *v <= 2)
-            };
-
-            if !has_permission(
-                &state_transaction.world,
+            ensure_exact_governance_ballot_permission(
                 authority,
-                "CanSubmitGovernanceBallot",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanSubmitGovernanceBallot".into(),
-                ));
-            }
+                &self.election_id,
+                state_transaction,
+            )?;
             ensure_citizen_for_ballot(authority, &self.election_id, state_transaction)?;
+            let GovernanceZkPublicInputsV1 {
+                lock_owner,
+                lock_amount,
+                lock_duration,
+                lock_direction,
+                root_hint: root_hint_opt,
+                nullifier_hint,
+            } = match parse_governance_zk_public_inputs_v1(&self.public_inputs_json) {
+                Ok(public_inputs) => public_inputs,
+                Err(reason) => {
+                    state_transaction.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                referendum_id: self.election_id.clone(),
+                                reason: reason.clone(),
+                            },
+                        ),
+                    ));
+                    return Err(InstructionExecutionError::InvariantViolation(reason.into()));
+                }
+            };
             let id = self.election_id.clone();
             // Validate ballot proof inputs and enforce governance policy before recording state.
 
@@ -4797,281 +4987,6 @@ pub mod isi {
                         "proof exceeds configured max bytes".into(),
                     ),
                 ));
-            }
-
-            let public_inputs = if self.public_inputs_json.trim().is_empty() {
-                None
-            } else {
-                let value = if let Ok(value) =
-                    norito::json::from_str::<norito::json::Value>(self.public_inputs_json.as_str())
-                {
-                    value
-                } else {
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "public inputs must be valid JSON".into(),
-                            },
-                        ),
-                    ));
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "public inputs must be valid JSON".into(),
-                    ));
-                };
-                if !value.is_object() {
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "public inputs must be a JSON object".into(),
-                            },
-                        ),
-                    ));
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "public inputs must be a JSON object".into(),
-                    ));
-                }
-                Some(value)
-            };
-            let mut lock_owner: Option<iroha_data_model::account::AccountId> = None;
-            let mut lock_amount: Option<u128> = None;
-            let mut lock_duration: Option<u64> = None;
-            let mut lock_direction: Option<u8> = None;
-            let mut root_hint_opt: Option<[u8; 32]> = None;
-            let mut nullifier_hint: Option<[u8; 32]> = None;
-            if let Some(val) = public_inputs.as_ref() {
-                if val.get("durationBlocks").is_some() {
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "public inputs must use duration_blocks".into(),
-                            },
-                        ),
-                    ));
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "public inputs must use duration_blocks".into(),
-                    ));
-                }
-                if val.get("root_hint_hex").is_some()
-                    || val.get("rootHintHex").is_some()
-                    || val.get("rootHint").is_some()
-                {
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "public inputs must use root_hint".into(),
-                            },
-                        ),
-                    ));
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "public inputs must use root_hint".into(),
-                    ));
-                }
-                if let Some(root_val) = val.get("root_hint") {
-                    if !matches!(root_val, norito::json::Value::Null) {
-                        let rh_str = root_val.as_str().ok_or_else(|| {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "root_hint must be 32-byte hex".into(),
-                                    },
-                                ),
-                            ));
-                            InstructionExecutionError::InvariantViolation(
-                                "root_hint must be 32-byte hex".into(),
-                            )
-                        })?;
-                        if let Some(parsed) = parse_hex32_hint(rh_str) {
-                            root_hint_opt = Some(parsed);
-                        } else {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "root_hint must be 32-byte hex".into(),
-                                    },
-                                ),
-                            ));
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "root_hint must be 32-byte hex".into(),
-                            ));
-                        }
-                    }
-                }
-                if val.get("nullifier_hex").is_some() || val.get("nullifierHex").is_some() {
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "public inputs must use nullifier".into(),
-                            },
-                        ),
-                    ));
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "public inputs must use nullifier".into(),
-                    ));
-                }
-                if let Some(null_val) = val.get("nullifier") {
-                    if !matches!(null_val, norito::json::Value::Null) {
-                        let hex_str = null_val.as_str().ok_or_else(|| {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "nullifier must be 32-byte hex".into(),
-                                    },
-                                ),
-                            ));
-                            InstructionExecutionError::InvariantViolation(
-                                "nullifier must be 32-byte hex".into(),
-                            )
-                        })?;
-                        if let Some(parsed) = parse_hex32_hint(hex_str) {
-                            nullifier_hint = Some(parsed);
-                        } else {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "nullifier must be 32-byte hex".into(),
-                                    },
-                                ),
-                            ));
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "nullifier must be 32-byte hex".into(),
-                            ));
-                        }
-                    }
-                }
-            }
-
-            if let Some(val) = public_inputs.as_ref() {
-                if let Some(owner_val) = val.get("owner") {
-                    if !matches!(owner_val, norito::json::Value::Null) {
-                        let owner_str_raw = owner_val.as_str().ok_or_else(|| {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical I105 account id".into(),
-                                },
-                            ),
-                        ));
-                        InstructionExecutionError::InvariantViolation(
-                            "owner must be a canonical I105 account id".into(),
-                        )
-                    })?;
-                        let owner_str = owner_str_raw.trim();
-                        if owner_str != owner_str_raw || owner_str.is_empty() {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical I105 account id form".into(),
-                                    },
-                                ),
-                            ));
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical I105 account id form".into(),
-                            ));
-                        }
-
-                        let owner_parsed = iroha_data_model::account::AccountId::parse_encoded(
-                            owner_str,
-                        )
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                        .map_err(|_| {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical I105 account id".into(),
-                                    },
-                                ),
-                            ));
-                            InstructionExecutionError::InvariantViolation(
-                                "owner must be a canonical I105 account id".into(),
-                            )
-                        })?;
-                        if owner_parsed.to_string() != owner_str {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical I105 account id form".into(),
-                                    },
-                                ),
-                            ));
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical I105 account id form".into(),
-                            ));
-                        }
-                        if lock_owner.is_none() {
-                            lock_owner = Some(owner_parsed);
-                        }
-                    }
-                }
-                if let Some(amount_val) = val.get("amount") {
-                    if !matches!(amount_val, norito::json::Value::Null) {
-                        if let Some(parsed) = parse_ballot_amount(amount_val) {
-                            lock_amount = Some(parsed);
-                        } else {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "amount must be u128".into(),
-                                    },
-                                ),
-                            ));
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "amount must be u128".into(),
-                            ));
-                        }
-                    }
-                }
-                if let Some(duration_val) = val.get("duration_blocks") {
-                    if !matches!(duration_val, norito::json::Value::Null) {
-                        if let Some(parsed) = parse_duration_blocks(duration_val) {
-                            lock_duration = Some(parsed);
-                        } else {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "duration_blocks must be u64".into(),
-                                    },
-                                ),
-                            ));
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "duration_blocks must be u64".into(),
-                            ));
-                        }
-                    }
-                }
-                if let Some(direction_val) = val.get("direction") {
-                    if !matches!(direction_val, norito::json::Value::Null) {
-                        if let Some(parsed) = parse_ballot_direction(direction_val) {
-                            lock_direction = Some(parsed);
-                        } else {
-                            state_transaction.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                        referendum_id: self.election_id.clone(),
-                                        reason: "direction must be Aye, Nay, or Abstain".into(),
-                                    },
-                                ),
-                            ));
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "direction must be Aye, Nay, or Abstain".into(),
-                            ));
-                        }
-                    }
-                }
             }
 
             let mut st = state_transaction
@@ -5560,9 +5475,6 @@ pub mod isi {
                 if let (Some(owner), Some(amount), Some(duration_blocks)) =
                     (lock_owner.clone(), lock_amount, lock_duration)
                 {
-                    // The proof circuit commits to a fixed-width integer witness. Keep that
-                    // circuit contract and cross the public economic boundary explicitly.
-                    let amount = Quantity::from(amount);
                     let direction = lock_direction.unwrap_or(2);
                     if owner != *authority {
                         state_transaction.world.emit_events(Some(
@@ -6280,6 +6192,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_exact_governance_ballot_permission(
+                authority,
+                &self.referendum_id,
+                state_transaction,
+            )?;
             let validation_fee_rules =
                 ensure_plain_ballot_preconditions(&self, authority, state_transaction)?;
             let (conviction_step_blocks, max_conviction) = validation_fee_rules
@@ -6316,18 +6233,19 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            let required: Permission = CanSlashGovernanceLock {
+                referendum_id: self.referendum_id.clone(),
+            }
+            .into();
+            ensure_exact_governance_permission(
+                authority,
+                &required,
+                "CanSlashGovernanceLock",
+                state_transaction,
+            )?;
             if self.amount.is_zero() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract("slash amount must be > 0".into()),
-                ));
-            }
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanSlashGovernanceLock",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanSlashGovernanceLock".into(),
                 ));
             }
             governance_slash_absolute(
@@ -6348,15 +6266,16 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanRestituteGovernanceLock",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanRestituteGovernanceLock".into(),
-                ));
+            let required: Permission = CanRestituteGovernanceLock {
+                referendum_id: self.referendum_id.clone(),
             }
+            .into();
+            ensure_exact_governance_permission(
+                authority,
+                &required,
+                "CanRestituteGovernanceLock",
+                state_transaction,
+            )?;
             governance_restitute_lock(
                 &self.referendum_id,
                 &self.owner,
@@ -7702,9 +7621,15 @@ pub mod isi {
     impl Execute for gov::EnactReferendum {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            let required: Permission = CanEnactGovernance.into();
+            if !has_exact_permission(&state_transaction.world, authority, &required) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: exact CanEnactGovernance required".into(),
+                ));
+            }
             let pid = self.referendum_id;
             let pid_hex = hex::encode(pid);
             let (proposal, already_terminal) = load_proposal(state_transaction, pid, &pid_hex)?;
@@ -7877,8 +7802,9 @@ pub mod isi {
                 ));
             }
 
+            let can_enact: Permission = CanEnactGovernance.into();
             if existing.is_some()
-                && !has_permission(&state_transaction.world, authority, "CanEnactGovernance")
+                && !has_exact_permission(&state_transaction.world, authority, &can_enact)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanEnactGovernance is required for in-place contract kaizen/改善"
@@ -9759,7 +9685,8 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(&state_transaction.world, authority, "CanManageParliament") {
+            let required: Permission = CanManageParliament.into();
+            if !has_exact_permission(&state_transaction.world, authority, &required) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageParliament".into(),
                 ));
@@ -10018,15 +9945,16 @@ pub mod isi {
                     InvalidParameterError::SmartContract("role must not be blank".into()),
                 ));
             }
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanRecordCitizenService",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanRecordCitizenService".into(),
-                ));
+            let required: Permission = CanRecordCitizenService {
+                owner: self.owner.clone(),
             }
+            .into();
+            ensure_exact_governance_permission(
+                authority,
+                &required,
+                "CanRecordCitizenService",
+                state_transaction,
+            )?;
             let Some(mut record) = state_transaction.world.citizens.get(&self.owner).cloned()
             else {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -10165,10 +10093,10 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !has_permission(
+        if !has_legacy_unscoped_permission(
             &state_transaction.world,
             authority,
-            "CanManageRuntimeUpgrades",
+            LegacyUnscopedPermission::RuntimeUpgrades,
         ) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "not permitted: CanManageRuntimeUpgrades".into(),
@@ -10733,10 +10661,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageRuntimeUpgrades",
+                LegacyUnscopedPermission::RuntimeUpgrades,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageRuntimeUpgrades".into(),
@@ -10808,10 +10736,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageRuntimeUpgrades",
+                LegacyUnscopedPermission::RuntimeUpgrades,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageRuntimeUpgrades".into(),
@@ -10943,10 +10871,10 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if has_permission(
+        if has_legacy_unscoped_permission(
             &state_transaction.world,
             authority,
-            "CanManageConsensusKeys",
+            LegacyUnscopedPermission::ConsensusKeys,
         ) {
             Ok(())
         } else {
@@ -11175,10 +11103,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageConsensusKeys",
+                LegacyUnscopedPermission::ConsensusKeys,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageConsensusKeys".into(),
@@ -11236,10 +11164,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageConfidentialParams",
+                LegacyUnscopedPermission::ConfidentialParams,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageConfidentialParams".into(),
@@ -11271,10 +11199,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageConfidentialParams",
+                LegacyUnscopedPermission::ConfidentialParams,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageConfidentialParams".into(),
@@ -11310,10 +11238,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageConfidentialParams",
+                LegacyUnscopedPermission::ConfidentialParams,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageConfidentialParams".into(),
@@ -11345,10 +11273,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageConfidentialParams",
+                LegacyUnscopedPermission::ConfidentialParams,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageConfidentialParams".into(),
@@ -13017,23 +12945,18 @@ pub mod isi {
         Ok(())
     }
 
-    const CAN_MANAGE_SCCP_GOVERNANCE: &str = "CanManageSccpGovernance";
-
     fn ensure_can_manage_sccp_governance(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        let required: Permission = CanManageSccpGovernance.into();
         if state_transaction._curr_block.is_genesis()
-            || has_permission(
-                &state_transaction.world,
-                authority,
-                CAN_MANAGE_SCCP_GOVERNANCE,
-            )
+            || has_exact_permission(&state_transaction.world, authority, &required)
         {
             Ok(())
         } else {
             Err(InstructionExecutionError::InvariantViolation(
-                format!("not permitted: {CAN_MANAGE_SCCP_GOVERNANCE}").into(),
+                "not permitted: CanManageSccpGovernance".into(),
             ))
         }
     }
@@ -16228,7 +16151,8 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(&state_transaction.world, authority, "CanManageParliament") {
+            let required: Permission = CanManageParliament.into();
+            if !has_exact_permission(&state_transaction.world, authority, &required) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageParliament".into(),
                 ));
@@ -16345,15 +16269,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
-                &state_transaction.world,
+            ensure_exact_governance_ballot_permission(
                 authority,
-                "CanSubmitGovernanceBallot",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanSubmitGovernanceBallot".into(),
-                ));
-            }
+                &self.election_id,
+                state_transaction,
+            )?;
             ensure_citizen_for_ballot(authority, &self.election_id, state_transaction)?;
 
             let id = self.election_id().clone();
@@ -16460,7 +16380,8 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(&state_transaction.world, authority, "CanEnactGovernance") {
+            let required: Permission = CanEnactGovernance.into();
+            if !has_exact_permission(&state_transaction.world, authority, &required) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanEnactGovernance".into(),
                 ));
@@ -17371,10 +17292,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageConsensusKeys",
+                LegacyUnscopedPermission::ConsensusKeys,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageConsensusKeys".into(),
@@ -17459,10 +17380,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
+            if !has_legacy_unscoped_permission(
                 &state_transaction.world,
                 authority,
-                "CanManageConsensusKeys",
+                LegacyUnscopedPermission::ConsensusKeys,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageConsensusKeys".into(),
@@ -17538,11 +17459,8 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanManageLaneRelayEmergency",
-            ) {
+            let required: Permission = CanManageLaneRelayEmergency.into();
+            if !has_exact_permission(&state_transaction.world, authority, &required) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "not permitted: CanManageLaneRelayEmergency".into(),
                 ));
@@ -22400,16 +22318,696 @@ pub mod isi {
         }
 
         #[test]
-        fn parse_hex32_hint_accepts_scheme_and_prefix() {
-            let raw = format!("BlAkE2B32:0x{}", "Aa".repeat(32));
-            let parsed = super::parse_hex32_hint(&raw).expect("parse hint");
-            assert_eq!(parsed, [0xaa; 32]);
+        fn governance_hex32_parser_accepts_only_the_exact_declared_grammar() {
+            let canonical = "aa".repeat(32);
+            for raw in [
+                canonical.clone(),
+                "AA".repeat(32),
+                format!("0x{}", "Aa".repeat(32)),
+                format!("0X{}", "Aa".repeat(32)),
+                format!("BlAkE2B32:{}", "Aa".repeat(32)),
+                format!("BlAkE2B32:0X{}", "Aa".repeat(32)),
+            ] {
+                let (normalized, parsed) =
+                    super::canonical_governance_hex32(&raw, "hash").expect("parse hash");
+                assert_eq!(normalized, canonical, "raw={raw:?}");
+                assert_eq!(parsed, [0xaa; 32], "raw={raw:?}");
+            }
+
+            for raw in [
+                format!(" {canonical}"),
+                format!("{canonical} "),
+                format!(":{canonical}"),
+                format!("sha256:{canonical}"),
+                format!("blake2b32::{canonical}"),
+                format!("blake2b32: 0x{canonical}"),
+                format!("0x{canonical}:suffix"),
+                "aa".repeat(31),
+                format!("{}g", "aa".repeat(31)),
+            ] {
+                assert!(
+                    super::canonical_governance_hex32(&raw, "hash").is_err(),
+                    "unexpectedly accepted {raw:?}"
+                );
+            }
         }
 
         #[test]
-        fn parse_hex32_hint_rejects_unknown_scheme() {
-            let raw = format!("sha256:{}", "aa".repeat(32));
-            assert!(super::parse_hex32_hint(&raw).is_none());
+        fn governance_zk_public_inputs_accept_zero_and_max_u64_boundaries() {
+            for duration_blocks in [0_u64, u64::MAX] {
+                let encoded = format!(
+                    r#"{{"root_hint":"BlAkE2B32:0X{}","owner":"{}","amount":"{}","duration_blocks":{duration_blocks},"direction":"Abstain","nullifier":"0x{}"}}"#,
+                    "aa".repeat(32),
+                    &*ALICE_ID,
+                    u128::MAX,
+                    "bb".repeat(32),
+                );
+                let parsed = super::parse_governance_zk_public_inputs_v1(&encoded)
+                    .expect("closed governance public inputs");
+                assert_eq!(parsed.lock_owner.as_ref(), Some(&*ALICE_ID));
+                assert_eq!(parsed.lock_amount, Some(Quantity::from(u128::MAX)));
+                assert_eq!(parsed.lock_duration, Some(duration_blocks));
+                assert_eq!(parsed.lock_direction, Some(2));
+                assert_eq!(parsed.root_hint, Some([0xaa; 32]));
+                assert_eq!(parsed.nullifier_hint, Some([0xbb; 32]));
+            }
+
+            for amount in ["1.25", "0.0000000000000000000000000001"] {
+                let encoded = format!(
+                    r#"{{"owner":"{}","amount":"{amount}","duration_blocks":1}}"#,
+                    &*ALICE_ID,
+                );
+                let parsed = super::parse_governance_zk_public_inputs_v1(&encoded)
+                    .expect("fractional canonical Quantity must remain admissible");
+                assert_eq!(
+                    parsed.lock_amount.as_ref().map(ToString::to_string),
+                    Some(amount.to_owned())
+                );
+            }
+        }
+
+        #[test]
+        fn governance_zk_public_inputs_reject_aliases_unknowns_and_noncanonical_scalars() {
+            let owner = ALICE_ID.to_string();
+            let canonical_hash = "aa".repeat(32);
+            let cases = [
+                ("".to_owned(), "non-empty JSON object"),
+                ("[]".to_owned(), "JSON object"),
+                (
+                    r#"{"metadata":{"private_key":"secret"}}"#.to_owned(),
+                    "unknown field",
+                ),
+                (
+                    format!(
+                        r#"{{"owner":{{"privateKeyHex":"secret"}},"amount":"1","duration_blocks":1}}"#
+                    ),
+                    "private signing field",
+                ),
+                (r#"{"direction":"aye"}"#.to_owned(), "exactly Aye"),
+                (
+                    format!(r#"{{"owner":"{owner}","amount":"1","duration_blocks":"1"}}"#),
+                    "canonical JSON u64",
+                ),
+                (
+                    format!(
+                        r#"{{"owner":"{owner}","amount":"1","duration_blocks":18446744073709551616}}"#
+                    ),
+                    "canonical JSON u64",
+                ),
+                (
+                    format!(r#"{{"owner":"{owner}"}}"#),
+                    "lock hints must include",
+                ),
+                (
+                    format!(r#"{{"root_hint":" {canonical_hash}"}}"#),
+                    "no whitespace",
+                ),
+                (
+                    format!(r#"{{"root_hint":":{canonical_hash}"}}"#),
+                    "optional blake2b32",
+                ),
+                (
+                    format!(r#"{{"owner":"{owner}","amount":"01","duration_blocks":1}}"#),
+                    "canonical non-negative Kotodama V1 quantity",
+                ),
+                (
+                    format!(r#"{{"owner":"{owner}","amount":1,"duration_blocks":1}}"#),
+                    "quantity string",
+                ),
+                (
+                    format!(r#"{{"owner":"{owner}","amount":"1.0","duration_blocks":1}}"#),
+                    "canonical non-negative Kotodama V1 quantity",
+                ),
+                (
+                    format!(
+                        r#"{{"owner":"{owner}","amount":"0.00000000000000000000000000001","duration_blocks":1}}"#
+                    ),
+                    "canonical non-negative Kotodama V1 quantity",
+                ),
+            ];
+            for (encoded, expected) in cases {
+                let error = super::parse_governance_zk_public_inputs_v1(&encoded)
+                    .expect_err("noncanonical public inputs must fail closed");
+                assert!(
+                    error.contains(expected),
+                    "encoded={encoded:?}, expected={expected:?}, error={error:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn direct_deploy_isi_cannot_bypass_exact_governance_admission() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let contract_address = ContractAddress::derive(
+                &iroha_data_model::ChainId::from("governance-boundary-test"),
+                &ALICE_ID,
+                1,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("canonical contract address");
+            let permission: Permission =
+                iroha_executor_data_model::permission::governance::CanProposeContractDeployment {
+                    contract_address: contract_address.clone(),
+                }
+                .into();
+            state_transaction
+                .world
+                .account_permissions
+                .insert(ALICE_ID.clone(), BTreeSet::from([permission]));
+
+            let base = gov::ProposeDeployContract {
+                contract_address,
+                code_hash_hex: "11".repeat(32),
+                abi_hash_hex: hex::encode(ivm::syscalls::compute_abi_hash(
+                    ivm::SyscallPolicy::AbiV1,
+                )),
+                abi_version: "1".to_owned(),
+                window: None,
+                mode: Some(gov::VotingMode::Zk),
+                manifest_provenance: None,
+            };
+
+            let mut padded_abi = base.clone();
+            padded_abi.abi_version = " 1 ".to_owned();
+            let mut whitespace_hash = base.clone();
+            whitespace_hash.code_hash_hex = format!(" {}", "11".repeat(32));
+            let mut reverse_window = base.clone();
+            reverse_window.window = Some(gov::AtWindow {
+                lower: u64::MAX,
+                upper: u64::MAX - 1,
+            });
+            let exact_target_probe = base.clone();
+            let mut empty_provenance = base.clone();
+            empty_provenance.manifest_provenance = Some(ManifestProvenance {
+                signer: ALICE_KEYPAIR.public_key().clone(),
+                signature: Signature::from_bytes(&[]),
+            });
+            let mut zero_provenance = base;
+            zero_provenance.manifest_provenance = Some(ManifestProvenance {
+                signer: ALICE_KEYPAIR.public_key().clone(),
+                signature: Signature::from_bytes(&[0; 64]),
+            });
+
+            for (proposal, expected) in [
+                (padded_abi, "exact string `1`"),
+                (whitespace_hash, "no whitespace"),
+                (reverse_window, "window.upper"),
+                (empty_provenance, "manifest_provenance.signature"),
+                (zero_provenance, "manifest_provenance.signature"),
+            ] {
+                let error = proposal
+                    .execute(&ALICE_ID, &mut state_transaction)
+                    .expect_err("direct native governance ISI must fail closed");
+                let message = format!("{error:?}");
+                assert!(
+                    message.contains(expected),
+                    "expected={expected:?}, error={error:?}"
+                );
+                assert!(
+                    state_transaction
+                        .world
+                        .governance_proposals
+                        .iter()
+                        .next()
+                        .is_none(),
+                    "invalid direct proposal must not reach governance storage"
+                );
+            }
+
+            let other_contract_address = ContractAddress::derive(
+                &iroha_data_model::ChainId::from("governance-boundary-test"),
+                &ALICE_ID,
+                2,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("second canonical contract address");
+            let wrong_target_permission: Permission = CanProposeContractDeployment {
+                contract_address: other_contract_address,
+            }
+            .into();
+            state_transaction
+                .world
+                .account_permissions
+                .insert(ALICE_ID.clone(), BTreeSet::from([wrong_target_permission]));
+            let error = exact_target_probe
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("a grant for another target must not authorize this proposal");
+            assert!(
+                format!("{error:?}").contains("exact CanProposeContractDeployment target"),
+                "unexpected target-scope rejection: {error:?}"
+            );
+        }
+
+        #[test]
+        fn direct_runtime_upgrade_proposal_requires_the_exact_abi_target_permission() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+            let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
+                name: "exact-runtime-target".to_owned(),
+                description: "direct execution authorization regression".to_owned(),
+                abi_version: 1,
+                abi_hash,
+                added_syscalls: Vec::new(),
+                added_pointer_types: Vec::new(),
+                start_height: 10,
+                end_height: 20,
+                sbom_digests: Vec::new(),
+                slsa_attestation: Vec::new(),
+                provenance: Vec::new(),
+            };
+            let proposal = gov::ProposeRuntimeUpgradeProposal {
+                manifest: manifest.clone(),
+                window: None,
+                mode: Some(gov::VotingMode::Plain),
+            };
+
+            let unrelated_contract = ContractAddress::derive(
+                &iroha_data_model::ChainId::from("runtime-permission-regression"),
+                &ALICE_ID,
+                1,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("canonical contract address");
+            let legacy_permission: Permission = CanProposeContractDeployment {
+                contract_address: unrelated_contract,
+            }
+            .into();
+            state_transaction
+                .world
+                .account_permissions
+                .insert(ALICE_ID.clone(), BTreeSet::from([legacy_permission]));
+            let error = proposal
+                .clone()
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("a contract deployment grant must never authorize runtime upgrades");
+            assert!(
+                format!("{error:?}").contains("exact CanProposeRuntimeUpgrade ABI target"),
+                "unexpected legacy-permission rejection: {error:?}"
+            );
+
+            for wrong_target_permission in [
+                CanProposeRuntimeUpgrade {
+                    abi_version: 1,
+                    abi_hash: [0xFF; 32],
+                },
+                CanProposeRuntimeUpgrade {
+                    abi_version: 2,
+                    abi_hash,
+                },
+            ] {
+                state_transaction.world.account_permissions.insert(
+                    ALICE_ID.clone(),
+                    BTreeSet::from([wrong_target_permission.into()]),
+                );
+                let error = proposal
+                    .clone()
+                    .execute(&ALICE_ID, &mut state_transaction)
+                    .expect_err("a runtime grant for another ABI target must fail closed");
+                assert!(
+                    format!("{error:?}").contains("exact CanProposeRuntimeUpgrade ABI target"),
+                    "unexpected wrong-ABI rejection: {error:?}"
+                );
+            }
+
+            let exact_permission: Permission = CanProposeRuntimeUpgrade {
+                abi_version: 1,
+                abi_hash,
+            }
+            .into();
+            state_transaction
+                .world
+                .account_permissions
+                .insert(ALICE_ID.clone(), BTreeSet::from([exact_permission]));
+            let mut invalid_window_manifest = manifest;
+            invalid_window_manifest.end_height = invalid_window_manifest.start_height;
+            let error = gov::ProposeRuntimeUpgradeProposal {
+                manifest: invalid_window_manifest,
+                window: None,
+                mode: Some(gov::VotingMode::Plain),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("exact target grant must reach runtime manifest validation");
+            assert!(
+                format!("{error:?}").contains("runtime upgrade window"),
+                "exact ABI grant did not pass authorization: {error:?}"
+            );
+        }
+
+        #[test]
+        fn direct_zk_ballot_isi_rejects_closed_input_bypasses_before_proof_dispatch() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            let permission: Permission =
+                iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot {
+                    referendum_id: "election-1".to_owned(),
+                }
+                .into();
+            state_transaction
+                .world
+                .account_permissions
+                .insert(ALICE_ID.clone(), BTreeSet::from([permission]));
+
+            let owner = ALICE_ID.to_string();
+            let cases = [
+                (
+                    r#"{"metadata":{"private_key":"secret"}}"#.to_owned(),
+                    "unknown field",
+                ),
+                (
+                    format!(
+                        r#"{{"owner":{{"privateKey":"secret"}},"amount":"1","duration_blocks":1}}"#
+                    ),
+                    "private signing field",
+                ),
+                (r#"{"direction":"yes"}"#.to_owned(), "exactly Aye"),
+                (
+                    format!(
+                        r#"{{"owner":"{owner}","amount":"1","duration_blocks":"18446744073709551615"}}"#
+                    ),
+                    "canonical JSON u64",
+                ),
+            ];
+            for (public_inputs_json, expected) in cases {
+                let error = gov::CastZkBallot {
+                    election_id: "election-1".to_owned(),
+                    proof_b64: "AA==".to_owned(),
+                    public_inputs_json,
+                }
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("direct native ballot must reject before proof dispatch");
+                let message = format!("{error:?}");
+                assert!(
+                    message.contains(expected),
+                    "expected={expected:?}, error={error:?}"
+                );
+                assert!(
+                    state_transaction
+                        .world
+                        .elections
+                        .get(&"election-1".to_owned())
+                        .is_none(),
+                    "invalid public inputs must not reach election lookup or mutation"
+                );
+            }
+
+            for amount in ["1.25", "0.0000000000000000000000000001"] {
+                let public_inputs_json =
+                    format!(r#"{{"owner":"{owner}","amount":"{amount}","duration_blocks":1}}"#);
+                let error = gov::CastZkBallot {
+                    election_id: "election-1".to_owned(),
+                    proof_b64: "AA==".to_owned(),
+                    public_inputs_json,
+                }
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("canonical Quantity must pass admission and reach election lookup");
+                assert!(
+                    format!("{error:?}").contains("unknown election id"),
+                    "canonical amount {amount:?} was rejected before proof dispatch: {error:?}"
+                );
+            }
+
+            let wrong_target_permission: Permission = CanSubmitGovernanceBallot {
+                referendum_id: "election-2".to_owned(),
+            }
+            .into();
+            state_transaction
+                .world
+                .account_permissions
+                .insert(ALICE_ID.clone(), BTreeSet::from([wrong_target_permission]));
+            let error = gov::CastZkBallot {
+                election_id: "election-1".to_owned(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: "{}".to_owned(),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a ballot grant for another election must not authorize this ballot");
+            assert!(
+                format!("{error:?}").contains("exact CanSubmitGovernanceBallot target"),
+                "unexpected ballot target-scope rejection: {error:?}"
+            );
+        }
+
+        #[test]
+        fn direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let wrong_target_permission: Permission = CanSubmitGovernanceBallot {
+                referendum_id: "election-2".to_owned(),
+            }
+            .into();
+            state_transaction
+                .world
+                .account_permissions
+                .insert(ALICE_ID.clone(), BTreeSet::from([wrong_target_permission]));
+
+            let error = gov::CastPlainBallot {
+                referendum_id: "election-1".to_owned(),
+                owner: ALICE_ID.clone(),
+                amount: Quantity::zero(),
+                duration_blocks: 0,
+                direction: 0,
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a PLAIN ballot grant for another referendum must fail closed");
+            assert!(
+                format!("{error:?}").contains("exact CanSubmitGovernanceBallot target"),
+                "unexpected PLAIN ballot target-scope rejection: {error:?}"
+            );
+
+            let backend = "halo2/ipa";
+            let proof = iroha_data_model::proof::ProofAttachment::new_ref(
+                backend.into(),
+                iroha_data_model::proof::ProofBox::new(backend.into(), vec![0x01]),
+                iroha_data_model::proof::VerifyingKeyId::new(backend, "ballot-v1"),
+            );
+            let error = zk::SubmitBallot {
+                election_id: "election-1".to_owned(),
+                ciphertext: vec![0x02],
+                ballot_proof: proof,
+                nullifier: [0x03; 32],
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a low-level ZK ballot grant for another election must fail closed");
+            assert!(
+                format!("{error:?}").contains("exact CanSubmitGovernanceBallot target"),
+                "unexpected low-level ZK ballot target-scope rejection: {error:?}"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_locks
+                    .get(&"election-1".to_owned())
+                    .is_none(),
+                "unauthorized direct ballots must not mutate governance locks"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .elections
+                    .get(&"election-1".to_owned())
+                    .is_none(),
+                "unauthorized direct ballots must not mutate election state"
+            );
+        }
+
+        #[test]
+        fn scoped_governance_mutation_isis_reject_wrong_targets_without_state_changes() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            state_transaction
+                .gov
+                .citizen_service
+                .free_declines_per_epoch = u32::MAX;
+
+            let citizen =
+                crate::state::CitizenshipRecord::new(BOB_ID.clone(), Quantity::from(10_u64), 1);
+            state_transaction
+                .world
+                .citizens
+                .insert(BOB_ID.clone(), citizen.clone());
+
+            let target_referendum = "target-referendum";
+            let mut locks = crate::state::GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                BOB_ID.clone(),
+                crate::state::GovernanceLockRecord {
+                    owner: BOB_ID.clone(),
+                    amount: Quantity::from(10_u64),
+                    slashed: Quantity::from(2_u64),
+                    expiry_height: 100,
+                    direction: 0,
+                    duration_blocks: 10,
+                    custody: None,
+                },
+            );
+            state_transaction
+                .world
+                .governance_locks
+                .insert(target_referendum.to_owned(), locks);
+
+            let wrong_target_permissions = BTreeSet::from([
+                Permission::from(CanRecordCitizenService {
+                    owner: ALICE_ID.clone(),
+                }),
+                Permission::from(CanSlashGovernanceLock {
+                    referendum_id: "other-referendum".to_owned(),
+                }),
+                Permission::from(CanRestituteGovernanceLock {
+                    referendum_id: "other-referendum".to_owned(),
+                }),
+            ]);
+            state_transaction
+                .world
+                .account_permissions
+                .insert(ALICE_ID.clone(), wrong_target_permissions);
+
+            let citizen_before = state_transaction
+                .world
+                .citizens
+                .get(&*BOB_ID)
+                .cloned()
+                .expect("seeded citizen");
+            let lock_before = state_transaction
+                .world
+                .governance_locks
+                .get(&target_referendum.to_owned())
+                .and_then(|referendum| referendum.locks.get(&*BOB_ID))
+                .map(|record| (record.amount.clone(), record.slashed.clone()))
+                .expect("seeded governance lock");
+
+            let service_error = gov::RecordCitizenServiceOutcome {
+                owner: BOB_ID.clone(),
+                epoch: 2,
+                role: "observer".to_owned(),
+                event: gov::CitizenServiceEvent::Decline,
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a service grant for another citizen must fail closed");
+            assert!(
+                format!("{service_error:?}").contains("exact CanRecordCitizenService target"),
+                "unexpected citizen-service target rejection: {service_error:?}"
+            );
+
+            let slash_error = gov::SlashGovernanceLock {
+                referendum_id: target_referendum.to_owned(),
+                owner: BOB_ID.clone(),
+                amount: Quantity::from(1_u64),
+                reason: "scope regression".to_owned(),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a slash grant for another referendum must fail closed");
+            assert!(
+                format!("{slash_error:?}").contains("exact CanSlashGovernanceLock target"),
+                "unexpected slash target rejection: {slash_error:?}"
+            );
+
+            let restitution_error = gov::RestituteGovernanceLock {
+                referendum_id: target_referendum.to_owned(),
+                owner: BOB_ID.clone(),
+                amount: Quantity::from(1_u64),
+                reason: "scope regression".to_owned(),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a restitution grant for another referendum must fail closed");
+            assert!(
+                format!("{restitution_error:?}")
+                    .contains("exact CanRestituteGovernanceLock target"),
+                "unexpected restitution target rejection: {restitution_error:?}"
+            );
+
+            assert_eq!(
+                state_transaction.world.citizens.get(&*BOB_ID),
+                Some(&citizen_before),
+                "wrong-target service recording must not mutate citizen state"
+            );
+            let lock_after = state_transaction
+                .world
+                .governance_locks
+                .get(&target_referendum.to_owned())
+                .and_then(|referendum| referendum.locks.get(&*BOB_ID))
+                .map(|record| (record.amount.clone(), record.slashed.clone()))
+                .expect("governance lock must remain present");
+            assert_eq!(
+                lock_after, lock_before,
+                "wrong-target slash and restitution must not mutate lock balances"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_slashes
+                    .get(&target_referendum.to_owned())
+                    .is_none(),
+                "wrong-target slash and restitution must not create ledger state"
+            );
         }
 
         use iroha_executor_data_model::permission::{
@@ -26880,7 +27478,7 @@ seiyaku GovernanceLifecycle {
             let governance_permission = Permission::from(
                 iroha_executor_data_model::permission::sccp::CanManageSccpGovernance,
             );
-            if !has_permission(&stx.world, &ALICE_ID, super::CAN_MANAGE_SCCP_GOVERNANCE) {
+            if !has_exact_permission(&stx.world, &ALICE_ID, &governance_permission) {
                 Grant::account_permission(governance_permission, ALICE_ID.clone())
                     .execute(&ALICE_ID, stx)
                     .expect("grant SCCP governance fixture permission");
@@ -27803,7 +28401,8 @@ seiyaku GovernanceLifecycle {
             stx: &mut StateTransaction<'_, '_>,
             account: &AccountId,
         ) {
-            let permission = Permission::new("CanManageLaneRelayEmergency".into(), Json::new(()));
+            let permission: Permission =
+                iroha_executor_data_model::permission::peer::CanManageLaneRelayEmergency.into();
             stx.world
                 .account_permissions
                 .insert(account.clone(), BTreeSet::from([permission]));
@@ -32268,6 +32867,13 @@ seiyaku GovernanceLifecycle {
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
+            stx.world.add_account_permission(
+                &authority,
+                Permission::new(
+                    "CanManageLaneRelayEmergency".into(),
+                    Json::from(norito::json!({ "unexpected": true })),
+                ),
+            );
             let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
 
@@ -32278,7 +32884,7 @@ seiyaku GovernanceLifecycle {
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
-            .expect_err("permission should be required");
+            .expect_err("a malformed same-name permission must not authorize the override");
             assert!(matches!(
                 err,
                 InstructionExecutionError::InvariantViolation(msg)

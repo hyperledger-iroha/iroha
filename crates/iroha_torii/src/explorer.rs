@@ -2576,7 +2576,7 @@ mod tests {
     fn explorer_cursor_uses_canonical_typed_identifier_decoders() {
         let account_digest =
             explorer_filter_digest(ExplorerCursorCollection::Accounts, &[None, None]);
-        let noncanonical_account = format!(" {ALICE_ID} ");
+        let noncanonical_account = format!(" {} ", &*ALICE_ID);
         let account_cursor = encode_explorer_cursor(
             ExplorerCursorCollection::Accounts,
             account_digest,

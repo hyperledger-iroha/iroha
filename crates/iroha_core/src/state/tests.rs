@@ -3086,11 +3086,6 @@ fn set_nexus_rejects_post_genesis_catalog_mutation_atomically() {
     );
     assert_eq!(state.lane_incarnations_snapshot(), before_incarnations);
     assert_eq!(
-        state.world.asset_definition_aliases.view().get(&alias),
-        Some(&asset_definition_id),
-        "rejected retirement must preserve the derived alias index"
-    );
-    assert_eq!(
         state.lane_incarnation_activation_heights_snapshot(),
         before_activations
     );
@@ -5111,11 +5106,11 @@ fn explorer_count_indexes_rollback_apply_and_commit_with_primary_rows() {
         transaction.insert_nft_entry(nft_id.clone(), value);
         // Drop without applying: the primary rows and every derived bucket must roll back.
     }
-    assert!(block.world.assets.get(&asset_id).is_none());
-    assert!(block.world.assets_by_account.get(&ALICE_ID).is_none());
-    assert!(block.world.assets_by_domain.get(&domain).is_none());
-    assert!(block.world.nfts.get(&nft_id).is_none());
-    assert!(block.world.nfts_by_domain.get(&domain).is_none());
+    assert!(block.assets.get(&asset_id).is_none());
+    assert!(block.assets_by_account.get(&ALICE_ID).is_none());
+    assert!(block.assets_by_domain.get(&domain).is_none());
+    assert!(block.nfts.get(&nft_id).is_none());
+    assert!(block.nfts_by_domain.get(&domain).is_none());
 
     {
         let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
@@ -5128,9 +5123,9 @@ fn explorer_count_indexes_rollback_apply_and_commit_with_primary_rows() {
         transaction.insert_nft_entry(nft_id.clone(), value);
         transaction.apply();
     }
-    assert!(block.world.assets_by_account.get(&ALICE_ID).is_some());
-    assert!(block.world.assets_by_domain.get(&domain).is_some());
-    assert!(block.world.nfts_by_domain.get(&domain).is_some());
+    assert!(block.assets_by_account.get(&ALICE_ID).is_some());
+    assert!(block.assets_by_domain.get(&domain).is_some());
+    assert!(block.nfts_by_domain.get(&domain).is_some());
 
     block.commit();
     let view = world.view();
@@ -52766,6 +52761,145 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
     }
 }
 
+#[allow(clippy::too_many_lines)]
+fn indexed_settled_vpn_lease(
+    chain_id: &ChainId,
+    client: &AccountId,
+    account_tag: u8,
+    ordinal: u16,
+    operator_key: &KeyPair,
+) -> VpnLeaseRecordV1 {
+    use iroha_data_model::soranet::vpn::{
+        VpnExitClassV1, VpnQuoteBodyV1, VpnQuotePolicyV1, VpnSessionReceiptV1, VpnSignedQuoteV1,
+        VpnTariffV1,
+    };
+
+    let mut quote_id = [0_u8; 32];
+    quote_id[0] = account_tag;
+    quote_id[1..3].copy_from_slice(&ordinal.to_be_bytes());
+    let address_slot = VpnAddressSlotV1::new(
+        u32::from(account_tag)
+            .checked_mul(1_000)
+            .and_then(|base| base.checked_add(u32::from(ordinal)))
+            .expect("fixture VPN address slot arithmetic"),
+    )
+    .expect("fixture VPN address slot");
+    let lease_id = derive_vpn_lease_id_v1(chain_id, quote_id, client);
+    let session_id = derive_vpn_session_id_v1(chain_id, quote_id, client, address_slot);
+    let operator_account_id = AccountId::new(operator_key.public_key().clone());
+    let asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::parse_fully_qualified("universal.universal").expect("XOR domain"),
+        "xor".parse().expect("XOR asset name"),
+    );
+    let custody_account_id = crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id(
+        chain_id,
+        &lease_id,
+        &asset_definition,
+    )
+    .expect("fixture VPN custody account");
+    let tariff = VpnTariffV1 {
+        lease_fee: Quantity::from(10_u32),
+        active_fee_per_minute: Quantity::from(1_u32),
+        ingress_fee_per_mib: Quantity::from(1_u32),
+        egress_fee_per_mib: Quantity::from(1_u32),
+    };
+    let policy = VpnQuotePolicyV1 {
+        exit_class: VpnExitClassV1::Standard,
+        relay_endpoint: "/dns/restart.test/udp/9443/quic".to_owned(),
+        relay_id: [account_tag.wrapping_add(0x20); 32],
+        descriptor_commit: [account_tag.wrapping_add(0x30); 32],
+        tls_server_name: "restart.test".to_owned(),
+        relay_tls_spki_sha256: [account_tag.wrapping_add(0x40); 32],
+        relay_certificate_sha256: [account_tag.wrapping_add(0x50); 32],
+        directory_snapshot_digest: [account_tag.wrapping_add(0x60); 32],
+        relay_trust_valid_until_ms: 1_002_000,
+        lease_secs: 1_000,
+        meter_family: "soranet.vpn.restart".to_owned(),
+        fee_asset_id: asset_definition.to_string(),
+        escrow_account_id: custody_account_id.clone(),
+        route_pushes: vec!["0.0.0.0/0".to_owned()],
+        excluded_routes: Vec::new(),
+        dns_servers: vec!["1.1.1.1".to_owned()],
+        tunnel_addresses: derive_vpn_address_plan_v1(address_slot).client_tunnel_addresses,
+        mtu_bytes: 1_280,
+        flow_label_bits: 24,
+        padding_budget_ms: 15,
+    };
+    let signed_quote = VpnSignedQuoteV1::try_sign(
+        VpnQuoteBodyV1 {
+            chain_id: chain_id.clone(),
+            quote_id,
+            lease_id,
+            session_id,
+            address_slot,
+            client_account_id: client.clone(),
+            operator_account_id: operator_account_id.clone(),
+            metering_public_key: operator_key.public_key().clone(),
+            asset_definition: asset_definition.clone(),
+            tariff: tariff.clone(),
+            policy: policy.clone(),
+            valid_after_ms: 1_000,
+            expires_at_ms: 1_001_000,
+            settlement_grace_ms: 60_000,
+        },
+        operator_key.private_key(),
+    )
+    .expect("sign fixture VPN quote");
+    let settled_at_ms = 10_000_u64
+        .checked_add(u64::from(account_tag) * 1_000)
+        .and_then(|base| base.checked_add(u64::from(ordinal)))
+        .expect("fixture VPN settlement timestamp");
+    let open_tx_hash = quote_id;
+    let receipt = VpnSessionReceiptV1 {
+        session_id,
+        quote_id,
+        payment_tx_hash: open_tx_hash,
+        account_hash: *blake3::hash(client.to_string().as_bytes()).as_bytes(),
+        relay_id: policy.relay_id,
+        ingress_bytes: u64::from(ordinal),
+        egress_bytes: u64::from(ordinal),
+        cover_bytes: 0,
+        uptime_secs: 1,
+        started_at_ms: 2_000,
+        ended_at_ms: settled_at_ms,
+        exit_class: policy.exit_class,
+        meter_hash: [account_tag.wrapping_add(0x70); 32],
+        earned_fee: Quantity::from(1_u32),
+        highest_voucher_sequence: u64::from(ordinal) + 1,
+        client_voucher_hash: quote_id,
+    };
+    let relay_receipt_hash = receipt.hash();
+    VpnLeaseRecordV1 {
+        lease_id,
+        session_id,
+        quote_id,
+        client_account_id: client.clone(),
+        operator_account_id,
+        metering_public_key: operator_key.public_key().clone(),
+        asset_definition,
+        lease_fee: tariff.lease_fee.clone(),
+        custody_account_id,
+        relay_id: policy.relay_id,
+        tariff,
+        quote_policy: policy,
+        address_slot,
+        signed_quote,
+        open_tx_hash,
+        status: VpnLeaseStatusV1::Settled,
+        opened_at_ms: 2_000,
+        expires_at_ms: 1_001_000,
+        settlement_grace_ms: 60_000,
+        settled_at_ms: Some(settled_at_ms),
+        refunded_at_ms: None,
+        highest_voucher_sequence: receipt.highest_voucher_sequence,
+        client_voucher_hash: Some(receipt.client_voucher_hash),
+        relay_receipt_hash: Some(relay_receipt_hash),
+        settled_relay_receipt: Some(receipt),
+        earned_fee: Quantity::from(1_u32),
+        refunded_fee: Quantity::from(9_u32),
+    }
+}
+
 #[test]
 fn governance_lock_test_mutator_replaces_removes_and_rolls_back_expiry_index() {
     let world = World::default();
@@ -52929,6 +53063,196 @@ fn governance_unlock_stats_snapshot_obeys_transaction_and_block_visibility() {
 
     block.commit();
     assert_eq!(*world.view().governance_unlock_stats(), snapshot);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
+    let chain_id = ChainId::from("derived-index-restart");
+    let operator_key = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+        .expect("deterministic VPN operator key");
+    let alice_id = (*ALICE_ID).clone();
+    let bob_id = (*BOB_ID).clone();
+    let alice_lease_count = VPN_SETTLED_RECEIPT_HISTORY_LIMIT + 7;
+    let bob_lease_count = VPN_SETTLED_RECEIPT_HISTORY_LIMIT + 3;
+    let mut leases = Vec::with_capacity(alice_lease_count + bob_lease_count);
+    let mut expected_alice = BTreeSet::new();
+    let mut expected_bob = BTreeSet::new();
+
+    for (client, account_tag, lease_count, expected) in [
+        (&alice_id, 1_u8, alice_lease_count, &mut expected_alice),
+        (&bob_id, 2_u8, bob_lease_count, &mut expected_bob),
+    ] {
+        for ordinal in 0..lease_count {
+            let record = indexed_settled_vpn_lease(
+                &chain_id,
+                client,
+                account_tag,
+                u16::try_from(ordinal).expect("fixture VPN ordinal"),
+                &operator_key,
+            );
+            expected.insert((
+                record.settled_at_ms.expect("settled fixture timestamp"),
+                record.lease_id,
+            ));
+            while expected.len() > VPN_SETTLED_RECEIPT_HISTORY_LIMIT {
+                let oldest = expected
+                    .first()
+                    .copied()
+                    .expect("over-limit expected VPN projection");
+                expected.remove(&oldest);
+            }
+            leases.push(record);
+        }
+    }
+
+    let xor_domain = DomainId::parse_fully_qualified("universal.universal").expect("XOR domain");
+    let xor_definition_id = AssetDefinitionId::derive_from_components(
+        xor_domain.clone(),
+        "xor".parse().expect("XOR asset name"),
+    );
+    let mut accounts = vec![
+        Account::new(alice_id.clone()).build(&alice_id),
+        Account::new(bob_id.clone()).build(&alice_id),
+        Account::new(AccountId::new(operator_key.public_key().clone())).build(&alice_id),
+    ];
+    accounts.extend(
+        leases
+            .iter()
+            .map(|record| Account::new(record.custody_account_id.clone()).build(&alice_id)),
+    );
+    let mut world = World::with(
+        [Domain::new(xor_domain.clone()).build(&alice_id)],
+        accounts,
+        [AssetDefinition::numeric(
+            xor_definition_id,
+            "XOR",
+            AssetBalancePolicy::Global,
+            Some(xor_domain),
+        )
+        .build(&alice_id)],
+    );
+
+    let referendum_a = "restart-lock-a".to_owned();
+    let referendum_b = "restart-lock-b".to_owned();
+    world.governance_locks.insert(
+        referendum_a.clone(),
+        GovernanceLocksForReferendum {
+            locks: BTreeMap::from([
+                (
+                    alice_id.clone(),
+                    indexed_governance_lock(alice_id.clone(), 80),
+                ),
+                (bob_id.clone(), indexed_governance_lock(bob_id.clone(), 120)),
+            ]),
+        },
+    );
+    world.governance_locks.insert(
+        referendum_b.clone(),
+        GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(
+                alice_id.clone(),
+                indexed_governance_lock(alice_id.clone(), 80),
+            )]),
+        },
+    );
+    let first_proposal_id = [0x11; 32];
+    let second_proposal_id = [0x22; 32];
+    world
+        .governance_proposals
+        .insert(first_proposal_id, indexed_validation_fee_proposal(31));
+    world
+        .governance_proposals
+        .insert(second_proposal_id, indexed_validation_fee_proposal(12));
+    let unlock_snapshot = GovernanceUnlockStatsSnapshot {
+        evaluated_height: 144,
+        expired_locks_now: 3,
+        referenda_with_expired: 2,
+    };
+    world.governance_unlock_stats = Cell::new(unlock_snapshot);
+    for record in leases {
+        assert!(world.vpn_leases.insert(record.lease_id, record).is_none());
+    }
+
+    let state = State::new_with_chain(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        chain_id,
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize indexed state snapshot");
+    let snapshot_world = snapshot
+        .as_object()
+        .and_then(|state| state.get("world"))
+        .and_then(norito::json::Value::as_object)
+        .expect("state snapshot world object");
+    for derived_field in [
+        "governance_lock_expiry_index",
+        "validation_fee_proposal_index",
+        "vpn_settled_leases_by_account",
+    ] {
+        assert!(
+            !snapshot_world.contains_key(derived_field),
+            "derived index `{derived_field}` must not be persisted or trusted on restart"
+        );
+    }
+    assert!(
+        snapshot_world.contains_key("governance_unlock_stats"),
+        "authoritative O(1) unlock snapshot must be persisted"
+    );
+
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore indexed state");
+    let restored_world = restored.world_view();
+    assert_eq!(
+        restored_world
+            .governance_lock_expiry_index()
+            .iter()
+            .map(|(height, bucket)| (*height, bucket.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                80,
+                BTreeSet::from([
+                    (referendum_a.clone(), alice_id.clone()),
+                    (referendum_b, alice_id.clone()),
+                ]),
+            ),
+            (120, BTreeSet::from([(referendum_a, bob_id.clone())])),
+        ],
+        "restart must exactly rebuild governance lock expiry buckets"
+    );
+    assert_eq!(
+        restored_world
+            .validation_fee_proposal_index()
+            .iter()
+            .map(|(key, ())| *key)
+            .collect::<Vec<_>>(),
+        vec![(12, second_proposal_id), (31, first_proposal_id)],
+        "restart must exactly rebuild the typed validation-fee ordering index"
+    );
+    assert_eq!(
+        *restored_world.governance_unlock_stats(),
+        unlock_snapshot,
+        "restart must retain the authoritative constant-time unlock projection"
+    );
+    assert_eq!(
+        restored_world.vpn_leases().len(),
+        alice_lease_count + bob_lease_count,
+        "authoritative settled lease history must remain complete"
+    );
+    assert_eq!(restored_world.vpn_settled_leases_by_account().len(), 2);
+    assert_eq!(
+        restored_world
+            .vpn_settled_leases_by_account()
+            .get(&alice_id),
+        Some(&expected_alice),
+        "Alice must receive only her exact newest 24 settled leases"
+    );
+    assert_eq!(
+        restored_world.vpn_settled_leases_by_account().get(&bob_id),
+        Some(&expected_bob),
+        "Bob must receive only his exact newest 24 settled leases"
+    );
 }
 
 #[test]

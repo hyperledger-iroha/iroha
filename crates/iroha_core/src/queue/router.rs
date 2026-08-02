@@ -24,8 +24,8 @@ use iroha_data_model::{
             AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1,
             AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
             RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
-            RegisterMusubiNamespaceBindingV1, RemoveMusubiPackageMaintainerV1,
-            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+            RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
+            RemoveMusubiPackageMaintainerV1, RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
             RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
             SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
@@ -4759,6 +4759,9 @@ fn musubi_instruction_dataspace_target(any: &dyn core::any::Any) -> Option<DataS
         return Some(register.binding.home_dataspace);
     }
     if any.downcast_ref::<RegisterMusubiArchiveV1>().is_some()
+        || any
+            .downcast_ref::<RegisterMusubiProviderBundleAttestationV1>()
+            .is_some()
         || any.downcast_ref::<AddMusubiArchiveLocationV1>().is_some()
         || any
             .downcast_ref::<RetireMusubiArchiveLocationV1>()
@@ -14123,8 +14126,9 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
+        let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let mut state = state_with_asset_definitions(
@@ -14206,8 +14210,10 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(2), dataspace_id),
         ]);
+        let owning_domain =
+            DomainId::try_new("cash", "universal").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            owning_domain.clone(),
             "pkr".parse().expect("asset definition name"),
         );
         let tx = sample_transaction(

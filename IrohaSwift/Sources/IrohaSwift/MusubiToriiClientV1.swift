@@ -16,10 +16,12 @@ private final class MusubiV1RejectRedirectDelegate: NSObject, URLSessionTaskDele
     }
 }
 
-/// Signer-free read-only client for the eleven typed Musubi first-release queries.
+/// Signer-free read-only client for the twelve typed Musubi first-release queries.
 public final class MusubiToriiClientV1: @unchecked Sendable {
     public static let exactPackagePath = "/v1/musubi/queries/exact-package"
     public static let exactReleasePath = "/v1/musubi/queries/exact-release"
+    public static let providerBundleAttestationPath =
+        "/v1/musubi/queries/provider-bundle-attestation"
     public static let resolverIndexPath = "/v1/musubi/queries/resolver-index"
     public static let versionsPath = "/v1/musubi/queries/versions"
     public static let maintainersPath = "/v1/musubi/queries/maintainers"
@@ -56,11 +58,26 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
         return record
     }
 
-    /// Fetches one exact immutable release and its mutable projections.
+    /// Fetches paired home and universal projections for one exact release at finality.
     public func findExactRelease(
         _ request: MusubiExactReleaseQueryV1
-    ) async throws -> MusubiReleaseRecordV1 {
-        let record: MusubiReleaseRecordV1 = try await post(Self.exactReleasePath, request: request)
+    ) async throws -> MusubiExactReleaseSnapshotV1 {
+        let snapshot: MusubiExactReleaseSnapshotV1 = try await post(
+            Self.exactReleasePath,
+            request: request
+        )
+        try snapshot.requireMatches(request)
+        return snapshot
+    }
+
+    /// Fetches one immutable provider proof by its archive/order/provider identity.
+    public func findProviderBundleAttestation(
+        _ request: MusubiProviderBundleAttestationKeyV1
+    ) async throws -> MusubiProviderBundleAttestationRecordV1 {
+        let record: MusubiProviderBundleAttestationRecordV1 = try await post(
+            Self.providerBundleAttestationPath,
+            request: request
+        )
         try record.requireMatches(request)
         return record
     }

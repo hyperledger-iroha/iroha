@@ -6,9 +6,10 @@ use iroha_data_model::musubi::{
     MusubiAliasHistoryPageV1, MusubiAliasPricingPolicyV1, MusubiAliasQueryV1, MusubiAliasRecordV1,
     MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveRetentionPageV1,
     MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
-    MusubiMaintainerPageV1, MusubiNamespaceV1, MusubiOrderedPackagePageV1,
-    MusubiOrderedPrefixQueryV1, MusubiPackageIdV1, MusubiPackageNameV1, MusubiPackagePageQueryV1,
-    MusubiPackageRecordV1, MusubiPackageSelectorV1, MusubiReleaseRecordV1,
+    MusubiExactReleaseSnapshotV1, MusubiMaintainerPageV1, MusubiNamespaceV1,
+    MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiPackageIdV1, MusubiPackageNameV1,
+    MusubiPackagePageQueryV1, MusubiPackageRecordV1, MusubiPackageSelectorV1,
+    MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleAttestationRecordV1,
     MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiSearchPageV1, MusubiSearchQueryV1,
     MusubiVersionPageV1, MusubiVersionReqV1, MusubiVersionV1,
 };
@@ -192,6 +193,7 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
             "exact-release",
             "maintainers",
             "ordered-prefix",
+            "provider-bundle-attestation",
             "resolver-index",
             "search",
             "versions",
@@ -214,9 +216,23 @@ fn shared_musubi_sdk_fixture_is_owned_and_canonical() {
                 record.validate().expect("valid package fixture");
             }
             "exact-release" => {
-                let _: MusubiExactReleaseQueryV1 = canonical_roundtrip(request);
-                let record: MusubiReleaseRecordV1 = canonical_roundtrip(response);
-                record.validate().expect("valid release fixture");
+                let request: MusubiExactReleaseQueryV1 = canonical_roundtrip(request);
+                let snapshot: MusubiExactReleaseSnapshotV1 = canonical_roundtrip(response);
+                snapshot
+                    .validate_for(&request)
+                    .expect("valid exact-release snapshot fixture");
+            }
+            "provider-bundle-attestation" => {
+                let key: MusubiProviderBundleAttestationKeyV1 = canonical_roundtrip(request);
+                let record: MusubiProviderBundleAttestationRecordV1 = canonical_roundtrip(response);
+                record
+                    .validate()
+                    .expect("valid provider bundle attestation fixture");
+                assert_eq!(record.key, key);
+                record
+                    .attestation
+                    .verify(&record.attestation.payload.binding)
+                    .expect("provider bundle attestation fixture is genuinely signed");
             }
             "resolver-index" => {
                 let request: MusubiResolverIndexQueryV1 = canonical_roundtrip(request);

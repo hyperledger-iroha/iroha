@@ -65,6 +65,7 @@ impl_nested_json_key_codec!(
     crate::musubi::ArchiveId,
     crate::musubi::MusubiArchiveLocationKeyV1,
     crate::musubi::MusubiProviderLocationKeyV1,
+    crate::musubi::MusubiProviderBundleAttestationKeyV1,
     crate::musubi::MusubiAliasNameV1,
     crate::musubi::MusubiAliasHistoryKeyV1,
 );
@@ -698,10 +699,11 @@ mod tests {
     };
     use crate::{
         musubi::{
-            MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
-            MusubiPackageScopeV1,
+            ArchiveId, MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
+            MusubiPackageScopeV1, MusubiProviderBundleAttestationKeyV1,
         },
         nexus::DataSpaceId,
+        sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
     };
 
     fn checked_random_keypair() -> KeyPair {
@@ -739,6 +741,32 @@ mod tests {
         let decoded = MusubiMaintainerDirectoryKeyV1::decode_json_key(&raw_key)
             .expect("decode maintainer directory key");
         assert_eq!(decoded, key);
+    }
+
+    #[test]
+    fn musubi_provider_bundle_attestation_key_json_codec_roundtrip() {
+        let key = MusubiProviderBundleAttestationKeyV1 {
+            archive_id: ArchiveId::new([0x41; 32]),
+            replication_order: ReplicationOrderId::new([0x42; 32]),
+            provider_id: ProviderId::new([0x43; 32]),
+        };
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded JSON key");
+        let decoded = MusubiProviderBundleAttestationKeyV1::decode_json_key(&raw_key)
+            .expect("decode provider bundle attestation key");
+        assert_eq!(decoded, key);
+
+        let with_unknown_field = raw_key
+            .strip_suffix('}')
+            .expect("structural Musubi key is a JSON object")
+            .to_owned()
+            + ",\"unexpected\":true}";
+        assert!(
+            MusubiProviderBundleAttestationKeyV1::decode_json_key(&with_unknown_field).is_err(),
+            "provider attestation key must reject unknown fields"
+        );
     }
 
     #[test]

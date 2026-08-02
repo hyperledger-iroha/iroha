@@ -9,7 +9,10 @@ use core::{
 use halo2curves::t256::Fp;
 use halo2curves::{
     Coordinates, CurveAffine, CurveExt,
-    ff::PrimeField,
+    ff::{
+        PrimeField,
+        derive::subtle::{Choice, ConditionallySelectable as _},
+    },
     group::{Curve as _, Group as _, GroupEncoding as _},
     t256::{T256, T256Affine},
 };
@@ -217,6 +220,28 @@ impl VegaT256PointV1 {
         Self(self.0 * scalar.0)
     }
 
+    /// Select `a` for zero and `b` for one without secret-dependent branches.
+    ///
+    /// Only the low bit of `choice` is used. It is converted directly to the
+    /// `Choice` consumed by the linked `CurveExt` implementation, which selects
+    /// every projective coordinate without a field conversion or zero test.
+    #[must_use]
+    pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
+        let select_b = Choice::from(choice & 1);
+        Self(T256::conditional_select(&a.0, &b.0, select_b))
+    }
+
+    /// Replace this complete projective point instance with the identity.
+    ///
+    /// This is best-effort safe erasure for a named value. The point is
+    /// [`Copy`], so compiler-created copies and register temporaries cannot be
+    /// guaranteed erased, and no destructor runs after process abort.
+    pub fn clear_secret(&mut self) {
+        *self = Self::identity();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *self);
+    }
+
     pub(super) fn identity() -> Self {
         Self(T256::identity())
     }
@@ -230,7 +255,7 @@ impl VegaT256PointV1 {
             for bit in (0..8).rev() {
                 result = result + result;
                 if byte & (1 << bit) != 0 {
-                    result = result + self;
+                    result += self;
                 }
             }
         }
@@ -364,6 +389,19 @@ mod tests {
         q_minus_one[31] -= 1;
         let minus_one = VegaT256ScalarV1::from_be_bytes_exact(q_minus_one).expect("q - 1 scalar");
         assert!((generator.mul_scalar(minus_one) + generator).is_identity());
+
+        let identity = VegaT256PointV1::identity();
+        assert_eq!(
+            VegaT256PointV1::conditional_select(&identity, &generator, 0),
+            identity
+        );
+        assert_eq!(
+            VegaT256PointV1::conditional_select(&identity, &generator, 1),
+            generator
+        );
+        let mut cleared = generator;
+        cleared.clear_secret();
+        assert_eq!(cleared, identity);
     }
 
     #[test]

@@ -30,7 +30,7 @@ use iroha::data_model::{
 use iroha_crypto::KeyPair;
 use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
-    CanSubmitGovernanceBallot,
+    CanProposeRuntimeUpgrade, CanSubmitGovernanceBallot,
 };
 use iroha_test_network::{NetworkBuilder, ensure_domain_setup_for_network};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -873,6 +873,13 @@ pub fn governance_builder_for_runtime_resilience() -> NetworkBuilder {
     let governance_asset_id = governance_asset_definition_id().to_string();
     NetworkBuilder::new()
         .with_peers(4)
+        .with_genesis_instruction(Grant::account_permission(
+            CanProposeRuntimeUpgrade {
+                abi_version: 1,
+                abi_hash: parse_hex32(&canonical_abi_hex()),
+            },
+            ALICE_ID.clone(),
+        ))
         .with_config_layer(move |layer| {
             layer
                 .write(["nexus", "governance", "default_module"], "parliament")
@@ -997,7 +1004,7 @@ pub async fn setup_runtime_governance_fixture(
         .wrap_err("wait for governance asset definition registration")?;
 
     let enact_perm: Permission = CanEnactGovernance.into();
-    let runtime_propose_perm: Permission = CanProposeContractDeployment {
+    let primary_propose_perm: Permission = CanProposeContractDeployment {
         contract_address: governance_contract_address(FIRST_CONTRACT_ID),
     }
     .into();
@@ -1009,9 +1016,9 @@ pub async fn setup_runtime_governance_fixture(
     let grant_permissions_tx_hash = alice
         .submit_all(
             [
-                Grant::account_permission(runtime_propose_perm, ALICE_ID.clone()),
-                Grant::account_permission(secondary_propose_perm, ALICE_ID.clone()),
                 Grant::account_permission(enact_perm, ALICE_ID.clone()),
+                Grant::account_permission(primary_propose_perm, ALICE_ID.clone()),
+                Grant::account_permission(secondary_propose_perm, ALICE_ID.clone()),
                 Grant::account_permission(manage_parliament_perm, ALICE_ID.clone()),
             ],
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),

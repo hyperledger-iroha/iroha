@@ -226,6 +226,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(contract_alias::SetContractAlias => "iroha.contract.alias.set"),
     built_in_wire_id!(musubi::RegisterMusubiNamespaceBindingV1 => "iroha.musubi.v1.namespace_binding.register"),
     built_in_wire_id!(musubi::RegisterMusubiArchiveV1 => "iroha.musubi.v1.archive.register"),
+    built_in_wire_id!(musubi::RegisterMusubiProviderBundleAttestationV1 => "iroha.musubi.v1.provider_bundle_attestation.register"),
     built_in_wire_id!(musubi::AddMusubiArchiveLocationV1 => "iroha.musubi.v1.archive_location.add"),
     built_in_wire_id!(musubi::RetireMusubiArchiveLocationV1 => "iroha.musubi.v1.archive_location.retire"),
     built_in_wire_id!(musubi::PublishMusubiReleaseV1 => "iroha.musubi.v1.release.publish"),

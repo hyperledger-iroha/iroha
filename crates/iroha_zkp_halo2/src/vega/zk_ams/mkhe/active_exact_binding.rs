@@ -129,10 +129,15 @@ const BOUND_TWO_GATES_PER_CHUNK_V1: usize =
     WITNESS_CHUNK_COEFFICIENTS_V1 * BOUND_TWO_BOOLEAN_GATES_PER_COEFFICIENT_V1;
 const BOUND_ONE_PADDED_GATES_V1: usize = 32_768;
 const BOUND_TWO_PADDED_GATES_V1: usize = 65_536;
-const BOUND_ONE_CONSTRAINTS_PER_CHUNK_V1: usize =
-    WITNESS_CHUNK_COEFFICIENTS_V1 * BOUND_ONE_CONSTRAINTS_PER_COEFFICIENT_V1;
-const BOUND_TWO_CONSTRAINTS_PER_CHUNK_V1: usize =
-    WITNESS_CHUNK_COEFFICIENTS_V1 * BOUND_TWO_CONSTRAINTS_PER_COEFFICIENT_V1;
+// The opening occupies the complete padded generator basis.  In addition to
+// each visible coefficient's membership equations, one constraint fixes every
+// remaining committed coordinate to zero.
+const BOUND_ONE_CONSTRAINTS_PER_CHUNK_V1: usize = WITNESS_CHUNK_COEFFICIENTS_V1
+    * BOUND_ONE_CONSTRAINTS_PER_COEFFICIENT_V1
+    + (BOUND_ONE_PADDED_GATES_V1 - WITNESS_CHUNK_COEFFICIENTS_V1);
+const BOUND_TWO_CONSTRAINTS_PER_CHUNK_V1: usize = WITNESS_CHUNK_COEFFICIENTS_V1
+    * BOUND_TWO_CONSTRAINTS_PER_COEFFICIENT_V1
+    + (BOUND_TWO_PADDED_GATES_V1 - WITNESS_CHUNK_COEFFICIENTS_V1);
 const BOUND_ONE_IPA_ROUNDS_V1: usize = 15;
 const BOUND_TWO_IPA_ROUNDS_V1: usize = 16;
 const MEMBERSHIP_FIXED_POINTS_V1: usize = 9;
@@ -255,8 +260,8 @@ const _: () = {
     assert!(BOUND_ONE_GATES_PER_CHUNK_V1 == BOUND_ONE_PADDED_GATES_V1);
     assert!(BOUND_TWO_GATES_PER_CHUNK_V1 == 49_152);
     assert!(BOUND_TWO_PADDED_GATES_V1 == 65_536);
-    assert!(BOUND_ONE_CONSTRAINTS_PER_CHUNK_V1 == 81_920);
-    assert!(BOUND_TWO_CONSTRAINTS_PER_CHUNK_V1 == 114_688);
+    assert!(BOUND_ONE_CONSTRAINTS_PER_CHUNK_V1 == 98_304);
+    assert!(BOUND_TWO_CONSTRAINTS_PER_CHUNK_V1 == 163_840);
     assert!(BOUND_ONE_MEMBERSHIP_CORE_BYTES_V1 == 1_447);
     assert!(BOUND_TWO_MEMBERSHIP_CORE_BYTES_V1 == 1_513);
     assert!(MAX_MEMBERSHIP_CORE_PAYLOAD_BYTES_V1 == 71_568);
@@ -742,7 +747,7 @@ impl VerifiedPersistentWitnessBindingSetV1 {
         roster.validate()?;
         if cpk_transcript_digest == [0; 32]
             || collective_public_key_digest == [0; 32]
-            || cpk_share_digests.iter().any(|digest| *digest == [0; 32])
+            || cpk_share_digests.contains(&[0; 32])
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -839,26 +844,14 @@ impl VerifiedPersistentWitnessBindingSetV1 {
             || self.cpk_transcript_digest == [0; 32]
             || self.collective_public_key_digest == [0; 32]
             || self.parties != roster.participants().map(|participant| participant.party())
-            || self
-                .cpk_share_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
-            || self
-                .identity_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
-            || self
-                .generator_basis_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
+            || self.cpk_share_digests.contains(&[0; 32])
+            || self.identity_digests.contains(&[0; 32])
+            || self.generator_basis_digests.contains(&[0; 32])
             || self
                 .generator_basis_digests
                 .iter()
                 .any(|digest| *digest != self.generator_basis_digests[0])
-            || self
-                .commitment_set_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
+            || self.commitment_set_digests.contains(&[0; 32])
             || self.set_root == [0; 32]
             || self.set_root != verified_binding_set_root(self)?
             || !matches!(

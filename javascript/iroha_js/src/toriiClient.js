@@ -61,7 +61,10 @@ import {
   normalizeNodeCapabilitiesResponse,
 } from "./toriiCompatibility.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
-import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+import {
+  parseStrictLosslessIntegerJson,
+  stringifyStrictLosslessIntegerJson,
+} from "./strictLosslessJson.js";
 import {
   buildCanonicalRequestHeaders,
   requireCanonicalAuthAccount,
@@ -7272,7 +7275,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceProposal(proposalId, options) {
-    const normalized = requireNonEmptyString(proposalId, "proposalId");
+    const normalized = requireExactLowerHex32String(proposalId, "proposalId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceProposal");
     const response = await this._request(
       "GET",
@@ -7312,7 +7315,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceReferendum(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireExactTokenString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceReferendum");
     const response = await this._request(
       "GET",
@@ -7352,7 +7355,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceTally(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireExactTokenString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceTally");
     const response = await this._request(
       "GET",
@@ -7379,7 +7382,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiGovernanceTallyResult>}
    */
   async getGovernanceTallyTyped(referendumId, options) {
-    const normalizedId = requireNonEmptyString(referendumId, "referendumId");
+    const normalizedId = requireExactTokenString(referendumId, "referendumId");
     const payload = await this.getGovernanceTally(normalizedId, options);
     if (!payload) {
       return createEmptyGovernanceTallyResult(normalizedId);
@@ -7394,7 +7397,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceLocks(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireExactTokenString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceLocks");
     const response = await this._request(
       "GET",
@@ -7421,7 +7424,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiGovernanceLocksResult>}
    */
   async getGovernanceLocksTyped(referendumId, options) {
-    const normalizedId = requireNonEmptyString(referendumId, "referendumId");
+    const normalizedId = requireExactTokenString(referendumId, "referendumId");
     const payload = await this.getGovernanceLocks(normalizedId, options);
     if (!payload) {
       return createEmptyGovernanceLocksResult(normalizedId);
@@ -7484,7 +7487,10 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown>>}
    */
   async draftMinistryAgendaProposal(payload, options = {}) {
-    const body = JSON.stringify(normalizeMinistryAgendaProposalDraftRequest(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeMinistryAgendaProposalDraftRequest(payload),
+      "draftMinistryAgendaProposal request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "draftMinistryAgendaProposal",
@@ -7538,11 +7544,14 @@ export class ToriiClient {
 
   /**
    * Finalise a referendum (`POST /v1/gov/finalize`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceFinalizeRequest} payload
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async governanceFinalizeReferendum(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceFinalizePayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceFinalizePayload(payload),
+      "governance finalize request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceFinalizeReferendum",
@@ -7569,11 +7578,14 @@ export class ToriiClient {
 
   /**
    * Enact a governance proposal (`POST /v1/gov/enact`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceEnactRequest} payload
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async governanceEnactProposal(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceEnactPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceEnactPayload(payload),
+      "governance enact request",
+    );
     const { signal } = normalizeSignalOnlyOption(options, "governanceEnactProposal");
     const response = await this._request("POST", "/v1/gov/enact", {
       headers: JSON_REQUEST_HEADERS,
@@ -7597,7 +7609,7 @@ export class ToriiClient {
 
   /**
    * Draft a governance deployment proposal (`POST /v1/gov/proposals/deploy-contract`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceDeployContractProposalRequest} payload
    * @returns {Promise<ToriiGovernanceDraftResponse>}
    */
   async governanceProposeDeployContract(payload, options = {}) {
@@ -7605,7 +7617,10 @@ export class ToriiClient {
       options,
       "governanceProposeDeployContract",
     );
-    const body = JSON.stringify(normalizeGovernanceDeployContractProposalPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceDeployContractProposalPayload(payload),
+      "governance deploy-contract request",
+    );
     const response = await this._request("POST", "/v1/gov/proposals/deploy-contract", {
       headers: JSON_REQUEST_HEADERS,
       body,
@@ -7621,11 +7636,14 @@ export class ToriiClient {
 
   /**
    * Submit a plain governance ballot (`POST /v1/gov/ballots/plain`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernancePlainBallotRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitPlainBallot(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernancePlainBallotPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernancePlainBallotPayload(payload),
+      "governance plain-ballot request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceSubmitPlainBallot",
@@ -7644,14 +7662,20 @@ export class ToriiClient {
   }
 
   /**
-   * Submit a ZK governance ballot (`POST /v1/gov/ballots/zk`).
-   * @param {Record<string, unknown>} payload
+   * Submit an equal Parliament stage ballot (`POST /v1/gov/parliament/ballots`).
+   * @param {ToriiGovernanceParliamentBallotRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
-  async governanceSubmitZkBallot(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotPayload(payload));
-    const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallot");
-    const response = await this._request("POST", "/v1/gov/ballots/zk", {
+  async governanceSubmitParliamentBallot(payload, options = {}) {
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceParliamentBallotPayload(payload),
+      "governance Parliament-ballot request",
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "governanceSubmitParliamentBallot",
+    );
+    const response = await this._request("POST", "/v1/gov/parliament/ballots", {
       headers: JSON_REQUEST_HEADERS,
       body,
       signal,
@@ -7659,18 +7683,24 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const draft = await this._maybeJson(response);
     if (!draft) {
-      throw new Error("governance zk ballot endpoint returned no payload");
+      throw new Error("governance Parliament ballot endpoint returned no payload");
     }
-    return normalizeGovernanceBallotResponse(draft, "governance zk ballot response");
+    return normalizeGovernanceBallotResponse(
+      draft,
+      "governance Parliament ballot response",
+    );
   }
 
   /**
    * Submit a ZK ballot using the v1 envelope DTO (`POST /v1/gov/ballots/zk-v1`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceZkBallotV1Request} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitZkBallotV1(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotV1Payload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceZkBallotV1Payload(payload),
+      "governance ZK-v1 ballot request",
+    );
     const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallotV1");
     const response = await this._request("POST", "/v1/gov/ballots/zk-v1", {
       headers: JSON_REQUEST_HEADERS,
@@ -7687,11 +7717,14 @@ export class ToriiClient {
 
   /**
    * Submit a BallotProof payload (`POST /v1/gov/ballots/zk-v1/ballot-proof`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceZkBallotProofRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitZkBallotProofV1(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotProofPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceZkBallotProofPayload(payload),
+      "governance BallotProof request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceSubmitZkBallotProofV1",
@@ -13755,6 +13788,46 @@ function normalizeUint64DecimalString(value, name, options = {}) {
   return integer.toString(10);
 }
 
+function normalizeGovernanceUint64Integer(value, name) {
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a lossless unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string") {
+    const canonical = requireExactNonEmptyString(value, name);
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(canonical)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a canonical unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(canonical);
+  } else {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a lossless unsigned 64-bit integer`,
+      name,
+    );
+  }
+  if (integer < 0n || integer > MAX_UINT64_BIGINT) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${MAX_UINT64_BIGINT.toString(10)}`,
+      name,
+    );
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
 function normalizeIsoSubmissionResponse(payload, context, options = {}) {
   const record = ToriiClient._requirePlainObject(payload, context);
   const rawMessageId = record.message_id;
@@ -19254,7 +19327,7 @@ function normalizeProtectedNamespaceList(input) {
     throw new TypeError("protected namespaces list must not be empty");
   }
   return values.map((entry, index) =>
-    requireNonEmptyString(entry, `namespaces[${index}]`),
+    requireExactAsciiTokenString(entry, `namespaces[${index}]`),
   );
 }
 
@@ -19274,7 +19347,7 @@ function normalizeProtectedNamespacesGetResponse(payload) {
       record.namespaces,
       "protected namespaces response.namespaces",
     ).map((value, index) =>
-      requireNonEmptyString(value, `protected namespaces response.namespaces[${index}]`),
+      requireExactAsciiTokenString(value, `protected namespaces response.namespaces[${index}]`),
     ),
   };
 }
@@ -22363,6 +22436,18 @@ function requireExactTokenString(value, name) {
   return exact;
 }
 
+function requireExactAsciiTokenString(value, name) {
+  const exact = requireExactTokenString(value, name);
+  if (!/^[!-~]+$/u.test(exact)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must contain only non-whitespace ASCII characters`,
+      name,
+    );
+  }
+  return exact;
+}
+
 function requireCanonicalQuantity(value, name) {
   if (typeof value !== "string") {
     throw createValidationError(
@@ -24135,8 +24220,9 @@ function normalizeIrohaHashHex32(value, name) {
 }
 
 function normalizeHex32String(value, name, options = {}) {
-  const allowShort = options.allowShort === true;
-  const allowScheme = options.allowScheme === true;
+    const allowShort = options.allowShort === true;
+    const allowScheme = options.allowScheme === true;
+    const exactString = options.exactString === true;
   const schemeName =
     typeof options.scheme === "string" && options.scheme.trim()
       ? options.scheme.trim().toLowerCase()
@@ -24157,17 +24243,21 @@ function normalizeHex32String(value, name, options = {}) {
   if (Array.isArray(value)) {
     return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
-  let normalized = requireNonEmptyString(value, name);
+  let normalized = exactString
+    ? requireExactNonEmptyString(value, name)
+    : requireNonEmptyString(value, name);
   if (allowScheme && normalized.includes(":")) {
-    const [scheme, rest] = normalized.split(":", 2);
-    if (scheme && scheme.toLowerCase() !== schemeName) {
+    const separator = normalized.indexOf(":");
+    const scheme = normalized.slice(0, separator);
+    const rest = normalized.slice(separator + 1);
+    if (!scheme || scheme.toLowerCase() !== schemeName) {
       throw createValidationError(
         ValidationErrorCode.INVALID_HEX,
         `${name} must be a 32-byte hex string`,
         name,
       );
     }
-    normalized = rest.trim();
+    normalized = exactString ? rest : rest.trim();
   }
   const hex =
     normalized.startsWith("0x") || normalized.startsWith("0X")
@@ -24821,72 +24911,531 @@ function normalizeAppApiTransactionDraft(
   };
 }
 
+const GOVERNANCE_WINDOW_KEYS = new Set(["lower", "upper"]);
+const GOVERNANCE_FINALIZE_REQUEST_KEYS = new Set([
+  "referendumId",
+  "proposalId",
+]);
+const GOVERNANCE_ENACT_REQUEST_KEYS = new Set(["proposalId"]);
+const GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS = new Set([
+  "contractAddress",
+  "contractAlias",
+  "abiVersion",
+  "codeHash",
+  "abiHash",
+  "window",
+  "mode",
+  "manifestProvenance",
+]);
+const GOVERNANCE_MANIFEST_PROVENANCE_KEYS = new Set(["signer", "signature"]);
+const GOVERNANCE_PLAIN_BALLOT_REQUEST_KEYS = new Set([
+  "authority",
+  "chainId",
+  "referendumId",
+  "owner",
+  "amount",
+  "durationBlocks",
+  "direction",
+]);
+const GOVERNANCE_PARLIAMENT_BALLOT_REQUEST_KEYS = new Set([
+  "authority",
+  "chainId",
+  "proposalId",
+  "body",
+  "decision",
+]);
+const GOVERNANCE_ZK_BALLOT_V1_REQUEST_KEYS = new Set([
+  "authority",
+  "chainId",
+  "electionId",
+  "backend",
+  "envelope",
+  "rootHint",
+  "owner",
+  "amount",
+  "durationBlocks",
+  "direction",
+  "nullifier",
+]);
+const GOVERNANCE_ZK_BALLOT_PROOF_REQUEST_KEYS = new Set([
+  "authority",
+  "chainId",
+  "electionId",
+  "ballot",
+]);
+const GOVERNANCE_BALLOT_PROOF_KEYS = new Set([
+  "backend",
+  "envelopeBytes",
+  "rootHint",
+  "owner",
+  "nullifier",
+  "amount",
+  "durationBlocks",
+  "direction",
+]);
+const GOVERNANCE_PARLIAMENT_BODIES = new Set([
+  "rules-committee",
+  "agenda-council",
+  "interest-panel",
+  "review-panel",
+  "policy-jury",
+  "oversight-committee",
+  "fma-committee",
+]);
+const GOVERNANCE_PARLIAMENT_DECISIONS = new Set([
+  "approve",
+  "reject",
+  "abstain",
+]);
+
+function rejectGovernancePrivateKeyFieldsDeep(value, context) {
+  const pending = [{ value, path: context }];
+  const visited = new WeakSet();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    const candidate = current.value;
+    if (candidate === null || typeof candidate !== "object") {
+      continue;
+    }
+    if (visited.has(candidate)) {
+      continue;
+    }
+    visited.add(candidate);
+    if (Array.isArray(candidate)) {
+      for (let index = candidate.length - 1; index >= 0; index -= 1) {
+        pending.push({ value: candidate[index], path: `${current.path}[${index}]` });
+      }
+      continue;
+    }
+    if (!isPlainObject(candidate)) {
+      continue;
+    }
+    const fields = Object.keys(candidate).filter((key) =>
+      VERIFYING_KEY_PRIVATE_KEY_FIELDS.has(key),
+    );
+    if (fields.length > 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${current.path} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
+        `${current.path}.${fields[0]}`,
+      );
+    }
+    for (const [key, nested] of Object.entries(candidate)) {
+      pending.push({ value: nested, path: `${current.path}.${key}` });
+    }
+  }
+}
+
 function normalizeGovernanceFinalizePayload(input) {
-  const record = ensureRecord(input, "governanceFinalizeReferendum payload");
-  const referendumId = record.referendum_id ?? record.referendumId;
+  const context = "governanceFinalizeReferendum payload";
+  const record = ensureRecord(input, context);
+  rejectGovernancePrivateKeyFieldsDeep(record, context);
+  assertSupportedOptionKeys(record, GOVERNANCE_FINALIZE_REQUEST_KEYS, context);
+  const referendumId = record.referendumId;
   if (referendumId === undefined || referendumId === null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.referendum_id is required",
-      "governanceFinalizeReferendum.referendum_id",
+      "governanceFinalizeReferendum.referendumId is required",
+      "governanceFinalizeReferendum.referendumId",
     );
   }
-  const proposalId = record.proposal_id ?? record.proposalId;
+  const proposalId = record.proposalId;
   if (proposalId === undefined || proposalId === null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.proposal_id is required",
-      "governanceFinalizeReferendum.proposal_id",
+      "governanceFinalizeReferendum.proposalId is required",
+      "governanceFinalizeReferendum.proposalId",
     );
   }
   return {
-    referendum_id: requireNonEmptyString(
+    referendum_id: requireExactTokenString(
       referendumId,
-      "governanceFinalizeReferendum.referendum_id",
+      "governanceFinalizeReferendum.referendumId",
     ),
     proposal_id: normalizeHex32String(
       proposalId,
-      "governanceFinalizeReferendum.proposal_id",
+      "governanceFinalizeReferendum.proposalId",
+      { allowScheme: true, scheme: "blake2b32", exactString: true },
     ),
   };
 }
 
 function normalizeGovernanceEnactPayload(input) {
-  const record = ensureRecord(input, "governanceEnactProposal payload");
-  const payload = {
-    proposal_id: normalizeHex32String(
-      record.proposal_id ?? record.proposalId,
-      "governanceEnactProposal.proposal_id",
+  const context = "governanceEnactProposal payload";
+  const record = ensureRecord(input, context);
+  rejectGovernancePrivateKeyFieldsDeep(record, context);
+  assertSupportedOptionKeys(record, GOVERNANCE_ENACT_REQUEST_KEYS, context);
+  const proposalId = record.proposalId;
+  if (proposalId === undefined || proposalId === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      "governanceEnactProposal.proposalId is required",
+      "governanceEnactProposal.proposalId",
+    );
+  }
+  return {
+    proposal_id: requireExactLowerHex32String(
+      proposalId,
+      "governanceEnactProposal.proposalId",
     ),
   };
-  const preimageValue = record.preimage_hash ?? record.preimageHash;
-  if (preimageValue !== undefined && preimageValue !== null) {
-    payload.preimage_hash = normalizeHex32String(
-      preimageValue,
-      "governanceEnactProposal.preimage_hash",
+}
+
+const MINISTRY_AGENDA_DRAFT_REQUEST_KEYS = new Set(["proposal", "authority"]);
+const MINISTRY_AGENDA_PROPOSAL_KEYS = new Set([
+  "version",
+  "proposal_id",
+  "submitted_at_unix_ms",
+  "language",
+  "action",
+  "summary",
+  "tags",
+  "targets",
+  "evidence",
+  "submitter",
+  "duplicates",
+]);
+const MINISTRY_AGENDA_SUMMARY_KEYS = new Set([
+  "title",
+  "motivation",
+  "expected_impact",
+]);
+const MINISTRY_AGENDA_TARGET_KEYS = new Set([
+  "label",
+  "hash_family",
+  "hash_hex",
+  "reason",
+]);
+const MINISTRY_AGENDA_EVIDENCE_KEYS = new Set([
+  "kind",
+  "uri",
+  "digest_blake3_hex",
+  "description",
+]);
+const MINISTRY_AGENDA_SUBMITTER_KEYS = new Set([
+  "name",
+  "contact",
+  "organization",
+  "pgp_fingerprint",
+]);
+const MINISTRY_AGENDA_ACTIONS = new Set([
+  "add-to-denylist",
+  "remove-from-denylist",
+  "amend-policy",
+]);
+const MINISTRY_AGENDA_TAGS = new Set([
+  "csam",
+  "malware",
+  "fraud",
+  "harassment",
+  "impersonation",
+  "policy-escalation",
+  "terrorism",
+  "spam",
+]);
+const MINISTRY_AGENDA_EVIDENCE_KINDS = new Set([
+  "url",
+  "torii-case",
+  "sorafs-cid",
+  "attachment",
+]);
+
+function requireMinistryAgendaArray(value, context, { nonEmpty = false } = {}) {
+  if (!Array.isArray(value) || (nonEmpty && value.length === 0)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must be ${nonEmpty ? "a non-empty array" : "an array"}`,
+      context,
     );
   }
-  const windowValue =
-    record.window;
-  if (windowValue !== undefined && windowValue !== null) {
-    payload.window = normalizeGovernanceWindow(
-      windowValue,
-      "governanceEnactProposal.window",
+  return value;
+}
+
+function normalizeMinistryAgendaOptionalText(value, context) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a string or null`,
+      context,
     );
   }
-  return payload;
+  return value;
+}
+
+function requireMinistryAgendaText(value, context) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must contain non-whitespace text`,
+      context,
+    );
+  }
+  return value;
+}
+
+function normalizeMinistryAgendaProposal(input, context) {
+  const proposal = ensureRecord(input, context);
+  assertSupportedOptionKeys(proposal, MINISTRY_AGENDA_PROPOSAL_KEYS, context);
+
+  const version = normalizeGovernanceUint64Integer(
+    proposal.version,
+    `${context}.version`,
+  );
+  if (version !== 1) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.version must be exactly 1`,
+      `${context}.version`,
+    );
+  }
+
+  const proposalId = requireExactNonEmptyString(
+    proposal.proposal_id,
+    `${context}.proposal_id`,
+  );
+  if (!/^AC-[0-9]{4}-[0-9]{3}$/u.test(proposalId)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.proposal_id must follow AC-YYYY-###`,
+      `${context}.proposal_id`,
+    );
+  }
+
+  const submittedAt = normalizeGovernanceUint64Integer(
+    proposal.submitted_at_unix_ms,
+    `${context}.submitted_at_unix_ms`,
+  );
+  if (submittedAt === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${context}.submitted_at_unix_ms must be positive`,
+      `${context}.submitted_at_unix_ms`,
+    );
+  }
+
+  const language = requireExactNonEmptyString(
+    proposal.language,
+    `${context}.language`,
+  );
+  if (
+    language.length < 2 ||
+    language.length > 32 ||
+    !/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/u.test(language)
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.language must be an exact BCP-47 language tag`,
+      `${context}.language`,
+    );
+  }
+
+  const action = requireExactNonEmptyString(proposal.action, `${context}.action`);
+  if (!MINISTRY_AGENDA_ACTIONS.has(action)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.action is unsupported`,
+      `${context}.action`,
+    );
+  }
+
+  const summaryContext = `${context}.summary`;
+  const summary = ensureRecord(proposal.summary, summaryContext);
+  assertSupportedOptionKeys(summary, MINISTRY_AGENDA_SUMMARY_KEYS, summaryContext);
+  const normalizedSummary = {
+    title: requireMinistryAgendaText(summary.title, `${summaryContext}.title`),
+    motivation: requireMinistryAgendaText(
+      summary.motivation,
+      `${summaryContext}.motivation`,
+    ),
+    expected_impact: requireMinistryAgendaText(
+      summary.expected_impact,
+      `${summaryContext}.expected_impact`,
+    ),
+  };
+
+  const tags = requireMinistryAgendaArray(
+    proposal.tags ?? [],
+    `${context}.tags`,
+  ).map((tag, index) => {
+    const normalized = requireExactNonEmptyString(tag, `${context}.tags[${index}]`);
+    if (!MINISTRY_AGENDA_TAGS.has(normalized)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${context}.tags[${index}] is unsupported`,
+        `${context}.tags[${index}]`,
+      );
+    }
+    return normalized;
+  });
+
+  const fingerprints = new Set();
+  const targets = requireMinistryAgendaArray(
+    proposal.targets,
+    `${context}.targets`,
+    { nonEmpty: true },
+  ).map((entry, index) => {
+    const targetContext = `${context}.targets[${index}]`;
+    const target = ensureRecord(entry, targetContext);
+    assertSupportedOptionKeys(target, MINISTRY_AGENDA_TARGET_KEYS, targetContext);
+    const hashFamily = requireExactNonEmptyString(
+      target.hash_family,
+      `${targetContext}.hash_family`,
+    );
+    if (
+      hashFamily.length > 48 ||
+      !/^[A-Za-z0-9._-]+$/u.test(hashFamily)
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${targetContext}.hash_family is invalid`,
+        `${targetContext}.hash_family`,
+      );
+    }
+    const hashHex = requireExactNonEmptyString(
+      target.hash_hex,
+      `${targetContext}.hash_hex`,
+    );
+    if (hashHex.length < 32 || !/^[0-9a-fA-F]+$/u.test(hashHex)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${targetContext}.hash_hex must contain at least 16 bytes of hexadecimal`,
+        `${targetContext}.hash_hex`,
+      );
+    }
+    const fingerprint = `${hashFamily.toLowerCase()}:${hashHex.toLowerCase()}`;
+    if (fingerprints.has(fingerprint)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${targetContext} duplicates an earlier target`,
+        targetContext,
+      );
+    }
+    fingerprints.add(fingerprint);
+    return {
+      label: requireMinistryAgendaText(target.label, `${targetContext}.label`),
+      hash_family: hashFamily,
+      hash_hex: hashHex,
+      reason: requireMinistryAgendaText(target.reason, `${targetContext}.reason`),
+    };
+  });
+
+  const evidence = requireMinistryAgendaArray(
+    proposal.evidence,
+    `${context}.evidence`,
+    { nonEmpty: true },
+  ).map((entry, index) => {
+    const evidenceContext = `${context}.evidence[${index}]`;
+    const attachment = ensureRecord(entry, evidenceContext);
+    assertSupportedOptionKeys(attachment, MINISTRY_AGENDA_EVIDENCE_KEYS, evidenceContext);
+    const kind = requireExactNonEmptyString(
+      attachment.kind,
+      `${evidenceContext}.kind`,
+    );
+    if (!MINISTRY_AGENDA_EVIDENCE_KINDS.has(kind)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${evidenceContext}.kind is unsupported`,
+        `${evidenceContext}.kind`,
+      );
+    }
+    const normalized = {
+      kind,
+      uri: requireMinistryAgendaText(attachment.uri, `${evidenceContext}.uri`),
+    };
+    if (attachment.digest_blake3_hex !== undefined && attachment.digest_blake3_hex !== null) {
+      const digest = requireExactNonEmptyString(
+        attachment.digest_blake3_hex,
+        `${evidenceContext}.digest_blake3_hex`,
+      );
+      if (!/^[0-9a-fA-F]{64}$/u.test(digest)) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_STRING,
+          `${evidenceContext}.digest_blake3_hex must be exactly 32 bytes of hexadecimal`,
+          `${evidenceContext}.digest_blake3_hex`,
+        );
+      }
+      normalized.digest_blake3_hex = digest;
+    } else if (kind === "sorafs-cid" || kind === "attachment") {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${evidenceContext}.digest_blake3_hex is required for ${kind}`,
+        `${evidenceContext}.digest_blake3_hex`,
+      );
+    } else if (attachment.digest_blake3_hex === null) {
+      normalized.digest_blake3_hex = null;
+    }
+    if (attachment.description !== undefined) {
+      normalized.description = normalizeMinistryAgendaOptionalText(
+        attachment.description,
+        `${evidenceContext}.description`,
+      );
+    }
+    return normalized;
+  });
+
+  const submitterContext = `${context}.submitter`;
+  const submitter = ensureRecord(proposal.submitter, submitterContext);
+  assertSupportedOptionKeys(submitter, MINISTRY_AGENDA_SUBMITTER_KEYS, submitterContext);
+  const normalizedSubmitter = {
+    name: requireMinistryAgendaText(submitter.name, `${submitterContext}.name`),
+    contact: requireMinistryAgendaText(
+      submitter.contact,
+      `${submitterContext}.contact`,
+    ),
+  };
+  for (const field of ["organization", "pgp_fingerprint"]) {
+    if (submitter[field] !== undefined) {
+      normalizedSubmitter[field] = normalizeMinistryAgendaOptionalText(
+        submitter[field],
+        `${submitterContext}.${field}`,
+      );
+    }
+  }
+
+  const duplicates = requireMinistryAgendaArray(
+    proposal.duplicates ?? [],
+    `${context}.duplicates`,
+  ).map((duplicate, index) => {
+    if (typeof duplicate !== "string") {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${context}.duplicates[${index}] must be a string`,
+        `${context}.duplicates[${index}]`,
+      );
+    }
+    return duplicate;
+  });
+
+  return {
+    version,
+    proposal_id: proposalId,
+    submitted_at_unix_ms: submittedAt,
+    language,
+    action,
+    summary: normalizedSummary,
+    tags,
+    targets,
+    evidence,
+    submitter: normalizedSubmitter,
+    duplicates,
+  };
 }
 
 function normalizeMinistryAgendaProposalDraftRequest(input) {
-  const record = ensureRecord(input, "draftMinistryAgendaProposal payload");
+  const context = "draftMinistryAgendaProposal payload";
+  const record = ensureRecord(input, context);
+  rejectGovernancePrivateKeyFieldsDeep(record, context);
+  assertSupportedOptionKeys(record, MINISTRY_AGENDA_DRAFT_REQUEST_KEYS, context);
   return {
-    proposal: ensureRecord(
+    proposal: normalizeMinistryAgendaProposal(
       record.proposal,
-      "draftMinistryAgendaProposal.proposal",
+      `${context}.proposal`,
     ),
-    authority: requireNonEmptyString(
+    authority: requireExactTokenString(
       record.authority,
-      "draftMinistryAgendaProposal.authority",
+      `${context}.authority`,
     ),
   };
 }
@@ -24956,6 +25505,7 @@ function normalizeMinistryAgendaProposalGetResponse(
 
 function normalizeGovernanceWindow(value, name) {
   const record = ensureRecord(value, name);
+  assertSupportedOptionKeys(record, GOVERNANCE_WINDOW_KEYS, name);
   const lowerValue = record.lower;
   const upperValue = record.upper;
   if (lowerValue === undefined || upperValue === undefined) {
@@ -24973,12 +25523,8 @@ function normalizeGovernanceWindow(value, name) {
       `${basePath}.upper`,
     );
   }
-  const lower = ToriiClient._normalizeUnsignedInteger(lowerValue, `${name}.lower`, {
-    allowZero: true,
-  });
-  const upper = ToriiClient._normalizeUnsignedInteger(upperValue, `${name}.upper`, {
-    allowZero: true,
-  });
+  const lower = normalizeGovernanceUint64Integer(lowerValue, `${name}.lower`);
+  const upper = normalizeGovernanceUint64Integer(upperValue, `${name}.upper`);
   if (upper < lower) {
     throw createValidationError(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
@@ -24990,12 +25536,9 @@ function normalizeGovernanceWindow(value, name) {
 }
 
 function normalizeGovernanceVotingMode(value, name) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (normalized === "zk" || normalized === "zkballot" || normalized === "zk_vote") {
-    return "Zk";
-  }
-  if (normalized === "plain" || normalized === "plainballot") {
-    return "Plain";
+  const canonical = requireExactNonEmptyString(value, name);
+  if (canonical === "Zk" || canonical === "Plain") {
+    return canonical;
   }
   throw createValidationError(
     ValidationErrorCode.INVALID_STRING,
@@ -25115,42 +25658,60 @@ function normalizeGovernanceBallotResponse(payload, context) {
 }
 
 function normalizeGovernanceDeployContractProposalPayload(input) {
-  const record = ensureRecord(input, "governanceProposeDeployContract payload");
-  const contractAddressValue = record.contract_address ?? record.contractAddress ?? null;
-  const contractAliasValue = record.contract_alias ?? record.contractAlias ?? null;
+  const context = "governanceProposeDeployContract payload";
+  const record = ensureRecord(input, context);
+  rejectGovernancePrivateKeyFieldsDeep(record, context);
+  assertSupportedOptionKeys(record, GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS, context);
+  const contractAddressValue = record.contractAddress ?? null;
+  const contractAliasValue = record.contractAlias ?? null;
   if ((contractAddressValue == null) === (contractAliasValue == null)) {
     throw new TypeError(
-      "governanceProposeDeployContract requires exactly one of contract_address or contract_alias",
+      "governanceProposeDeployContract requires exactly one of contractAddress or contractAlias",
     );
   }
-  const abiVersion = requireNonEmptyString(
-    record.abi_version ?? record.abiVersion ?? "1",
+  const abiVersionValue =
+    record.abiVersion === undefined ? "1" : record.abiVersion;
+  const abiVersion = requireExactNonEmptyString(
+    abiVersionValue,
     "governanceProposeDeployContract.abiVersion",
   );
-  const codeHashValue =
-    record.code_hash ?? record.codeHash;
-  if (codeHashValue === undefined || codeHashValue === null) {
-    throw new TypeError("governanceProposeDeployContract.code_hash is required");
+  if (abiVersion !== "1") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      "governanceProposeDeployContract.abiVersion must be exactly '1'",
+      "governanceProposeDeployContract.abiVersion",
+    );
   }
-  const abiHashValue =
-    record.abi_hash ?? record.abiHash;
+  const codeHashValue = record.codeHash;
+  if (codeHashValue === undefined || codeHashValue === null) {
+    throw new TypeError("governanceProposeDeployContract.codeHash is required");
+  }
+  const abiHashValue = record.abiHash;
   if (abiHashValue === undefined || abiHashValue === null) {
-    throw new TypeError("governanceProposeDeployContract.abi_hash is required");
+    throw new TypeError("governanceProposeDeployContract.abiHash is required");
   }
   const payload = {
     abi_version: abiVersion,
-    code_hash: normalizeHashLike32(codeHashValue, "governanceProposeDeployContract.code_hash"),
-    abi_hash: normalizeHashLike32(abiHashValue, "governanceProposeDeployContract.abi_hash"),
+    code_hash: normalizeHex32String(
+      codeHashValue,
+      "governanceProposeDeployContract.codeHash",
+      { allowScheme: true, scheme: "blake2b32", exactString: true },
+    ),
+    abi_hash: normalizeHex32String(
+      abiHashValue,
+      "governanceProposeDeployContract.abiHash",
+      { allowScheme: true, scheme: "blake2b32", exactString: true },
+    ),
   };
   if (contractAddressValue != null) {
     payload.contract_address = requireNonEmptyString(
       contractAddressValue,
-      "governanceProposeDeployContract.contract_address",
+      "governanceProposeDeployContract.contractAddress",
     );
   } else {
     payload.contract_alias = requireNonEmptyString(
       contractAliasValue,
-      "governanceProposeDeployContract.contract_alias",
+      "governanceProposeDeployContract.contractAlias",
     );
   }
   const windowValue =
@@ -25168,29 +25729,42 @@ function normalizeGovernanceDeployContractProposalPayload(input) {
       "governanceProposeDeployContract.mode",
     );
   }
-  if (record.limits !== undefined) {
-    payload.limits = cloneJsonValue(
-      record.limits,
-      "governanceProposeDeployContract.limits",
-    );
+  const manifestProvenance = record.manifestProvenance;
+  if (manifestProvenance !== undefined) {
+    payload.manifest_provenance =
+      manifestProvenance === null
+        ? null
+        : normalizeGovernanceManifestProvenancePayload(
+            manifestProvenance,
+            "governanceProposeDeployContract.manifestProvenance",
+          );
   }
   return payload;
 }
 
+function normalizeGovernanceManifestProvenancePayload(value, context) {
+  const record = ensureRecord(value, context);
+  assertSupportedOptionKeys(record, GOVERNANCE_MANIFEST_PROVENANCE_KEYS, context);
+  return normalizeManifestProvenancePayload(record, context);
+}
+
 function normalizeGovernancePlainBallotPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitPlainBallot payload");
+  const context = "governanceSubmitPlainBallot payload";
+  const record = ensureRecord(input, context);
+  rejectGovernancePrivateKeyFieldsDeep(record, context);
+  assertSupportedOptionKeys(record, GOVERNANCE_PLAIN_BALLOT_REQUEST_KEYS, context);
   const direction = record.direction;
   const payload = {
     authority: ToriiClient._normalizeAccountId(
       record.authority,
       "governanceSubmitPlainBallot.authority",
     ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
+    chain_id: requireExactTokenString(
+      record.chainId,
       "governanceSubmitPlainBallot.chainId",
     ),
-    referendum_id: requireNonEmptyString(
-      record.referendum_id ?? record.referendumId,
+    referendum_id: requireExactTokenString(
+      record.referendumId,
       "governanceSubmitPlainBallot.referendumId",
     ),
     owner: ToriiClient._normalizeAccountId(
@@ -25201,10 +25775,10 @@ function normalizeGovernancePlainBallotPayload(input) {
       record.amount,
       "governanceSubmitPlainBallot.amount",
     ),
-    duration_blocks: ToriiClient._normalizeUnsignedInteger(
-      record.duration_blocks ?? record.durationBlocks,
+    duration_blocks: normalizeUint64DecimalString(
+      record.durationBlocks,
       "governanceSubmitPlainBallot.durationBlocks",
-      { allowZero: false },
+      { allowZero: true },
     ),
     direction: normalizeGovernanceBallotDirection(
       direction,
@@ -25214,212 +25788,117 @@ function normalizeGovernancePlainBallotPayload(input) {
   return payload;
 }
 
-function normalizeGovernanceBallotDirection(value, name) {
-  const normalized = requireNonEmptyString(value, name).toLowerCase();
-  if (normalized === "aye") {
-    return "Aye";
-  }
-  if (normalized === "nay") {
-    return "Nay";
-  }
-  if (normalized === "abstain") {
-    return "Abstain";
-  }
-  throw new TypeError(`${name} must be one of Aye, Nay, or Abstain`);
+function normalizeGovernanceParliamentBallotPayload(input) {
+  const context = "governanceSubmitParliamentBallot payload";
+  const record = ensureRecord(input, context);
+  rejectGovernancePrivateKeyFieldsDeep(record, context);
+  assertSupportedOptionKeys(record, GOVERNANCE_PARLIAMENT_BALLOT_REQUEST_KEYS, context);
+  return {
+    authority: ToriiClient._normalizeAccountId(
+      record.authority,
+      "governanceSubmitParliamentBallot.authority",
+    ),
+    chain_id: requireExactTokenString(
+      record.chainId,
+      "governanceSubmitParliamentBallot.chainId",
+    ),
+    proposal_id: normalizeHex32String(
+      record.proposalId,
+      "governanceSubmitParliamentBallot.proposalId",
+      { allowScheme: true, scheme: "blake2b32", exactString: true },
+    ),
+    body: normalizeGovernanceParliamentBody(
+      record.body,
+      "governanceSubmitParliamentBallot.body",
+    ),
+    decision: normalizeGovernanceParliamentDecision(
+      record.decision,
+      "governanceSubmitParliamentBallot.decision",
+    ),
+  };
 }
 
-function normalizeGovernancePublicInputs(value, name) {
-  const cloned = cloneJsonValue(value, name);
-  if (!isPlainObject(cloned)) {
+function normalizeGovernanceParliamentBody(value, name) {
+  const body = requireExactTokenString(value, name);
+  if (!GOVERNANCE_PARLIAMENT_BODIES.has(body)) {
     throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} must be an object`,
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must name a canonical Parliament body`,
       name,
     );
   }
-  const normalized = { ...cloned };
-  rejectGovernancePublicInputKey(
-    normalized,
-    "durationBlocks",
-    "duration_blocks",
-    name,
-  );
-  rejectGovernancePublicInputKey(normalized, "root_hint_hex", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "rootHintHex", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "rootHint", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "nullifier_hex", "nullifier", name);
-  rejectGovernancePublicInputKey(normalized, "nullifierHex", "nullifier", name);
-  normalizeGovernancePublicInputHex(normalized, "root_hint", name);
-  normalizeGovernancePublicInputHex(normalized, "nullifier", name);
-  ensureGovernanceLockHintsComplete(normalized, name);
-  if (
-    Object.prototype.hasOwnProperty.call(normalized, "amount") &&
-    normalized.amount !== null
-  ) {
-    normalized.amount = requireCanonicalQuantity(
-      normalized.amount,
-      `${name}.amount`,
-    );
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(normalized, "owner") &&
-    normalized.owner !== null
-  ) {
-    normalized.owner = ensureCanonicalAccountId(normalized.owner, `${name}.owner`);
-  }
-  return normalized;
+  return body;
 }
 
-function normalizeGovernancePublicInputHex(target, key, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
-  }
-  const value = target[key];
-  if (value === null) {
-    return;
-  }
-  const context = `${name}.${key}`;
-  const raw = requireNonEmptyString(value, context).trim();
-  let body = raw;
-  if (raw.includes(":")) {
-    const [scheme, rest] = raw.split(":", 2);
-    if (scheme && scheme.toLowerCase() !== "blake2b32") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_HEX,
-        `${context} must be a 32-byte hex string`,
-        context,
-      );
-    }
-    body = rest.trim();
-  }
-  if (body.startsWith("0x") || body.startsWith("0X")) {
-    body = body.slice(2);
-  }
-  if (!/^[0-9a-fA-F]{64}$/.test(body)) {
+function normalizeGovernanceParliamentDecision(value, name) {
+  const decision = requireExactTokenString(value, name);
+  if (!GOVERNANCE_PARLIAMENT_DECISIONS.has(decision)) {
     throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context} must be a 32-byte hex string`,
-      context,
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be approve, reject, or abstain`,
+      name,
     );
   }
-  target[key] = body.toLowerCase();
+  return decision;
 }
 
-function rejectGovernancePublicInputKey(target, key, canonicalKey, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
+function normalizeGovernanceBallotDirection(value, name) {
+  const canonical = requireExactNonEmptyString(value, name);
+  if (canonical === "Aye" || canonical === "Nay" || canonical === "Abstain") {
+    return canonical;
   }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_OBJECT,
-    `${name} must use ${canonicalKey} (unsupported key ${key})`,
-    name,
-  );
+  throw new TypeError(`${name} must be one of Aye, Nay, or Abstain`);
 }
 
 function ensureGovernanceLockHintsComplete(source, name) {
   const hasOwner = source.owner !== undefined && source.owner !== null;
   const hasAmount = source.amount !== undefined && source.amount !== null;
   const hasDuration =
-    source.duration_blocks !== undefined && source.duration_blocks !== null;
+    source.durationBlocks !== undefined && source.durationBlocks !== null;
   const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
   if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      `${name} must include owner, amount, and duration_blocks when providing lock hints`,
+      `${name} must include owner, amount, and durationBlocks when providing lock hints`,
       name,
     );
   }
 }
 
-function normalizeGovernanceZkBallotPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallot payload");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitZkBallot.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitZkBallot.chainId",
-    ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
-      "governanceSubmitZkBallot.electionId",
-    ),
-    proof_b64: normalizeRequiredBase64Payload(
-      record.proof ?? record.proof_b64 ?? record.proofB64,
-      "governanceSubmitZkBallot.proofB64",
-    ),
-  };
-  if (record.public !== undefined && record.public !== null) {
-    payload.public = normalizeGovernancePublicInputs(
-      record.public,
-      "governanceSubmitZkBallot.public",
-    );
-  }
-  return payload;
-}
-
 function normalizeGovernanceZkBallotV1Payload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallotV1 payload");
+  const context = "governanceSubmitZkBallotV1 payload";
+  const record = ensureRecord(input, context);
+  rejectGovernancePrivateKeyFieldsDeep(record, context);
+  assertSupportedOptionKeys(record, GOVERNANCE_ZK_BALLOT_V1_REQUEST_KEYS, context);
   const payload = {
     authority: ToriiClient._normalizeAccountId(
       record.authority,
       "governanceSubmitZkBallotV1.authority",
     ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
+    chain_id: requireExactTokenString(
+      record.chainId,
       "governanceSubmitZkBallotV1.chainId",
     ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
+    election_id: requireExactTokenString(
+      record.electionId,
       "governanceSubmitZkBallotV1.electionId",
     ),
-    backend: requireNonEmptyString(
+    backend: requireExactTokenString(
       record.backend,
       "governanceSubmitZkBallotV1.backend",
     ),
     envelope_b64: normalizeRequiredBase64Payload(
-      record.envelope ?? record.envelope_b64 ?? record.envelopeB64,
-      "governanceSubmitZkBallotV1.envelopeB64",
+      record.envelope,
+      "governanceSubmitZkBallotV1.envelope",
     ),
   };
-  rejectGovernancePublicInputKey(
-    record,
-    "root_hint_hex",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "rootHintHex",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "rootHint",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "nullifier_hex",
-    "nullifier",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "nullifierHex",
-    "nullifier",
-    "governanceSubmitZkBallotV1",
-  );
-  const rootHint = record.root_hint;
+  ensureGovernanceLockHintsComplete(record, "governanceSubmitZkBallotV1");
+  const rootHint = record.rootHint;
   if (rootHint !== undefined && rootHint !== null) {
     payload.root_hint = normalizeHex32String(
       rootHint,
-      "governanceSubmitZkBallotV1.root_hint",
-      { allowScheme: true, scheme: "blake2b32" },
+      "governanceSubmitZkBallotV1.rootHint",
+      { allowScheme: true, scheme: "blake2b32", exactString: true },
     );
   }
   if (record.owner !== undefined && record.owner !== null) {
@@ -25434,12 +25913,11 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.amount",
     );
   }
-  const durationBlocks = record.duration_blocks ?? record.durationBlocks;
+  const durationBlocks = record.durationBlocks;
   if (durationBlocks !== undefined && durationBlocks !== null) {
-    payload.duration_blocks = ToriiClient._normalizeUnsignedInteger(
+    payload.duration_blocks = normalizeGovernanceUint64Integer(
       durationBlocks,
       "governanceSubmitZkBallotV1.durationBlocks",
-      { allowZero: false },
     );
   }
   if (record.direction !== undefined && record.direction !== null) {
@@ -25453,10 +25931,9 @@ function normalizeGovernanceZkBallotV1Payload(input) {
     payload.nullifier = normalizeHex32String(
       nullifier,
       "governanceSubmitZkBallotV1.nullifier",
-      { allowScheme: true, scheme: "blake2b32" },
+      { allowScheme: true, scheme: "blake2b32", exactString: true },
     );
   }
-  ensureGovernanceLockHintsComplete(payload, "governanceSubmitZkBallotV1");
   if (payload.owner !== undefined && payload.owner !== null) {
     payload.owner = ensureCanonicalAccountId(
       payload.owner,
@@ -25467,93 +25944,93 @@ function normalizeGovernanceZkBallotV1Payload(input) {
 }
 
 function normalizeGovernanceZkBallotProofPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallotProofV1 payload");
+  const context = "governanceSubmitZkBallotProofV1 payload";
+  const record = ensureRecord(input, context);
+  rejectGovernancePrivateKeyFieldsDeep(record, context);
+  assertSupportedOptionKeys(record, GOVERNANCE_ZK_BALLOT_PROOF_REQUEST_KEYS, context);
   const ballot = ensureRecord(
     record.ballot,
     "governanceSubmitZkBallotProofV1.ballot",
   );
   const ballotContext = "governanceSubmitZkBallotProofV1.ballot";
-  const normalizedBallot = { ...ballot };
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "rootHintHex",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "root_hint_hex",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "rootHint",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "nullifierHex",
-    "nullifier",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "nullifier_hex",
-    "nullifier",
-    ballotContext,
-  );
-  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "root_hint")) {
-    const rootHint = normalizedBallot.root_hint;
-    if (rootHint !== null) {
-      normalizedBallot.root_hint = normalizeHex32String(
-        rootHint,
-        `${ballotContext}.root_hint`,
-        { allowScheme: true, scheme: "blake2b32" },
-      );
-    }
-  }
-  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "nullifier")) {
-    const nullifier = normalizedBallot.nullifier;
-    if (nullifier !== null) {
-      normalizedBallot.nullifier = normalizeHex32String(
-        nullifier,
-        `${ballotContext}.nullifier`,
-        { allowScheme: true, scheme: "blake2b32" },
-      );
-    }
-  }
-  ensureGovernanceLockHintsComplete(normalizedBallot, ballotContext);
-  if (
-    Object.prototype.hasOwnProperty.call(normalizedBallot, "amount") &&
-    normalizedBallot.amount !== null
-  ) {
-    normalizedBallot.amount = normalizeQuantityInput(
-      normalizedBallot.amount,
-      `${ballotContext}.amount`,
+  rejectGovernancePrivateKeyFieldsDeep(ballot, ballotContext);
+  assertSupportedOptionKeys(ballot, GOVERNANCE_BALLOT_PROOF_KEYS, ballotContext);
+  ensureGovernanceLockHintsComplete(ballot, ballotContext);
+  if (ballot.envelopeBytes === undefined || ballot.envelopeBytes === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${ballotContext}.envelopeBytes is required`,
+      `${ballotContext}.envelopeBytes`,
     );
   }
-  if (
-    Object.prototype.hasOwnProperty.call(normalizedBallot, "owner") &&
-    normalizedBallot.owner !== null
-  ) {
-    normalizedBallot.owner = ensureCanonicalAccountId(
-      normalizedBallot.owner,
-      `${ballotContext}.owner`,
-    );
+  const normalizedBallot = {
+    backend: requireExactTokenString(ballot.backend, `${ballotContext}.backend`),
+    envelope_bytes: normalizeRequiredBase64Payload(
+      ballot.envelopeBytes,
+      `${ballotContext}.envelopeBytes`,
+    ),
+  };
+  if (Object.prototype.hasOwnProperty.call(ballot, "rootHint")) {
+    normalizedBallot.root_hint =
+      ballot.rootHint === null
+        ? null
+        : normalizeHex32String(ballot.rootHint, `${ballotContext}.rootHint`, {
+            allowScheme: true,
+            scheme: "blake2b32",
+            exactString: true,
+          });
+  }
+  if (Object.prototype.hasOwnProperty.call(ballot, "nullifier")) {
+    normalizedBallot.nullifier =
+      ballot.nullifier === null
+        ? null
+        : normalizeHex32String(ballot.nullifier, `${ballotContext}.nullifier`, {
+            allowScheme: true,
+            scheme: "blake2b32",
+            exactString: true,
+          });
+  }
+  if (Object.prototype.hasOwnProperty.call(ballot, "amount")) {
+    normalizedBallot.amount =
+      ballot.amount === null
+        ? null
+        : normalizeQuantityInput(ballot.amount, `${ballotContext}.amount`);
+  }
+  if (Object.prototype.hasOwnProperty.call(ballot, "owner")) {
+    normalizedBallot.owner =
+      ballot.owner === null
+        ? null
+        : ensureCanonicalAccountId(ballot.owner, `${ballotContext}.owner`);
+  }
+  if (Object.prototype.hasOwnProperty.call(ballot, "durationBlocks")) {
+    normalizedBallot.duration_blocks =
+      ballot.durationBlocks === null
+        ? null
+        : normalizeGovernanceUint64Integer(
+            ballot.durationBlocks,
+            `${ballotContext}.durationBlocks`,
+          );
+  }
+  if (Object.prototype.hasOwnProperty.call(ballot, "direction")) {
+    normalizedBallot.direction =
+      ballot.direction === null
+        ? null
+        : normalizeGovernanceBallotDirection(
+            ballot.direction,
+            `${ballotContext}.direction`,
+          );
   }
   const payload = {
-    authority: requireNonEmptyString(
+    authority: ToriiClient._normalizeAccountId(
       record.authority,
       "governanceSubmitZkBallotProofV1.authority",
     ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
+    chain_id: requireExactTokenString(
+      record.chainId,
       "governanceSubmitZkBallotProofV1.chainId",
     ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
+    election_id: requireExactTokenString(
+      record.electionId,
       "governanceSubmitZkBallotProofV1.electionId",
     ),
     ballot: normalizedBallot,

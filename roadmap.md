@@ -9,7 +9,7 @@ Completed history lives in [`status.md`](./status.md).
 
 The V1 contract, typed registry/Core storage, Cargo-style developer path,
 authenticated cache and publication client/service core, Torii/MCP surface,
-and Kotlin/Java/Swift package-model and exact eleven-query parity, including
+and Kotlin/Java/Swift package-model and exact twelve-query parity, including
 archive retention, are implemented without a migration or compatibility layer.
 Remaining release gates, in order, are:
 
@@ -18,7 +18,7 @@ Remaining release gates, in order, are:
   projection preflight, and runtime publication authorization, signer-clock, retry,
   and dead-letter hardening after the concurrent Halo2/data-model dirty-tree
   work and shared build lane are coherent. Regenerate the checked
-  exact 29-route OpenAPI surface only from a clean dependency graph whose
+  exact 31-route OpenAPI surface only from a clean dependency graph whose
   ignored `Cargo.lock` matches the committed exact pin; do not bless the
   present unrelated uncommitted dependency work by changing that pin in
   isolation.
@@ -43,6 +43,36 @@ Remaining release gates, in order, are:
   typed post-rejection check; stale healthy or retirement pages cannot overwrite
   a later journaled renewal. Native AMX evidence retains its applied height and
   final verification must cover it.
+  The bounded exact-release journal model now retains a reconstructable signed
+  V1 envelope, separate payload and authorization-inclusive wire digests, the
+  exact replication/readback floor, append-only outcomes, synchronized
+  resolver/retention absence, and derived pre-send capacity reservations.
+  The production backend now prepares and persists before send, queries the
+  authoritative exact status first, reconstructs byte-identical Torii bytes,
+  gates absent submission on the unchanged selected location, and rotates only
+  after terminal finalized evidence. An identical observed release is not
+  treated as proof that this transaction applied. Restart, lost-response,
+  no-resign, renewal, pending-status, and Torii-body oracle regressions are in
+  place. Qualify those boundaries against the real fee-quote/status/submission
+  transport and crash injection next. Authoritative status currently proves
+  payload-hash application while the authorization-inclusive wire digest is a
+  local byte-identical replay binding; do not describe it as committed-wire
+  evidence. Move the remaining maximum-size mutable final evidence to a compact
+  immutable checkpoint before admitting broader post-publication projections.
+  The archive-location wire bound is now corrected: the former
+  64-provider, 64-approval aggregate can exceed both the 10 MiB transaction and
+  16 MiB block-body corridors, so it is not an admissible consensus shape.
+  Each provider's signed parsed-bundle attestation is registered as one
+  immutable at-most-1-MiB record; the location Add and public page carry only
+  the sorted provider list and archive/order-bound aggregate set digest, which
+  Core resolves and recomputes exactly. The publisher installs a compact set
+  descriptor plus one no-replace exact signed-transaction sidecar per provider,
+  persists compact append-only main-journal anchors in separate advances,
+  exact-queries finalized audit records, and replays byte-for-byte before
+  preparing the compact Add. Missing or substituted anchored sidecars fail
+  permanently, and rejected proof registration rebases only from a covering
+  strictly advanced finalized location revision. Qualify the std-only path
+  implementation with descriptor-relative primitives and crash injection.
   Retain as a release blocker the absent deployment-owned storage/finality
   backend. The latest exact archive query can now reproduce the immutable
   registration projection without a historical mutable WSV. Same-ID renewal

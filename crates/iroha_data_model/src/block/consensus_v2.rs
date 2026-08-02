@@ -2413,7 +2413,7 @@ pub struct CommitCertificateResponseSignaturePayload {
     pub responder: PeerId,
 }
 
-/// Authenticated NPoS randomness commitment for one frozen epoch roster.
+/// Authenticated `NPoS` randomness commitment for one frozen epoch roster.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2427,11 +2427,11 @@ pub struct VrfCommit {
     pub commitment: [u8; 32],
     /// Signer index in the immutable height-context roster.
     pub signer: ValidatorIndex,
-    /// Signature over the canonical NPoS VRF-commit preimage.
+    /// Signature over the canonical `NPoS` `VRF`-commit preimage.
     pub bls_sig: Vec<u8>,
 }
 
-/// Authenticated NPoS randomness reveal for one frozen epoch roster.
+/// Authenticated `NPoS` randomness reveal for one frozen epoch roster.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2447,7 +2447,7 @@ pub struct VrfReveal {
     pub signer: ValidatorIndex,
     /// Canonical Norito-encoded VRF proof whose verified output equals `reveal`.
     pub vrf_proof: Vec<u8>,
-    /// Signature over the canonical NPoS VRF-reveal preimage.
+    /// Signature over the canonical `NPoS` `VRF`-reveal preimage.
     pub bls_sig: Vec<u8>,
 }
 
@@ -2490,9 +2490,9 @@ pub enum ConsensusMessageV2Payload {
     CommitCertificateRequest(CommitCertificateRequest),
     /// Response carrying the active height context's durable `CommitQC`.
     CommitCertificateResponse(CommitCertificateResponse),
-    /// NPoS epoch-randomness commitment.
+    /// `NPoS` epoch-randomness commitment.
     VrfCommit(VrfCommit),
-    /// NPoS epoch-randomness reveal.
+    /// `NPoS` epoch-randomness reveal.
     VrfReveal(VrfReveal),
 }
 

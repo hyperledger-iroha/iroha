@@ -7538,19 +7538,6 @@ impl NodeHandle {
         self.enqueue_governance_outbox_with_optional_provenance(kind, payload_bytes, None)
     }
 
-    fn enqueue_governance_outbox_with_provenance(
-        &self,
-        kind: GovernanceOutboxKindV1,
-        payload_bytes: Vec<u8>,
-        provenance: GovernanceSubmissionProvenanceV1,
-    ) -> Result<u64, GovernancePublishError> {
-        self.enqueue_governance_outbox_with_optional_provenance(
-            kind,
-            payload_bytes,
-            Some(provenance),
-        )
-    }
-
     fn enqueue_governance_outbox_with_optional_provenance(
         &self,
         kind: GovernanceOutboxKindV1,
@@ -8672,6 +8659,7 @@ impl NodeHandle {
     }
 
     /// Record one source event for later SFM-4c privacy aggregate publication.
+    #[cfg(test)]
     pub(crate) fn record_privacy_aggregate_source_event(
         &self,
         event: PrivacyAggregateSourceEvent,
@@ -9306,6 +9294,7 @@ impl NodeHandle {
     /// Window selection depends only on the governed activation/cadence and the
     /// durable release cursor. Source-event presence never affects which cycle
     /// is selected.
+    #[cfg(test)]
     fn publish_due_privacy_aggregate_cycle_from_source_events(
         &self,
         now_unix: u64,
@@ -14875,7 +14864,8 @@ impl NodeHandle {
         self.schedulers.clone()
     }
 
-    /// Compatibility-only internal wrapper that discards the authority delta.
+    /// Test helper that discards the authority delta.
+    #[cfg(test)]
     pub(crate) fn record_por_challenge(
         &self,
         challenge: &PorChallengeV1,
@@ -14895,17 +14885,6 @@ impl NodeHandle {
             .as_ref()
             .map(|archive| archive.0.as_ref());
         self.record_por_challenge_with_optional_replay_archive(challenge, replay_archive)
-    }
-
-    /// Record or replay a challenge using the checkpoint-pinned archive.
-    pub(crate) fn record_por_challenge_with_replay_archive(
-        &self,
-        challenge: &PorChallengeV1,
-        replay_archive: &dyn PorFinalizedReplayArchiveV1,
-    ) -> Result<(), PorTrackerError> {
-        self.record_por_challenge_with_optional_replay_archive(challenge, Some(replay_archive))
-            .map(drop)
-            .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     fn record_por_challenge_with_optional_replay_archive(
@@ -15035,6 +15014,7 @@ impl NodeHandle {
     }
 
     /// Record a provider PoR proof response bound to its admitted provider key.
+    #[cfg(test)]
     pub(crate) fn record_por_proof(
         &self,
         proof: &PorProofV1,
@@ -15430,6 +15410,7 @@ impl NodeHandle {
     }
 
     /// Record an audit verdict and update telemetry counters accordingly.
+    #[cfg(test)]
     pub(crate) fn record_por_verdict(
         &self,
         verdict: &AuditVerdictV1,
@@ -15462,24 +15443,6 @@ impl NodeHandle {
             auditor_threshold,
             replay_archive,
         )
-    }
-
-    /// Record or exactly replay a verdict using the checkpoint-pinned archive.
-    pub(crate) fn record_por_verdict_with_replay_archive(
-        &self,
-        verdict: &AuditVerdictV1,
-        trusted_auditor_keys: &[Vec<u8>],
-        auditor_threshold: usize,
-        replay_archive: &dyn PorFinalizedReplayArchiveV1,
-    ) -> Result<PorVerdictOutcome, PorTrackerError> {
-        self.record_por_verdict_with_optional_replay_archive(
-            verdict,
-            trusted_auditor_keys,
-            auditor_threshold,
-            Some(replay_archive),
-        )
-        .map(|(outcome, _update)| outcome)
-        .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     fn record_por_verdict_with_optional_replay_archive(

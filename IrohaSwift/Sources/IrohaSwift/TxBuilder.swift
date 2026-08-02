@@ -703,7 +703,10 @@ public struct GovernanceWindow: Sendable {
     public let lower: UInt64
     public let upper: UInt64
 
-    public init(lower: UInt64, upper: UInt64) {
+    public init(lower: UInt64, upper: UInt64) throws {
+        guard lower <= upper else {
+            throw TransactionInputError.invalidGovernanceWindow(lower: lower, upper: upper)
+        }
         self.lower = lower
         self.upper = upper
     }
@@ -741,7 +744,10 @@ public struct ProposeDeployContractRequest {
                 window: GovernanceWindow? = nil,
                 mode: GovernanceVotingMode? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) {
+                ttlMs: UInt64? = 100_000) throws {
+        guard abiVersion == "1" else {
+            throw TransactionInputError.invalidGovernanceAbiVersion(abiVersion)
+        }
         self.chainId = chainId
         self.authority = authority
         self.contractAddress = contractAddress
@@ -792,7 +798,7 @@ public struct CastZkBallotRequest {
     public let authority: String
     public let electionId: String
     public let proofB64: String
-    public let publicInputs: NoritoJSON
+    public let publicInputs: GovernanceZkBallotPublicInputs
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
@@ -800,7 +806,7 @@ public struct CastZkBallotRequest {
                 authority: String,
                 electionId: String,
                 proofB64: String,
-                publicInputs: NoritoJSON,
+                publicInputs: GovernanceZkBallotPublicInputs = .init(),
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
@@ -810,23 +816,6 @@ public struct CastZkBallotRequest {
         self.publicInputs = publicInputs
         self.feePayment = feePayment
         self.ttlMs = ttlMs
-    }
-
-    public init(chainId: String,
-                authority: String,
-                electionId: String,
-                proofB64: String,
-                publicInputs: ToriiJSONValue,
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) throws {
-        let encoded = try NoritoJSON(publicInputs)
-        self.init(chainId: chainId,
-                  authority: authority,
-                  electionId: electionId,
-                  proofB64: proofB64,
-                  publicInputs: encoded,
-                  feePayment: feePayment,
-                  ttlMs: ttlMs)
     }
 }
 
@@ -2316,13 +2305,31 @@ public final class IrohaSDK: @unchecked Sendable {
         toriiRestClient.submitGovernancePlainBallot(request, completion: completion)
     }
 
-    public func submitGovernanceZkBallot(_ request: ToriiGovernanceZkBallotRequest,
-                                         completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
+    public func submitGovernanceParliamentBallot(_ request: ToriiGovernanceParliamentBallotRequest,
+                                                 completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.submitGovernanceZkBallot(request, completion: completion)
+        toriiRestClient.submitGovernanceParliamentBallot(request, completion: completion)
+    }
+
+    public func submitGovernanceZkBallotV1(_ request: ToriiGovernanceZkBallotV1Request,
+                                           completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
+        guard let toriiRestClient else {
+            completion(.failure(Self.restUnavailableError()))
+            return
+        }
+        toriiRestClient.submitGovernanceZkBallotV1(request, completion: completion)
+    }
+
+    public func submitGovernanceZkBallotProofV1(_ request: ToriiGovernanceZkBallotProofRequest,
+                                                completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
+        guard let toriiRestClient else {
+            completion(.failure(Self.restUnavailableError()))
+            return
+        }
+        toriiRestClient.submitGovernanceZkBallotProofV1(request, completion: completion)
     }
 
     public func finalizeGovernanceReferendum(_ request: ToriiGovernanceFinalizeRequest,
@@ -2408,11 +2415,27 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func submitGovernanceZkBallot(_ request: ToriiGovernanceZkBallotRequest) async throws -> ToriiGovernanceBallotResponse {
+    public func submitGovernanceParliamentBallot(_ request: ToriiGovernanceParliamentBallotRequest) async throws -> ToriiGovernanceBallotResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.submitGovernanceZkBallot(request)
+        return try await toriiRestClient.submitGovernanceParliamentBallot(request)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submitGovernanceZkBallotV1(_ request: ToriiGovernanceZkBallotV1Request) async throws -> ToriiGovernanceBallotResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitGovernanceZkBallotV1(request)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submitGovernanceZkBallotProofV1(_ request: ToriiGovernanceZkBallotProofRequest) async throws -> ToriiGovernanceBallotResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitGovernanceZkBallotProofV1(request)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

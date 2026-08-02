@@ -179,8 +179,10 @@ pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
 pub enum PublicMusubiQueryPathV1 {
     /// Fetch one exact structural package record.
     ExactPackage,
-    /// Fetch one exact immutable release record.
+    /// Fetch one exact paired home/universal release snapshot.
     ExactRelease,
+    /// Fetch one exact immutable provider bundle-attestation record.
+    ProviderBundleAttestation,
     /// Fetch one finalized resolver-index page.
     ResolverIndex,
     /// Fetch one finalized structured-version page.
@@ -206,6 +208,7 @@ impl PublicMusubiQueryPathV1 {
         match self {
             Self::ExactPackage => "/v1/musubi/queries/exact-package",
             Self::ExactRelease => "/v1/musubi/queries/exact-release",
+            Self::ProviderBundleAttestation => "/v1/musubi/queries/provider-bundle-attestation",
             Self::ResolverIndex => "/v1/musubi/queries/resolver-index",
             Self::Versions => "/v1/musubi/queries/versions",
             Self::Maintainers => "/v1/musubi/queries/maintainers",
@@ -19386,14 +19389,14 @@ impl Client {
         Ok(result)
     }
 
-    /// POST `/v1/gov/ballots/zk` with a JSON DTO body.
+    /// POST `/v1/gov/ballots/zk-v1` with the canonical flat envelope DTO.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_gov_ballot_zk_json(
+    pub fn post_gov_ballot_zk_v1_json(
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/gov/ballots/zk");
+        let url = join_torii_url(&self.torii_url, "v1/gov/ballots/zk-v1");
         let body = norito::json::to_vec(value)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -19403,7 +19406,7 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to submit zk ballot: {} {}",
+                "Failed to submit ZK V1 ballot: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
@@ -24373,6 +24376,7 @@ mod tests {
     use iroha_telemetry::metrics::GovernanceStatus;
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use iroha_version::codec::DecodeVersioned;
+    use norito::json::Value;
     use sorafs_car::{
         fetch_plan::try_chunk_fetch_plan_to_json,
         multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport},
@@ -24403,6 +24407,14 @@ mod tests {
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    #[test]
+    fn provider_bundle_attestation_uses_dedicated_public_musubi_route() {
+        assert_eq!(
+            PublicMusubiQueryPathV1::ProviderBundleAttestation.path(),
+            "/v1/musubi/queries/provider-bundle-attestation"
+        );
+    }
 
     #[test]
     fn public_musubi_query_uses_fixed_route_without_account_headers() {

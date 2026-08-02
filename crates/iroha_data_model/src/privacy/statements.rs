@@ -266,7 +266,7 @@ impl BootleLanternIssuerPublicMatrixV1 {
         let mut entries = Vec::with_capacity(
             BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
         );
-        for row in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 {
+        for row in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 - 1 {
             for column in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 {
                 if row >= column {
                     entries.push(first_column[row - column].clone());
@@ -286,6 +286,9 @@ impl BootleLanternIssuerPublicMatrixV1 {
                 }
             }
         }
+        // The final row is the reversed first column. Move those polynomials
+        // directly because no later matrix entry needs the owned inputs.
+        entries.extend(first_column.into_iter().rev());
         Ok(Self { entries })
     }
 
@@ -300,6 +303,10 @@ impl BootleLanternIssuerPublicMatrixV1 {
     ///
     /// Rejects a non-Toeplitz block, an incorrect negacyclic `Y` shift, or a
     /// public key whose eight first-column blocks are too sparse.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the matrix validator keeps ordered structural checks and their stable first-error precedence together"
+    )]
     pub fn validate_r512_multiplication_structure_v1(
         &self,
     ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {

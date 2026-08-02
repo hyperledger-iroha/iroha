@@ -2978,6 +2978,73 @@ pub mod json {
         }
 
         #[test]
+        fn canonical_document_depth_scan_is_quote_aware_and_caps_at_first_failure() {
+            assert_eq!(document_json_value_depth("   \n\t"), 0);
+            assert_eq!(document_json_value_depth("null"), 1);
+            assert_eq!(document_json_value_depth("{}"), 1);
+            assert_eq!(
+                document_json_value_depth(r#"{"text":"[[[{{{]]]}}}"}"#),
+                2,
+                "container punctuation inside a JSON string must not affect depth"
+            );
+            assert_eq!(
+                document_json_value_depth(r#"{"text":"\\\"[[["}"#),
+                2,
+                "an escaped quote must keep following punctuation inside the string"
+            );
+            assert_eq!(
+                document_json_value_depth(r#"{"text":"\\\\","nested":[null]}"#),
+                3,
+                "an even backslash run must leave the following quote unescaped"
+            );
+
+            let far_over_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH + 64),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH + 64)
+            );
+            assert_eq!(
+                document_json_value_depth(&far_over_limit),
+                MAX_JSON_VALUE_NESTING_DEPTH + 1,
+                "depth errors must report the first forbidden level"
+            );
+        }
+
+        #[test]
+        fn reader_enforces_complete_document_depth() {
+            let at_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
+            );
+            let mut reader = Reader::new(&at_limit);
+            let mut token_count = 0_usize;
+            while reader
+                .next_token()
+                .expect("Reader must accept a document at the depth limit")
+                .is_some()
+            {
+                token_count += 1;
+            }
+            assert_eq!(token_count, 2 * MAX_JSON_VALUE_NESTING_DEPTH - 1);
+
+            let over_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH)
+            );
+            let mut reader = Reader::new(&over_limit);
+            assert!(matches!(
+                reader.next_token(),
+                Err(Error::NestingDepthExceeded {
+                    depth,
+                    limit: MAX_JSON_VALUE_NESTING_DEPTH,
+                    context: "JSON value",
+                }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
+            ));
+        }
+
+        #[test]
         fn strict_validator_accounts_for_an_enclosing_document_depth() {
             let root_depth = 4;
             let wrappers = MAX_JSON_VALUE_NESTING_DEPTH - root_depth;
@@ -7298,6 +7365,68 @@ pub mod json {
         }
     }
 
+    fn document_json_value_depth(input: &str) -> usize {
+        let bytes = input.as_bytes();
+        let mut container_depth = 0_usize;
+        let mut maximum_depth = usize::from(
+            bytes
+                .iter()
+                .any(|byte| !matches!(byte, b' ' | b'\n' | b'\r' | b'\t')),
+        );
+        let first_forbidden_depth = MAX_JSON_VALUE_NESTING_DEPTH.saturating_add(1);
+        let mut in_string = false;
+        let mut escaped = false;
+
+        for (offset, &byte) in bytes.iter().enumerate() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            if byte == b'"' {
+                in_string = true;
+                continue;
+            }
+
+            let matching_close = match byte {
+                b'{' => Some(b'}'),
+                b'[' => Some(b']'),
+                b'}' | b']' => {
+                    container_depth = container_depth.saturating_sub(1);
+                    None
+                }
+                _ => None,
+            };
+            let Some(matching_close) = matching_close else {
+                continue;
+            };
+
+            container_depth = container_depth.saturating_add(1);
+            maximum_depth = maximum_depth.max(container_depth);
+            if maximum_depth >= first_forbidden_depth {
+                return first_forbidden_depth;
+            }
+
+            let mut next = offset.saturating_add(1);
+            while matches!(bytes.get(next), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+                next = next.saturating_add(1);
+            }
+            if bytes.get(next).copied() != Some(matching_close) {
+                maximum_depth = maximum_depth.max(container_depth.saturating_add(1));
+                if maximum_depth >= first_forbidden_depth {
+                    return first_forbidden_depth;
+                }
+            }
+        }
+
+        maximum_depth
+    }
+
     /// A light walker over the structural index.
     pub struct TapeWalker<'a> {
         input: &'a str,
@@ -7306,6 +7435,7 @@ pub mod json {
         raw: usize,
         last_key_lo: usize,
         last_key_hi: usize,
+        document_value_depth: usize,
     }
 
     /// Reset cached dynamic libraries used by the Stage-1 GPU/Metal accelerators.
@@ -7322,14 +7452,26 @@ pub mod json {
     }
     impl<'a> TapeWalker<'a> {
         pub fn new(input: &'a str) -> Self {
+            let tape = build_struct_index(input);
+            // Depth enforcement is consensus-facing, so derive it from one
+            // canonical scalar scan independently of the selected hardware
+            // Stage-1 implementation.
+            let document_value_depth = document_json_value_depth(input);
             Self {
                 input,
                 idx: 0,
-                tape: build_struct_index(input),
+                tape,
                 raw: 0,
                 last_key_lo: 0,
                 last_key_hi: 0,
+                document_value_depth,
             }
+        }
+        /// Reject a structurally over-deep enclosing document before a fast
+        /// typed parser enters generated or custom recursive code.
+        #[doc(hidden)]
+        pub fn ensure_document_depth(&self) -> Result<(), Error> {
+            ensure_json_value_depth(self.document_value_depth)
         }
         pub fn input(&self) -> &'a str {
             self.input
@@ -7380,6 +7522,7 @@ pub mod json {
         }
         /// Expect the next structural to be `{` and advance past it.
         pub fn expect_object_start(&mut self) -> Result<(), Error> {
+            self.ensure_document_depth()?;
             match self.next_struct() {
                 Some((off, b'{')) => {
                     self.raw = off + 1;
@@ -7418,6 +7561,7 @@ pub mod json {
         }
         /// Expect the next structural to be `[` and advance past it.
         pub fn expect_array_start(&mut self) -> Result<(), Error> {
+            self.ensure_document_depth()?;
             match self.next_struct() {
                 Some((off, b'[')) => {
                     self.raw = off + 1;
@@ -7981,6 +8125,7 @@ pub mod json {
 
         /// Skip over the next JSON value using the structural index when possible.
         pub fn skip_value(&mut self) -> Result<(), Error> {
+            self.ensure_document_depth()?;
             self.skip_ws_raw();
             let bytes = self.input.as_bytes();
             if self.raw >= bytes.len() {
@@ -7989,9 +8134,9 @@ pub mod json {
             }
             // Reuse the iterative parser walk so an unknown value cannot use
             // mismatched delimiters, malformed container syntax, duplicate
-            // keys, or an unbounded skipped subtree. `TapeWalker` does not
-            // currently track its enclosing structural depth, so this applies
-            // the nesting ceiling to the value rooted at `raw`.
+            // keys, or an unbounded skipped subtree. The complete document's
+            // global depth was checked above, so the local walk only needs to
+            // validate the exact subtree grammar while advancing `raw`.
             let mut parser = Parser::new_at(self.input, self.raw);
             parser.skip_value()?;
             self.sync_to_raw(parser.position());
@@ -8538,6 +8683,7 @@ pub mod json {
 
         /// Return the next token or None at end of input.
         pub fn next_token(&mut self) -> Result<Option<Token<'a>>, Error> {
+            self.w.ensure_document_depth()?;
             self.skip_commas();
             let s = self.w.input();
             let bytes = s.as_bytes();
@@ -8857,6 +9003,10 @@ pub mod json {
 
     /// Deserialize `T` from JSON using the generic `JsonDeserialize` path.
     pub fn from_json<T: JsonDeserialize>(s: &str) -> Result<T, Error> {
+        // Preflight the complete document once, before a generated typed
+        // decoder can recurse or skip a subtree with a locally rooted Parser.
+        // Internal Parser::new_at calls deliberately do not repeat this scan.
+        ensure_json_value_depth(document_json_value_depth(s))?;
         let mut p = Parser::new(s);
         p.skip_ws();
         let v = T::json_deserialize(&mut p)?;
@@ -8876,6 +9026,7 @@ pub mod json {
     {
         // Tape-first path: build structural index, then invoke the type's fast parser.
         let mut w = TapeWalker::new(s);
+        w.ensure_document_depth()?;
         let mut arena = Arena::new();
         let value = T::parse(&mut w, &mut arena).map_err(|e| Error::Message(e.to_string()))?;
 

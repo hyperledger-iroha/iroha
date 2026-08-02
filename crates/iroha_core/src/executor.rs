@@ -308,6 +308,7 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindDataspaceNameOwnerById(_)
         | SingularQueryBox::FindMusubiExactPackageV1(_)
         | SingularQueryBox::FindMusubiExactReleaseV1(_)
+        | SingularQueryBox::FindMusubiProviderBundleAttestationV1(_)
         | SingularQueryBox::FindMusubiResolverIndexV1(_)
         | SingularQueryBox::FindMusubiVersionsV1(_)
         | SingularQueryBox::FindMusubiMaintainersV1(_)
@@ -9175,6 +9176,30 @@ fn initial_permission_capability_root_authority(
             let manager: Permission = executor_permission::sccp::CanManageSccpGovernance.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
+        "CanProposeContractDeployment" => {
+            let _ = decode!(executor_permission::governance::CanProposeContractDeployment);
+            false
+        }
+        "CanProposeRuntimeUpgrade" => {
+            let _ = decode!(executor_permission::governance::CanProposeRuntimeUpgrade);
+            false
+        }
+        "CanSubmitGovernanceBallot" => {
+            let _ = decode!(executor_permission::governance::CanSubmitGovernanceBallot);
+            false
+        }
+        "CanRecordCitizenService" => {
+            let _ = decode!(executor_permission::governance::CanRecordCitizenService);
+            false
+        }
+        "CanSlashGovernanceLock" => {
+            let _ = decode!(executor_permission::governance::CanSlashGovernanceLock);
+            false
+        }
+        "CanRestituteGovernanceLock" => {
+            let _ = decode!(executor_permission::governance::CanRestituteGovernanceLock);
+            false
+        }
         "CanIssueSoranetVpnQuote" => {
             let _ = decode!(executor_permission::soranet::CanIssueSoranetVpnQuote);
             let manager: Permission =
@@ -9821,20 +9846,29 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         return true;
     }
 
-    // Cross-border settlement and relays either require an exact governance
-    // permission or consume a cryptographically verified, replay-protected proof.
+    // Cross-border settlement, relays, and public governance mutations either
+    // require an exact Core-enforced permission or consume a cryptographically
+    // verified, replay-protected proof. Keep the signed governance draft surface
+    // usable while the fail-safe Initial executor is active; the lower-level
+    // `zk::SubmitBallot` vendor instruction remains IVM-latch-only below.
     if is_any!(
         iroha_data_model::isi::settlement::SettlementInstructionBox,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
         iroha_data_model::isi::bridge::RecordSccpMessage,
+        iroha_data_model::isi::governance::ProposeDeployContract,
+        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
         iroha_data_model::isi::governance::ApproveGovernanceProposal,
         iroha_data_model::isi::governance::CastParliamentBallot,
+        iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
+        iroha_data_model::isi::governance::SlashGovernanceLock,
+        iroha_data_model::isi::governance::RestituteGovernanceLock,
+        iroha_data_model::isi::governance::RecordCitizenServiceOutcome,
         iroha_data_model::isi::governance::FinalizeReferendum,
         iroha_data_model::isi::governance::EnactReferendum,
         iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
@@ -10900,6 +10934,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanEnrollFeeSponsorProgram",
     "CanWithdrawFeeSponsorProgram",
     "CanProposeContractDeployment",
+    "CanProposeRuntimeUpgrade",
     "CanSubmitGovernanceBallot",
     "CanEnactGovernance",
     "CanManageParliament",
@@ -12872,6 +12907,333 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorization() {
+        use iroha_data_model::isi::governance as gov;
+        use iroha_executor_data_model::permission::governance::{
+            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
+            CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+        };
+
+        let authority = checked_account_id();
+        let citizen_target = checked_account_id();
+        let chain_id = ChainId::from("initial-governance-scope-regression");
+        let contract_address =
+            ContractAddress::derive(&chain_id, &authority, 1, DataSpaceId::UNIVERSAL)
+                .expect("canonical contract address");
+        let other_contract_address =
+            ContractAddress::derive(&chain_id, &authority, 2, DataSpaceId::UNIVERSAL)
+                .expect("second canonical contract address");
+        let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+        let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
+            name: "initial-executor-exact-scope".to_owned(),
+            description: "governance admission regression".to_owned(),
+            abi_version: 1,
+            abi_hash,
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
+            start_height: 10,
+            end_height: 10,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let referendum_id = "exact-governance-scope".to_owned();
+        let probes: Vec<(InstructionBox, &str, &str)> = vec![
+            (
+                gov::ProposeDeployContract {
+                    contract_address: contract_address.clone(),
+                    code_hash_hex: "11".repeat(32),
+                    abi_hash_hex: hex::encode(abi_hash),
+                    abi_version: " 1".to_owned(),
+                    window: None,
+                    mode: Some(gov::VotingMode::Zk),
+                    manifest_provenance: None,
+                }
+                .into(),
+                "CanProposeContractDeployment",
+                "exact string `1`",
+            ),
+            (
+                gov::ProposeRuntimeUpgradeProposal {
+                    manifest,
+                    window: None,
+                    mode: Some(gov::VotingMode::Plain),
+                }
+                .into(),
+                "CanProposeRuntimeUpgrade",
+                "runtime upgrade window",
+            ),
+            (
+                gov::CastZkBallot {
+                    election_id: referendum_id.clone(),
+                    proof_b64: "AA==".to_owned(),
+                    public_inputs_json: r#"{"unknown":"field"}"#.to_owned(),
+                }
+                .into(),
+                "CanSubmitGovernanceBallot",
+                "unknown field",
+            ),
+            (
+                gov::SlashGovernanceLock {
+                    referendum_id: referendum_id.clone(),
+                    owner: citizen_target.clone(),
+                    amount: Quantity::zero(),
+                    reason: "scope regression".to_owned(),
+                }
+                .into(),
+                "CanSlashGovernanceLock",
+                "slash amount must be > 0",
+            ),
+            (
+                gov::RestituteGovernanceLock {
+                    referendum_id: referendum_id.clone(),
+                    owner: citizen_target.clone(),
+                    amount: Quantity::zero(),
+                    reason: "scope regression".to_owned(),
+                }
+                .into(),
+                "CanRestituteGovernanceLock",
+                "restitution amount must be > 0",
+            ),
+            (
+                gov::RecordCitizenServiceOutcome {
+                    owner: citizen_target.clone(),
+                    epoch: 1,
+                    role: "observer".to_owned(),
+                    event: gov::CitizenServiceEvent::Decline,
+                }
+                .into(),
+                "CanRecordCitizenService",
+                "citizen not found for service record",
+            ),
+        ];
+        for (instruction, _, _) in &probes {
+            assert!(
+                initial_native_instruction_is_explicitly_admitted(instruction),
+                "{} must be admitted to its Core authorization gate",
+                instruction.id()
+            );
+        }
+
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([], [account], []);
+        world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([
+                Permission::from(CanProposeContractDeployment {
+                    contract_address: other_contract_address,
+                }),
+                Permission::from(CanProposeRuntimeUpgrade {
+                    abi_version: 1,
+                    abi_hash: [0xFF; 32],
+                }),
+                Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: "other-governance-scope".to_owned(),
+                }),
+                Permission::from(CanSlashGovernanceLock {
+                    referendum_id: "other-governance-scope".to_owned(),
+                }),
+                Permission::from(CanRestituteGovernanceLock {
+                    referendum_id: "other-governance-scope".to_owned(),
+                }),
+                Permission::from(CanRecordCitizenService {
+                    owner: authority.clone(),
+                }),
+            ]),
+        );
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+
+        for (instruction, permission_name, _) in &probes {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &authority, instruction.clone())
+                .expect_err("an adjacent governance scope must fail closed");
+            assert!(
+                format!("{error:?}").contains(&format!("exact {permission_name} target"))
+                    || (*permission_name == "CanProposeRuntimeUpgrade"
+                        && format!("{error:?}")
+                            .contains("exact CanProposeRuntimeUpgrade ABI target")),
+                "unexpected wrong-scope {permission_name} rejection: {error:?}"
+            );
+        }
+        assert!(
+            state_transaction
+                .world
+                .governance_proposals
+                .iter()
+                .next()
+                .is_none()
+        );
+        assert!(
+            state_transaction
+                .world
+                .governance_referenda
+                .iter()
+                .next()
+                .is_none()
+        );
+        assert!(state_transaction.world.elections.iter().next().is_none());
+        assert!(
+            state_transaction
+                .world
+                .governance_locks
+                .iter()
+                .next()
+                .is_none()
+        );
+        assert!(
+            state_transaction
+                .world
+                .governance_slashes
+                .iter()
+                .next()
+                .is_none()
+        );
+        assert!(state_transaction.world.citizens.iter().next().is_none());
+
+        state_transaction.world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([
+                Permission::from(CanProposeContractDeployment { contract_address }),
+                Permission::from(CanProposeRuntimeUpgrade {
+                    abi_version: 1,
+                    abi_hash,
+                }),
+                Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                }),
+                Permission::from(CanSlashGovernanceLock {
+                    referendum_id: referendum_id.clone(),
+                }),
+                Permission::from(CanRestituteGovernanceLock { referendum_id }),
+                Permission::from(CanRecordCitizenService {
+                    owner: citizen_target,
+                }),
+            ]),
+        );
+        for (instruction, permission_name, downstream_error) in probes {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &authority, instruction)
+                .expect_err("the exact scope must reach the deliberately invalid Core probe");
+            assert!(
+                format!("{error:?}").contains(downstream_error),
+                "exact {permission_name} scope did not reach Core validation: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn initial_executor_keeps_low_level_submit_ballot_behind_the_ivm_latch() {
+        let backend = "halo2/ipa";
+        let proof = iroha_data_model::proof::ProofAttachment::new_ref(
+            backend.into(),
+            iroha_data_model::proof::ProofBox::new(backend.into(), vec![0x01]),
+            iroha_data_model::proof::VerifyingKeyId::new(backend, "ballot-v1"),
+        );
+        let instruction: InstructionBox = iroha_data_model::isi::zk::SubmitBallot {
+            election_id: "latched-election".to_owned(),
+            ciphertext: vec![0x02],
+            ballot_proof: proof,
+            nullifier: [0x03; 32],
+        }
+        .into();
+
+        assert!(
+            !initial_native_instruction_is_explicitly_admitted(&instruction),
+            "direct signed SubmitBallot would bypass the IVM host's one-shot verification latch"
+        );
+    }
+
+    #[test]
+    fn initial_executor_requires_exact_enactment_permission_before_state_lookup() {
+        use iroha_data_model::isi::governance::{AtWindow, EnactReferendum};
+        use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+
+        let authority = checked_account_id();
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([], [account], []);
+        world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([Permission::new(
+                "CanEnactGovernance".to_owned(),
+                Json::from(norito::json!({ "unexpected": true })),
+            )]),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let proposal_id = [0xA6; 32];
+        let instruction: InstructionBox = EnactReferendum {
+            referendum_id: proposal_id,
+            preimage_hash: proposal_id,
+            at_window: AtWindow { lower: 1, upper: 1 },
+        }
+        .into();
+
+        assert!(initial_native_instruction_is_explicitly_admitted(
+            &instruction
+        ));
+        let error = super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &authority, instruction.clone())
+            .expect_err("a malformed same-name permission must not authorize enactment");
+        assert!(
+            matches!(
+                error,
+                ValidationFail::InstructionFailed(
+                    InstructionExecutionError::InvariantViolation(ref message)
+                ) if message.as_ref() == "not permitted: exact CanEnactGovernance required"
+            ),
+            "unexpected malformed-token rejection: {error:?}"
+        );
+        assert!(
+            state_transaction
+                .world
+                .governance_proposals
+                .iter()
+                .next()
+                .is_none()
+        );
+        assert!(
+            state_transaction
+                .world
+                .governance_referenda
+                .iter()
+                .next()
+                .is_none()
+        );
+        assert!(state_transaction.world.elections.iter().next().is_none());
+
+        state_transaction.world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([Permission::from(CanEnactGovernance)]),
+        );
+        let error = super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .expect_err("the exact permission must reach proposal validation");
+        assert!(
+            matches!(
+                error,
+                ValidationFail::InstructionFailed(
+                    InstructionExecutionError::InvariantViolation(ref message)
+                ) if message.as_ref() == "governance proposal not found"
+            ),
+            "exact enactment permission did not reach Core validation: {error:?}"
+        );
+    }
+
+    #[test]
     fn initial_executor_denies_chain_and_foreign_controller_takeover_paths() {
         let attacker = checked_account_id();
         let victim = checked_account_id();
@@ -12999,6 +13361,37 @@ mod tests {
         let dataspace = DataSpaceId::new(7);
         let manifest_root: Permission =
             executor_permission::nexus::CanPublishSpaceDirectoryManifest { dataspace }.into();
+        let contract_proposal_permission: Permission =
+            executor_permission::governance::CanProposeContractDeployment {
+                contract_address: contract.clone(),
+            }
+            .into();
+        let runtime_proposal_permission: Permission =
+            executor_permission::governance::CanProposeRuntimeUpgrade {
+                abi_version: 1,
+                abi_hash: [0xA5; 32],
+            }
+            .into();
+        let ballot_permission: Permission =
+            executor_permission::governance::CanSubmitGovernanceBallot {
+                referendum_id: "grant-policy-referendum".to_owned(),
+            }
+            .into();
+        let record_service_permission: Permission =
+            executor_permission::governance::CanRecordCitizenService {
+                owner: adjacent_owner.clone(),
+            }
+            .into();
+        let slash_permission: Permission =
+            executor_permission::governance::CanSlashGovernanceLock {
+                referendum_id: "grant-policy-referendum".to_owned(),
+            }
+            .into();
+        let restitute_permission: Permission =
+            executor_permission::governance::CanRestituteGovernanceLock {
+                referendum_id: "grant-policy-referendum".to_owned(),
+            }
+            .into();
         let mut world = World::with_assets(
             [
                 Domain::new(governed_domain.clone()).build(&legitimate_root),
@@ -13025,6 +13418,12 @@ mod tests {
                 executor_permission::settlement::CanManageFxCorridors.into(),
                 manifest_root,
                 executor_permission::sccp::CanManageSccpGovernance.into(),
+                contract_proposal_permission.clone(),
+                runtime_proposal_permission.clone(),
+                ballot_permission.clone(),
+                record_service_permission.clone(),
+                slash_permission.clone(),
+                restitute_permission.clone(),
             ]),
         );
         let state = State::new_for_testing(
@@ -13405,9 +13804,23 @@ mod tests {
                 executor_permission::sccp::CanProposeSccpRouteGovernance.into(),
                 true,
             ),
+            (
+                "CanProposeContractDeployment",
+                contract_proposal_permission,
+                false,
+            ),
+            (
+                "CanProposeRuntimeUpgrade",
+                runtime_proposal_permission,
+                false,
+            ),
+            ("CanSubmitGovernanceBallot", ballot_permission, false),
+            ("CanRecordCitizenService", record_service_permission, false),
+            ("CanSlashGovernanceLock", slash_permission, false),
+            ("CanRestituteGovernanceLock", restitute_permission, false),
         ];
 
-        assert_eq!(cases.len(), 42, "update this table for every scoped arm");
+        assert_eq!(cases.len(), 48, "update this table for every scoped arm");
         assert_eq!(
             cases
                 .iter()
@@ -13417,6 +13830,44 @@ mod tests {
             cases.len(),
             "permission cases must be unique",
         );
+
+        for name in [
+            "CanProposeContractDeployment",
+            "CanProposeRuntimeUpgrade",
+            "CanSubmitGovernanceBallot",
+            "CanRecordCitizenService",
+            "CanSlashGovernanceLock",
+            "CanRestituteGovernanceLock",
+        ] {
+            let malformed = Permission::new(name.to_owned(), Json::new(()));
+            let error = initial_permission_capability_root_authority(
+                &state_transaction,
+                &legitimate_root,
+                &malformed,
+                None,
+            )
+            .expect_err("malformed scoped governance payload must fail closed");
+            assert!(
+                matches!(&error, ValidationFail::NotPermitted(message)
+                    if message.contains(name) && message.contains("Invalid permission payload")),
+                "unexpected malformed {name} rejection: {error:?}"
+            );
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &legitimate_root,
+                    Grant::account_permission(malformed, adjacent_owner.clone()).into(),
+                )
+                .expect_err("malformed scoped governance grant must fail before storage");
+            assert!(
+                !state_transaction
+                    .world
+                    .account_permissions_iter(&adjacent_owner)
+                    .expect("adjacent account permissions")
+                    .any(|permission| permission.name() == name),
+                "malformed {name} permission reached account storage"
+            );
+        }
 
         for (name, permission, expected_root) in &cases {
             assert_eq!(permission.name(), *name);

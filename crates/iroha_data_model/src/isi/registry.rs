@@ -208,6 +208,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<contract_alias::SetContractAlias>,
     InstructionRegistry::register_slice::<musubi::RegisterMusubiNamespaceBindingV1>,
     InstructionRegistry::register_slice::<musubi::RegisterMusubiArchiveV1>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiProviderBundleAttestationV1>,
     InstructionRegistry::register_slice::<musubi::AddMusubiArchiveLocationV1>,
     InstructionRegistry::register_slice::<musubi::RetireMusubiArchiveLocationV1>,
     InstructionRegistry::register_slice::<musubi::PublishMusubiReleaseV1>,
@@ -485,6 +486,7 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
         registry;
         RegisterMusubiNamespaceBindingV1,
         RegisterMusubiArchiveV1,
+        RegisterMusubiProviderBundleAttestationV1,
         AddMusubiArchiveLocationV1,
         RetireMusubiArchiveLocationV1,
         PublishMusubiReleaseV1,
@@ -1147,9 +1149,9 @@ mod tests {
 
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "cac7fc565a6a5a5b25be028218e08cb46973b96bfc24dd488c56c9b84bbdc297";
+            "44cf338645bc0c3fe285724e5766e0f8aefe66ea4f8c6337a9660477354fd13e";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "8b3425102fdceb1cf4e61ef19ec6db5474d365918d1fe233255aa47e08de47b8";
+            "53f14268898a1d48283cf01d219a8f3b9e10b102f790ed459318a8bc63efda0e";
 
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries

@@ -185,7 +185,7 @@ impl ZkAmsPhase23PublicChallengeV1 {
 
     /// Exact 256 public challenge bits.
     #[must_use]
-    pub const fn to_bytes(&self) -> [u8; 32] {
+    pub const fn to_bytes(self) -> [u8; 32] {
         self.bytes
     }
 }
@@ -1281,6 +1281,10 @@ fn update_context_hash(hash: &mut Keccak256, context: &ZkAmsPhase23FreshnessCont
     hash.update(&context.session_digest);
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the canonical record prefix encodes each context axis independently"
+)]
 fn encode_record_context(
     bytes: &mut Vec<u8>,
     phase: ZkAmsPhase23FreshnessPhaseV1,

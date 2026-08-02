@@ -5421,7 +5421,7 @@ final class ToriiClientTests: XCTestCase {
 
         var verifierCommitmentDrift = try object(loadSharedBfvFixture(), "operation_vectors")
         var driftedMaterial = try object(verifierCommitmentDrift, "full_bootstrap_material")
-        driftedMaterial["vk_commitment_hex"] = try string(driftedMaterial, "expected_statement_digest_hex")
+        driftedMaterial["vk_commitment_hex"] = try string(driftedMaterial, "expected_material_digest_hex")
         verifierCommitmentDrift["full_bootstrap_material"] = driftedMaterial
         XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(verifierCommitmentDrift))
 
@@ -6024,7 +6024,6 @@ final class ToriiClientTests: XCTestCase {
             "verifier_key_material_commitment_hex",
             "vk_commitment_hex",
             "expected_material_digest_hex",
-            "expected_statement_digest_hex",
         ]
         let digestValues = try digestFields.map { field -> String in
             let value = try string(material, field)
@@ -6051,11 +6050,6 @@ final class ToriiClientTests: XCTestCase {
             uniqueDigestValues.append(value)
         }
         try assertBfvEqual(Set(uniqueDigestValues).count, uniqueDigestValues.count, "full-bootstrap material digest roles")
-        XCTAssertNotEqual(
-            try string(material, "expected_material_digest_hex"),
-            try string(material, "expected_statement_digest_hex"),
-            "full-bootstrap material and statement digests must differ"
-        )
     }
 
     private func assertBfvEqual<T: Equatable>(_ actual: T, _ expected: T, _ label: String) throws {
@@ -7058,6 +7052,87 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(profile.leaseFee, "1000000.25")
         XCTAssertEqual(profile.dnsPushIntervalSecs, 60)
         XCTAssertEqual(profile.flowLabelBits, 24)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testVpnRoutesRejectInsecureBaseURLBeforeTransportDispatch() async {
+        let client = makeClient(baseURL: URL(string: "http://example.test")!)
+        let sessionId = String(repeating: "11", count: 32)
+        let auth = ToriiCanonicalRequestAuth(
+            accountId: "alice",
+            privateKey: Data(repeating: 7, count: 32),
+            timestampMs: 1_700_000_000_000,
+            nonce: "vpn-https-test"
+        )
+        let operations: [(String, () async throws -> Void)] = [
+            ("profile", { _ = try await client.getVpnProfile() }),
+            ("quote", {
+                _ = try await client.createVpnQuote(
+                    ToriiVpnQuoteCreateRequest(
+                        exitClass: "standard",
+                        meteringPublicKeyHex: String(repeating: "22", count: 32)
+                    ),
+                    canonicalAuth: auth
+                )
+            }),
+            ("session create", {
+                _ = try await client.createVpnSession(
+                    ToriiVpnSessionCreateRequest(
+                        exitClass: "standard",
+                        quoteId: sessionId,
+                        paymentTransactionHash: String(repeating: "33", count: 32),
+                        meteringPublicKeyHex: String(repeating: "44", count: 32)
+                    ),
+                    canonicalAuth: auth
+                )
+            }),
+            ("session read", {
+                _ = try await client.getVpnSession(sessionId: sessionId, canonicalAuth: auth)
+            }),
+            ("session delete", {
+                _ = try await client.deleteVpnSession(sessionId: sessionId, canonicalAuth: auth)
+            }),
+            ("receipt submit", {
+                _ = try await client.submitVpnReceipt(
+                    ToriiVpnReceiptSubmitRequest(
+                        relayReceiptHex: "abcd",
+                        clientVoucherHex: "beef",
+                        leaseIdHex: sessionId
+                    ),
+                    canonicalAuth: auth
+                )
+            }),
+            ("receipt list", {
+                _ = try await client.listVpnReceipts(canonicalAuth: auth)
+            }),
+        ]
+
+        var dispatched = false
+        StubURLProtocol.handler = { request in
+            dispatched = true
+            XCTFail("insecure VPN request reached transport dispatch: \(request)")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+
+        for (label, operation) in operations {
+            await XCTAssertThrowsErrorAsync(try await operation()) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("expected HTTPS rejection for \(label), got \(error)")
+                }
+                XCTAssertEqual(
+                    reason,
+                    "Sora VPN Torii requests require an HTTPS base URL.",
+                    label
+                )
+            }
+            XCTAssertFalse(dispatched, "\(label) reached transport dispatch")
+        }
     }
 
     func testVpnProfileRejectsMissingOrOutOfRangeDnsPushInterval() throws {
@@ -19666,6 +19741,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let expectation = expectation(description: "governance proposal")
         let proposalId = String(repeating: "3", count: 64)
         let codeHash = String(repeating: "4", count: 64)
+        let encodedCodeHash = "BlAkE2b32:0X\(codeHash)"
         let abiHash = String(repeating: "5", count: 64)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/deploy-contract")
@@ -19677,8 +19753,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(body["abi_hash"] as? String, abiHash)
             XCTAssertEqual(body["abi_version"] as? String, "1")
             XCTAssertEqual(body["mode"] as? String, "Plain")
-            let limits = body["limits"] as? [String: Any]
-            XCTAssertEqual(limits?["max_gas"] as? Int, 5000)
+            XCTAssertNil(body["limits"])
+            let provenance = body["manifest_provenance"] as? [String: Any]
+            XCTAssertEqual(provenance?["signer"] as? String, "ed25519:public")
+            XCTAssertEqual(provenance?["signature"] as? String, "ed25519:signature")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -19690,12 +19768,15 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
 
         let request = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
-                                                                   codeHashHex: codeHash,
+                                                                   codeHashHex: encodedCodeHash,
                                                                    abiHashHex: abiHash,
                                                                    abiVersion: "1",
                                                                    window: ToriiGovernanceWindow(lower: 10, upper: 20),
                                                                    mode: .plain,
-                                                                   limits: .object(["max_gas": .number(5000)]))
+                                                                   manifestProvenance: .init(
+                                                                    signer: "ed25519:public",
+                                                                    signature: "ed25519:signature"
+                                                                   ))
         makeClient().submitGovernanceDeployContractProposal(request) { result in
             switch result {
             case .success(let response):
@@ -19725,39 +19806,151 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testFinalizeGovernanceEncodesProposalId() {
-        let proposalId = String(repeating: "6", count: 64)
-        let request = ToriiGovernanceFinalizeRequest(referendumId: "ref-1", proposalId: proposalId)
-        do {
-            let data = try JSONEncoder().encode(request)
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return XCTFail("missing JSON body")
+    func testGovernanceDeployContractProposalRejectsNonV1AbiVersion() {
+        for abiVersion in ["2", "01", " 1", "1 "] {
+            let request = ToriiGovernanceDeployContractProposalRequest(
+                contractAlias: "demo::universal",
+                codeHashHex: String(repeating: "4", count: 64),
+                abiHashHex: String(repeating: "5", count: 64),
+                abiVersion: abiVersion
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+                guard case let ToriiClientError.invalidPayload(message) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertTrue(message.contains("abi_version must be exactly 1"))
             }
-            XCTAssertEqual(json["referendum_id"] as? String, "ref-1")
-            XCTAssertEqual(json["proposal_id"] as? String, proposalId)
-        } catch {
-            XCTFail("unexpected error: \(error)")
         }
     }
 
-    func testEnactGovernanceEncodesProposalIdAndPreimage() {
-        let proposalId = String(repeating: "7", count: 64)
-        let preimage = String(repeating: "8", count: 64)
-        let request = ToriiGovernanceEnactRequest(proposalId: proposalId,
-                                                  preimageHash: preimage,
-                                                  window: ToriiGovernanceWindow(lower: 10, upper: 20))
-        do {
-            let data = try JSONEncoder().encode(request)
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return XCTFail("missing JSON body")
+    func testGovernanceWindowEncodesEntireUInt64Domain() throws {
+        let window = ToriiGovernanceWindow(lower: 0, upper: UInt64.max)
+        let data = try JSONEncoder().encode(window)
+        let decoded = try JSONDecoder().decode(ToriiGovernanceWindow.self, from: data)
+        XCTAssertEqual(decoded.lower, 0)
+        XCTAssertEqual(decoded.upper, UInt64.max)
+        XCTAssertTrue(
+            String(decoding: data, as: UTF8.self)
+                .contains("\"upper\":18446744073709551615")
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGovernanceWindowRejectsReversedBoundsBeforeTransportDispatch() async {
+        var dispatched = false
+        StubURLProtocol.handler = { request in
+            dispatched = true
+            XCTFail("reversed governance window reached transport dispatch: \(request)")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 500,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                Data()
+            )
+        }
+        let request = ToriiGovernanceDeployContractProposalRequest(
+            contractAlias: "demo::universal",
+            codeHashHex: String(repeating: "4", count: 64),
+            abiHashHex: String(repeating: "5", count: 64),
+            window: .init(lower: 2, upper: 1)
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().submitGovernanceDeployContractProposal(request)
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("unexpected error: \(error)")
             }
-            XCTAssertEqual(json["proposal_id"] as? String, proposalId)
-            XCTAssertEqual(json["preimage_hash"] as? String, preimage)
-            let window = json["window"] as? [String: Any]
-            XCTAssertEqual(window?["lower"] as? Int, 10)
-            XCTAssertEqual(window?["upper"] as? Int, 20)
-        } catch {
-            XCTFail("unexpected error: \(error)")
+            XCTAssertTrue(reason.contains("upper bound must not precede"))
+        }
+        XCTAssertFalse(dispatched)
+    }
+
+    func testGovernanceDeployContractProposalRejectsUndeclaredHashAliases() {
+        let hash = String(repeating: "4", count: 64)
+        for codeHash in [
+            ":\(hash)",
+            " \(hash)",
+            "\(hash) ",
+            "blake2b32:\(hash):ignored",
+            "sha256:\(hash)"
+        ] {
+            let request = ToriiGovernanceDeployContractProposalRequest(
+                contractAlias: "demo::universal",
+                codeHashHex: codeHash,
+                abiHashHex: String(repeating: "5", count: 64)
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+                guard case let ToriiClientError.invalidPayload(message) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertTrue(message.contains("code_hash must be a 32-byte hex string"))
+            }
+        }
+    }
+
+    func testFinalizeGovernanceUsesExactReferendumAndSharedHashGrammar() throws {
+        let proposalId = String(repeating: "6", count: 64)
+        let request = ToriiGovernanceFinalizeRequest(
+            referendumId: "ref-1",
+            proposalId: "BLAKE2B32:0X\(proposalId.uppercased())"
+        )
+        let data = try JSONEncoder().encode(request)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(json["referendum_id"] as? String, "ref-1")
+        XCTAssertEqual(json["proposal_id"] as? String, proposalId)
+
+        for invalidReferendum in ["", " ref-1", "ref-1 ", "ref 1", "ref\t1", "ref\u{0000}1"] {
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiGovernanceFinalizeRequest(
+                        referendumId: invalidReferendum,
+                        proposalId: proposalId
+                    )
+                )
+            )
+        }
+        for invalidProposal in [
+            ":\(proposalId)",
+            " \(proposalId)",
+            "\(proposalId) ",
+            "blake2b32:\(proposalId):ignored",
+            "sha256:\(proposalId)"
+        ] {
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiGovernanceFinalizeRequest(
+                        referendumId: "ref-1",
+                        proposalId: invalidProposal
+                    )
+                )
+            )
+        }
+    }
+
+    func testEnactGovernanceEncodesOnlyExactLowercaseProposalId() throws {
+        let proposalId = String(repeating: "7", count: 64)
+        let data = try JSONEncoder().encode(ToriiGovernanceEnactRequest(proposalId: proposalId))
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(json["proposal_id"] as? String, proposalId)
+        XCTAssertEqual(Set(json.keys), Set(["proposal_id"]))
+
+        for invalid in ["0x\(proposalId)", String(repeating: "A", count: 64), " \(proposalId)"] {
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(ToriiGovernanceEnactRequest(proposalId: invalid))
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertTrue(reason.contains("exactly 64 lowercase hexadecimal"))
+            }
         }
     }
 
@@ -19770,13 +19963,15 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             owner: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             amount: canonical,
             durationBlocks: 5,
-            direction: "Aye"
+            direction: .aye
         )
         let data = try JSONEncoder().encode(request)
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         XCTAssertEqual(json["amount"] as? String, canonical)
+        XCTAssertEqual(json["duration_blocks"] as? String, "5")
+        XCTAssertEqual(json["direction"] as? String, "Aye")
 
         let overflowing = String(repeating: "9", count: 155)
         for invalid in ["+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing] {
@@ -19796,32 +19991,176 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testSubmitGovernanceZkBallotEncodesPublicInputs() {
-        let expectation = expectation(description: "zk ballot")
+    func testGovernanceMutationContextsAndProofsAreExactBeforeEncoding() throws {
+        let owner = try canonicalOwnerLiteral()
+        let invalidEncoders: [() throws -> Data] = [
+            {
+                try JSONEncoder().encode(ToriiGovernanceZkBallotV1Request(
+                    authority: owner,
+                    chainId: "chain",
+                    electionId: "election-1 ",
+                    backend: "halo2/ipa",
+                    envelopeB64: "AQIDBA=="
+                ))
+            },
+            {
+                try JSONEncoder().encode(ToriiGovernanceZkBallotProofRequest(
+                    authority: owner,
+                    chainId: "chain",
+                    electionId: "election-1",
+                    ballot: .init(
+                        backend: "halo2/ipa",
+                        envelopeBytesB64: "AQIDBA== "
+                    )
+                ))
+            },
+            {
+                try JSONEncoder().encode(ToriiGovernancePlainBallotRequest(
+                    authority: owner,
+                    chainId: "chain",
+                    referendumId: "referendum 1",
+                    owner: owner,
+                    amount: "250",
+                    durationBlocks: 12,
+                    direction: .aye
+                ))
+            },
+        ]
+        for encode in invalidEncoders {
+            XCTAssertThrowsError(try encode())
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testInvalidGovernanceZkPublicInputsFailBeforeTransportDispatch() async throws {
+        let owner = try canonicalOwnerLiteral()
+        let request = ToriiGovernanceZkBallotV1Request(
+            authority: owner,
+            chainId: "chain",
+            electionId: "election-1",
+            backend: "halo2/ipa",
+            envelopeB64: "AQIDBA==",
+            publicInputs: .init(
+                rootHint: "not-hex",
+                owner: owner,
+                amount: "250",
+                durationBlocks: 12
+            )
+        )
+        var dispatched = false
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/gov/ballots/zk")
-            let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["authority"] as? String, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-            XCTAssertEqual(body["chain_id"] as? String, "chain")
-            XCTAssertEqual(body["election_id"] as? String, "election-1")
-            let publicInputs = body["public"] as? [String: Any]
-            XCTAssertEqual(publicInputs?["foo"] as? String, "bar")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let payload = """
-            {"ok":true,"accepted":true,"reason":null,"tx_instructions":[]}
-            """.data(using: .utf8)!
-            return (response, payload)
+            dispatched = true
+            XCTFail("invalid governance request reached transport dispatch: \(request)")
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!,
+                Data()
+            )
         }
 
-        let request = ToriiGovernanceZkBallotRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     chainId: "chain",
-                                                     electionId: "election-1",
-                                                     proofB64: "AAAA",
-                                                     publicInputs: ["foo": .string("bar")])
-        makeClient().submitGovernanceZkBallot(request) { result in
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().submitGovernanceZkBallotV1(request)
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("root_hint"))
+        }
+        XCTAssertFalse(dispatched)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGovernanceZkBackendsRejectWhitespaceAndControlsBeforeDispatch() async throws {
+        let owner = try canonicalOwnerLiteral()
+        var dispatched = false
+        StubURLProtocol.handler = { request in
+            dispatched = true
+            XCTFail("invalid governance backend reached transport dispatch: \(request)")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 500,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                Data()
+            )
+        }
+
+        for backend in ["", " halo2/ipa", "halo2/ipa ", "halo2 /ipa", "halo2\t/ipa", "halo2\u{0000}/ipa"] {
+            let envelope = ToriiGovernanceZkBallotV1Request(
+                authority: owner,
+                chainId: "chain",
+                electionId: "election-1",
+                backend: backend,
+                envelopeB64: "AQIDBA=="
+            )
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().submitGovernanceZkBallotV1(envelope)
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("unexpected flat-v1 error for \(backend.debugDescription): \(error)")
+                }
+                XCTAssertTrue(reason.contains("backend"))
+            }
+
+            let proof = ToriiGovernanceZkBallotProofRequest(
+                authority: owner,
+                chainId: "chain",
+                electionId: "election-1",
+                ballot: .init(
+                    backend: backend,
+                    envelopeBytesB64: "AQIDBA=="
+                )
+            )
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().submitGovernanceZkBallotProofV1(proof)
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("unexpected proof-v1 error for \(backend.debugDescription): \(error)")
+                }
+                XCTAssertTrue(reason.contains("backend"))
+            }
+            XCTAssertFalse(dispatched)
+        }
+    }
+
+    func testSubmitGovernanceZkBallotV1EncodesFlatTypedEnvelope() throws {
+        let expectation = expectation(description: "zk ballot v1")
+        let owner = try canonicalOwnerLiteral()
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/gov/ballots/zk-v1")
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
+            XCTAssertEqual(body["envelope_b64"] as? String, "AQIDBA==")
+            XCTAssertNil(body["public"])
+            XCTAssertEqual(body["root_hint"] as? String, String(repeating: "11", count: 32))
+            XCTAssertEqual(body["owner"] as? String, owner)
+            XCTAssertEqual(body["amount"] as? String, "250")
+            XCTAssertEqual(body["duration_blocks"] as? Int, 12)
+            XCTAssertEqual(body["direction"] as? String, "Nay")
+            XCTAssertEqual(body["nullifier"] as? String, String(repeating: "22", count: 32))
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                headerFields: ["Content-Type": "application/json"])!,
+                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
+            )
+        }
+        let request = ToriiGovernanceZkBallotV1Request(
+            authority: owner,
+            chainId: "chain",
+            electionId: "election-1",
+            backend: "halo2/ipa",
+            envelopeB64: "AQIDBA==",
+            publicInputs: .init(
+                rootHint: "0x\(String(repeating: "11", count: 32))",
+                owner: owner,
+                amount: "250",
+                durationBlocks: 12,
+                direction: .nay,
+                nullifier: "blake2b32:\(String(repeating: "22", count: 32))"
+            )
+        )
+        makeClient().submitGovernanceZkBallotV1(request) { result in
             if case .failure(let error) = result {
                 XCTFail("unexpected error: \(error)")
             }
@@ -19830,136 +20169,158 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testSubmitGovernanceZkBallotRejectsIncompleteLockHints() throws {
+    func testSubmitGovernanceZkBallotProofV1EncodesTypedNestedProof() throws {
+        let expectation = expectation(description: "zk ballot proof v1")
         let owner = try canonicalOwnerLiteral()
-        let request = ToriiGovernanceZkBallotRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     chainId: "chain",
-                                                     electionId: "election-1",
-                                                     proofB64: "AAAA",
-                                                     publicInputs: ["owner": .string(owner)])
-        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-            guard case let ToriiClientError.invalidPayload(message) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(message.contains("owner, amount, and duration_blocks"))
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/gov/ballots/zk-v1/ballot-proof")
+            let body = self.bodyJSON(from: request)
+            let ballot = body["ballot"] as? [String: Any]
+            XCTAssertEqual(ballot?["backend"] as? String, "halo2/ipa")
+            XCTAssertEqual(ballot?["envelope_bytes"] as? String, "AQIDBA==")
+            XCTAssertEqual(ballot?["owner"] as? String, owner)
+            XCTAssertEqual(ballot?["amount"] as? String, "250")
+            XCTAssertEqual(ballot?["duration_blocks"] as? Int, 12)
+            XCTAssertEqual(ballot?["direction"] as? String, "Abstain")
+            XCTAssertEqual(ballot?["root_hint"] as? String, String(repeating: "33", count: 32))
+            XCTAssertEqual(ballot?["nullifier"] as? String, String(repeating: "44", count: 32))
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                headerFields: ["Content-Type": "application/json"])!,
+                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
+            )
         }
-    }
-
-    func testSubmitGovernanceZkBallotRejectsDeprecatedPublicInputs() throws {
-        let owner = try canonicalOwnerLiteral()
-        let request = ToriiGovernanceZkBallotRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     chainId: "chain",
-                                                     electionId: "election-1",
-                                                     proofB64: "AAAA",
-                                                     publicInputs: [
-                                                        "owner": .string(owner),
-                                                        "amount": .string("18446744073709551616.25"),
-                                                        "durationBlocks": .number(12),
-                                                        "rootHintHex": .string("0x\(String(repeating: "Aa", count: 32))"),
-                                                        "nullifierHex": .string("blake2b32:\(String(repeating: "BB", count: 32))"),
-                                                     ])
-        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-            guard case let ToriiClientError.invalidPayload(message) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(message.contains("durationBlocks"))
-        }
-    }
-
-    func testSubmitGovernanceZkBallotNormalizesPublicInputs() throws {
-        let owner = try canonicalOwnerLiteral()
-        let request = ToriiGovernanceZkBallotRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     chainId: "chain",
-                                                     electionId: "election-1",
-                                                     proofB64: "AAAA",
-                                                     publicInputs: [
-                                                        "owner": .string(owner),
-                                                        "amount": .string("18446744073709551616.25"),
-                                                        "duration_blocks": .number(12),
-                                                        "root_hint": .string("0x\(String(repeating: "Cc", count: 32))"),
-                                                        "nullifier": .string("blake2b32:\(String(repeating: "DD", count: 32))"),
-                                                     ])
-        let data = try JSONEncoder().encode(request)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let publicInputs = json["public"] as? [String: Any] else {
-            return XCTFail("missing public inputs")
-        }
-        XCTAssertEqual(publicInputs["root_hint"] as? String, String(repeating: "cc", count: 32))
-        XCTAssertEqual(publicInputs["nullifier"] as? String, String(repeating: "dd", count: 32))
-        XCTAssertEqual(
-            publicInputs["amount"] as? String,
-            "18446744073709551616.25"
+        let request = ToriiGovernanceZkBallotProofRequest(
+            authority: owner,
+            chainId: "chain",
+            electionId: "election-1",
+            ballot: .init(
+                backend: "halo2/ipa",
+                envelopeBytesB64: "AQIDBA==",
+                publicInputs: .init(
+                    rootHint: String(repeating: "33", count: 32),
+                    owner: owner,
+                    amount: "250",
+                    durationBlocks: 12,
+                    direction: .abstain,
+                    nullifier: String(repeating: "44", count: 32)
+                )
+            )
         )
+        makeClient().submitGovernanceZkBallotProofV1(request) { result in
+            if case .failure(let error) = result {
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
     }
 
-    func testSubmitGovernanceZkBallotRejectsNoncanonicalQuantityHints() throws {
+    func testSubmitGovernanceParliamentBallotUsesCanonicalPolicyJuryWireLabels() throws {
+        let expectation = expectation(description: "Parliament ballot")
         let owner = try canonicalOwnerLiteral()
-        let overflowing = String(repeating: "9", count: 155)
-        let invalidAmounts: [ToriiJSONValue] = [
-            .number(1),
-            .string("+1"),
-            .string("01"),
-            .string("1.0"),
-            .string("1.2300"),
-            .string(" 1"),
-            .string("-1"),
-            .string(overflowing),
-        ]
-        for amount in invalidAmounts {
-            let request = ToriiGovernanceZkBallotRequest(
+        let proposalId = String(repeating: "a5", count: 32)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/gov/parliament/ballots")
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["authority"] as? String, owner)
+            XCTAssertEqual(body["chain_id"] as? String, "chain")
+            XCTAssertEqual(body["proposal_id"] as? String, proposalId)
+            XCTAssertEqual(body["body"] as? String, "policy-jury")
+            XCTAssertEqual(body["decision"] as? String, "approve")
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                headerFields: ["Content-Type": "application/json"])!,
+                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
+            )
+        }
+        let request = ToriiGovernanceParliamentBallotRequest(
+            authority: owner,
+            chainId: "chain",
+            proposalId: "blake2b32:\(proposalId.uppercased())",
+            body: .policyJury,
+            decision: .approve
+        )
+        makeClient().submitGovernanceParliamentBallot(request) { result in
+            if case .failure(let error) = result {
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testGovernanceTypedRequestBodiesCannotEmitPrivateKeyAliases() throws {
+        let owner = try canonicalOwnerLiteral()
+        let publicInputs = GovernanceZkBallotPublicInputs(
+            owner: owner,
+            amount: "250",
+            durationBlocks: 12
+        )
+        let bodies = [
+            try JSONEncoder().encode(ToriiGovernanceDeployContractProposalRequest(
+                contractAlias: "demo::universal",
+                codeHashHex: String(repeating: "11", count: 32),
+                abiHashHex: String(repeating: "22", count: 32),
+                manifestProvenance: .init(
+                    signer: "ed25519:public",
+                    signature: "ed25519:signature"
+                )
+            )),
+            try JSONEncoder().encode(ToriiGovernancePlainBallotRequest(
+                authority: owner,
+                chainId: "chain",
+                referendumId: "referendum-1",
+                owner: owner,
+                amount: "250",
+                durationBlocks: 12,
+                direction: .aye
+            )),
+            try JSONEncoder().encode(ToriiGovernanceZkBallotV1Request(
                 authority: owner,
                 chainId: "chain",
                 electionId: "election-1",
-                proofB64: "AAAA",
-                publicInputs: [
-                    "owner": .string(owner),
-                    "amount": amount,
-                    "duration_blocks": .number(12),
-                ]
+                backend: "halo2/ipa",
+                envelopeB64: "AQIDBA==",
+                publicInputs: publicInputs
+            )),
+            try JSONEncoder().encode(ToriiGovernanceZkBallotProofRequest(
+                authority: owner,
+                chainId: "chain",
+                electionId: "election-1",
+                ballot: .init(
+                    backend: "halo2/ipa",
+                    envelopeBytesB64: "AQIDBA==",
+                    publicInputs: publicInputs
+                )
+            )),
+            try JSONEncoder().encode(ToriiGovernanceParliamentBallotRequest(
+                authority: owner,
+                chainId: "chain",
+                proposalId: String(repeating: "55", count: 32),
+                body: .policyJury,
+                decision: .approve
+            )),
+            try JSONEncoder().encode(ToriiGovernanceFinalizeRequest(
+                referendumId: "referendum-1",
+                proposalId: String(repeating: "66", count: 32)
+            )),
+        ]
+        let privateAliases = [
+            "private_key", "privateKey", "private_key_hex", "privateKeyHex",
+            "private_key_bytes", "privateKeyBytes", "private_key_seed", "privateKeySeed",
+            "private_key_multihash", "privateKeyMultihash", "private_key_algorithm",
+            "privateKeyAlgorithm",
+        ]
+        for data in bodies {
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any]
             )
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(request),
-                "noncanonical amount \(amount) must be rejected"
-            )
-        }
-    }
-
-    func testSubmitGovernanceZkBallotRejectsInvalidHexHints() throws {
-        let owner = try canonicalOwnerLiteral()
-        let request = ToriiGovernanceZkBallotRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     chainId: "chain",
-                                                     electionId: "election-1",
-                                                     proofB64: "AAAA",
-                                                     publicInputs: [
-                                                        "owner": .string(owner),
-                                                        "amount": .string("250"),
-                                                        "duration_blocks": .number(12),
-                                                        "root_hint": .string("not-hex"),
-                                                     ])
-        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-            guard case let ToriiClientError.invalidPayload(message) = error else {
-                return XCTFail("unexpected error: \(error)")
+            let wire = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+            let text = try XCTUnwrap(String(data: wire, encoding: .utf8))
+            for alias in privateAliases {
+                XCTAssertFalse(text.contains("\"\(alias)\""), "emitted private alias \(alias)")
             }
-            XCTAssertTrue(message.contains("root_hint"))
-        }
-    }
-
-    func testSubmitGovernanceZkBallotRejectsNoncanonicalOwner() throws {
-        let owner = try noncanonicalOwnerLiteral()
-        let request = ToriiGovernanceZkBallotRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     chainId: "chain",
-                                                     electionId: "election-1",
-                                                     proofB64: "AAAA",
-                                                     publicInputs: [
-                                                        "owner": .string(owner),
-                                                        "amount": .string("250"),
-                                                        "duration_blocks": .number(12),
-                                                     ])
-        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-            guard case let ToriiClientError.invalidPayload(message) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(message.contains("owner must be a canonical I105 account id."))
         }
     }
 
@@ -19996,6 +20357,114 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGovernanceGetIdentifiersAreExactEncodedPathSegments() async throws {
+        let proposalId = String(repeating: "ab", count: 32)
+        var requestedURLs: [String] = []
+        StubURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            requestedURLs.append(url.absoluteString)
+            let body: Data
+            switch url.absoluteString {
+            case "https://example.test/v1/gov/proposals/\(proposalId)":
+                body = Data(#"{"found":false,"proposal":null}"#.utf8)
+            case "https://example.test/v1/gov/referenda/ref%2Freferendum":
+                body = Data(#"{"found":false,"referendum":null}"#.utf8)
+            case "https://example.test/v1/gov/tally/ref%2Ftally":
+                body = Data(
+                    #"{"referendum_id":"ref/tally","approve":"0","reject":"0","abstain":"0"}"#.utf8
+                )
+            case "https://example.test/v1/gov/locks/ref%2Flocks":
+                body = Data(#"{"found":false,"referendum_id":"ref/locks","locks":null}"#.utf8)
+            default:
+                XCTFail("unexpected governance GET URL: \(url.absoluteString)")
+                body = Data()
+            }
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, body)
+        }
+
+        let client = makeClient()
+        let proposal = try await client.getGovernanceProposal(idHex: proposalId)
+        let referendum = try await client.getGovernanceReferendum(id: "ref/referendum")
+        let tally = try await client.getGovernanceTally(id: "ref/tally")
+        let locks = try await client.getGovernanceLocks(referendumId: "ref/locks")
+
+        XCTAssertFalse(proposal.found)
+        XCTAssertFalse(referendum.found)
+        XCTAssertEqual(tally.referendumId, "ref/tally")
+        XCTAssertEqual(locks.referendumId, "ref/locks")
+        XCTAssertEqual(requestedURLs, [
+            "https://example.test/v1/gov/proposals/\(proposalId)",
+            "https://example.test/v1/gov/referenda/ref%2Freferendum",
+            "https://example.test/v1/gov/tally/ref%2Ftally",
+            "https://example.test/v1/gov/locks/ref%2Flocks",
+        ])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGovernanceGetIdentifiersRejectAliasesBeforeTransportDispatch() async throws {
+        let client = makeClient()
+        let proposalId = String(repeating: "ab", count: 32)
+        let invalidCalls: [(String, () async throws -> Void)] = [
+            ("uppercase proposal", {
+                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased())
+            }),
+            ("prefixed proposal", {
+                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)")
+            }),
+            ("padded proposal", {
+                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)")
+            }),
+            ("slash proposal", {
+                _ = try await client.getGovernanceProposal(idHex: "proposal/segment")
+            }),
+            ("padded referendum", {
+                _ = try await client.getGovernanceReferendum(id: " ref-1")
+            }),
+            ("internal referendum whitespace", {
+                _ = try await client.getGovernanceReferendum(id: "ref 1")
+            }),
+            ("tally tab", {
+                _ = try await client.getGovernanceTally(id: "ref\t1")
+            }),
+            ("locks control", {
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1")
+            }),
+            ("locks unicode whitespace", {
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1")
+            }),
+        ]
+        var dispatched = false
+        StubURLProtocol.handler = { request in
+            dispatched = true
+            XCTFail("invalid governance identifier reached transport dispatch: \(request)")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 500,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                Data()
+            )
+        }
+
+        for (label, invoke) in invalidCalls {
+            await XCTAssertThrowsErrorAsync(try await invoke()) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("expected invalidPayload for \(label), got \(error)")
+                }
+            }
+            XCTAssertFalse(dispatched, "\(label) reached transport dispatch")
+        }
     }
 
     func testGetGovernanceUnlockStatsAddsQuery() {

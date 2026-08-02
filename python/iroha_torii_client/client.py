@@ -13825,41 +13825,6 @@ class ToriiClient:
             tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
         )
 
-    def submit_zk_ballot(
-        self,
-        *,
-        authority: str,
-        chain_id: str,
-        election_id: str,
-        proof_b64: str,
-        public: Optional[Mapping[str, Any]] = None,
-    ) -> BallotSubmitResult:
-        """Submit a zk ballot via ``POST /v1/gov/ballots/zk``."""
-
-        payload: Dict[str, Any] = {
-            "authority": authority,
-            "chain_id": chain_id,
-            "election_id": election_id,
-            "proof_b64": proof_b64,
-        }
-        public_inputs = self._normalize_governance_zk_public_inputs(
-            public,
-            context="zk ballot public inputs",
-        )
-        if public_inputs is not None:
-            payload["public"] = public_inputs
-        body = self._post_json(
-            "/v1/gov/ballots/zk",
-            payload,
-            context="zk ballot",
-        )
-        return BallotSubmitResult(
-            ok=bool(body.get("ok")),
-            accepted=bool(body.get("accepted")),
-            reason=body.get("reason"),
-            tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
-        )
-
     def submit_zk_ballot_v1(
         self,
         *,
@@ -18625,20 +18590,6 @@ class ToriiClient:
         raise RuntimeError(f"{context} must be an object")
 
     @staticmethod
-    def _reject_governance_public_input_key(
-        target: MutableMapping[str, Any],
-        key: str,
-        canonical_key: str,
-        *,
-        context: str,
-    ) -> None:
-        if key not in target:
-            return
-        raise RuntimeError(
-            f"{context} must use {canonical_key} (unsupported key {key})"
-        )
-
-    @staticmethod
     def _normalize_governance_public_hex_hint(
         target: MutableMapping[str, Any],
         key: str,
@@ -18719,81 +18670,6 @@ class ToriiClient:
             _decode_i105_string(trimmed)
         except ValueError as exc:
             raise RuntimeError(f"{context}.owner must be a canonical I105 account id") from exc
-
-    @classmethod
-    def _normalize_governance_zk_public_inputs(
-        cls,
-        value: Optional[Mapping[str, Any]],
-        *,
-        context: str,
-    ) -> Optional[Dict[str, Any]]:
-        if value is None:
-            return None
-        if not isinstance(value, Mapping):
-            raise RuntimeError(f"{context} must be an object")
-        normalized = dict(value)
-        cls._reject_governance_public_input_key(
-            normalized,
-            "durationBlocks",
-            "duration_blocks",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "root_hint_hex",
-            "root_hint",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "rootHintHex",
-            "root_hint",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "rootHint",
-            "root_hint",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "nullifier_hex",
-            "nullifier",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "nullifierHex",
-            "nullifier",
-            context=context,
-        )
-        cls._normalize_governance_public_hex_hint(
-            normalized,
-            "root_hint",
-            context=context,
-        )
-        cls._normalize_governance_public_hex_hint(
-            normalized,
-            "nullifier",
-            context=context,
-        )
-        cls._ensure_governance_lock_hints_complete(
-            normalized.get("owner"),
-            normalized.get("amount"),
-            normalized.get("duration_blocks"),
-            context=context,
-        )
-        if normalized.get("amount") is not None:
-            normalized["amount"] = cls._quantity(
-                normalized["amount"],
-                f"{context}.amount",
-            )
-        cls._ensure_governance_owner_canonical(
-            normalized.get("owner"),
-            context=context,
-        )
-        return normalized
 
     @staticmethod
     def _parse_string_list(value: Any, *, context: str) -> List[str]:

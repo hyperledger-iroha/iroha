@@ -870,7 +870,7 @@ class HttpClientTransportTest {
             },
             "full-bootstrap verifier commitment drift" to { operationVectors ->
                 val material = mutableObj(operationVectors, "full_bootstrap_material")
-                material["vk_commitment_hex"] = string(material, "expected_statement_digest_hex")
+                material["vk_commitment_hex"] = string(material, "expected_material_digest_hex")
             },
             "noncanonical full-bootstrap material digest" to { operationVectors ->
                 val material = mutableObj(operationVectors, "full_bootstrap_material")
@@ -4408,7 +4408,6 @@ class HttpClientTransportTest {
             "verifier_key_material_commitment_hex",
             "vk_commitment_hex",
             "expected_material_digest_hex",
-            "expected_statement_digest_hex",
         )
         val digestValues = digestFields.map { field ->
             val value = string(material, field)
@@ -4432,10 +4431,6 @@ class HttpClientTransportTest {
             uniqueDigestValues.size,
             uniqueDigestValues.toSet().size,
             "full-bootstrap material digest roles must be unique",
-        )
-        assertTrue(
-            string(material, "expected_material_digest_hex") != string(material, "expected_statement_digest_hex"),
-            "full-bootstrap material and statement digests must differ",
         )
     }
 

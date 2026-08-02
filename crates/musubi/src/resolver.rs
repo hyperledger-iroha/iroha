@@ -359,6 +359,7 @@ pub fn resolve_fresh(request: ResolveRequestV1) -> Result<ResolveOutcomeV1, Reso
     resolve_with_policy(request, Limits::default(), SelectionPolicyV1::FreshOnly)
 }
 
+#[cfg(test)]
 fn resolve_with_limits(
     request: ResolveRequestV1,
     limits: Limits,
@@ -1839,7 +1840,10 @@ mod tests {
         );
 
         next.mode = ResolveModeV1::Locked;
-        assert_eq!(resolve_fresh(next), Err(ResolverError::LockChangeRequired));
+        assert!(matches!(
+            resolve_fresh(next),
+            Err(ResolverError::LockChangeRequired)
+        ));
     }
 
     #[test]
@@ -3036,6 +3040,9 @@ mod tests {
         locked.previous = Some(previous);
         locked.mode = ResolveModeV1::Locked;
 
-        assert_eq!(resolve(locked), Err(ResolverError::LockChangeRequired));
+        assert!(matches!(
+            resolve(locked),
+            Err(ResolverError::LockChangeRequired)
+        ));
     }
 }

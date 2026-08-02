@@ -90,6 +90,10 @@ const RUNTIME_INDEX_SCHEMA: &str = "sorafs.governance_dag.runtime_signed_index.v
 const MIRROR_INDEX_SCHEMA: &str = "sorafs.governance_dag.mirror.v1";
 const MIRROR_INDEX_FILE: &str = "mirror-index.json";
 const SERVICE_LOCK_FILE: &str = ".service.lock";
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const ATOMIC_RECOVERY_QUARANTINE_DIR: &str = ".governance-service-recovery-quarantine-v1";
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const ATOMIC_RECOVERY_ENTRY_HARD_CAP: usize = 16;
 const MAX_DNS_ADDRESSES: usize = 8;
 const MAX_RESPONSE_HEADERS: usize = 64;
 const MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
@@ -1890,14 +1894,7 @@ fn write_rooted_atomic_secret(
             "durable state target name must be canonical UTF-8".to_owned(),
         )
     })?;
-    parent
-        .remove_atomic_temps_for(target_name)
-        .map_err(|error| {
-            GovernanceDagServiceError::Filesystem(format!(
-                "cannot recover durable temporaries for `{}`: {error}",
-                state_root_guard.root().join(relative).display()
-            ))
-        })?;
+    recover_rooted_atomic_secret_temporary(state_root_guard, &parent, target_name, relative)?;
     let expected = parent
         .private_file_binding(
             &name,
@@ -1943,6 +1940,144 @@ fn write_rooted_atomic_secret(
             state_root_guard.root().join(relative).display()
         ))
     })
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn atomic_temporary_target_name(name: &str) -> Option<&str> {
+    let name = name.strip_prefix('.')?;
+    let (target, suffix) = name.rsplit_once(".tmp-")?;
+    let (pid, counter) = suffix.split_once('-')?;
+    (!target.is_empty()
+        && !pid.is_empty()
+        && !counter.is_empty()
+        && pid.bytes().all(|byte| byte.is_ascii_digit())
+        && counter.bytes().all(|byte| byte.is_ascii_digit()))
+    .then_some(target)
+}
+
+#[cfg(windows)]
+fn recover_rooted_atomic_secret_temporary(
+    state_root_guard: &GovernanceFilesystemRootGuard,
+    parent: &crate::governance_rooted_fs::RootedDirectory,
+    target_name: &str,
+    relative: &Path,
+) -> Result<(), GovernanceDagServiceError> {
+    parent
+        .remove_atomic_temps_for(target_name)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot recover durable temporaries for `{}`: {error}",
+                state_root_guard.root().join(relative).display()
+            ))
+        })?;
+    state_root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "state root changed during durable temporary recovery: {error}"
+        ))
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn recover_rooted_atomic_secret_temporary(
+    state_root_guard: &GovernanceFilesystemRootGuard,
+    parent: &crate::governance_rooted_fs::RootedDirectory,
+    target_name: &str,
+    relative: &Path,
+) -> Result<(), GovernanceDagServiceError> {
+    match parent.open_directory(OsStr::new(ATOMIC_RECOVERY_QUARANTINE_DIR)) {
+        Ok(quarantine) => {
+            let entries = quarantine
+                .child_names_bounded(ATOMIC_RECOVERY_ENTRY_HARD_CAP)
+                .map(|entries| entries.len())
+                .map_err(|error| {
+                    GovernanceDagServiceError::Filesystem(format!(
+                        "durable-state recovery quarantine cannot be inspected: {error}"
+                    ))
+                })?;
+            return Err(GovernanceDagServiceError::Filesystem(format!(
+                "durable-state recovery quarantine contains {entries} preserved entries; stop the service, inspect them, and clear `{ATOMIC_RECOVERY_QUARANTINE_DIR}` offline"
+            )));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(GovernanceDagServiceError::Filesystem(format!(
+                "cannot inspect durable-state recovery quarantine: {error}"
+            )));
+        }
+    }
+    let matching = parent
+        .child_names_bounded(SOURCE_ENTRY_HARD_CAP)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot inventory durable-state atomic temporaries: {error}"
+            ))
+        })?
+        .into_iter()
+        .filter(|name| name.to_str().and_then(atomic_temporary_target_name) == Some(target_name))
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return Ok(());
+    }
+    if matching.len() != 1 {
+        return Err(GovernanceDagServiceError::Filesystem(format!(
+            "more than one interrupted atomic temporary targets `{target_name}`; stop the service and reconcile them offline"
+        )));
+    }
+    let temporary_name = &matching[0];
+    let binding = parent
+        .removal_file_binding(
+            temporary_name,
+            rooted_byte_limit(MUTABLE_STATE_MAX_BYTES, "durable state")?,
+        )
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot retain interrupted durable-state temporary: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            GovernanceDagServiceError::Filesystem(
+                "interrupted durable-state temporary disappeared during recovery".to_owned(),
+            )
+        })?;
+    let quarantine = parent
+        .open_or_create_directory(OsStr::new(ATOMIC_RECOVERY_QUARANTINE_DIR))
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot create durable-state recovery quarantine: {error}"
+            ))
+        })?;
+    parent
+        .isolate_file_binding(
+            binding,
+            &quarantine,
+            OsStr::new("interrupted-atomic-temporary"),
+        )
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot isolate interrupted durable-state temporary: {error}"
+            ))
+        })?;
+    state_root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "state root changed during durable temporary isolation: {error}"
+        ))
+    })?;
+    Err(GovernanceDagServiceError::Filesystem(format!(
+        "isolated an interrupted temporary for `{}` into `{ATOMIC_RECOVERY_QUARANTINE_DIR}`; stop the service, inspect it, and clear the quarantine offline",
+        state_root_guard.root().join(relative).display()
+    )))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn recover_rooted_atomic_secret_temporary(
+    _state_root_guard: &GovernanceFilesystemRootGuard,
+    _parent: &crate::governance_rooted_fs::RootedDirectory,
+    _target_name: &str,
+    _relative: &Path,
+) -> Result<(), GovernanceDagServiceError> {
+    Err(GovernanceDagServiceError::Filesystem(
+        "durable-state atomic recovery is unsupported on this platform".to_owned(),
+    ))
 }
 
 #[cfg(unix)]
@@ -8399,14 +8534,62 @@ listen_addr = "127.0.0.1:0"
         fs::write(&stale, b"crash-temporary").expect("seed restart temporary");
         let restarted = GovernanceFilesystemRootGuard::capture_writer(dir.path())
             .expect("retain restarted state root");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let error = write_rooted_atomic_secret(
+                &restarted,
+                Path::new(MIRROR_INDEX_FILE),
+                b"second-generation",
+            )
+            .expect_err("online restart must isolate and retain an interrupted temporary");
+            assert!(error.to_string().contains("offline"));
+            assert!(!stale.exists());
+            let quarantine = dir.path().join(ATOMIC_RECOVERY_QUARANTINE_DIR);
+            assert_eq!(
+                fs::read(quarantine.join("interrupted-atomic-temporary"))
+                    .expect("read isolated crash temporary"),
+                b"crash-temporary"
+            );
+            write_rooted_atomic_secret(
+                &restarted,
+                Path::new(MIRROR_INDEX_FILE),
+                b"second-generation",
+            )
+            .expect_err("restart remains blocked while quarantine exists");
+            fs::remove_dir_all(&quarantine)
+                .expect("clear quarantine offline while service is stopped");
+        }
         write_rooted_atomic_secret(
             &restarted,
             Path::new(MIRROR_INDEX_FILE),
             b"second-generation",
         )
-        .expect("recover and write second state generation");
+        .expect("write after bounded recovery");
+        write_rooted_atomic_secret(
+            &restarted,
+            Path::new(MIRROR_INDEX_FILE),
+            b"second-generation",
+        )
+        .expect("exact mirror replay is a verified storage no-op");
 
         assert!(!stale.exists());
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        {
+            assert_eq!(
+                fs::read(
+                    dir.path()
+                        .join(format!(".{MIRROR_INDEX_FILE}.retained-v1-0000")),
+                )
+                .expect("read exact retained predecessor"),
+                b"first-generation"
+            );
+            assert!(
+                !dir.path()
+                    .join(format!(".{MIRROR_INDEX_FILE}.retained-v1-0001"))
+                    .exists(),
+                "exact mirror replay must not consume another retained slot"
+            );
+        }
         assert_eq!(
             read_rooted_file(
                 &restarted,
@@ -8418,6 +8601,57 @@ listen_addr = "127.0.0.1:0"
             .bytes(),
             b"second-generation"
         );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_state_recovery_rejects_an_empty_quarantine_until_offline_cleanup() {
+        let dir = secure_temp_dir();
+        let quarantine = dir.path().join(ATOMIC_RECOVERY_QUARANTINE_DIR);
+        fs::create_dir(&quarantine).expect("seed empty recovery quarantine");
+        let guard =
+            GovernanceFilesystemRootGuard::capture_writer(dir.path()).expect("retain state root");
+
+        let error =
+            write_rooted_atomic_secret(&guard, Path::new(MIRROR_INDEX_FILE), b"must-not-land")
+                .expect_err("empty online quarantine must fail closed");
+        assert!(error.to_string().contains("offline"));
+        assert_eq!(
+            fs::read_dir(&quarantine)
+                .expect("reread empty quarantine")
+                .count(),
+            0
+        );
+        assert!(!dir.path().join(MIRROR_INDEX_FILE).exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_state_recovery_rejects_a_saturated_quarantine_without_mutation() {
+        let dir = secure_temp_dir();
+        let quarantine = dir.path().join(ATOMIC_RECOVERY_QUARANTINE_DIR);
+        fs::create_dir(&quarantine).expect("seed recovery quarantine");
+        for position in 0..=ATOMIC_RECOVERY_ENTRY_HARD_CAP {
+            fs::write(
+                quarantine.join(format!("preserved-{position:02}")),
+                position.to_le_bytes(),
+            )
+            .expect("seed saturated quarantine entry");
+        }
+        let guard =
+            GovernanceFilesystemRootGuard::capture_writer(dir.path()).expect("retain state root");
+
+        let error =
+            write_rooted_atomic_secret(&guard, Path::new(MIRROR_INDEX_FILE), b"must-not-land")
+                .expect_err("saturated online quarantine must fail closed");
+        assert!(error.to_string().contains("cannot be inspected"));
+        assert_eq!(
+            fs::read_dir(&quarantine)
+                .expect("reread saturated quarantine")
+                .count(),
+            ATOMIC_RECOVERY_ENTRY_HARD_CAP + 1
+        );
+        assert!(!dir.path().join(MIRROR_INDEX_FILE).exists());
     }
 
     #[cfg(unix)]

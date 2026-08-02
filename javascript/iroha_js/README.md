@@ -2983,7 +2983,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   proposal: {
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: Buffer.alloc(32, 0xaa),
-    abiHash: "hash:…#…",
+    abiHash: `blake2b32:${"bb".repeat(32)}`,
     abiVersion: "1",
     window: { lower: Date.now(), upper: Date.now() + 60000 },
     votingMode: "Plain",
@@ -3036,6 +3036,14 @@ const enactTx = buildEnactReferendumTransaction({
   privateKey,
 });
 ```
+
+The local deployment builder accepts only a canonical `contractAddress`; alias
+resolution belongs to Torii and is not available while building a transaction
+offline. Its camel-case input is closed, ABI V1 is exact, and the optional
+`manifestProvenance` object contains only `signer` and `signature`. ZK ballot
+`publicInputs` are likewise closed to `root_hint`, `owner`, `amount`,
+`duration_blocks`, `direction`, and `nullifier`. Durations retain the complete
+u64 range and directions use exactly `Aye`, `Nay`, or `Abstain`.
 
 Helper inputs accept either strings or raw `Buffer`s for 32-byte hashes, ensure
 referendum windows remain ordered, and convert ballot payloads to canonical
@@ -4097,14 +4105,15 @@ console.log(
 );
 
 // Governance read helpers accept an AbortSignal so long-running requests can be cancelled.
+// Proposal ids are canonical lowercase 32-byte hashes; opaque referendum ids are exact tokens.
 const controller = new AbortController();
-const proposal = await torii.getGovernanceProposal("proposal-001", {
+const proposal = await torii.getGovernanceProposal("ab".repeat(32), {
   signal: controller.signal,
 });
-console.log(proposal?.kind);
+console.log(proposal?.proposal?.kind);
 
 // Typed wrapper returns a structured not-found result when the proposal is missing.
-const proposalResult = await torii.getGovernanceProposalTyped("proposal-missing");
+const proposalResult = await torii.getGovernanceProposalTyped("cd".repeat(32));
 if (!proposalResult.found) {
   console.warn("proposal not found");
 }
@@ -4124,11 +4133,15 @@ if (!tallyResult.found) {
 const writeController = new AbortController();
 const deployDraft = await torii.governanceProposeDeployContract({
   contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-  codeHash: "hash:7B38...#ABCD",
+  codeHash: "11".repeat(32),
   abiHash: Buffer.alloc(32, 0xaa),
   abiVersion: "1",
   window: { lower: 12_345, upper: 12_500 },
   mode: "Plain",
+  manifestProvenance: {
+    signer: `ed25519:${manifestSignerMultihashHex}`,
+    signature: `ed25519:${manifestSignatureHex}`,
+  },
 }, { signal: writeController.signal });
 console.log("proposal instructions", deployDraft.tx_instructions.length);
 
@@ -4145,55 +4158,49 @@ if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
+const parliamentBallot = await torii.governanceSubmitParliamentBallot({
+  authority,
+  chainId: "00000000-0000-0000-0000-000000000000",
+  proposalId: "11".repeat(32),
+  body: "policy-jury",
+  decision: "approve",
+}, { signal: writeController.signal });
+if (!parliamentBallot.accepted) {
+  console.warn("Parliament ballot rejected:", parliamentBallot.reason);
+}
+
 const zkOwner = "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL"; // canonical I105 account id for ZK public inputs
-await torii.governanceSubmitZkBallot({
+await torii.governanceSubmitZkBallotV1({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
   electionId: "ref-zk",
-  proof: Buffer.from(proofBytes),
-  public: {
-    owner: zkOwner,
-    amount: "5000",
-    duration_blocks: 7_200,
-    direction: "Aye",
-  },
+  backend: "halo2/ipa",
+  envelope: Buffer.from(ballotEnvelopeBytes),
+  owner: zkOwner,
+  amount: "5000",
+  durationBlocks: 7_200,
+  direction: "Aye",
 }, { signal: writeController.signal });
 
-// The JS SDK also exposes governanceSubmitZkBallotV1 / governanceSubmitZkBallotProofV1
-// for the BallotProof DTOs described in specs/governance_api.md.
-const validatorPublicKeyBytes = Buffer.alloc(48, 0xaa);
-const validatorProofBytes = Buffer.alloc(96, 0xbb);
+// governanceSubmitZkBallotProofV1 accepts the BallotProof DTO described in
+// specs/governance_api.md.
+
+// Governance mutation payloads are closed, secret-free DTOs. Deploy proposals
+// accept the exact public manifest provenance object above; the retired opaque
+// `limits` field is not sent. ZK-v1 requests use only rootHint, owner, amount,
+// durationBlocks, direction, and nullifier for lock hints. Request DTOs use
+// exact camelCase names; snake_case and envelope aliases are rejected before an
+// HTTP request is attempted. Private-key fields are likewise rejected at any
+// nesting depth; sign the returned transaction draft in the caller's wallet or
+// key store. Plain-ballot durations are sent as canonical u64 decimal strings,
+// including "0". Parliament decisions use only the exact lowercase labels
+// "approve", "reject", and "abstain". Finalize accepts the shared governance
+// hash grammar; enact requires the exact 64-character lowercase proposal id.
+// Protected namespace labels are exact printable-ASCII tokens and are never
+// trimmed.
 
 const council = await torii.getGovernanceCouncilCurrent();
 console.log(`active council epoch=${council.epoch} members=${council.members.length}`);
-
-const deriveResponse = await torii.governanceDeriveCouncilVrf({
-  committeeSize: 2,
-  candidates: [
-    {
-      accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-      variant: "Normal",
-      pk: validatorPublicKeyBytes,
-      proof: validatorProofBytes,
-    },
-  ],
-});
-console.log(`verified candidates=${deriveResponse.verified}`);
-
-await torii.governancePersistCouncil({
-  committeeSize: deriveResponse.members.length,
-  candidates: deriveResponse.members.map((member) => ({
-    accountId: member.account_id,
-    variant: "Normal",
-    pk: validatorPublicKeyBytes,
-    proof: validatorProofBytes,
-  })),
-  authority,
-  privateKey,
-});
-
-const audit = await torii.getGovernanceCouncilAudit({ epoch: deriveResponse.epoch });
-console.log(`seed=${audit.seed_hex} beacon=${audit.beacon_hex}`);
 
 const protectedNamespaceAbort = new AbortController();
 await torii.setProtectedNamespaces(["apps", "system"], {
@@ -4206,12 +4213,11 @@ console.log(protectedNamespaces.namespaces); // ["apps", "system"]
 
 const finalizeDraft = await torii.governanceFinalizeReferendumTyped({
   referendumId: "ref-mainnet-001",
-  proposalId: "0123abcd...beef",
+  proposalId: `BLAKE2B32:0X${"01".repeat(32)}`,
 });
 console.log(`finalize instructions=${finalizeDraft.tx_instructions.length}`);
 const enactDraft = await torii.governanceEnactProposalTyped({
-  proposalId: "abcd0123...cafe",
-  window: { lower: 10, upper: 25 },
+  proposalId: "02".repeat(32),
 });
 console.log(`enact instructions=${enactDraft.tx_instructions.length}`);
 

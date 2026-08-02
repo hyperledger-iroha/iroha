@@ -39918,6 +39918,63 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn governance_dag_car_archive_lookup_rejects_ambiguous_digest() {
+        let (app, temp_dir, _digest_hex, archive_digest) =
+            sorafs_app_state_with_governance_car_queue();
+        let governance_dir = temp_dir.path().join("governance");
+        let mut queue = read_publication_section_fixture(&governance_dir, "car_queue");
+        let segments = queue
+            .get_mut("segments")
+            .and_then(Value::as_array_mut)
+            .expect("CAR queue segments");
+        assert_eq!(segments.len(), 2, "fixture must contain two CAR segments");
+        segments[1]
+            .as_object_mut()
+            .expect("second CAR segment")
+            .insert(
+                "car_archive_blake3".into(),
+                Value::from(archive_digest.clone()),
+            );
+        let archive_lookup = queue
+            .get_mut("by_car_archive_blake3")
+            .and_then(Value::as_object_mut)
+            .expect("CAR archive lookup");
+        archive_lookup.clear();
+        archive_lookup.insert(
+            archive_digest.clone(),
+            Value::Array(vec![Value::from(0_u64), Value::from(1_u64)]),
+        );
+        write_car_queue_fixture(&governance_dir, queue);
+
+        let response =
+            handle_get_sorafs_governance_dag_car_queue(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the duplicate archive digest is a structurally valid queue"
+        );
+
+        let response = handle_get_sorafs_governance_dag_car_queue_archive(
+            State(app),
+            HeaderMap::new(),
+            Path(archive_digest.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect ambiguous archive lookup body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode ambiguous archive lookup body");
+        let expected_error =
+            format!("governance DAG CAR queue archive `{archive_digest}` is ambiguous");
+        assert_eq!(
+            value.get("error").and_then(Value::as_str),
+            Some(expected_error.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn governance_dag_car_queue_rejects_stale_archive_index() {
         let (app, temp_dir, _digest_hex, car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();

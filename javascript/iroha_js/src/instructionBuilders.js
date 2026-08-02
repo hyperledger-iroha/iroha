@@ -24,6 +24,8 @@ import {
 } from "./validationError.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import { parseCanonicalContractAddress } from "./contractAddress.js";
+import { stringifyStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
   isCanonicalKotodamaDynamicAccessBaseKey,
@@ -51,7 +53,30 @@ import {
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const UINT64_MAX_BIGINT = 0xffff_ffff_ffff_ffffn;
 const UINT32_MAX = 0xffff_ffff;
+const GOVERNANCE_PRIVATE_KEY_FIELDS = new Set([
+  "private_key",
+  "privateKey",
+  "private_key_hex",
+  "privateKeyHex",
+  "private_key_bytes",
+  "privateKeyBytes",
+  "private_key_seed",
+  "privateKeySeed",
+  "private_key_multihash",
+  "privateKeyMultihash",
+  "private_key_algorithm",
+  "privateKeyAlgorithm",
+]);
+const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS = Object.freeze([
+  "root_hint",
+  "owner",
+  "amount",
+  "duration_blocks",
+  "direction",
+  "nullifier",
+]);
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 /** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
 export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
@@ -394,6 +419,46 @@ function assertExactFields(source, fields, name) {
         `${name}.${field} is required`,
         `${name}.${field}`,
       );
+    }
+  }
+}
+
+function rejectGovernancePrivateKeyFieldsDeep(value, context) {
+  const pending = [{ value, path: context }];
+  const visited = new WeakSet();
+  while (pending.length > 0) {
+    const { value: candidate, path } = pending.pop();
+    if (candidate === null || typeof candidate !== "object") {
+      continue;
+    }
+    if (visited.has(candidate)) {
+      continue;
+    }
+    visited.add(candidate);
+    const prototype = Object.getPrototypeOf(candidate);
+    if (
+      !Array.isArray(candidate) &&
+      prototype !== Object.prototype &&
+      prototype !== null
+    ) {
+      continue;
+    }
+    for (const key of Reflect.ownKeys(candidate)) {
+      if (key === "length") {
+        continue;
+      }
+      const field = typeof key === "string" ? key : key.toString();
+      if (typeof key === "string" && GOVERNANCE_PRIVATE_KEY_FIELDS.has(key)) {
+        fail(
+          ValidationErrorCode.INVALID_OBJECT,
+          `${path} does not accept private-key field ${key}; sign the transaction locally`,
+          `${path}.${key}`,
+        );
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      if (descriptor && Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+        pending.push({ value: descriptor.value, path: `${path}.${field}` });
+      }
     }
   }
 }
@@ -1080,6 +1145,76 @@ function normalizeHexHashString(value, name) {
     fail(ValidationErrorCode.INVALID_HEX, `${name} must be 32 bytes`, name);
   }
   return Buffer.from(buffer).toString("hex");
+}
+
+function normalizeGovernanceHex32(value, name) {
+  if (typeof value !== "string") {
+    return normalizeHexHashString(value, name);
+  }
+  const literal = assertString(value, name);
+  let body = literal;
+  const separator = literal.indexOf(":");
+  if (separator !== -1) {
+    const scheme = literal.slice(0, separator);
+    if (scheme.length === 0 || scheme.toLowerCase() !== "blake2b32") {
+      fail(
+        ValidationErrorCode.INVALID_HEX,
+        `${name} must use the optional blake2b32: scheme`,
+        name,
+      );
+    }
+    body = literal.slice(separator + 1);
+  }
+  if (body.startsWith("0x") || body.startsWith("0X")) {
+    body = body.slice(2);
+  }
+  if (body.length !== 64 || !/^[0-9A-Fa-f]{64}$/u.test(body)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be exactly 32-byte hexadecimal with no whitespace`,
+      name,
+    );
+  }
+  return body.toLowerCase();
+}
+
+function normalizeGovernanceU64(value, name) {
+  let integer;
+  if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      fail(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a lossless unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "string") {
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+      fail(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a canonical unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a lossless unsigned 64-bit integer`,
+      name,
+    );
+  }
+  if (integer < 0n || integer > UINT64_MAX_BIGINT) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${UINT64_MAX_BIGINT.toString(10)}`,
+      name,
+    );
+  }
+  return integer;
 }
 
 function normalizeVerifyingKeyId(value, name) {
@@ -2982,14 +3117,9 @@ function normalizeAtWindow(value, name) {
     return null;
   }
   const source = assertPlainObject(value, name);
-  const lower = asNonNegativeInteger(
-    source.lower ?? source.start ?? source.from,
-    `${name}.lower`,
-  );
-  const upper = asNonNegativeInteger(
-    source.upper ?? source.end ?? source.to,
-    `${name}.upper`,
-  );
+  assertExactFields(source, ["lower", "upper"], name);
+  const lower = normalizeGovernanceU64(source.lower, `${name}.lower`);
+  const upper = normalizeGovernanceU64(source.upper, `${name}.upper`);
   if (upper < lower) {
     fail(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
@@ -2997,7 +3127,7 @@ function normalizeAtWindow(value, name) {
       `${name}.upper`,
     );
   }
-  return { lower: String(lower), upper: String(upper) };
+  return { lower: lower.toString(10), upper: upper.toString(10) };
 }
 
 function normalizeVotingMode(value, name) {
@@ -3014,87 +3144,52 @@ function normalizeJsonPayload(value, name) {
   if (value === null || value === undefined) {
     return "{}";
   }
-  let payload = value;
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
-    }
-    try {
-      payload = JSON.parse(trimmed);
-    } catch (error) {
-      fail(
-        ValidationErrorCode.INVALID_JSON_VALUE,
-        `${name} must be valid JSON`,
-        name,
-        error,
-      );
-    }
-  }
-  const normalized = normalizeZkBallotPublicInputs(payload, name);
-  return canonicalJsonStringify(normalized, name);
-}
-
-function canonicalJsonStringify(value, name) {
-  return JSON.stringify(canonicalizeJsonValue(value, name, new Set()));
-}
-
-function canonicalizeJsonValue(value, name, stack) {
-  if (value === null || typeof value === "boolean" || typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      fail(ValidationErrorCode.INVALID_JSON_VALUE, `${name} must not contain non-finite numbers`, name);
-    }
-    return value;
-  }
-  if (typeof value === "bigint") {
-    fail(ValidationErrorCode.INVALID_JSON_VALUE, `${name} must not contain BigInt values`, name);
-  }
-  if (typeof value === "function" || typeof value === "symbol") {
-    return undefined;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => canonicalizeJsonValue(entry, name, stack));
-  }
-  if (value && typeof value === "object") {
-    if (typeof value.toJSON === "function") {
-      return canonicalizeJsonValue(value.toJSON(), name, stack);
-    }
-    if (stack.has(value)) {
-      fail(
-        ValidationErrorCode.INVALID_JSON_VALUE,
-        `${name} must not contain circular references`,
-        name,
-      );
-    }
-    stack.add(value);
-    const result = {};
-    const keys = Object.keys(value).sort();
-    for (const key of keys) {
-      const entry = value[key];
-      if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") {
-        continue;
-      }
-      result[key] = canonicalizeJsonValue(entry, name, stack);
-    }
-    stack.delete(value);
-    return result;
-  }
-  return value;
+  const normalized = normalizeZkBallotPublicInputs(value, name);
+  return stringifyStrictLosslessIntegerJson(normalized, name);
 }
 
 function normalizeZkBallotPublicInputs(value, name) {
-  const normalized = { ...assertPlainObject(value, name) };
-  rejectPublicInputKey(normalized, "durationBlocks", "duration_blocks", name);
-  rejectPublicInputKey(normalized, "root_hint_hex", "root_hint", name);
-  rejectPublicInputKey(normalized, "rootHintHex", "root_hint", name);
-  rejectPublicInputKey(normalized, "rootHint", "root_hint", name);
-  rejectPublicInputKey(normalized, "nullifier_hex", "nullifier", name);
-  rejectPublicInputKey(normalized, "nullifierHex", "nullifier", name);
-  normalizeZkBallotPublicInputHex(normalized, "root_hint", name);
-  normalizeZkBallotPublicInputHex(normalized, "nullifier", name);
+  const source = assertPlainObject(value, name);
+  rejectGovernancePrivateKeyFieldsDeep(source, name);
+  assertAllowedFields(source, new Set(GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS), name);
+
+  const normalized = {};
+  for (const field of GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      continue;
+    }
+    const entry = source[field];
+    if (entry === null) {
+      normalized[field] = null;
+      continue;
+    }
+    switch (field) {
+      case "root_hint":
+      case "nullifier":
+        normalized[field] = normalizeGovernanceHex32(entry, `${name}.${field}`);
+        break;
+      case "owner":
+        normalized.owner = ensureCanonicalAccountId(entry, `${name}.owner`);
+        break;
+      case "amount":
+        normalized.amount = asQuantity(entry, `${name}.amount`);
+        break;
+      case "duration_blocks":
+        normalized.duration_blocks = normalizeGovernanceU64(
+          entry,
+          `${name}.duration_blocks`,
+        );
+        break;
+      case "direction":
+        normalized.direction = normalizeGovernanceBallotDirection(
+          entry,
+          `${name}.direction`,
+        );
+        break;
+      default:
+        throw new Error(`unhandled governance public input ${field}`);
+    }
+  }
 
   const hasOwner = normalized.owner !== undefined && normalized.owner !== null;
   const hasAmount = normalized.amount !== undefined && normalized.amount !== null;
@@ -3108,60 +3203,16 @@ function normalizeZkBallotPublicInputs(value, name) {
       name,
     );
   }
-  if (hasOwner) {
-    normalized.owner = ensureCanonicalAccountId(normalized.owner, `${name}.owner`);
-  }
   return normalized;
 }
 
-function normalizeZkBallotPublicInputHex(target, key, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
-  }
-  const value = target[key];
-  if (value === null) {
-    return;
-  }
-  if (typeof value !== "string") {
-    fail(
-      ValidationErrorCode.INVALID_HEX,
-      `${name}.${key} must be a 32-byte hex string`,
-      name,
-    );
-  }
-  const trimmed = value.trim();
-  let body = trimmed;
-  if (trimmed.includes(":")) {
-    const [scheme, rest] = trimmed.split(":", 2);
-    if (scheme && scheme.toLowerCase() !== "blake2b32") {
-      fail(
-        ValidationErrorCode.INVALID_HEX,
-        `${name}.${key} must be a 32-byte hex string`,
-        name,
-      );
-    }
-    body = rest.trim();
-  }
-  if (body.startsWith("0x") || body.startsWith("0X")) {
-    body = body.slice(2);
-  }
-  if (!/^[0-9a-fA-F]{64}$/.test(body)) {
-    fail(
-      ValidationErrorCode.INVALID_HEX,
-      `${name}.${key} must be a 32-byte hex string`,
-      name,
-    );
-  }
-  target[key] = body.toLowerCase();
-}
-
-function rejectPublicInputKey(target, key, canonicalKey, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
+function normalizeGovernanceBallotDirection(value, name) {
+  if (value === "Aye" || value === "Nay" || value === "Abstain") {
+    return value;
   }
   fail(
-    ValidationErrorCode.INVALID_OBJECT,
-    `${name} must use ${canonicalKey} (unsupported key ${key})`,
+    ValidationErrorCode.INVALID_STRING,
+    `${name} must be exactly Aye, Nay, or Abstain`,
     name,
   );
 }
@@ -4875,6 +4926,25 @@ function normalizeContractTargetSelectorInput(source, context) {
   };
 }
 
+function normalizeGovernanceContractAddress(value, name) {
+  const literal = assertExactNonBlankString(value, name);
+  parseCanonicalContractAddress(literal, name);
+  return literal;
+}
+
+function normalizeGovernanceManifestProvenance(value, name) {
+  const source = assertPlainObject(value, name);
+  assertExactFields(source, ["signer", "signature"], name);
+  return normalizeManifestProvenance(source, name);
+}
+
+function normalizeGovernanceProof(value, name) {
+  if (typeof value === "string") {
+    return decodeBase64Strict(value, name).toString("base64");
+  }
+  return normalizeBase64(value, name);
+}
+
 /**
  * Build a normalized payload for `ToriiClient.approveMultisigContractCall(...)`.
  * @param {object} options
@@ -5049,23 +5119,70 @@ export function buildRegisterKaigiRelayInstruction(options) {
  */
 export function buildProposeDeployContractInstruction(options) {
   const source = assertPlainObject(options, "proposeDeployContract");
-  const payload = {
-    ...normalizeContractTargetSelectorInput(source, "proposeDeployContract"),
-    code_hash_hex: normalizeHexHashString(
-      source.codeHash ?? source.code_hash ?? source.codeHashHex,
+  rejectGovernancePrivateKeyFieldsDeep(source, "proposeDeployContract");
+  assertAllowedFields(
+    source,
+    new Set([
+      "contractAddress",
       "codeHash",
-    ),
-    abi_hash_hex: normalizeHexHashString(
-      source.abiHash ?? source.abi_hash ?? source.abiHashHex,
       "abiHash",
-    ),
-    abi_version: assertString(
-      source.abiVersion ?? source.abi_version ?? "1",
       "abiVersion",
+      "window",
+      "votingMode",
+      "manifestProvenance",
+    ]),
+    "proposeDeployContract",
+  );
+  for (const field of ["contractAddress", "codeHash", "abiHash"]) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `proposeDeployContract.${field} is required`,
+        `proposeDeployContract.${field}`,
+      );
+    }
+  }
+  const abiVersion = Object.prototype.hasOwnProperty.call(source, "abiVersion")
+    ? source.abiVersion
+    : "1";
+  if (abiVersion !== "1") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      "abiVersion must be exactly '1'",
+      "abiVersion",
+    );
+  }
+  const payload = {
+    contract_address: normalizeGovernanceContractAddress(
+      source.contractAddress,
+      "proposeDeployContract.contractAddress",
     ),
-    window: normalizeAtWindow(source.window, "window"),
-    mode: normalizeVotingMode(source.votingMode ?? source.mode, "votingMode"),
+    code_hash_hex: normalizeGovernanceHex32(source.codeHash, "codeHash"),
+    abi_hash_hex: normalizeGovernanceHex32(source.abiHash, "abiHash"),
+    abi_version: abiVersion,
+    window: normalizeAtWindow(
+      Object.prototype.hasOwnProperty.call(source, "window")
+        ? source.window
+        : undefined,
+      "window",
+    ),
+    mode: normalizeVotingMode(
+      Object.prototype.hasOwnProperty.call(source, "votingMode")
+        ? source.votingMode
+        : undefined,
+      "votingMode",
+    ),
   };
+  if (
+    Object.prototype.hasOwnProperty.call(source, "manifestProvenance") &&
+    source.manifestProvenance !== undefined &&
+    source.manifestProvenance !== null
+  ) {
+    payload.manifest_provenance = normalizeGovernanceManifestProvenance(
+      source.manifestProvenance,
+      "manifestProvenance",
+    );
+  }
   return { ProposeDeployContract: payload };
 }
 
@@ -5099,17 +5216,31 @@ export function buildProposeSccpRouteGovernanceInstruction(options) {
  */
 export function buildCastZkBallotInstruction(options) {
   const source = assertPlainObject(options, "castZkBallot");
-  const proofValue = source.proof ?? source.proofB64 ?? source.proof_b64;
-  const publicInputs =
-    source.publicInputs ?? source.publicInputsJson ?? source.public_inputs_json;
+  rejectGovernancePrivateKeyFieldsDeep(source, "castZkBallot");
+  assertAllowedFields(
+    source,
+    new Set(["electionId", "proof", "publicInputs"]),
+    "castZkBallot",
+  );
+  for (const field of ["electionId", "proof"]) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `castZkBallot.${field} is required`,
+        `castZkBallot.${field}`,
+      );
+    }
+  }
   return {
     CastZkBallot: {
-      election_id: assertString(
-        source.electionId ?? source.election_id,
-        "electionId",
+      election_id: assertExactNonBlankString(source.electionId, "electionId"),
+      proof_b64: normalizeGovernanceProof(source.proof, "proof"),
+      public_inputs_json: normalizeJsonPayload(
+        Object.prototype.hasOwnProperty.call(source, "publicInputs")
+          ? source.publicInputs
+          : undefined,
+        "publicInputs",
       ),
-      proof_b64: normalizeBase64(proofValue, "proof"),
-      public_inputs_json: normalizeJsonPayload(publicInputs, "publicInputs"),
     },
   };
 }

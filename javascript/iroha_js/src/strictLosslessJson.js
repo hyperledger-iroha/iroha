@@ -2,6 +2,100 @@ const STRICT_JSON_MAX_DEPTH = 128;
 const STRICT_JSON_MAX_NODES = 2_000_000;
 
 /**
+ * Serialize the integer-only JSON profile without rounding bigint values.
+ *
+ * Native `JSON.stringify` rejects bigint and cannot represent integer tokens
+ * above `Number.MAX_SAFE_INTEGER`. This writer emits bigint as a raw canonical
+ * integer token, accepts only safe integer `number` values, rejects accessors,
+ * symbols, sparse arrays, cycles, and unsupported object prototypes, and uses
+ * the same structural budgets as the lossless decoder.
+ *
+ * @param {unknown} value JSON-compatible value containing integer numbers.
+ * @param {string} context human-readable error context.
+ * @returns {string} lossless JSON text.
+ */
+export function stringifyStrictLosslessIntegerJson(value, context) {
+  if (typeof context !== "string" || context.length === 0) {
+    throw new TypeError("strict lossless JSON context must be a non-empty string");
+  }
+
+  let nodes = 0;
+  const ancestors = new Set();
+  const fail = (path, message, ErrorType = TypeError) => {
+    throw new ErrorType(`${context} cannot encode ${path}: ${message}`);
+  };
+  const consumeNode = (depth, path) => {
+    nodes += 1;
+    if (nodes > STRICT_JSON_MAX_NODES) {
+      fail(path, `value exceeds the ${STRICT_JSON_MAX_NODES}-node limit`, RangeError);
+    }
+    if (depth > STRICT_JSON_MAX_DEPTH) {
+      fail(path, `value exceeds the ${STRICT_JSON_MAX_DEPTH}-level nesting limit`, RangeError);
+    }
+  };
+
+  const encode = (current, depth, path) => {
+    consumeNode(depth, path);
+    if (current === null) return "null";
+    switch (typeof current) {
+      case "string":
+        return JSON.stringify(current);
+      case "boolean":
+        return current ? "true" : "false";
+      case "number":
+        if (!Number.isSafeInteger(current) || Object.is(current, -0)) {
+          fail(path, "number values must be canonical safe integers");
+        }
+        return current.toString(10);
+      case "bigint":
+        return current.toString(10);
+      case "object": {
+        if (ancestors.has(current)) fail(path, "cyclic values are forbidden");
+        const prototype = Object.getPrototypeOf(current);
+        if (!Array.isArray(current) && prototype !== Object.prototype && prototype !== null) {
+          fail(path, "objects must have the default or null prototype");
+        }
+        ancestors.add(current);
+        try {
+          if (Array.isArray(current)) {
+            const items = [];
+            for (let index = 0; index < current.length; index += 1) {
+              if (!Object.prototype.hasOwnProperty.call(current, index)) {
+                fail(`${path}[${index}]`, "sparse arrays are forbidden");
+              }
+              items.push(encode(current[index], depth + 1, `${path}[${index}]`));
+            }
+            return `[${items.join(",")}]`;
+          }
+
+          const fields = [];
+          for (const key of Reflect.ownKeys(current)) {
+            const descriptor = Object.getOwnPropertyDescriptor(current, key);
+            if (!descriptor?.enumerable) continue;
+            if (typeof key !== "string") {
+              fail(path, "enumerable symbol keys are forbidden");
+            }
+            if (!("value" in descriptor)) {
+              fail(`${path}.${key}`, "accessor properties are forbidden");
+            }
+            fields.push(
+              `${JSON.stringify(key)}:${encode(descriptor.value, depth + 1, `${path}.${key}`)}`,
+            );
+          }
+          return `{${fields.join(",")}}`;
+        } finally {
+          ancestors.delete(current);
+        }
+      }
+      default:
+        fail(path, `unsupported ${typeof current} value`);
+    }
+  };
+
+  return encode(value, 0, "root");
+}
+
+/**
  * Parse the integer-only JSON profile emitted by typed Torii endpoints.
  *
  * Native `JSON.parse` rounds integer tokens beyond `Number.MAX_SAFE_INTEGER`

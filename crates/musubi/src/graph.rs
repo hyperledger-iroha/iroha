@@ -223,18 +223,6 @@ pub(crate) struct GraphUpdateV1 {
     pub precise: Option<iroha_data_model::musubi::MusubiVersionV1>,
 }
 
-/// Resolve the selected workspace graph against one coherent finalized registry snapshot.
-pub(crate) fn resolve_workspace_online(
-    registry: &RegistryReadClientV1,
-    workspace: &Workspace,
-    selected: &[MusubiPackageSelectorV1],
-    previous: Option<LockfileV1>,
-    update: Option<GraphUpdateV1>,
-    mode: ResolveModeV1,
-) -> Result<ResolveOutcomeV1, GraphErrorV1> {
-    resolve_workspace_from_source(registry, workspace, selected, previous, update, mode)
-}
-
 /// Resolve online and atomically publish only the coherent validated pages consumed.
 pub(crate) fn resolve_workspace_online_cached(
     registry: &RegistryReadClientV1,

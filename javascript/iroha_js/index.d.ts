@@ -5040,14 +5040,12 @@ export interface ToriiGovernanceFinalizeRequest {
 }
 
 export interface ToriiGovernanceWindow {
-  lower: number;
-  upper: number;
+  lower: number | string | bigint;
+  upper: number | string | bigint;
 }
 
 export interface ToriiGovernanceEnactRequest {
   proposalId: string;
-  preimageHash?: string | null;
-  window?: ToriiGovernanceWindow | null;
 }
 
 export interface ToriiGovernanceDraftInstruction {
@@ -5064,8 +5062,70 @@ export interface ToriiGovernanceDraftResponse {
 }
 
 export interface MinistryAgendaProposalDraftRequest {
-  proposal: Record<string, unknown>;
+  proposal: MinistryAgendaProposalV1;
   authority: string;
+}
+
+export type MinistryAgendaProposalAction =
+  | "add-to-denylist"
+  | "remove-from-denylist"
+  | "amend-policy";
+
+export type MinistryAgendaProposalTag =
+  | "csam"
+  | "malware"
+  | "fraud"
+  | "harassment"
+  | "impersonation"
+  | "policy-escalation"
+  | "terrorism"
+  | "spam";
+
+export type MinistryAgendaEvidenceKind =
+  | "url"
+  | "torii-case"
+  | "sorafs-cid"
+  | "attachment";
+
+export interface MinistryAgendaProposalSummaryV1 {
+  title: string;
+  motivation: string;
+  expected_impact: string;
+}
+
+export interface MinistryAgendaProposalTargetV1 {
+  label: string;
+  hash_family: string;
+  hash_hex: string;
+  reason: string;
+}
+
+export interface MinistryAgendaEvidenceAttachmentV1 {
+  kind: MinistryAgendaEvidenceKind;
+  uri: string;
+  digest_blake3_hex?: string | null;
+  description?: string | null;
+}
+
+export interface MinistryAgendaProposalSubmitterV1 {
+  name: string;
+  contact: string;
+  organization?: string | null;
+  pgp_fingerprint?: string | null;
+}
+
+export interface MinistryAgendaProposalV1 {
+  version: 1;
+  proposal_id: string;
+  submitted_at_unix_ms: number | string | bigint;
+  language: string;
+  action: MinistryAgendaProposalAction;
+  summary: MinistryAgendaProposalSummaryV1;
+  tags?: ReadonlyArray<MinistryAgendaProposalTag>;
+  targets: ReadonlyArray<MinistryAgendaProposalTargetV1>;
+  evidence: ReadonlyArray<MinistryAgendaEvidenceAttachmentV1>;
+  submitter: MinistryAgendaProposalSubmitterV1;
+  duplicates?: ReadonlyArray<string>;
 }
 
 export interface MinistryAgendaProposalDraftResponse {
@@ -5077,7 +5137,7 @@ export interface MinistryAgendaProposalDraftResponse {
 }
 
 export interface MinistryAgendaProposalRecord {
-  proposal: Record<string, unknown>;
+  proposal: MinistryAgendaProposalV1;
   authority: string;
   submitted_tx_hash_hex: string;
   submitted_height: number;
@@ -5090,15 +5150,20 @@ export interface MinistryAgendaProposalGetResponse {
 
 export type ToriiGovernanceBallotDirection = "Aye" | "Nay" | "Abstain";
 
+export interface ToriiGovernanceManifestProvenanceInput {
+  signer: string;
+  signature: string;
+}
+
 export interface ToriiGovernanceDeployContractProposalRequest {
   contractAddress?: string;
   contractAlias?: string;
   codeHash: string | BinaryLike;
   abiHash: string | BinaryLike;
-  abiVersion?: string;
+  abiVersion?: "1";
   window?: ToriiGovernanceWindow | null;
   mode?: "Zk" | "Plain";
-  limits?: JsonValue;
+  manifestProvenance?: ToriiGovernanceManifestProvenanceInput | null;
 }
 
 export interface ToriiGovernancePlainBallotRequest {
@@ -5108,16 +5173,29 @@ export interface ToriiGovernancePlainBallotRequest {
   owner: string;
   amount: QuantityInput;
   durationBlocks: number | string | bigint;
-  direction: ToriiGovernanceBallotDirection | string;
+  direction: ToriiGovernanceBallotDirection;
 }
 
-export interface ToriiGovernanceZkBallotRequest {
+export type ToriiGovernanceParliamentBody =
+  | "rules-committee"
+  | "agenda-council"
+  | "interest-panel"
+  | "review-panel"
+  | "policy-jury"
+  | "oversight-committee"
+  | "fma-committee";
+
+export type ToriiGovernanceParliamentDecision =
+  | "approve"
+  | "reject"
+  | "abstain";
+
+export interface ToriiGovernanceParliamentBallotRequest {
   authority: string;
   chainId: string;
-  electionId: string;
-  proof?: BinaryLike | string;
-  proofB64?: BinaryLike | string;
-  public?: JsonValue;
+  proposalId: string;
+  body: ToriiGovernanceParliamentBody;
+  decision: ToriiGovernanceParliamentDecision;
 }
 
 export interface ToriiGovernanceZkBallotV1Request {
@@ -5125,25 +5203,24 @@ export interface ToriiGovernanceZkBallotV1Request {
   chainId: string;
   electionId: string;
   backend: string;
-  envelope?: BinaryLike | string;
-  envelopeB64?: BinaryLike | string;
-  root_hint?: string | BinaryLike | null;
+  envelope: BinaryLike | string;
+  rootHint?: string | BinaryLike | null;
   owner?: string | null;
   amount?: QuantityInput | null;
   durationBlocks?: number | string | bigint | null;
-  direction?: ToriiGovernanceBallotDirection | string | null;
+  direction?: ToriiGovernanceBallotDirection | null;
   nullifier?: string | BinaryLike | null;
 }
 
 export interface ToriiGovernanceBallotProof {
   backend: string;
-  envelope_bytes: string;
-  root_hint?: string | null;
+  envelopeBytes: BinaryLike | string;
+  rootHint?: string | null;
   owner?: string | null;
   nullifier?: string | null;
   amount?: QuantityInput | null;
-  duration_blocks?: number | null;
-  direction?: ToriiGovernanceBallotDirection | string | null;
+  durationBlocks?: number | string | bigint | null;
+  direction?: ToriiGovernanceBallotDirection | null;
 }
 
 export interface ToriiGovernanceZkBallotProofRequest {
@@ -7563,13 +7640,13 @@ export interface GovernanceWindowInput {
 }
 
 export interface ProposeDeployContractInstructionInput {
-  contractAddress?: string;
-  contractAlias?: string;
+  contractAddress: string;
   codeHash: HashLike;
   abiHash: HashLike;
-  abiVersion?: string;
+  abiVersion?: "1";
   window?: GovernanceWindowInput | null;
   votingMode?: GovernanceVotingMode | null;
+  manifestProvenance?: ToriiGovernanceManifestProvenanceInput | null;
 }
 
 export interface ProposeSccpRouteGovernanceInstructionInput {
@@ -7581,7 +7658,16 @@ export interface ProposeSccpRouteGovernanceInstructionInput {
 export interface CastZkBallotInstructionInput {
   electionId: string;
   proof: ArrayBufferView | ArrayBuffer | Buffer | string;
-  publicInputs: Record<string, unknown> | string;
+  publicInputs?: GovernanceZkBallotPublicInputs;
+}
+
+export interface GovernanceZkBallotPublicInputs {
+  root_hint?: string | null;
+  owner?: string | null;
+  amount?: QuantityInput | null;
+  duration_blocks?: number | string | bigint | null;
+  direction?: ToriiGovernanceBallotDirection | null;
+  nullifier?: string | null;
 }
 
 export interface CastPlainBallotInstructionInput {
@@ -11555,8 +11641,8 @@ export declare class ToriiClient {
     payload: ToriiGovernancePlainBallotRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiGovernanceBallotResponse>;
-  governanceSubmitZkBallot(
-    payload: ToriiGovernanceZkBallotRequest,
+  governanceSubmitParliamentBallot(
+    payload: ToriiGovernanceParliamentBallotRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiGovernanceBallotResponse>;
   governanceSubmitZkBallotV1(

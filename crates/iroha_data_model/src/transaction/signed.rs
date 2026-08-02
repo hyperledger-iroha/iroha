@@ -1812,21 +1812,41 @@ impl iroha_version::Version for SignedTransaction {
     }
 }
 
-fn encode_default_layout_versioned<T>(version: u8, value: &T) -> Vec<u8>
+fn encode_default_layout_versioned<T>(
+    version: u8,
+    value: &T,
+) -> Result<Vec<u8>, norito::core::Error>
 where
     T: norito::NoritoSerialize,
 {
     let mut bytes = Vec::with_capacity(1 + value.encoded_len_hint().unwrap_or(0));
     bytes.push(version);
     let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    norito::core::serialize_to_buffer(value, &mut bytes)
-        .expect("versioned transaction encoding should not fail");
-    bytes
+    norito::core::serialize_to_buffer(value, &mut bytes)?;
+    Ok(bytes)
+}
+
+impl SignedTransaction {
+    /// Encode the complete canonical fixed-V1 transaction wire.
+    ///
+    /// These are the exact bytes emitted by [`iroha_version::codec::EncodeVersioned`], including
+    /// the primary signature and every multisignature authorization proof. They are therefore
+    /// suitable for exact replay and commitment checks where the payload-only transaction hash is
+    /// insufficient.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction cannot be serialized with the canonical V1 Norito
+    /// layout.
+    pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
+        encode_default_layout_versioned(self.version(), self)
+    }
 }
 
 impl iroha_version::codec::EncodeVersioned for SignedTransaction {
     fn encode_versioned(&self) -> Vec<u8> {
-        encode_default_layout_versioned(self.version(), self)
+        self.encode_wire_v1()
+            .expect("versioned transaction encoding should not fail")
     }
 }
 
@@ -1846,9 +1866,27 @@ impl iroha_version::Version for TransactionEntrypoint {
     }
 }
 
+impl TransactionEntrypoint {
+    /// Encode the complete canonical fixed-V1 transaction-entrypoint wire.
+    ///
+    /// These are the exact bytes emitted by [`iroha_version::codec::EncodeVersioned`]. In
+    /// particular, an external entrypoint retains its complete [`SignedTransaction`], including
+    /// every authorization proof, so callers can compare an observed committed entrypoint with the
+    /// exact transaction they submitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entrypoint cannot be serialized with the canonical V1 Norito
+    /// layout.
+    pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
+        encode_default_layout_versioned(self.version(), self)
+    }
+}
+
 impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
     fn encode_versioned(&self) -> Vec<u8> {
-        encode_default_layout_versioned(self.version(), self)
+        self.encode_wire_v1()
+            .expect("versioned transaction entrypoint encoding should not fail")
     }
 }
 
@@ -4412,10 +4450,62 @@ mod tests {
     fn signed_transaction_versioned_roundtrip() {
         let signed_tx = sample_signed_transaction();
         let bytes = signed_tx.encode_versioned();
+        assert_eq!(
+            signed_tx
+                .encode_wire_v1()
+                .expect("fixed V1 transaction wire must encode"),
+            bytes,
+            "the inherent fixed-V1 encoder must remain byte-identical to EncodeVersioned"
+        );
         let decoded = SignedTransaction::decode_all_versioned(&bytes)
             .expect("versioned signed transaction must decode");
 
         assert_eq!(decoded, signed_tx);
+    }
+
+    #[test]
+    fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
+        let signer_a = checked_random_keypair();
+        let signer_b = checked_random_keypair();
+        let policy = MultisigPolicy::new(
+            1,
+            vec![
+                MultisigMember::new(signer_a.public_key().clone(), 1)
+                    .expect("first multisig member"),
+                MultisigMember::new(signer_b.public_key().clone(), 1)
+                    .expect("second multisig member"),
+            ],
+        )
+        .expect("one-of-two multisig policy");
+        let builder = TransactionBuilder::new(
+            "wire-proof-chain".parse().expect("chain id"),
+            AccountId::new_multisig(policy),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "authorization-sensitive wire".into())]);
+        let signed_a = builder.clone().sign_multisig([signer_a.private_key()]);
+        let signed_b = builder.sign_multisig([signer_b.private_key()]);
+
+        signed_a.verify_signature().expect("first proof is valid");
+        signed_b.verify_signature().expect("second proof is valid");
+        assert_eq!(
+            signed_a.hash(),
+            signed_b.hash(),
+            "the transaction identity intentionally hashes only the shared payload"
+        );
+
+        let wire_a = signed_a
+            .encode_wire_v1()
+            .expect("first fixed V1 wire must encode");
+        let wire_b = signed_b
+            .encode_wire_v1()
+            .expect("second fixed V1 wire must encode");
+        assert_eq!(wire_a, signed_a.encode_versioned());
+        assert_eq!(wire_b, signed_b.encode_versioned());
+        assert_ne!(
+            wire_a, wire_b,
+            "different valid authorization proofs must produce different complete wire bytes"
+        );
     }
 
     #[test]
@@ -4620,6 +4710,23 @@ mod tests {
             .expect_err("versioned transaction entrypoint decoder must reject trailing bytes");
 
         assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    }
+
+    #[test]
+    fn transaction_entrypoint_versioned_roundtrip_matches_fixed_v1_wire() {
+        let entrypoint = TransactionEntrypoint::from(sample_signed_transaction());
+        let versioned = entrypoint.encode_versioned();
+        assert_eq!(
+            entrypoint
+                .encode_wire_v1()
+                .expect("fixed V1 entrypoint wire must encode"),
+            versioned,
+            "the inherent fixed-V1 entrypoint encoder must match EncodeVersioned"
+        );
+
+        let decoded = TransactionEntrypoint::decode_all_versioned(&versioned)
+            .expect("versioned transaction entrypoint must decode");
+        assert_eq!(decoded, entrypoint);
     }
 
     #[test]

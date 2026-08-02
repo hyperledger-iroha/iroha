@@ -73,6 +73,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Complete immutable inventory of Musubi V1 error codes.
+    #[cfg(test)]
     pub const ALL: &'static [Self] = &[
         Self::Usage,
         Self::ManifestInvalid,
@@ -188,24 +189,28 @@ impl Diagnostic {
 
     /// Return the stable public code.
     #[must_use]
+    #[cfg(test)]
     pub const fn code(&self) -> ErrorCode {
         self.code
     }
 
     /// Return the already redacted summary.
     #[must_use]
+    #[cfg(test)]
     pub fn message(&self) -> &str {
         &self.message
     }
 
     /// Return deterministic already redacted context.
     #[must_use]
+    #[cfg(test)]
     pub const fn context(&self) -> &BTreeMap<String, String> {
         &self.context
     }
 
     /// Return the optional already redacted remediation hint.
     #[must_use]
+    #[cfg(test)]
     pub fn help(&self) -> Option<&str> {
         self.help.as_deref()
     }
@@ -361,12 +366,14 @@ pub struct RenderedOutput {
 impl RenderedOutput {
     /// Return bytes routed to stdout.
     #[must_use]
+    #[cfg(test)]
     pub fn stdout(&self) -> &str {
         &self.stdout
     }
 
     /// Return bytes routed to stderr.
     #[must_use]
+    #[cfg(test)]
     pub fn stderr(&self) -> &str {
         &self.stderr
     }

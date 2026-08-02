@@ -2003,6 +2003,11 @@ pub mod musubi {
         "musubi.v1.query.exact_release",
         "/v1/musubi/queries/exact-release",
     );
+    /// Fetch one exact immutable provider bundle-attestation record.
+    pub const PROVIDER_BUNDLE_ATTESTATION: RouteDescriptor = app_post(
+        "musubi.v1.query.provider_bundle_attestation",
+        "/v1/musubi/queries/provider-bundle-attestation",
+    );
     /// Fetch a finalized resolver-index page.
     pub const RESOLVER_INDEX: RouteDescriptor = app_post(
         "musubi.v1.query.resolver_index",
@@ -2051,6 +2056,11 @@ pub mod musubi {
     pub const ARCHIVE_REGISTER: RouteDescriptor = app_post(
         "musubi.v1.instruction.archive_register",
         "/v1/musubi/instructions/archive-register",
+    );
+    /// Build an unsigned immutable provider bundle-attestation registration.
+    pub const PROVIDER_BUNDLE_ATTESTATION_REGISTER: RouteDescriptor = app_post(
+        "musubi.v1.instruction.provider_bundle_attestation_register",
+        "/v1/musubi/instructions/provider-bundle-attestation-register",
     );
     /// Build an unsigned archive-location add or renewal.
     pub const ARCHIVE_LOCATION_ADD: RouteDescriptor = app_post(
@@ -2137,6 +2147,7 @@ pub mod musubi {
     pub const ROUTES: &[RouteDescriptor] = &[
         EXACT_PACKAGE,
         EXACT_RELEASE,
+        PROVIDER_BUNDLE_ATTESTATION,
         RESOLVER_INDEX,
         VERSIONS,
         MAINTAINERS,
@@ -2148,6 +2159,7 @@ pub mod musubi {
         SEARCH,
         NAMESPACE_BINDING_REGISTER,
         ARCHIVE_REGISTER,
+        PROVIDER_BUNDLE_ATTESTATION_REGISTER,
         ARCHIVE_LOCATION_ADD,
         ARCHIVE_LOCATION_RETIRE,
         RELEASE_PUBLISH,
@@ -2933,9 +2945,6 @@ pub mod runtime_governance {
     /// Read a referendum tally snapshot.
     pub const GOV_TALLY_GET: RouteDescriptor =
         app_get("governance.tally.read", "/v1/gov/tally/{id}");
-    /// Submit a zero-knowledge governance ballot.
-    pub const GOV_BALLOT_ZK: RouteDescriptor =
-        app_post("governance.ballot.zk", "/v1/gov/ballots/zk");
     /// Submit a version-one zero-knowledge governance ballot.
     pub const GOV_BALLOT_ZK_V1: RouteDescriptor =
         app_post("governance.ballot.zk_v1", "/v1/gov/ballots/zk-v1");
@@ -3044,7 +3053,6 @@ pub mod runtime_governance {
         GOV_LOCKS_GET,
         GOV_REFERENDUM_GET,
         GOV_TALLY_GET,
-        GOV_BALLOT_ZK,
         GOV_BALLOT_ZK_V1,
         GOV_BALLOT_ZK_V1_PROOF,
         GOV_BALLOT_PLAIN,
@@ -4539,6 +4547,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     data_availability::PIN_INTENTS_VERIFY,
     musubi::EXACT_PACKAGE,
     musubi::EXACT_RELEASE,
+    musubi::PROVIDER_BUNDLE_ATTESTATION,
     musubi::RESOLVER_INDEX,
     musubi::VERSIONS,
     musubi::MAINTAINERS,
@@ -4660,7 +4669,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::GOV_LOCKS_GET,
     runtime_governance::GOV_REFERENDUM_GET,
     runtime_governance::GOV_TALLY_GET,
-    runtime_governance::GOV_BALLOT_ZK,
     runtime_governance::GOV_BALLOT_ZK_V1,
     runtime_governance::GOV_BALLOT_ZK_V1_PROOF,
     runtime_governance::GOV_BALLOT_PLAIN,
@@ -5821,6 +5829,7 @@ mod tests {
             "/v1/sorafs/capacity/por-challenge",
             "/v1/sorafs/capacity/por",
             "/v1/sorafs/por/trigger",
+            "/v1/gov/ballots/zk",
         ] {
             assert!(
                 routes.iter().all(|route| route.path() != unsupported_path),
@@ -6470,7 +6479,7 @@ mod tests {
 
     #[test]
     fn musubi_v1_catalog_is_post_only_and_has_no_legacy_routes() {
-        assert_eq!(musubi::ROUTES.len(), 29);
+        assert_eq!(musubi::ROUTES.len(), 31);
         assert_eq!(RouteCatalog::new(musubi::ROUTES).validate(), Ok(()));
         assert!(musubi::ROUTES.iter().all(|route| {
             route.method() == HttpMethod::Post

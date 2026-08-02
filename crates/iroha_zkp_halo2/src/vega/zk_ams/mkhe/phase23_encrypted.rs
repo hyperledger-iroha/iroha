@@ -10,6 +10,7 @@
 //! KAT exercises the complete native path, but it is not evidence for the
 //! release degree, roster, memory ceiling, or wall-clock budget.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
 
 use once_cell::sync::Lazy;
@@ -19,20 +20,26 @@ use super::phase23::{
     ZkAmsPhase23ChallengeContextV1, zk_ams_phase23_challenge_v1, zk_ams_phase23_fold_linear_v1,
     zk_ams_phase23_fold_quadratic_v1,
 };
+#[cfg(test)]
 use super::{
     BgvProfile, GaloisKey, LinearCiphertext, MKHE_VERSION_V1, PartySet, PlaintextModulus,
-    ProductRelinearizationKey, RnsPolynomial, Scalar, ZkAmsMkheErrorV1,
-    checked_ring_multiplication_work, hash_linear_ciphertext, keccak256,
-    manifest::{
-        ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1,
-    },
+    ProductRelinearizationKey, RnsPolynomial, checked_ring_multiplication_work,
+    hash_linear_ciphertext,
+    manifest::{ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1},
     packing::{
-        ZkAmsT256PackedPlaintextV1, ZkAmsT256RotationDirectionV1,
-        decode_zk_ams_t256_packed_plaintext_v1, encode_zk_ams_t256_packed_plaintext_v1,
-        packed_plaintext_to_rns_v1, zk_ams_t256_packing_layout_v1,
-        zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
+        ZkAmsT256RotationDirectionV1, encode_zk_ams_t256_packed_plaintext_v1,
+        packed_plaintext_to_rns_v1, zk_ams_t256_rotation_exponent_for_direction_v1,
+        zk_ams_t256_rotation_exponent_v1,
     },
     phase23_rotation_ring_multiplication_count, relinearize, rotate_ciphertext,
+};
+use super::{
+    Scalar, ZkAmsMkheErrorV1, keccak256,
+    manifest::release_profile_v1,
+    packing::{
+        ZkAmsT256PackedPlaintextV1, decode_zk_ams_t256_packed_plaintext_v1,
+        zk_ams_t256_packing_layout_v1,
+    },
 };
 use crate::vega::{
     VegaT256PointV1,
@@ -50,6 +57,7 @@ const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
 const PHASE23_MAX_ROWS_V1: u32 = 1_048_576;
 const PHASE23_MAX_COLUMNS_V1: u32 = 1_048_576;
 const PHASE23_MAX_ACCUMULATOR_VALUES_V1: usize = 4_194_304;
+#[cfg(test)]
 const PHASE23_MAX_DIAGONALS_V1: usize = 8_388_608;
 const PHASE23_MAX_COMPOSITION_CONTEXT_FRAME_BYTES_V1: usize = 2_048;
 /// Exact strict public-input scalar count retained in every release fold.
@@ -62,6 +70,7 @@ const PHASE23_SPARSE_MAP_WIRE_HEADER_BYTES_V1: usize = 18;
 const PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1: usize = 186;
 const PHASE23_SPARSE_MAP_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.sparse-map";
 const PHASE23_ENCRYPTED_BINDING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.encrypted-binding";
+#[cfg(test)]
 const PHASE23_PACKED_VECTOR_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.packed-vector";
 const PHASE23_MATERIALIZED_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.materialized";
 const PHASE23_IMPLEMENTATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.encrypted-implementation";
@@ -86,6 +95,8 @@ const PHASE23_COMPOSITION_CONTEXT_FRAME_DOMAIN_V1: &[u8] =
 const PHASE23_PUBLIC_FOLD_RECORD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.public-fold-record";
 const PHASE23_PUBLIC_FOLD_HISTORY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.public-fold-history";
 const PHASE23_ENCRYPTED_ALGEBRA_V1: &[u8] = b"A/B/C:canonical-csr:packed-diagonals:minimal-signed-binary-galois-composition|U:row-count-replicated-single-ciphertext-clones|Eq6:direct-replicated-U-mul+relinearize-four-terms|Eq7:G*rT+H*T|Eq9-10:x,u,W,rW=linear;E=quadratic;rE=quadratic-scalars|Eq11:Ebar=linear+quadratic;Wbar=linear";
+
+type CommitmentPreimageLayoutDigestsV1 = ([u8; 32], [u8; 32], [u8; 32]);
 
 static PHASE23_RELEASE_MAPS_V1: Lazy<Result<ZkAmsPhase23ReleaseMapsV1, ZkAmsMkheErrorV1>> =
     Lazy::new(compile_release_maps_v1);
@@ -2197,7 +2208,7 @@ fn compile_commitment_preimage_layout_without_validation_v1(
     message_columns: u32,
     row_count: u32,
     last_row_message_count: u32,
-) -> Result<([u8; 32], [u8; 32], [u8; 32]), ZkAmsMkheErrorV1> {
+) -> Result<CommitmentPreimageLayoutDigestsV1, ZkAmsMkheErrorV1> {
     let blinding_count = row_count;
     let hiding_generator_index = message_columns;
     let commitment_key_label_digest = keccak256(super::super::COMMITMENT_KEY_LABEL_V1);
@@ -2577,6 +2588,7 @@ fn read_array_32(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], ZkAmsMkhe
     Ok(value)
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum EncryptedFamily {
@@ -2594,12 +2606,14 @@ enum EncryptedFamily {
     CrossTermCommitment = 12,
 }
 
+#[cfg(test)]
 impl EncryptedFamily {
     const fn tag(self) -> u8 {
         self as u8
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EncryptedPackedVector {
     version: u8,
@@ -2613,6 +2627,7 @@ struct EncryptedPackedVector {
     digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl EncryptedPackedVector {
     fn new(
         profile: &BgvProfile,
@@ -2641,6 +2656,7 @@ impl EncryptedPackedVector {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EncryptedAccumulatorState {
     x: EncryptedPackedVector,
@@ -2653,6 +2669,7 @@ struct EncryptedAccumulatorState {
     w_commitment: Vec<Scalar>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EncryptedCrossTerm {
     t: EncryptedPackedVector,
@@ -2660,6 +2677,7 @@ struct EncryptedCrossTerm {
     encrypted_commitment: EncryptedPackedVector,
 }
 
+#[cfg(test)]
 fn encrypted_session_digest(binding: ZkAmsPhase23EncryptedBindingV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(256);
     frame.extend_from_slice(b"iroha.zk-ams.v1.phase23.encrypted-session");
@@ -2674,6 +2692,7 @@ fn encrypted_session_digest(binding: ZkAmsPhase23EncryptedBindingV1) -> [u8; 32]
     keccak256(&frame)
 }
 
+#[cfg(test)]
 fn slots_per_chunk(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
     profile.validate()?;
     match profile.plaintext_modulus {
@@ -2692,6 +2711,7 @@ fn slots_per_chunk(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
     }
 }
 
+#[cfg(test)]
 fn packed_chunk_count(logical_values: u32, slots: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     if logical_values == 0 || logical_values > PHASE23_MAX_ROWS_V1 || slots == 0 {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -2703,6 +2723,7 @@ fn packed_chunk_count(logical_values: u32, slots: usize) -> Result<usize, ZkAmsM
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn validate_encrypted_vector_fields(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -2744,6 +2765,7 @@ fn validate_encrypted_vector_fields(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_encrypted_vector(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -2756,6 +2778,7 @@ fn validate_encrypted_vector(
     Ok(())
 }
 
+#[cfg(test)]
 fn encrypted_vector_digest(
     profile: &BgvProfile,
     vector: &EncryptedPackedVector,
@@ -2780,6 +2803,7 @@ fn encrypted_vector_digest(
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn commitment_vector_digest(
     domain: &[u8],
     values: &[Scalar],
@@ -2800,6 +2824,7 @@ fn commitment_vector_digest(
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn accumulator_state_digest(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -2824,6 +2849,7 @@ fn accumulator_state_digest(
     Ok(keccak256(&frame))
 }
 
+#[cfg(test)]
 fn validate_accumulator_state(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -2861,6 +2887,7 @@ fn validate_accumulator_state(
     Ok(())
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct DiagonalKey {
     output_chunk: usize,
@@ -2869,6 +2896,7 @@ struct DiagonalKey {
     shift: usize,
 }
 
+#[cfg(test)]
 fn evaluate_sparse_map(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3028,6 +3056,7 @@ fn evaluate_sparse_map(
     EncryptedPackedVector::new(profile, binding, output_family, map.row_count, chunks)
 }
 
+#[cfg(test)]
 fn zero_ciphertext(
     profile: &BgvProfile,
     roster: &PartySet,
@@ -3045,10 +3074,12 @@ fn zero_ciphertext(
     Ok(ciphertext)
 }
 
+#[cfg(test)]
 fn rotation_exponent(profile: &BgvProfile, shift: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     rotation_exponent_for_direction(profile, shift, false)
 }
 
+#[cfg(test)]
 fn rotation_exponent_for_direction(
     profile: &BgvProfile,
     shift: usize,
@@ -3083,6 +3114,7 @@ fn rotation_exponent_for_direction(
     }
 }
 
+#[cfg(test)]
 fn canonical_slot_shift_decomposition(
     slots: usize,
     shift: usize,
@@ -3101,6 +3133,7 @@ fn canonical_slot_shift_decomposition(
 /// Compose an arbitrary forward slot shift from the governed binary Galois-key
 /// schedule.  No direct key for a non-power-of-two shift is required or
 /// admitted by the release topology.
+#[cfg(test)]
 fn rotate_ciphertext_by_slot_shift(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3140,6 +3173,7 @@ fn rotate_ciphertext_by_slot_shift(
     Ok(rotated)
 }
 
+#[cfg(test)]
 fn encode_slots_to_rns(
     profile: &BgvProfile,
     slots: &[Scalar],
@@ -3167,6 +3201,7 @@ fn encode_slots_to_rns(
     }
 }
 
+#[cfg(test)]
 fn select_rotation_keys(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3194,6 +3229,7 @@ fn select_rotation_keys(
     Ok(selected)
 }
 
+#[cfg(test)]
 fn multiply_packed_vectors(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3248,6 +3284,7 @@ fn multiply_packed_vectors(
     )
 }
 
+#[cfg(test)]
 fn select_product_keys(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3280,6 +3317,7 @@ fn select_product_keys(
     Ok(selected)
 }
 
+#[cfg(test)]
 fn scale_packed_vector(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3315,6 +3353,7 @@ fn scale_packed_vector(
     )
 }
 
+#[cfg(test)]
 fn negate_packed_vector(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3351,6 +3390,7 @@ fn negate_packed_vector(
     )
 }
 
+#[cfg(test)]
 fn promote_packed_vector_to_level_one(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3380,6 +3420,7 @@ fn promote_packed_vector_to_level_one(
     )
 }
 
+#[cfg(test)]
 fn add_packed_vectors(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3411,6 +3452,7 @@ fn add_packed_vectors(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn encrypted_equation_6(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3545,6 +3587,7 @@ fn encrypted_equation_6(
     )
 }
 
+#[cfg(test)]
 fn encrypted_equation_7(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3604,6 +3647,7 @@ fn encrypted_equation_7(
     })
 }
 
+#[cfg(test)]
 fn fold_linear_encrypted(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3625,6 +3669,7 @@ fn fold_linear_encrypted(
     add_packed_vectors(profile, binding, accumulated, &scaled, family)
 }
 
+#[cfg(test)]
 fn fold_error_encrypted(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -3668,6 +3713,7 @@ fn fold_error_encrypted(
     add_packed_vectors(profile, binding, &sum, &scaled_incoming, EncryptedFamily::E)
 }
 
+#[cfg(test)]
 fn fold_error_randomness_encrypted(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,

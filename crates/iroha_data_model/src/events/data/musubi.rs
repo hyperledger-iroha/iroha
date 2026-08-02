@@ -54,6 +54,8 @@ mod model {
         AliasRetargeted(crate::musubi::MusubiAliasHistoryEntryV1),
         /// A canonical archive commitment was registered.
         ArchiveRegistered(MusubiArchiveRegisteredEventV1),
+        /// A provider's complete bundle-verification attestation was immutably registered.
+        ProviderBundleAttestationRegistered(MusubiProviderBundleAttestationRegisteredEventV1),
         /// An archive location was added, renewed, retired, or refreshed.
         ArchiveLocationChanged(MusubiArchiveLocationEventV1),
         /// Aggregate archive availability changed.
@@ -168,6 +170,20 @@ mod model {
         pub finalized_height: u64,
     }
 
+    /// Compact provider bundle-attestation registration event.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct MusubiProviderBundleAttestationRegisteredEventV1 {
+        /// Exact archive/order/provider identity of the registered attestation.
+        pub key: crate::musubi::MusubiProviderBundleAttestationKeyV1,
+        /// Domain-separated digest of the complete bounded attestation.
+        pub attestation_digest: crate::musubi::MusubiProviderBundleAttestationDigestV1,
+        /// Archive manager that registered the immutable attestation.
+        pub registered_by: AccountId,
+        /// Finalized registration height.
+        pub finalized_height: u64,
+    }
+
     /// Closed archive-location transition kind.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
@@ -180,7 +196,7 @@ mod model {
         Renewed,
         /// A package owner retired the location.
         Retired,
-        /// Underlying SoraFS evidence changed its health state.
+        /// Underlying `SoraFS` evidence changed its health state.
         EvidenceRefreshed,
     }
 
@@ -194,6 +210,11 @@ mod model {
         pub pin_manifest: crate::sorafs::pin_registry::ManifestDigest,
         /// Exact current replication-order evidence.
         pub replication_order: crate::sorafs::pin_registry::ReplicationOrderId,
+        /// Digest of the exact sorted provider-attestation set used by the transition.
+        pub provider_attestation_set_digest:
+            crate::musubi::MusubiProviderBundleAttestationSetDigestV1,
+        /// Number of distinct providers committed by the attestation set.
+        pub provider_count: u8,
         /// Transition classification.
         pub transition: MusubiArchiveLocationTransitionV1,
         /// Resulting location health state.
@@ -261,6 +282,7 @@ impl MusubiEvent {
             Self::ArtifactTakenDown(event) => Some(&event.release.package),
             Self::NamespaceBound(_)
             | Self::ArchiveRegistered(_)
+            | Self::ProviderBundleAttestationRegistered(_)
             | Self::ArchiveLocationChanged(_)
             | Self::ArchiveAvailabilityChanged(_)
             | Self::RegistryPolicyChanged(_) => None,
@@ -274,6 +296,7 @@ impl MusubiEvent {
             Self::ReleasePublished(event) => Some(event.archive_id),
             Self::ReleaseYankChanged(event) => Some(event.archive_id),
             Self::ArchiveRegistered(event) => Some(event.archive_id),
+            Self::ProviderBundleAttestationRegistered(event) => Some(event.key.archive_id),
             Self::ArchiveLocationChanged(event) => Some(event.location.archive_id),
             Self::ArchiveAvailabilityChanged(event) => Some(event.archive_id),
             Self::ArtifactTakenDown(event) => Some(event.archive_id),
@@ -298,6 +321,67 @@ pub mod prelude {
         MusubiArchiveRegisteredEventV1, MusubiArtifactTakedownEventV1, MusubiEvent, MusubiEventSet,
         MusubiMaintainerInvitationLifecycleEventV1, MusubiPackageClaimedEventV1,
         MusubiPackageMemberRemovedEventV1, MusubiPackageRecoveredEventV1,
-        MusubiRegistryPolicyEventV1, MusubiReleasePublishedEventV1, MusubiReleaseYankEventV1,
+        MusubiProviderBundleAttestationRegisteredEventV1, MusubiRegistryPolicyEventV1,
+        MusubiReleasePublishedEventV1, MusubiReleaseYankEventV1,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use norito::codec::{DecodeAll as _, Encode as _};
+
+    use super::*;
+
+    #[test]
+    fn provider_attestation_registration_event_is_compact_and_archive_routable() {
+        let archive_id = crate::musubi::ArchiveId::new([0x31; 32]);
+        let event = MusubiEvent::ProviderBundleAttestationRegistered(
+            MusubiProviderBundleAttestationRegisteredEventV1 {
+                key: crate::musubi::MusubiProviderBundleAttestationKeyV1 {
+                    archive_id,
+                    replication_order: crate::sorafs::pin_registry::ReplicationOrderId::new(
+                        [0x32; 32],
+                    ),
+                    provider_id: crate::sorafs::capacity::ProviderId::new([0x33; 32]),
+                },
+                attestation_digest: crate::musubi::MusubiProviderBundleAttestationDigestV1::new(
+                    [0x34; 32],
+                ),
+                registered_by: AccountId::new(
+                    "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                        .parse()
+                        .expect("public key"),
+                ),
+                finalized_height: 7,
+            },
+        );
+
+        assert_eq!(event.archive(), Some(archive_id));
+        assert_eq!(event.package(), None);
+        assert_eq!(event.alias(), None);
+    }
+
+    #[test]
+    fn archive_location_event_roundtrip_carries_only_compact_provider_commitment() {
+        let event = MusubiArchiveLocationEventV1 {
+            location: crate::musubi::MusubiArchiveLocationKeyV1::new(
+                crate::musubi::ArchiveId::new([0x41; 32]),
+                crate::musubi::MusubiArchiveLocationIdV1::new([0x42; 32]),
+            ),
+            pin_manifest: crate::sorafs::pin_registry::ManifestDigest::new([0x43; 32]),
+            replication_order: crate::sorafs::pin_registry::ReplicationOrderId::new([0x44; 32]),
+            provider_attestation_set_digest:
+                crate::musubi::MusubiProviderBundleAttestationSetDigestV1::new([0x45; 32]),
+            provider_count: 3,
+            transition: MusubiArchiveLocationTransitionV1::Added,
+            state: crate::musubi::MusubiArchiveLocationStateV1::Healthy,
+            revision: 2,
+            finalized_height: 7,
+        };
+
+        let decoded = MusubiArchiveLocationEventV1::decode_all(&mut event.encode().as_slice())
+            .expect("compact location event Norito roundtrip");
+        assert_eq!(decoded, event);
+        assert_eq!(decoded.provider_count, 3);
+    }
 }

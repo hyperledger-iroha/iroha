@@ -898,9 +898,7 @@ mod tests {
         },
         block::BlockHeader,
         domain::{Domain, DomainId},
-        events::data::prelude::{
-            AccountEvent, DataEvent, DomainEvent, RepoAccountEvent, RepoAccountRole,
-        },
+        events::data::prelude::{AccountEvent, DataEvent, RepoAccountEvent, RepoAccountRole},
         isi::{InstructionBox, error::AssetTransferAdmissionError, repo::RepoInstructionBox},
         permission::Permission,
         query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements},

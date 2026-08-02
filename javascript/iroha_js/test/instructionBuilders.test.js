@@ -2699,31 +2699,163 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
   assert.equal(withoutReason.RemoveSmartContractBytes.reason, undefined);
 });
 
-test("buildProposeDeployContractInstruction normalizes hashes and window", () => {
+baseTest("buildProposeDeployContractInstruction normalizes exact hashes and full-u64 window", () => {
   const instruction = buildProposeDeployContractInstruction({
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-    codeHash: "AA".repeat(32),
-    abiHash: Buffer.alloc(32, 0xbb),
+    codeHash: `blake2b32:0x${"AA".repeat(32)}`,
+    abiHash: `0X${"BB".repeat(32)}`,
     abiVersion: "1",
-    window: { lower: 10, upper: 20 },
+    window: { lower: 10, upper: 0xffff_ffff_ffff_ffffn },
     votingMode: "Plain",
   });
   const expected = {
     ProposeDeployContract: {
       contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       code_hash_hex: "aa".repeat(32),
-      abi_hash_hex: Buffer.alloc(32, 0xbb).toString("hex"),
+      abi_hash_hex: "bb".repeat(32),
       abi_version: "1",
-      window: { lower: "10", upper: "20" },
+      window: { lower: "10", upper: "18446744073709551615" },
       mode: "Plain",
     },
   };
   assert.deepEqual(instruction, expected);
-  const decoded = encodeAndDecode(instruction);
+  const decoded = withPureJsInstructionCodec(() => encodeAndDecode(instruction));
   assert.deepEqual(decoded, expected);
 });
 
-test("buildProposeDeployContractInstruction rejects non-canonical voting modes", () => {
+baseTest("buildProposeDeployContractInstruction encodes manifest provenance as field seven", () => {
+  const instruction = buildProposeDeployContractInstruction({
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+    manifestProvenance: {
+      signer: `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
+      signature: `ed25519:${"22".repeat(64)}`,
+    },
+  });
+  assert.deepEqual(instruction.ProposeDeployContract.manifest_provenance, {
+    signer: `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
+    signature: "22".repeat(64).toUpperCase(),
+  });
+  assert.equal(Object.hasOwn(instruction.ProposeDeployContract, "limits"), false);
+
+  const decoded = withPureJsInstructionCodec(() => encodeAndDecode(instruction));
+  assert.deepEqual(
+    decoded.ProposeDeployContract.manifest_provenance,
+    instruction.ProposeDeployContract.manifest_provenance,
+  );
+  assert.equal(Object.hasOwn(decoded.ProposeDeployContract, "limits"), false);
+});
+
+baseTest("buildProposeDeployContractInstruction has a closed canonical local target", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const field of [
+    "contractAlias",
+    "contract_address",
+    "code_hash",
+    "mode",
+    "limits",
+    "manifest_provenance",
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, [field]: "retired" }),
+      new RegExp(field, "u"),
+    );
+  }
+  for (const contractAddress of [
+    base.contractAddress.toUpperCase(),
+    ` ${base.contractAddress}`,
+    `${base.contractAddress.slice(0, -1)}p`,
+    "merchant@paynet",
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, contractAddress }),
+      /contractAddress|contract address|Bech32/u,
+    );
+  }
+});
+
+baseTest("buildProposeDeployContractInstruction rejects non-V1 ABI and unordered windows", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const abiVersion of ["01", "1 ", "2", 1]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, abiVersion }),
+      /exactly '1'/u,
+    );
+  }
+  for (const window of [
+    { lower: 2, upper: 1 },
+    { lower: "01", upper: "2" },
+    { lower: 0, upper: 0x1_0000_0000_0000_0000n },
+    { lower: 0, upper: 1, from: 0 },
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, window }),
+      /window/u,
+    );
+  }
+});
+
+baseTest("buildProposeDeployContractInstruction enforces the governance hash grammar", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const codeHash of [
+    ` ${"aa".repeat(32)}`,
+    `${"aa".repeat(32)} `,
+    `sha256:${"aa".repeat(32)}`,
+    `blake2b32:${"aa".repeat(31)}`,
+    `blake2b32:0x${"gg".repeat(32)}`,
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, codeHash }),
+      /codeHash/u,
+    );
+  }
+});
+
+baseTest("governance proposal builder rejects every private-key alias recursively", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const alias of [
+    "private_key",
+    "privateKey",
+    "private_key_hex",
+    "privateKeyHex",
+    "private_key_bytes",
+    "privateKeyBytes",
+    "private_key_seed",
+    "privateKeySeed",
+    "private_key_multihash",
+    "privateKeyMultihash",
+    "private_key_algorithm",
+    "privateKeyAlgorithm",
+  ]) {
+    assert.throws(
+      () =>
+        buildProposeDeployContractInstruction({
+          ...base,
+          window: { lower: 0, upper: 1, nested: [{ [alias]: "secret" }] },
+        }),
+      new RegExp(alias, "u"),
+    );
+  }
+});
+
+baseTest("buildProposeDeployContractInstruction rejects non-canonical voting modes", () => {
   const base = {
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
@@ -2764,8 +2896,8 @@ test("buildProposeDeployContractInstruction rejects non-canonical voting modes",
   }
 });
 
-test("buildCastZkBallotInstruction encodes proof and JSON inputs", () => {
-  const publicInputs = { tally: "aye" };
+baseTest("buildCastZkBallotInstruction encodes proof and closed public inputs", () => {
+  const publicInputs = { direction: "Aye" };
   const instruction = buildCastZkBallotInstruction({
     electionId: "ref-1",
     proof: Buffer.from([0x01, 0x02]),
@@ -2783,7 +2915,7 @@ test("buildCastZkBallotInstruction encodes proof and JSON inputs", () => {
   assert.deepEqual(decoded, expected);
 });
 
-test("buildCastZkBallotInstruction defaults public inputs to empty object", () => {
+baseTest("buildCastZkBallotInstruction defaults public inputs to empty object", () => {
   const instruction = buildCastZkBallotInstruction({
     electionId: "ref-2",
     proof: Buffer.from([0x03]),
@@ -2793,7 +2925,7 @@ test("buildCastZkBallotInstruction defaults public inputs to empty object", () =
   assert.deepEqual(decoded, instruction);
 });
 
-test("buildCastZkBallotInstruction rejects unsupported public input keys", () => {
+baseTest("buildCastZkBallotInstruction rejects unsupported public input keys", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
@@ -2813,40 +2945,68 @@ test("buildCastZkBallotInstruction rejects unsupported public input keys", () =>
   );
 });
 
-test("buildCastZkBallotInstruction canonicalizes hex hint values", () => {
+baseTest("buildCastZkBallotInstruction has a closed camel-case request shape", () => {
+  const base = {
+    electionId: "ref-closed",
+    proof: Buffer.from([0x04]),
+  };
+  for (const field of [
+    "election_id",
+    "proofB64",
+    "proof_b64",
+    "publicInputsJson",
+    "public_inputs_json",
+  ]) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({ ...base, [field]: "retired" }),
+      new RegExp(field, "u"),
+    );
+  }
+});
+
+baseTest("buildCastZkBallotInstruction canonicalizes all six scalar inputs losslessly", () => {
   const instruction = buildCastZkBallotInstruction({
     electionId: "ref-3",
     proof: Buffer.from([0x04]),
     publicInputs: {
       owner: SAMPLE_ACCOUNT_I105_LITERAL,
-      amount: "250",
-      duration_blocks: 12,
+      amount: "18446744073709551616.25",
+      duration_blocks: 0xffff_ffff_ffff_ffffn,
+      direction: "Nay",
       root_hint: `0x${"Aa".repeat(32)}`,
       nullifier: `blake2b32:${"BB".repeat(32)}`,
     },
   });
-  const parsed = JSON.parse(instruction.CastZkBallot.public_inputs_json);
-  assert.equal(parsed.root_hint, "aa".repeat(32));
-  assert.equal(parsed.nullifier, "bb".repeat(32));
-});
-
-test("buildCastZkBallotInstruction canonicalizes public input ordering", () => {
-  const instruction = buildCastZkBallotInstruction({
-    electionId: "ref-4",
-    proof: Buffer.from([0x05]),
-    publicInputs: {
-      tally: "aye",
-      meta: { z: 1, a: 2 },
-      badge: "voter",
-    },
-  });
   assert.equal(
     instruction.CastZkBallot.public_inputs_json,
-    '{"badge":"voter","meta":{"a":2,"z":1},"tally":"aye"}',
+    `{"root_hint":"${"aa".repeat(32)}","owner":"${SAMPLE_ACCOUNT_I105_LITERAL}","amount":"18446744073709551616.25","duration_blocks":18446744073709551615,"direction":"Nay","nullifier":"${"bb".repeat(32)}"}`,
+  );
+  const decoded = withPureJsInstructionCodec(() => encodeAndDecode(instruction));
+  assert.equal(
+    decoded.CastZkBallot.public_inputs_json,
+    instruction.CastZkBallot.public_inputs_json,
   );
 });
 
-test("buildCastZkBallotInstruction rejects non-object public inputs", () => {
+baseTest("buildCastZkBallotInstruction rejects formerly accepted meta and badge fields", () => {
+  for (const publicInputs of [
+    { meta: { z: 1, a: 2 } },
+    { badge: "voter" },
+    { direction: "Aye", tally: "aye" },
+  ]) {
+    assert.throws(
+      () =>
+        buildCastZkBallotInstruction({
+          electionId: "ref-4",
+          proof: Buffer.from([0x05]),
+          publicInputs,
+        }),
+      /not supported/u,
+    );
+  }
+});
+
+baseTest("buildCastZkBallotInstruction rejects non-object public inputs", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
@@ -2862,7 +3022,7 @@ test("buildCastZkBallotInstruction rejects non-object public inputs", () => {
   );
 });
 
-test("buildCastZkBallotInstruction requires complete lock hints", () => {
+baseTest("buildCastZkBallotInstruction requires complete lock hints", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
@@ -2878,7 +3038,7 @@ test("buildCastZkBallotInstruction requires complete lock hints", () => {
   );
 });
 
-test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
+baseTest("buildCastZkBallotInstruction rejects noncanonical owner", () => {
   const malformedOwner = ACCOUNT_ID.replace(/^sora/u, "ｓｏｒａ");
   assert.throws(
     () =>
@@ -2899,13 +3059,173 @@ test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
   );
 });
 
-test("buildCastZkBallotInstruction rejects empty proof bytes", () => {
+baseTest("buildCastZkBallotInstruction rejects noncanonical direction and Quantity", () => {
+  const base = {
+    electionId: "ref-6",
+    proof: Buffer.from([0x07]),
+  };
+  for (const direction of ["aye", "NAY", "Abstain ", 0]) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({
+        ...base,
+        publicInputs: { direction },
+      }),
+      /exactly Aye, Nay, or Abstain/u,
+    );
+  }
+  for (const amount of [250, "01", "-1", "1.", " 1"] ) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({
+        ...base,
+        publicInputs: {
+          owner: SAMPLE_ACCOUNT_I105_LITERAL,
+          amount,
+          duration_blocks: 1,
+        },
+      }),
+      /Quantity|quantity|numeric/u,
+    );
+  }
+});
+
+baseTest("buildCastZkBallotInstruction rejects lossy or out-of-range durations", () => {
+  const base = {
+    electionId: "ref-duration",
+    proof: Buffer.from([0x07]),
+  };
+  for (const duration_blocks of [
+    -1,
+    Number.MAX_SAFE_INTEGER + 1,
+    "01",
+    "1 ",
+    0x1_0000_0000_0000_0000n,
+  ]) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({
+        ...base,
+        publicInputs: {
+          owner: SAMPLE_ACCOUNT_I105_LITERAL,
+          amount: "1",
+          duration_blocks,
+        },
+      }),
+      /duration_blocks/u,
+    );
+  }
+});
+
+baseTest("governance ZK ballot rejects every private-key alias recursively", () => {
+  for (const alias of [
+    "private_key",
+    "privateKey",
+    "private_key_hex",
+    "privateKeyHex",
+    "private_key_bytes",
+    "privateKeyBytes",
+    "private_key_seed",
+    "privateKeySeed",
+    "private_key_multihash",
+    "privateKeyMultihash",
+    "private_key_algorithm",
+    "privateKeyAlgorithm",
+  ]) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({
+        electionId: "ref-secret",
+        proof: Buffer.from([0x08]),
+        publicInputs: { meta: [{ [alias]: "secret" }] },
+      }),
+      new RegExp(alias, "u"),
+    );
+  }
+});
+
+baseTest("direct governance Norito validation runs before native dispatch", () => {
+  const prior = globalThis.__IROHA_NORITO_BINDING__;
+  let nativeCalls = 0;
+  globalThis.__IROHA_NORITO_BINDING__ = {
+    noritoEncodeInstruction() {
+      nativeCalls += 1;
+      return Buffer.from([0]);
+    },
+  };
+  try {
+    assert.throws(
+      () => noritoEncodeInstruction({
+        ProposeDeployContract: {
+          contract_address:
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+          code_hash_hex: "aa".repeat(32),
+          abi_hash_hex: "bb".repeat(32),
+          abi_version: "1",
+          limits: {},
+        },
+      }),
+      /unknown field limits/u,
+    );
+    assert.throws(
+      () => noritoEncodeInstruction({
+        CastZkBallot: {
+          election_id: "ref-direct",
+          proof_b64: "AQ==",
+          public_inputs_json: '{"meta":{"privateKey":"secret"}}',
+        },
+      }),
+      /privateKey/u,
+    );
+    assert.equal(nativeCalls, 0);
+  } finally {
+    if (prior === undefined) {
+      delete globalThis.__IROHA_NORITO_BINDING__;
+    } else {
+      globalThis.__IROHA_NORITO_BINDING__ = prior;
+    }
+  }
+});
+
+baseTest("direct pure-JS CastZkBallot preserves a raw max-u64 JSON token", () => {
+  const instructionJson = JSON.stringify({
+    CastZkBallot: {
+      election_id: "ref-direct",
+      proof_b64: "AQ==",
+      public_inputs_json:
+        '{"duration_blocks":18446744073709551615,"owner":"' +
+        SAMPLE_ACCOUNT_I105_LITERAL +
+        '","amount":"1","direction":"Abstain"}',
+    },
+  });
+  const decoded = withPureJsInstructionCodec(() =>
+    noritoDecodeInstruction(noritoEncodeInstruction(instructionJson)));
+  assert.equal(
+    decoded.CastZkBallot.public_inputs_json,
+    `{"owner":"${SAMPLE_ACCOUNT_I105_LITERAL}","amount":"1","duration_blocks":18446744073709551615,"direction":"Abstain"}`,
+  );
+});
+
+baseTest("direct pure-JS deploy proposal preserves raw max-u64 window tokens", () => {
+  const instructionJson =
+    '{"ProposeDeployContract":{' +
+    '"contract_address":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",' +
+    `"code_hash_hex":"blake2b32:0x${"AA".repeat(32)}",` +
+    `"abi_hash_hex":"${"BB".repeat(32)}",` +
+    '"abi_version":"1","window":{"lower":0,"upper":18446744073709551615}}}';
+  const decoded = withPureJsInstructionCodec(() =>
+    noritoDecodeInstruction(noritoEncodeInstruction(instructionJson)));
+  assert.deepEqual(decoded.ProposeDeployContract.window, {
+    lower: "0",
+    upper: "18446744073709551615",
+  });
+  assert.equal(decoded.ProposeDeployContract.code_hash_hex, "aa".repeat(32));
+  assert.equal(decoded.ProposeDeployContract.abi_hash_hex, "bb".repeat(32));
+});
+
+baseTest("buildCastZkBallotInstruction rejects empty proof bytes", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
         electionId: "ref-1",
         proof: Buffer.alloc(0),
-        publicInputs: { tally: "aye" },
+        publicInputs: {},
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);

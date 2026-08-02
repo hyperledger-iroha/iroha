@@ -120,8 +120,14 @@ const MUSUBI_V1_TOOL_DEFINITIONS: &[MusubiV1ToolDefinition] = &[
     },
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.exact_release",
-        description: "Fetch one exact structural Musubi V1 release record.",
+        description: "Fetch one coherent finalized Musubi V1 home/universal release snapshot.",
         path: route_catalog::musubi::EXACT_RELEASE.path(),
+        effect: ToolEffect::Read,
+    },
+    MusubiV1ToolDefinition {
+        name: "iroha.musubi.queries.provider_bundle_attestation",
+        description: "Audit one exact immutable Musubi V1 provider bundle attestation.",
+        path: route_catalog::musubi::PROVIDER_BUNDLE_ATTESTATION.path(),
         effect: ToolEffect::Read,
     },
     MusubiV1ToolDefinition {
@@ -188,6 +194,12 @@ const MUSUBI_V1_TOOL_DEFINITIONS: &[MusubiV1ToolDefinition] = &[
         name: "iroha.musubi.instructions.archive_register",
         description: "Build an unsigned Musubi V1 archive registration.",
         path: route_catalog::musubi::ARCHIVE_REGISTER.path(),
+        effect: ToolEffect::BuildInstruction,
+    },
+    MusubiV1ToolDefinition {
+        name: "iroha.musubi.instructions.provider_bundle_attestation_register",
+        description: "Build an unsigned immutable Musubi V1 provider bundle-attestation registration.",
+        path: route_catalog::musubi::PROVIDER_BUNDLE_ATTESTATION_REGISTER.path(),
         effect: ToolEffect::BuildInstruction,
     },
     MusubiV1ToolDefinition {
@@ -603,7 +615,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_locks_get_tool());
     tools.push(iroha_gov_referenda_get_tool());
     tools.push(iroha_gov_tally_get_tool());
-    tools.push(iroha_gov_ballots_zk_tool());
     tools.push(iroha_gov_ballots_zk_v1_tool());
     tools.push(iroha_gov_ballots_zk_v1_ballot_proof_tool());
     tools.push(iroha_gov_ballots_plain_tool());
@@ -1578,12 +1589,6 @@ async fn handle_tools_call(
         }
         "iroha.gov.tally.get" => {
             match dispatch_iroha_gov_tally_get(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.ballots.zk" => {
-            match dispatch_iroha_gov_ballots_zk(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4957,29 +4962,6 @@ async fn dispatch_iroha_gov_tally_get(
         arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_gov_ballots_zk(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/ballots/zk",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -11091,14 +11073,6 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
     }
 }
 
-fn iroha_gov_ballots_zk_tool() -> ToolSpec {
-    iroha_gov_post_tool(
-        "iroha.gov.ballots.zk",
-        "Submit a governance ZK ballot (`/v1/gov/ballots/zk`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/ballots/zk",
-    )
-}
-
 fn iroha_gov_ballots_zk_v1_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.ballots.zk_v1",
@@ -15323,7 +15297,7 @@ mod tests {
             .and_then(Value::as_array)
             .expect("Musubi instruction fixture cases");
 
-        assert_eq!(MUSUBI_V1_TOOL_DEFINITIONS.len(), 29);
+        assert_eq!(MUSUBI_V1_TOOL_DEFINITIONS.len(), 31);
         for definition in MUSUBI_V1_TOOL_DEFINITIONS {
             let matching = tools
                 .iter()
@@ -15423,7 +15397,13 @@ mod tests {
                 "exact-release",
                 route_catalog::musubi::EXACT_RELEASE,
                 "MusubiExactReleaseQueryV1",
-                "MusubiReleaseRecordV1",
+                "MusubiExactReleaseSnapshotV1",
+            ),
+            (
+                "provider-bundle-attestation",
+                route_catalog::musubi::PROVIDER_BUNDLE_ATTESTATION,
+                "MusubiProviderBundleAttestationKeyV1",
+                "MusubiProviderBundleAttestationRecordV1",
             ),
             (
                 "resolver-index",
@@ -16173,7 +16153,7 @@ mod tests {
                 .any(|tool| tool.name == "iroha.gov.referenda.get")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.gov.tally.get"));
-        assert!(tools.iter().any(|tool| tool.name == "iroha.gov.ballots.zk"));
+        assert!(tools.iter().all(|tool| tool.name != "iroha.gov.ballots.zk"));
         assert!(
             tools
                 .iter()

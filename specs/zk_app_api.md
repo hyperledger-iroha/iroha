@@ -463,9 +463,10 @@ iroha ledger trigger register \
 ## Governance Endpoints (ZK Ballots)
 
 For submitting ZK ballots and building transaction skeletons, refer to the
-Governance App API document. These strict request schemas do not accept
-`private_key`; Torii returns a skeleton for clients to sign locally and submit:
-- POST `/v1/gov/ballots/zk` — base DTO returning a `CastZkBallot` skeleton.
+Governance App API document. These strict request schemas and their nested
+window, provenance, proof, and public-input objects reject unknown fields and
+all private-key aliases before dispatch; Torii returns a skeleton for clients
+to sign locally and submit:
 - POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
 - POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts canonical V1 `BallotProof` JSON directly.
 

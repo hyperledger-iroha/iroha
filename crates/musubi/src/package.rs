@@ -174,12 +174,6 @@ impl PlannedFile {
         &self.path
     }
 
-    /// Return the canonical portable path components used by SoraFS.
-    #[must_use]
-    pub fn components(&self) -> &[String] {
-        &self.components
-    }
-
     /// Return the exact file payload.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
@@ -281,12 +275,9 @@ impl PackagePlan {
         let bundle_digest =
             MusubiContentDigestV1::new(domain_digest(BUNDLE_DOMAIN, &bundle_material));
         Ok(PackageCommitments {
-            source_tree_material,
             source_tree_digest,
             descriptor,
-            descriptor_material,
             descriptor_digest,
-            bundle_material,
             bundle_digest,
         })
     }
@@ -393,12 +384,14 @@ pub struct PackageCar {
 impl PackageCar {
     /// Return the validated SoraFS CAR plan.
     #[must_use]
+    #[cfg(test)]
     pub const fn plan(&self) -> &CarBuildPlan {
         &self.plan
     }
 
     /// Return the exact concatenated source payload expected by the CAR plan.
     #[must_use]
+    #[cfg(test)]
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
@@ -423,6 +416,7 @@ impl PackageCar {
 
     /// Return the source-tree file count, excluding three mandatory bundle metadata entries.
     #[must_use]
+    #[cfg(test)]
     pub const fn source_file_count(&self) -> usize {
         self.source_file_count
     }
@@ -498,22 +492,13 @@ impl PackageCar {
 /// All canonical materials and digests needed by the archive-commitment layer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageCommitments {
-    source_tree_material: Vec<u8>,
     source_tree_digest: MusubiContentDigestV1,
     descriptor: MusubiArtifactDescriptorV1,
-    descriptor_material: Vec<u8>,
     descriptor_digest: MusubiContentDigestV1,
-    bundle_material: Vec<u8>,
     bundle_digest: MusubiContentDigestV1,
 }
 
 impl PackageCommitments {
-    /// Return the canonical source-tree transcript.
-    #[must_use]
-    pub fn source_tree_material(&self) -> &[u8] {
-        &self.source_tree_material
-    }
-
     /// Return the domain-separated source-tree digest.
     #[must_use]
     pub const fn source_tree_digest(&self) -> MusubiContentDigestV1 {
@@ -522,26 +507,15 @@ impl PackageCommitments {
 
     /// Return the typed artifact descriptor.
     #[must_use]
+    #[cfg(test)]
     pub const fn descriptor(&self) -> &MusubiArtifactDescriptorV1 {
         &self.descriptor
-    }
-
-    /// Return the domain-prefixed Norito descriptor material.
-    #[must_use]
-    pub fn descriptor_material(&self) -> &[u8] {
-        &self.descriptor_material
     }
 
     /// Return the descriptor digest.
     #[must_use]
     pub const fn descriptor_digest(&self) -> MusubiContentDigestV1 {
         self.descriptor_digest
-    }
-
-    /// Return the canonical bundle transcript.
-    #[must_use]
-    pub fn bundle_material(&self) -> &[u8] {
-        &self.bundle_material
     }
 
     /// Return the domain-separated bundle digest.
@@ -786,6 +760,7 @@ pub fn canonicalize_manifest_toml(input: &str) -> Result<Vec<u8>, PackageError> 
 /// # Errors
 ///
 /// Returns an error for malformed TOML or missing `schema = "musubi-lock"`/`version = 1`.
+#[cfg(test)]
 pub fn normalize_verification_lock_toml(input: &str) -> Result<Vec<u8>, PackageError> {
     let (table, bytes) = canonicalize_toml(VERIFICATION_LOCK_PATH, input)?;
     let schema_matches = table.get("schema").and_then(toml::Value::as_str) == Some("musubi-lock");
@@ -1896,6 +1871,7 @@ fn sensitive_content_marker(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
+#[cfg(test)]
 fn reject_consumer_only_lock_fields(value: &toml::Value) -> Result<(), PackageError> {
     const FORBIDDEN: &[&str] = &[
         "cache-path",

@@ -7761,91 +7761,16 @@ def test_submit_plain_ballot_requires_canonical_lossless_quantity() -> None:
             )
 
 
-def test_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "accepted": True,
-                "reason": None,
-                "tx_instructions": [],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="durationBlocks"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": "100",
-                "durationBlocks": 5,
-            },
-        )
-
-
-def test_submit_zk_ballot_normalizes_public_inputs() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "accepted": True,
-                "reason": None,
-                "tx_instructions": [],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    client.submit_zk_ballot(
-        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        chain_id="chain",
-        election_id="election-1",
-        proof_b64="AAAA",
-        public={
-            "owner": CANONICAL_OWNER,
-            "amount": CANONICAL_LARGE_FRACTION,
-            "duration_blocks": 5,
-            "root_hint": f"0x{'Cc' * 32}",
-            "nullifier": bytes.fromhex("DD" * 32),
-        },
-    )
-
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    public = payload["public"]
-    assert public["amount"] == CANONICAL_LARGE_FRACTION
-    assert public["root_hint"] == "cc" * 32
-    assert public["nullifier"] == "dd" * 32
-
-
 @pytest.mark.parametrize(
     "amount",
     [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
 )
-def test_submit_zk_ballot_lock_hints_reject_noncanonical_quantity(
+def test_submit_zk_ballot_v1_lock_hints_reject_noncanonical_quantity(
     amount: Any,
 ) -> None:
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="quantity"):
-        client.submit_zk_ballot(
-            authority=CANONICAL_OWNER,
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": amount,
-                "duration_blocks": 5,
-            },
-        )
     with pytest.raises(RuntimeError, match="quantity"):
         client.submit_zk_ballot_v1(
             authority=CANONICAL_OWNER,
@@ -7859,58 +7784,84 @@ def test_submit_zk_ballot_lock_hints_reject_noncanonical_quantity(
         )
 
 
-def test_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
+def test_legacy_zk_ballot_surface_is_absent() -> None:
+    assert not hasattr(ToriiClient, "submit_zk_ballot")
+    assert hasattr(ToriiClient, "submit_zk_ballot_v1")
 
-    with pytest.raises(RuntimeError, match="root_hint"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": "100",
-                "duration_blocks": 5,
-                "root_hint": "not-hex",
+
+def test_mock_server_accepts_canonical_zk_v1_ballot() -> None:
+    server = ToriiMockServer().start()
+    try:
+        configured = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/gov/config",
+            json={
+                "referenda": [
+                    {
+                        "id": "election-1",
+                        "referendum": {"id": "election-1", "mode": "Zk"},
+                        "ballot_zk_response": {
+                            "ok": True,
+                            "accepted": True,
+                            "reason": None,
+                            "tx_instructions": [],
+                        },
+                    }
+                ]
             },
+            timeout=5.0,
         )
+        configured.raise_for_status()
 
-
-def test_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+        result = ToriiClient(server.base_url).submit_zk_ballot_v1(
+            authority=CANONICAL_OWNER,
             chain_id="chain",
             election_id="election-1",
-            proof_b64="AAAA",
-            public={"owner": CANONICAL_OWNER},
+            backend="halo2/ipa",
+            envelope_b64="AAAA",
+            owner=CANONICAL_OWNER,
+            amount="100",
+            duration_blocks=5,
         )
 
+        assert result.ok is True
+        assert result.accepted is True
+        assert result.reason is None
+    finally:
+        server.stop()
 
-def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="canonical I105 account id"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": "soradead",
-                "amount": "100",
-                "duration_blocks": 5,
+def test_mock_server_rejects_legacy_nested_payload_on_zk_v1_route() -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/v1/gov/ballots/zk-v1",
+            json={
+                "authority": CANONICAL_OWNER,
+                "chain_id": "chain",
+                "election_id": "election-1",
+                "proof_b64": "AAAA",
+                "public": {},
             },
+            timeout=5.0,
         )
+
+        assert response.status_code == 400
+    finally:
+        server.stop()
+
+
+def test_mock_server_rejects_retired_legacy_zk_ballot_route() -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/v1/gov/ballots/zk",
+            json={"proof_b64": "AAAA"},
+            timeout=5.0,
+        )
+
+        assert response.status_code == 404
+    finally:
+        server.stop()
 
 
 def test_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:

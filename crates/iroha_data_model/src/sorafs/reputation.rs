@@ -341,7 +341,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
             self.chain_id.clone(),
             self.sequence,
             self.predecessor_request_digest,
-            self.compact_through.clone(),
+            self.compact_through,
         );
         let bytes = norito::to_bytes(&material)
             .map_err(|_| ReputationFinalizedArchiveRetentionRequestErrorV1::CanonicalEncoding)?;

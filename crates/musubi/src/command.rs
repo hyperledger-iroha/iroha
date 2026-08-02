@@ -2640,7 +2640,7 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     let loaded = load_production_publication_runtime_v1(args.network.config.as_deref(), validator)
         .map_err(publication_configuration_diagnostic)?;
     let bindings = loaded.bindings().clone();
-    let (signing, services, _) = loaded.into_parts();
+    let (signing, mut services, _) = loaded.into_parts();
     let request = PublicationRequestV1 {
         chain_id: graph.lock.chain_id.clone(),
         genesis_block_hash: graph.lock.genesis_hash,
@@ -2659,6 +2659,9 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     let operation_id = request.operation_id();
     let state_root = publication_state_root()?;
     let store = PublicationJournalStore::open(&state_root).map_err(publication_diagnostic)?;
+    services
+        .bind_publication_state_root(&state_root)
+        .map_err(publication_configuration_diagnostic)?;
     let source = PublicationStagedCarSourceV1::stage_bytes(
         &state_root,
         operation_id,
@@ -2722,7 +2725,10 @@ fn resume_publication(args: &PublishArgs, operation_id: PublicationOperationIdV1
         validate_resumable_publication_car,
     )
     .map_err(publication_configuration_diagnostic)?;
-    let (signer, services, _) = loaded.into_parts();
+    let (signer, mut services, _) = loaded.into_parts();
+    services
+        .bind_publication_state_root(&state_root)
+        .map_err(publication_configuration_diagnostic)?;
     let mut backend = RegistryPublicationBackendV1::new(reader, signer, services, &journal.request)
         .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
     let source = PublicationStagedCarSourceV1::new(
@@ -2942,12 +2948,15 @@ fn publication_state_root() -> Result<PathBuf, Diagnostic> {
     #[cfg(not(any(unix, target_os = "windows")))]
     let root: Option<PathBuf> = None;
 
-    root.ok_or_else(|| {
+    let requested = root.ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::Io,
             "platform user state directory is unavailable",
         )
-    })
+    })?;
+    AtomicWriteRoot::open_or_create_private(&requested)
+        .map(|root| root.path().to_path_buf())
+        .map_err(atomic_diagnostic)
 }
 
 fn publication_diagnostic(error: PublicationError) -> Diagnostic {
@@ -3497,11 +3506,15 @@ fn registry_json<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> Result<V
 }
 
 fn registry_diagnostic(error: RegistryErrorV1, fallback: ErrorCode) -> Diagnostic {
-    let code = match error.class() {
-        crate::registry::RegistryFailureClassV1::Retryable => ErrorCode::Network,
-        crate::registry::RegistryFailureClassV1::Permanent
-        | crate::registry::RegistryFailureClassV1::NotFound
-        | crate::registry::RegistryFailureClassV1::StaleCursor => fallback,
+    let code = match (error.code(), error.class()) {
+        ("MUSUBI_PUBLICATION_AUTHORITY_MISMATCH", _) => ErrorCode::Unauthorized,
+        (_, crate::registry::RegistryFailureClassV1::Retryable) => ErrorCode::Network,
+        (
+            _,
+            crate::registry::RegistryFailureClassV1::Permanent
+            | crate::registry::RegistryFailureClassV1::NotFound
+            | crate::registry::RegistryFailureClassV1::StaleCursor,
+        ) => fallback,
     };
     Diagnostic::new(code, "Musubi registry operation failed")
         .with_context("registry_code", error.code())
@@ -4377,8 +4390,10 @@ mod tests {
         )
         .expect("signer-free registry client");
 
-        let error = prune_cache_targets(&cache, &archive_ids, &registry, false)
-            .expect_err("deployment drift must fail closed");
+        let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
+            Err(error) => error,
+            Ok(_) => panic!("deployment drift must fail closed"),
+        };
         assert_eq!(error.code(), ErrorCode::Registry);
         assert!(
             archive_path.exists(),

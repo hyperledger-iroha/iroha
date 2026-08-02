@@ -29,9 +29,9 @@ const SRC_V2_ED25519_DOMAIN: &[u8] = b"soranet.src.v2.ed25519";
 /// Canonical Blake3 domain separator for ML-DSA signing.
 const SRC_V2_MLDSA_DOMAIN: &[u8] = b"soranet.src.v2.mldsa65";
 
-/// Maximum encoded size of an SRCv2 certificate payload.
+/// Maximum encoded size of an `SRCv2` certificate payload.
 pub const SRC_V2_MAX_CERTIFICATE_BYTES: usize = 56 * 1024;
-/// Maximum encoded size of an SRCv2 certificate bundle.
+/// Maximum encoded size of an `SRCv2` certificate bundle.
 pub const SRC_V2_MAX_BUNDLE_BYTES: usize = 64 * 1024;
 /// Maximum number of transport endpoints in one certificate.
 pub const SRC_V2_MAX_ENDPOINTS: usize = 16;
@@ -365,7 +365,7 @@ pub struct RelayEndpointV2 {
     pub quic_multiaddr: String,
     /// Canonical DNS name supplied to TLS certificate verification.
     pub tls_server_name: String,
-    /// SHA-256 digest of the exact leaf-certificate SubjectPublicKeyInfo DER.
+    /// SHA-256 digest of the exact leaf-certificate `SubjectPublicKeyInfo` DER.
     pub tls_spki_sha256: [u8; 32],
     /// Priority (lower numbers are preferred).
     pub priority: u8,
@@ -495,32 +495,48 @@ impl RelayEndpointV2 {
             }
         }
 
-        let quic_multiaddr = quic_multiaddr.ok_or(CertificateError::MissingField {
-            field: "endpoint.quic_multiaddr",
-        })?;
-        validate_quic_multiaddr(&quic_multiaddr)?;
-        let tls_server_name = tls_server_name.ok_or(CertificateError::MissingField {
-            field: "endpoint.tls_server_name",
-        })?;
-        validate_tls_server_name(&tls_server_name)?;
-        let tls_spki_sha256 = tls_spki_sha256.ok_or(CertificateError::MissingField {
-            field: "endpoint.tls_spki_sha256",
-        })?;
-        validate_tls_spki_sha256(&tls_spki_sha256)?;
-        let priority = priority.ok_or(CertificateError::MissingField {
-            field: "endpoint.priority",
-        })?;
-        let tags = tags.unwrap_or_default();
-        validate_endpoint_tags(&tags)?;
-
-        Ok(Self {
+        finish_decoded_endpoint(
             quic_multiaddr,
             tls_server_name,
             tls_spki_sha256,
             priority,
             tags,
-        })
+        )
     }
+}
+
+fn finish_decoded_endpoint(
+    quic_multiaddr: Option<String>,
+    tls_server_name: Option<String>,
+    tls_spki_sha256: Option<[u8; 32]>,
+    priority: Option<u8>,
+    tags: Option<Vec<String>>,
+) -> Result<RelayEndpointV2, CertificateError> {
+    let quic_multiaddr = quic_multiaddr.ok_or(CertificateError::MissingField {
+        field: "endpoint.quic_multiaddr",
+    })?;
+    validate_quic_multiaddr(&quic_multiaddr)?;
+    let tls_server_name = tls_server_name.ok_or(CertificateError::MissingField {
+        field: "endpoint.tls_server_name",
+    })?;
+    validate_tls_server_name(&tls_server_name)?;
+    let tls_spki_sha256 = tls_spki_sha256.ok_or(CertificateError::MissingField {
+        field: "endpoint.tls_spki_sha256",
+    })?;
+    validate_tls_spki_sha256(&tls_spki_sha256)?;
+    let priority = priority.ok_or(CertificateError::MissingField {
+        field: "endpoint.priority",
+    })?;
+    let tags = tags.unwrap_or_default();
+    validate_endpoint_tags(&tags)?;
+
+    Ok(RelayEndpointV2 {
+        quic_multiaddr,
+        tls_server_name,
+        tls_spki_sha256,
+        priority,
+        tags,
+    })
 }
 
 fn invalid_endpoint(field: &'static str, reason: impl Into<String>) -> CertificateError {
@@ -974,9 +990,9 @@ impl RelayCertificateV2 {
         encoder.write_unsigned(Field::PqKemPublic as u64);
         encoder.write_bytes(&self.pq_kem_public, "certificate.pq_kem_public")?;
 
-        let encoded = encoder.finish();
-        validate_encoded_len(encoded.len(), SRC_V2_MAX_CERTIFICATE_BYTES, "certificate")?;
-        Ok(encoded)
+        let bytes = encoder.finish();
+        validate_encoded_len(bytes.len(), SRC_V2_MAX_CERTIFICATE_BYTES, "certificate")?;
+        Ok(bytes)
     }
 
     /// Serialize the certificate payload to canonical CBOR bytes.
@@ -1188,9 +1204,9 @@ impl RelayCertificateBundleV2 {
         encoder.write_bytes(&certificate, "bundle.certificate")?;
         encoder.write_unsigned(1);
         self.signatures.encode(&mut encoder)?;
-        let encoded = encoder.finish();
-        validate_encoded_len(encoded.len(), SRC_V2_MAX_BUNDLE_BYTES, "bundle")?;
-        Ok(encoded)
+        let bytes = encoder.finish();
+        validate_encoded_len(bytes.len(), SRC_V2_MAX_BUNDLE_BYTES, "bundle")?;
+        Ok(bytes)
     }
 
     /// Serialize the bundle to CBOR.
@@ -1871,7 +1887,7 @@ fn compute_signing_digest(domain: &[u8], payload: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Compute the SHA-256 digest of the exact SubjectPublicKeyInfo DER served by
+/// Compute the SHA-256 digest of the exact `SubjectPublicKeyInfo` DER served by
 /// an X.509 leaf certificate.
 ///
 /// The parser accepts only definite, minimally encoded DER lengths and an
@@ -1880,7 +1896,7 @@ fn compute_signing_digest(domain: &[u8], payload: &[u8]) -> [u8; 32] {
 ///
 /// # Errors
 /// Returns an error when the certificate is truncated, non-canonical, or does
-/// not contain the mandatory RFC 5280 TBSCertificate fields through SPKI.
+/// not contain the mandatory RFC 5280 `TBSCertificate` fields through SPKI.
 pub fn leaf_certificate_spki_sha256(certificate_der: &[u8]) -> Result<[u8; 32], CertificateError> {
     let certificate = read_der_element(certificate_der, 0, 0x30)?;
     if certificate.element.end != certificate_der.len() {
@@ -2103,7 +2119,7 @@ fn validate_container_len(
     }
     let minimum_bytes = len
         .checked_mul(2)
-        .ok_or(CertificateError::InvalidFieldValue {
+        .ok_or_else(|| CertificateError::InvalidFieldValue {
             field,
             reason: format!("map length {len} overflows its minimum encoded size"),
         })?;

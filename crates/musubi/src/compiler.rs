@@ -316,8 +316,13 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
 /// The caller supplies source units copied out of authenticated immutable cache entries. This
 /// helper never opens their recorded source paths. Every package is selected as the local package
 /// once so its semantic interface can be compared with the corresponding exact lock commitment.
-pub(crate) fn validate_exact_registry_interfaces_v1<'a>(
-    nodes: impl IntoIterator<Item = &'a MusubiVerificationNodeV1>,
+#[allow(
+    single_use_lifetimes,
+    clippy::needless_lifetimes,
+    reason = "stable Rust requires a named lifetime for references nested in impl Trait items"
+)]
+pub(crate) fn validate_exact_registry_interfaces_v1<'node>(
+    nodes: impl IntoIterator<Item = &'node MusubiVerificationNodeV1>,
     packages: &[SourcePackageUnit],
     options: CompilerOptions,
 ) -> Result<(), String> {

@@ -1496,7 +1496,8 @@ pub mod sorafs {
                 /// outside the completion transaction payload.
                 pub const COMPLETION_CHAIN_ID_MAX_BYTES_V1: usize = 255;
                 /// Maximum canonical bytes for each retained completion account identity.
-                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 = 8 * 1024;
+                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 =
+                    iroha_data_model::musubi::MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 as u64;
                 /// Canonical reserve for one immutable finalized authorization.
                 ///
                 /// The provider-ingest runtime validates the largest variable

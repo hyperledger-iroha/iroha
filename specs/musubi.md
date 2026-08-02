@@ -135,7 +135,12 @@ the first accepted owner.
 Later namespace ownership changes do not grant package authority. Package
 members have accepted roles. Owner is a role and at least one owner must
 remain. Maintainer capabilities independently cover publish, yank, metadata,
-and archive-location management.
+and archive-location management. Before an archive is referenced by any
+release, its registrant may establish the initial location. Once releases
+reference it, that bootstrap authority ends: every archive-location mutation
+requires the current archive-location capability for every referencing
+package, so removal or Parliament recovery cannot leave a former registrant
+with latent storage authority.
 
 Invitations are explicit and must be accepted by the invited account. Invite,
 accept, role, removal, metadata, and ownership operations use compare-and-set
@@ -226,19 +231,20 @@ After restart, a finalized barrier requires every peer to expose the same
 complete package, release, resolver, directory, location, and retention tuple
 with exactly one successful publication occurrence. The gate has source
 implementation coverage but still requires an execution receipt once the
-unrelated workspace MKHE build failure is cleared.
+unrelated workspace compilation failures are cleared.
 
 Snapshot loading reserves the complete generic `musubi` state-path namespace:
 the bare name and `_`, `/`, `.`, or `:` descendants are rejected as legacy
 pre-release state. This prevents an unenumerated retired record shape from
 bypassing the reset check.
 
-V1 exposes typed exact package, release, resolver-index, version, member,
-archive-location, alias/history, and ordered-prefix queries. Resolver pages
-default to 50 entries. A continuation cursor binds finalized height and hash,
-the canonical query hash, the last returned key, index revision, and caller
-when authorization affects output. A changed anchor, query, revision, caller,
-or boundary is an explicit stale-cursor error.
+V1 exposes twelve typed query families: exact package, exact release, exact
+provider-bundle attestation, resolver index, versions, maintainers, archive
+locations, archive retention, alias, alias history, ordered prefix, and search.
+Resolver pages default to 50 entries. A continuation cursor binds finalized
+height and hash, the canonical query hash, the last returned key, index
+revision, and caller when authorization affects output. A changed anchor,
+query, revision, caller, or boundary is an explicit stale-cursor error.
 
 Every resolver-index, version, maintainer, alias-history, ordered-prefix, and
 search page echoes the exact bounded request object that produced it, including
@@ -294,17 +300,17 @@ standalone `InstructionBox` frame use the exact tuple schema name
 
 The Rust-owned fixture at `fixtures/musubi/instructions_v1.json` locks the
 semantic value, wire id, schema name/hash, bare concrete payload, concrete
-frame, inline pair, and standalone frame. Its eighteen cases cover namespace
+frame, inline pair, and standalone frame. Its nineteen cases cover namespace
 registration; maintainer invitation, acceptance, revocation, role replacement,
 and removal; global-alias registration; exact release-digest assertion;
-archive registration and location addition or renewal; archive-location
-retirement; release publication and reversible yank state; package metadata
-replacement; and Parliament-enacted package ownership recovery,
+archive registration, immutable provider-bundle-attestation registration, and
+location addition or renewal; archive-location retirement; release publication
+and reversible yank state; package metadata replacement; and Parliament-enacted package ownership recovery,
 permanent-alias retargeting, artifact takedown, and registry-policy replacement
 across Rust, Kotlin, Java, and Swift. An already-framed generic instruction
 wrapper is not typed field-to-Norito support.
 
-Swift additionally embeds all eighteen fixture cases in one real signed batch
+Swift additionally embeds all nineteen fixture cases in one real signed batch
 and extracts each inline pair at the executable boundary. That regression locks
 the compact `ChainId` and `TransactionSignature` tuple wrappers while retaining
 fixed-width sequence and byte-vector counts required by Norito V1.
@@ -524,8 +530,12 @@ Production publication is resumable and idempotent:
    a signed expiring receipt bound to chain, publisher, broker/provider,
    manifest, archive, body digest and length, nonce, and expiry.
 3. Register or reuse the exact archive and permanent registry-grade pin.
-4. Wait for finalized approval and distinct provider validations/completions.
-5. Require three healthy replicas and read back through two distinct providers.
+4. Wait for finalized approval and distinct provider validations/completions;
+   each provider registers its one signed parsed-bundle attestation under the
+   immutable `(archive, replication order, provider)` key.
+5. Add the renewable location using the sorted provider identities and one
+   archive/order-bound aggregate digest of those finalized attestations,
+   require three healthy replicas, and read back through two distinct providers.
 6. Submit the package claim and immutable release through Native AMX.
 7. Wait for finality and verify the exact universal resolver row.
 
@@ -560,7 +570,14 @@ terminal evidence, and an authoritative generic rejection remains permanent.
 Pin coordination authenticates the finalized transaction hash, chain/genesis,
 snapshot, immutable archive-registration projection, and verification-lock
 digest rather than a new live seed receipt, and it rejects fewer than three
-parsed-bundle provider attestations. The projection contains the archive id,
+finalized parsed-bundle attestations. Each proof is an
+immutable universal record keyed by archive, replication order, and provider;
+the record retains the complete signed attestation and a domain-separated
+digest, while location records and public pages retain only the sorted provider
+identities and aggregate attestation-set digest. Core exact-reads and revalidates
+every provider record, then recomputes the archive/order-bound set digest against
+the complete finalized SoraFS completion set before accepting a location Add.
+The projection contains the archive id,
 commitment, original staging receipt, registrant, and registration height but
 deliberately excludes the renewable location revision and location identities.
 The coordinator independently retrieves the exact transaction, proves that its
@@ -572,8 +589,24 @@ record used for location CAS.
 Archive locations use a separate append-only journal of at most eight one-based
 generations. Before submitting a location Add, the publisher persists the
 complete finalized preparation page, current location-set CAS revision,
-never-before-used stable location ID, provider attestations, exact instruction
-digest, fee-quoted signed transaction, and transaction hash. The private
+never-before-used stable location ID, compact provider-attestation set digest,
+exact instruction digest, fee-quoted signed transaction, and transaction hash.
+Before that compact Add is prepared, a compact immutable set descriptor and one
+exact signed registration transaction per provider are installed as
+operation/generation-bound, no-replace sidecars. Recovery exact-queries the
+finalized audit record first and otherwise replays only the stored transaction;
+coordinator-set, instruction, signature, or sidecar substitution fails closed.
+The main operation journal retains only a domain-separated hash of the complete
+set sidecar and an append-only identity/hash anchor for each expected transaction
+sidecar. Installing a sidecar and durably appending its main-journal anchor are
+separate advances; no provider registration may be submitted in the same
+advance that first exposes its anchor. Once anchored, a missing, reordered,
+substituted, or partially reproduced sidecar is a permanent integrity failure
+and is never recreated from coordinator input. A finalized rejection may append
+another bounded signed attempt only when its non-zero rejection height is
+covered by a complete finalized archive page whose location-set revision
+strictly exceeds the rejected compare-and-set revision.
+The private
 storage-coordination replay journal uses the generation as part of its durable
 idempotency key, and every request carries the sorted IDs of prior generations;
 the coordinator must not return one of them. A later generation is accepted
@@ -619,10 +652,68 @@ retirement page observed after a later one was journaled is a retryable stale
 poll and never overwrites the journal; the exact journaled record or a higher
 revision at a non-regressing page and location height may resume.
 A healthy same-ID renewal resumes from its current finalized pin, order, epochs,
-and provider attestations, all of which must still bind the exact chain,
-archive, bundle, source, semantic manifest, verification lock, and replication
-order. Production qualification still must exercise the real fee-quote and
+provider identities, and attestation-set digest. Core resolves their immutable records and
+requires the full proofs to still bind the exact chain, archive, bundle, source,
+semantic manifest, verification lock, and replication order. Production
+qualification still must exercise the real fee-quote and
 submission transport at every location-generation crash boundary.
+
+Before a release transaction may be sent, the publisher must durably append a
+compact exact-signed intent. The envelope retains every non-derived payload and
+authorization field (creation time, non-zero lifetime, nonce, fee intent,
+primary signature, and the optional canonical multisig proof) and reconstructs
+the chain, publisher, sole `PublishMusubiReleaseV1` instruction, empty metadata,
+and absent attachments from the immutable operation request. The intent binds
+both the payload-only transaction hash and a domain-separated digest of the
+complete fixed-V1 signed wire. The registry's authoritative status identifies
+the payload transaction hash; the authorization-inclusive wire digest is a
+local durable replay binding, not consensus evidence that one particular
+signature bundle was committed. Status recovery must reconstruct this exact
+local transaction, query authoritative payload status before any send, and
+resubmit the same bytes while it is live; it must never sign a replacement for
+an absent, pending, or transport-unknown attempt.
+
+Release attempts are one-based, append-only, and bounded to eight. A replacement
+intent requires a durable terminal outcome plus synchronized finalized evidence
+that the exact package version is absent from an empty universal resolver page
+and that the archive retention response uses the same snapshot and consensus
+time. Expiry needs authoritative expired status or consensus time strictly past
+the signature-bound deadline. Rejection additionally requires a covering
+higher healthy revision of the same location, or finalized retirement followed
+by a later location generation. An identical already-published release is not
+proof that this payload applied. Without `Applied` status for the journaled
+payload hash, the attempt never synthesizes application evidence. When status
+is `Absent`, a finalized same-publisher release whose complete commitments
+match may still take Core's idempotent path by replaying the journaled bytes;
+a different publisher or any commitment conflict is permanent. Before that
+absent transaction is sent or replayed, a fresh finalized replication query
+must reproduce the selected location record byte-for-byte from the signed
+readback floor. A stale page, retirement, or same-ID renewal therefore leaves
+the exact intent durable and unsent. A stale `Pending` status cannot outlive the
+signature-bound deadline once synchronized finalized absence and consensus
+time prove terminal expiry.
+
+The current 16 MiB journal enforces derived, disjoint budgets for non-release
+state, eight release attempts, and final submission/evidence, and rejects an
+intent before send when the operation cannot complete inside those bounds.
+Complete operational-shape location pages are retained directly. A fixed-bound
+audit found that the former 64-provider, 64-approval location shape is not a
+consensus-legal V1 maximum: with an 8 KiB canonical account bound and the
+3,309-byte maximum supported approval payload, one `AddMusubiArchiveLocationV1`
+can approach 28.8 MiB and a four-location response can approach 115.6 MiB,
+already exceeding the 10 MiB transaction and 16 MiB block-body corridors.
+The V1 wire schema therefore registers each at-most-1-MiB provider proof in a
+separate transaction and stores only the provider list plus aggregate set digest
+in the location. Core requires every proof registration to finalize in an
+earlier block and exposes one exact audit query. This makes the location
+instruction and four-location page compact independently of approval geometry;
+the production release prepare/status/submit path now uses the compact durable
+intent and reconstructs the exact Torii request body for status-first replay.
+Descriptor-relative filesystem qualification of the publisher sidecars, real
+fee-quote/submission transport exercises, crash/fault injection, and compact
+checkpointing of the remaining maximum-size mutable evidence remain release
+gates.
+
 Final verification retains the resolver page's chain and genesis identities in
 the operation evidence and requires both to match the immutable publication
 request. It also journals the Native AMX transaction's authoritative applied
@@ -737,9 +828,11 @@ The production adapter dependency order is therefore explicit and fail-closed:
    and verification lock;
 3. implement a durable idempotent coordinator which independently retrieves
    and verifies the exact finalized archive-registration transaction, submits
-   or reconciles canonical pin and replication operations, and returns only
-   authoritative current archive/location state and distinct-provider
-   attestations;
+   or reconciles canonical pin and replication operations, waits for each
+   distinct provider completion, and returns the complete bounded provider
+   attestations plus authoritative current archive/location state; the publisher
+   durably registers those proofs one transaction at a time before the compact
+   location CAS;
 4. implement authenticated provider readback with redirect denial, DNS/IP
    pinning, bounded streaming, and the same complete verifier; and
 5. resolve public policy and identity bindings through `iroha_config`, resolve
@@ -755,6 +848,10 @@ publisher-supplied evidence, ordinary SoraFS storage completion, or the retired
 public Torii upload route cannot satisfy this boundary.
 
 Active and yanked releases cannot lose their last healthy archive location.
+Explicit location retirement or underlying pin/order invalidation must leave
+at least three distinct current providers across the archive's remaining
+locations. Deliberate provider removal may reduce that count while at least one
+valid provider remains, matching the replica-degradation rule below.
 Replica degradation removes a row from fresh selection and emits an alert but
 does not rewrite release content. Before either updating availability or taking
 an unchanged-state fast path, Core validates the archive record and embedded

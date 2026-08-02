@@ -1864,7 +1864,11 @@ core = { package = "test/core", version = "^1.0.0" }
         );
         fs::hard_link(&first, temp.path().join("tests/second.ko")).expect("hardlink test source");
         let workspace = load_workspace(&temp.path().join("Musubi.toml")).expect("workspace");
-        let selected = vec!["test/app".parse().expect("selector")];
+        let selected = vec![
+            "test/app"
+                .parse::<MusubiPackageSelectorV1>()
+                .expect("selector"),
+        ];
         let lock = lock(
             vec![LockedRootV1 {
                 package: selected[0].clone(),

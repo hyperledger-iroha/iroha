@@ -783,10 +783,10 @@ public final class MusubiModelsV1 {
   }
 
   /** Canonical one-field Norito JSON wrapper around a 32-byte digest. */
-  public static final class Digest32 extends WireValue {
+  public static class Digest32 extends WireValue {
     private final byte[] bytes;
 
-    private Digest32(final byte[] bytes) {
+    protected Digest32(final byte[] bytes) {
       if (bytes == null || bytes.length != 32) {
         throw new IllegalArgumentException("Musubi digest must contain exactly 32 bytes");
       }
@@ -814,6 +814,36 @@ public final class MusubiModelsV1 {
       final List<Integer> values = new ArrayList<>(32);
       for (final byte item : bytes) values.add(item & 0xff);
       return Collections.singletonList(values);
+    }
+  }
+
+  /** Domain-separated digest of one complete provider bundle attestation. */
+  public static final class ProviderBundleAttestationDigest extends Digest32 {
+    private ProviderBundleAttestationDigest(final byte[] bytes) {
+      super(bytes);
+      if (allZero(bytes)) {
+        throw new IllegalArgumentException(
+            "Musubi provider bundle attestation digest must be non-zero");
+      }
+    }
+
+    public static ProviderBundleAttestationDigest fromBytes(final byte[] bytes) {
+      return new ProviderBundleAttestationDigest(bytes);
+    }
+  }
+
+  /** Archive/order-bound digest of a provider-sorted attestation set. */
+  public static final class ProviderBundleAttestationSetDigest extends Digest32 {
+    private ProviderBundleAttestationSetDigest(final byte[] bytes) {
+      super(bytes);
+      if (allZero(bytes)) {
+        throw new IllegalArgumentException(
+            "Musubi provider bundle attestation set digest must be non-zero");
+      }
+    }
+
+    public static ProviderBundleAttestationSetDigest fromBytes(final byte[] bytes) {
+      return new ProviderBundleAttestationSetDigest(bytes);
     }
   }
 
@@ -1471,23 +1501,43 @@ public final class MusubiModelsV1 {
   abstract static class StrictRecord extends WireValue {
     private final Map<String, Object> raw;
     StrictRecord(final Map<String, Object> raw) { this.raw = immutableObject(raw); }
+    final Map<String, Object> rawValue() { return raw; }
     @Override final Object toJsonValue() { return raw; }
   }
 
   /** Exact release response. */
   public static final class ReleaseRecord extends StrictRecord {
+    private final ReleaseManifest manifest;
     private final ReleaseId release;
+    private final Digest32 releaseDigest;
     private final String publishedBy;
     private final BigInteger publishedAtHeight;
     ReleaseRecord(
-        final ReleaseId release,
+        final ReleaseManifest manifest,
+        final Digest32 releaseDigest,
         final String publishedBy,
         final BigInteger publishedAtHeight,
         final Map<String, Object> raw) {
-      super(raw); this.release = release; this.publishedBy = publishedBy;
+      super(raw);
+      this.manifest = Objects.requireNonNull(manifest, "manifest");
+      this.release = manifest.release();
+      this.releaseDigest = Objects.requireNonNull(releaseDigest, "releaseDigest");
+      if (!Arrays.equals(
+          releaseDigest.bytes(), MusubiInstructionsV1.releaseManifestDigest(manifest))) {
+        throw new IllegalArgumentException(
+            "Musubi release digest does not match its canonical manifest");
+      }
+      this.publishedBy =
+          AccountIdLiteral.requireCanonicalI105Address(publishedBy, "release publisher");
+      requireU64(publishedAtHeight, "publishedAtHeight");
+      if (publishedAtHeight.signum() == 0) {
+        throw new IllegalArgumentException("Musubi publication height must be non-zero");
+      }
       this.publishedAtHeight = publishedAtHeight;
     }
+    public ReleaseManifest manifest() { return manifest; }
     public ReleaseId release() { return release; }
+    public Digest32 releaseDigest() { return releaseDigest; }
     public String publishedBy() { return publishedBy; }
     public BigInteger publishedAtHeight() { return publishedAtHeight; }
 
@@ -1504,12 +1554,85 @@ public final class MusubiModelsV1 {
   public static final class ResolverReleaseRow extends StrictRecord {
     private final ReleaseId release;
     private final BigInteger indexRevision;
+    private final BigInteger storageIndexRevision;
     ResolverReleaseRow(
-        final ReleaseId release, final BigInteger indexRevision, final Map<String, Object> raw) {
-      super(raw); this.release = release; this.indexRevision = indexRevision;
+        final ReleaseId release,
+        final BigInteger indexRevision,
+        final BigInteger storageIndexRevision,
+        final Map<String, Object> raw) {
+      super(raw);
+      this.release = release;
+      this.indexRevision = indexRevision;
+      this.storageIndexRevision = storageIndexRevision;
     }
     public ReleaseId release() { return release; }
     public BigInteger indexRevision() { return indexRevision; }
+    public BigInteger storageIndexRevision() { return storageIndexRevision; }
+  }
+
+  /** Finalized paired home-dataspace and universal-index view of one exact release. */
+  public static final class ExactReleaseSnapshot extends WireValue {
+    private final String chainId;
+    private final byte[] genesisHash;
+    private final RegistrySnapshot snapshot;
+    private final ReleaseRecord homeRelease;
+    private final ResolverReleaseRow universalRelease;
+
+    ExactReleaseSnapshot(
+        final String chainId,
+        final byte[] genesisHash,
+        final RegistrySnapshot snapshot,
+        final ReleaseRecord homeRelease,
+        final ResolverReleaseRow universalRelease) {
+      requireChainId(chainId, "Musubi exact release chain ID");
+      if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)) {
+        throw new IllegalArgumentException(
+            "Musubi exact release genesis hash must be non-zero and 32 bytes");
+      }
+      this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
+      this.homeRelease = Objects.requireNonNull(homeRelease, "homeRelease");
+      this.universalRelease = Objects.requireNonNull(universalRelease, "universalRelease");
+      if (!homeRelease.release().equals(universalRelease.release())
+          || homeRelease.publishedAtHeight().compareTo(snapshot.finalizedHeight()) > 0
+          || universalRelease.storageIndexRevision().compareTo(
+                  universalRelease.indexRevision()) > 0
+          || universalRelease.indexRevision().compareTo(snapshot.indexRevision()) > 0) {
+        throw new IllegalArgumentException(
+            "Musubi exact release projections are inconsistent with their finalized snapshot");
+      }
+      MusubiJsonV1.validateExactReleaseSnapshot(
+          homeRelease.rawValue(),
+          universalRelease.rawValue(),
+          genesisHash,
+          snapshot);
+      this.chainId = chainId;
+      this.genesisHash = genesisHash.clone();
+    }
+
+    public String chainId() { return chainId; }
+    public byte[] genesisHash() { return genesisHash.clone(); }
+    public RegistrySnapshot snapshot() { return snapshot; }
+    public ReleaseRecord homeRelease() { return homeRelease; }
+    public ResolverReleaseRow universalRelease() { return universalRelease; }
+
+    /** Rejects a paired snapshot for a different immutable release. */
+    public void requireMatches(final ExactReleaseQuery request) {
+      final ReleaseId expected = Objects.requireNonNull(request, "request").release();
+      if (!homeRelease.release().equals(expected)
+          || !universalRelease.release().equals(expected)) {
+        throw new IllegalArgumentException(
+            "Musubi exact-release snapshot does not match the request");
+      }
+    }
+
+    @Override Object toJsonValue() {
+      return object(
+          "chain_id", chainId,
+          "genesis_hash", unsignedBytes(genesisHash),
+          "snapshot", snapshot.toJsonValue(),
+          "home_release", homeRelease.toJsonValue(),
+          "universal_release", universalRelease.toJsonValue());
+    }
   }
 
   /** Accepted package member response. */
@@ -1634,22 +1757,51 @@ public final class MusubiModelsV1 {
   public static final class ArchiveLocation extends StrictRecord {
     private final Digest32 locationId;
     private final Digest32 archiveId;
+    private final List<String> providers;
+    private final ProviderBundleAttestationSetDigest providerAttestationSetDigest;
     private final BigInteger finalizedHeight;
     private final BigInteger revision;
     private final String stateKind;
     ArchiveLocation(
         final Digest32 locationId,
         final Digest32 archiveId,
+        final List<String> providers,
+        final ProviderBundleAttestationSetDigest providerAttestationSetDigest,
         final BigInteger finalizedHeight,
         final BigInteger revision,
         final String stateKind,
         final Map<String, Object> raw) {
       super(raw); this.locationId = locationId; this.archiveId = archiveId;
+      this.providers = immutableList(providers);
+      if (this.providers.isEmpty() || this.providers.size() > 64) {
+        throw new IllegalArgumentException(
+            "Musubi archive location needs between 1 and 64 providers");
+      }
+      byte[] previous = null;
+      for (final String provider : this.providers) {
+        if (provider == null || !provider.matches("[0-9A-F]{64}")) {
+          throw new IllegalArgumentException(
+              "Musubi archive location provider ID must be canonical uppercase hexadecimal");
+        }
+        final byte[] current = hexBytes(provider);
+        if (allZero(current)
+            || (previous != null && compareUnsignedBytes(previous, current) >= 0)) {
+          throw new IllegalArgumentException(
+              "Musubi archive location providers must be nonzero, sorted, and distinct");
+        }
+        previous = current;
+      }
+      this.providerAttestationSetDigest =
+          Objects.requireNonNull(providerAttestationSetDigest, "providerAttestationSetDigest");
       this.finalizedHeight = finalizedHeight;
       this.revision = revision; this.stateKind = stateKind;
     }
     public Digest32 locationId() { return locationId; }
     public Digest32 archiveId() { return archiveId; }
+    public List<String> providers() { return providers; }
+    public ProviderBundleAttestationSetDigest providerAttestationSetDigest() {
+      return providerAttestationSetDigest;
+    }
     public BigInteger finalizedHeight() { return finalizedHeight; }
     public BigInteger revision() { return revision; }
     public String stateKind() { return stateKind; }
@@ -2211,6 +2363,104 @@ public final class MusubiModelsV1 {
         values.add(approval.toJsonValue());
       }
       return object("payload", payload.toJsonValue(), "approvals", values);
+    }
+  }
+
+  /** Immutable archive/order/provider identity of one registered provider proof. */
+  public static final class ProviderBundleAttestationKey extends WireValue {
+    private final Digest32 archiveId;
+    private final Digest32 replicationOrder;
+    private final String providerId;
+
+    public ProviderBundleAttestationKey(
+        final Digest32 archiveId,
+        final Digest32 replicationOrder,
+        final String providerId) {
+      this.archiveId = requireNonZeroModelDigest(archiveId, "archiveId");
+      this.replicationOrder =
+          requireNonZeroModelDigest(replicationOrder, "replicationOrder");
+      if (providerId == null
+          || !providerId.matches("[0-9A-F]{64}")
+          || allZero(hexBytes(providerId))) {
+        throw new IllegalArgumentException(
+            "Musubi provider attestation key provider ID must be canonical and non-zero");
+      }
+      this.providerId = providerId;
+    }
+
+    public Digest32 archiveId() { return archiveId; }
+    public Digest32 replicationOrder() { return replicationOrder; }
+    public String providerId() { return providerId; }
+
+    @Override Object toJsonValue() {
+      return object(
+          "archive_id", archiveId.toJsonValue(),
+          "replication_order", replicationOrder.toJsonValue(),
+          "provider_id", Collections.singletonList(providerId));
+    }
+  }
+
+  /** Complete immutable provider proof returned by the exact audit query. */
+  public static final class ProviderBundleAttestationRecord extends WireValue {
+    private final ProviderBundleAttestationKey key;
+    private final ProviderBundleAttestationDigest attestationDigest;
+    private final ProviderBundleVerificationAttestation attestation;
+    private final String registeredBy;
+    private final BigInteger registeredAtHeight;
+
+    ProviderBundleAttestationRecord(
+        final ProviderBundleAttestationKey key,
+        final ProviderBundleAttestationDigest attestationDigest,
+        final ProviderBundleVerificationAttestation attestation,
+        final String registeredBy,
+        final BigInteger registeredAtHeight) {
+      this.key = Objects.requireNonNull(key, "key");
+      this.attestationDigest = Objects.requireNonNull(attestationDigest, "attestationDigest");
+      this.attestation = Objects.requireNonNull(attestation, "attestation");
+      final ProviderBundleVerificationBinding binding = attestation.payload().binding();
+      if (!key.archiveId().equals(binding.archiveId())
+          || !key.replicationOrder().equals(binding.replicationOrder())
+          || !key.providerId().equals(binding.providerId())) {
+        throw new IllegalArgumentException(
+            "Musubi provider attestation record key disagrees with its signed binding");
+      }
+      if (!Arrays.equals(
+          attestationDigest.bytes(),
+          MusubiInstructionsV1.providerBundleAttestationDigest(attestation))) {
+        throw new IllegalArgumentException(
+            "Musubi provider attestation digest disagrees with its canonical attestation bytes");
+      }
+      this.registeredBy =
+          AccountIdLiteral.requireCanonicalI105Address(registeredBy, "registeredBy");
+      requireU64(registeredAtHeight, "providerAttestationRecord.registeredAtHeight");
+      if (registeredAtHeight.signum() == 0) {
+        throw new IllegalArgumentException(
+            "Musubi provider attestation registration height must be non-zero");
+      }
+      this.registeredAtHeight = registeredAtHeight;
+    }
+
+    public ProviderBundleAttestationKey key() { return key; }
+    public ProviderBundleAttestationDigest attestationDigest() { return attestationDigest; }
+    public ProviderBundleVerificationAttestation attestation() { return attestation; }
+    public String registeredBy() { return registeredBy; }
+    public BigInteger registeredAtHeight() { return registeredAtHeight; }
+
+    /** Rejects an audit response for a different archive/order/provider identity. */
+    public void requireMatches(final ProviderBundleAttestationKey request) {
+      if (!key.equals(Objects.requireNonNull(request, "request"))) {
+        throw new IllegalArgumentException(
+            "Musubi provider attestation response does not match the request");
+      }
+    }
+
+    @Override Object toJsonValue() {
+      return object(
+          "key", key.toJsonValue(),
+          "attestation_digest", attestationDigest.toJsonValue(),
+          "attestation", attestation.toJsonValue(),
+          "registered_by", registeredBy,
+          "registered_at_height", registeredAtHeight);
     }
   }
 

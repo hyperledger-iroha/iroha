@@ -1096,6 +1096,7 @@ fn preflight_singular_source_materialization(
         }
         SingularQueryBox::FindMusubiExactPackageV1(_)
         | SingularQueryBox::FindMusubiExactReleaseV1(_)
+        | SingularQueryBox::FindMusubiProviderBundleAttestationV1(_)
         | SingularQueryBox::FindMusubiResolverIndexV1(_)
         | SingularQueryBox::FindMusubiVersionsV1(_)
         | SingularQueryBox::FindMusubiMaintainersV1(_)
@@ -1371,6 +1372,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindMusubiExactReleaseV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiProviderBundleAttestationV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindMusubiResolverIndexV1(q) => {

@@ -1678,6 +1678,38 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(normalized.norito, swift.norito)
     }
 
+    func testGovernanceWindowAndDeployAbiAreExactByConstruction() throws {
+        let fullRange = try GovernanceWindow(lower: 0, upper: UInt64.max)
+        XCTAssertEqual(fullRange.lower, 0)
+        XCTAssertEqual(fullRange.upper, UInt64.max)
+
+        XCTAssertThrowsError(try GovernanceWindow(lower: 2, upper: 1)) { error in
+            XCTAssertEqual(
+                error as? TransactionInputError,
+                .invalidGovernanceWindow(lower: 2, upper: 1)
+            )
+        }
+
+        for abiVersion in ["", "01", "2", " 1", "1 "] {
+            XCTAssertThrowsError(
+                try ProposeDeployContractRequest(
+                    chainId: Self.fixtureChainId,
+                    authority: "authority",
+                    contractAddress: Self.fixtureGovernanceContractAddress,
+                    codeHashHex: String(repeating: "11", count: 32),
+                    abiHashHex: String(repeating: "22", count: 32),
+                    abiVersion: abiVersion,
+                    feePayment: .authority(chargeLimits: [], gasLimit: nil)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? TransactionInputError,
+                    .invalidGovernanceAbiVersion(abiVersion)
+                )
+            }
+        }
+    }
+
     func testGovernanceProposeDeployMatchesNativeBridge() throws {
         try requireNativeTestCapability(
             NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
@@ -1688,17 +1720,17 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let codeHash = Data(repeating: 0x11, count: 32)
         let abiHash = Data(repeating: 0x22, count: 32)
-        let window = GovernanceWindow(lower: 4, upper: 8)
-        let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
-                                                   authority: authority,
-                                                   contractAddress: Self.fixtureGovernanceContractAddress,
-                                                   codeHashHex: hexEncoded(codeHash),
-                                                   abiHashHex: hexEncoded(abiHash),
-                                                   abiVersion: "1",
-                                                   window: window,
-                                                   mode: .plain,
-                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                                   ttlMs: 20)
+        let window = try GovernanceWindow(lower: 4, upper: 8)
+        let request = try ProposeDeployContractRequest(chainId: Self.fixtureChainId,
+                                                       authority: authority,
+                                                       contractAddress: Self.fixtureGovernanceContractAddress,
+                                                       codeHashHex: hexEncoded(codeHash),
+                                                       abiHashHex: hexEncoded(abiHash),
+                                                       abiVersion: "1",
+                                                       window: window,
+                                                       mode: .plain,
+                                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                                       ttlMs: 20)
 
         let swift = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
                                                                     keypair: keypair,
@@ -1919,16 +1951,16 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
-                                                   authority: authority,
-                                                   contractAddress: Self.fixtureGovernanceContractAddress,
-                                                   codeHashHex: String(repeating: "aa", count: 32),
-                                                   abiHashHex: String(repeating: "bb", count: 32),
-                                                   abiVersion: "1",
-                                                   window: GovernanceWindow(lower: 1, upper: 5),
-                                                   mode: .zk,
-                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                                   ttlMs: nil)
+        let request = try ProposeDeployContractRequest(chainId: Self.fixtureChainId,
+                                                       authority: authority,
+                                                       contractAddress: Self.fixtureGovernanceContractAddress,
+                                                       codeHashHex: String(repeating: "aa", count: 32),
+                                                       abiHashHex: String(repeating: "bb", count: 32),
+                                                       abiVersion: "1",
+                                                       window: GovernanceWindow(lower: 1, upper: 5),
+                                                       mode: .zk,
+                                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                                       ttlMs: nil)
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let envelope = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
                                                                        signingKey: signingKey,

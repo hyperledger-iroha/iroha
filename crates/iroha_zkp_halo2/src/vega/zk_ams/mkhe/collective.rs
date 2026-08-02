@@ -549,7 +549,7 @@ impl ZkAmsMkheCollectivePublicKeyV1 {
             || self.epoch == 0
             || self.transcript_digest == [0; 32]
             || self.parties.parties.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
-            || self.share_digests.iter().any(|digest| *digest == [0; 32])
+            || self.share_digests.contains(&[0; 32])
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -964,6 +964,10 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
         self.evaluation_key_digest
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the constructor binds every independently authenticated ciphertext field"
+    )]
     pub(super) fn new(
         profile: &BgvProfile,
         parties: &super::PartySet,
@@ -1055,10 +1059,18 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
         Ok(())
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed collective evaluated-key runtime"
+    )]
     pub(super) const fn constant(&self) -> &RnsPolynomial {
         &self.constant
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed collective evaluated-key runtime"
+    )]
     pub(super) const fn linear(&self) -> &RnsPolynomial {
         &self.linear
     }
@@ -1150,6 +1162,7 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[cfg(test)]
     fn with_validated_native_proof_witness_v1<T>(
         &self,
         profile: &BgvProfile,
@@ -1779,6 +1792,10 @@ impl ZkAmsMkheCollectiveLevelOneV1 {
         &self.linear
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed collective evaluated-key runtime"
+    )]
     pub(super) const fn quadratic(&self) -> &RnsPolynomial {
         &self.quadratic
     }

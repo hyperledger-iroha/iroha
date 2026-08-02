@@ -1,7 +1,7 @@
 //! Safe ML-DSA-65 key derivation adapters.
 //!
 //! All key generation and secret-key validation goes through `soranet_pq`.
-//! This module deliberately does not bind PQClean's private polynomial ABI:
+//! This module deliberately does not bind `PQClean`'s private polynomial ABI:
 //! only canonical FIPS 204 byte encodings cross the crate boundary.
 
 /// ML-DSA-65 key derivation and public-key recovery.

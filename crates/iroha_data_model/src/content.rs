@@ -66,7 +66,7 @@ pub struct ContentCachePolicy {
 }
 
 impl ContentCachePolicy {
-    fn public_cache_control_value(&self) -> String {
+    fn public_cache_control_value(self) -> String {
         if self.immutable {
             format!("public, max-age={}, immutable", self.max_age_seconds)
         } else {

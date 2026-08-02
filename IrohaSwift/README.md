@@ -1797,7 +1797,11 @@ The Android and JavaScript SDKs use the same seed/attempt mapping, so reconnect 
 let proposal = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
                                                             codeHashHex: "f0…",
                                                             abiHashHex: "e1…",
-                                                            abiVersion: "1")
+                                                            abiVersion: "1",
+                                                            manifestProvenance: .init(
+                                                                signer: "ed25519:…",
+                                                                signature: "ed25519:…"
+                                                            ))
 let draft = try await torii.submitGovernanceDeployContractProposal(proposal)
 
 // Convert the instruction skeleton into a signed transaction envelope
@@ -1807,6 +1811,34 @@ let draft = try await torii.submitGovernanceDeployContractProposal(proposal)
 let tally = try await torii.getGovernanceTally(id: "referendum-123")
 print("approve:", tally.approve, "reject:", tally.reject)
 ```
+
+Governance mutation DTOs are closed, public-only types. They cannot carry a
+private key, witness, or an unrecognized JSON extension; sign the returned
+transaction skeleton locally. Deployment proposals deliberately expose no
+`limits` field because Torii does not enforce a per-proposal limits object.
+Manifest provenance uses `ToriiContractManifestProvenance` rather than opaque
+JSON.
+
+Both V1 ZK submission formats share `GovernanceZkBallotPublicInputs`, whose
+only fields are `root_hint`, `owner`, `amount`, `duration_blocks`, `direction`,
+and `nullifier`. The flat envelope and nested `BallotProof` routes are available
+through `submitGovernanceZkBallotV1` and `submitGovernanceZkBallotProofV1`.
+Parliament ballots use `ToriiGovernanceParliamentBody` and
+`ToriiGovernanceParliamentDecision`, so canonical labels such as
+`policy-jury` and `approve` are emitted without stringly typed aliases. Plain
+ballots accept a `UInt64` duration in Swift and encode it as the canonical
+decimal JSON string required by Torii. ZK backend tags are exact non-empty
+tokens: whitespace and control-character variants are rejected before an HTTP
+request is dispatched. Governance windows reject an upper bound below the
+lower bound while retaining the complete `UInt64` height domain.
+
+`ToriiGovernanceEnactRequest` contains only the exact 64-character lowercase
+proposal id. Torii derives the retained window and instruction preimage from
+committed state; Swift does not accept caller-supplied enactment aliases for
+either value. Locally signed `CastZkBallotRequest` transactions use the same
+closed `GovernanceZkBallotPublicInputs` model as REST, including typed `UInt64`
+durations and exact ballot directions. Arbitrary `NoritoJSON` public-input
+objects are intentionally not accepted.
 
 The same helpers are exposed on `IrohaSDK` via convenience methods (for example,
 `sdk.submitGovernancePlainBallot(...)`, `sdk.getGovernanceProposal(idHex:)`). Unlock statistics (`/v1/gov/locks/stats`) accept optional `height` and `referendum_id` filters.

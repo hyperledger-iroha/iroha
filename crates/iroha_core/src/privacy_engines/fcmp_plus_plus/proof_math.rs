@@ -11,14 +11,17 @@ use std::{
 };
 
 use blake2::{Blake2b512, Digest as _};
+#[cfg(test)]
+use iroha_zkp_halo2::generalized_bulletproof::multiexp;
 use iroha_zkp_halo2::generalized_bulletproof::{
     GeneralizedBulletproofErrorV1, ProofRandomSource, ProverTranscript as SharedProverTranscript,
     VerifierTranscript as SharedVerifierTranscript,
 };
 pub(super) use iroha_zkp_halo2::generalized_bulletproof::{
-    ProofGeneratorView, ProofGenerators, ProofPoint, ProofScalar, ProofSuite, multiexp,
+    ProofGeneratorView, ProofGenerators, ProofPoint, ProofScalar, ProofSuite, SecretMultiexpBuilder,
 };
 use p256::elliptic_curve::bigint::U256;
+use p256::elliptic_curve::subtle::Choice;
 use rand_core_06::{CryptoRng, RngCore};
 use zeroize::Zeroize;
 
@@ -227,12 +230,12 @@ macro_rules! impl_point_operators {
         impl Mul<$scalar> for $point {
             type Output = Self;
             fn mul(self, rhs: $scalar) -> Self {
-                <$point>::mul(self, rhs.retrieve())
+                <$point>::mul(self, rhs)
             }
         }
         impl MulAssign<$scalar> for $point {
             fn mul_assign(&mut self, rhs: $scalar) {
-                *self = <$point>::mul(*self, rhs.retrieve());
+                *self = <$point>::mul(*self, rhs);
             }
         }
         impl ProofPoint for $point {
@@ -250,7 +253,13 @@ macro_rules! impl_point_operators {
                 <$point>::double(self)
             }
             fn scale(self, scalar: Self::Scalar) -> Self {
-                <$point>::mul(self, scalar.retrieve())
+                <$point>::mul(self, scalar)
+            }
+            fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
+                <$point>::conditional_select(a, b, Choice::from(choice & 1))
+            }
+            fn clear_secret(&mut self) {
+                <$point>::clear_secret(self);
             }
             fn encode(self) -> Self::Encoded {
                 <$point>::encode(self)

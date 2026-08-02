@@ -946,6 +946,78 @@ public struct MusubiDigest32V1: Codable, Hashable, Sendable {
     }
 }
 
+/// Domain-separated digest of one complete provider bundle attestation.
+public struct MusubiProviderBundleAttestationDigestV1: Codable, Hashable, Sendable {
+    public let bytes: [UInt8]
+
+    public init(bytes: [UInt8]) throws {
+        guard bytes.count == 32, bytes.contains(where: { $0 != 0 }) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi provider bundle attestation digest must be non-zero and 32 bytes."
+            )
+        }
+        self.bytes = bytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        try self.init(bytes: MusubiDigest32V1(from: decoder).bytes)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try MusubiDigest32V1(bytes: bytes).encode(to: encoder)
+    }
+}
+
+/// Archive/order-bound digest of a provider-sorted attestation set.
+public struct MusubiProviderBundleAttestationSetDigestV1: Codable, Hashable, Sendable {
+    public let bytes: [UInt8]
+
+    public init(bytes: [UInt8]) throws {
+        guard bytes.count == 32, bytes.contains(where: { $0 != 0 }) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi provider bundle attestation set digest must be non-zero and 32 bytes."
+            )
+        }
+        self.bytes = bytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        try self.init(bytes: MusubiDigest32V1(from: decoder).bytes)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try MusubiDigest32V1(bytes: bytes).encode(to: encoder)
+    }
+}
+
+private func musubiProviderIDBytesV1(_ value: String) throws -> [UInt8] {
+    guard value == value.uppercased(), !value.hasPrefix("0X"), value.count == 64,
+          let bytes = Data(hexString: value), bytes.count == 32,
+          bytes.contains(where: { $0 != 0 }) else {
+        throw MusubiV1Error.invalidValue(
+            "Musubi provider ID must be non-zero canonical uppercase hexadecimal."
+        )
+    }
+    return [UInt8](bytes)
+}
+
+private struct MusubiProviderIDJSONV1: Codable {
+    let value: String
+
+    init(_ value: String) throws {
+        _ = try musubiProviderIDBytesV1(value)
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        try self.init(musubiDecodeSingleText(decoder, field: "Musubi provider ID"))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try musubiEncodeSingleText(value, to: encoder)
+    }
+}
+
 /// Enacted Parliament decision authorizing one delayed Musubi governance action.
 public struct MusubiGovernanceDecisionV1: Codable, Hashable, Sendable {
     /// Exact enacted proposal fingerprint. Unlike `actionDigest`, this is a fixed byte array,
@@ -2047,7 +2119,7 @@ public struct MusubiPackageRecordV1: Codable, Hashable, Sendable {
     }
 }
 
-private func musubiValidateManifest(_ value: MusubiJSONValueV1) throws -> MusubiReleaseIdV1 {
+private func musubiParseManifest(_ value: MusubiJSONValueV1) throws -> MusubiReleaseManifestV1 {
     let object = try musubiRawObject(
         value,
         field: "manifest",
@@ -2060,7 +2132,9 @@ private func musubiValidateManifest(_ value: MusubiJSONValueV1) throws -> Musubi
         throw MusubiV1Error.invalidValue("manifest.release is missing.")
     }
     let release = try musubiDecodeRaw(releaseValue, as: MusubiReleaseIdV1.self)
-    _ = try musubiValidateTaggedUnit(object["edition"], field: "manifest.edition", allowed: ["V1"])
+    _ = try musubiValidateTaggedUnit(
+        object["edition"], field: "manifest.edition", allowed: ["V1"]
+    )
 
     guard let abiValue = object["abi"] else {
         throw MusubiV1Error.invalidValue("manifest.abi is missing.")
@@ -2073,11 +2147,16 @@ private func musubiValidateManifest(_ value: MusubiJSONValueV1) throws -> Musubi
             "Musubi only supports IVM ABI V1; the response advertised another version."
         )
     }
-    try musubiValidateRawFixedBytes(abi["abi_hash"], field: "manifest.abi.abi_hash")
+    let abiBinding = try MusubiAbiBindingV1(
+        abiVersion: 1,
+        abiHash: musubiRawBytes(
+            abi["abi_hash"], field: "manifest.abi.abi_hash", count: 32
+        )
+    )
 
-    for (index, dependencyValue) in try musubiRawArray(
+    let dependencies = try musubiRawArray(
         object["dependencies"], field: "manifest.dependencies"
-    ).enumerated() {
+    ).enumerated().map { index, dependencyValue in
         let field = "manifest.dependencies[\(index)]"
         let dependency = try musubiRawObject(
             dependencyValue, field: field, exactKeys: ["alias", "package", "requirement"]
@@ -2089,20 +2168,15 @@ private func musubiValidateManifest(_ value: MusubiJSONValueV1) throws -> Musubi
         guard let package = dependency["package"], let requirement = dependency["requirement"] else {
             throw MusubiV1Error.invalidValue("\(field) is incomplete.")
         }
-        _ = try musubiDecodeRaw(package, as: MusubiPackageIdV1.self)
-        _ = try musubiDecodeRaw(requirement, as: MusubiVersionReqV1.self)
-    }
-    for export in try musubiRawArray(object["exports"], field: "manifest.exports") {
-        try musubiRequireName(
-            musubiRawString(export, field: "manifest.exports[]"),
-            field: "Musubi export"
+        return try MusubiDependencyReqV1(
+            alias: musubiRawString(dependency["alias"], field: "\(field).alias"),
+            package: musubiDecodeRaw(package, as: MusubiPackageIdV1.self),
+            requirement: musubiDecodeRaw(requirement, as: MusubiVersionReqV1.self)
         )
     }
-    try musubiValidateRawDigest(object["interface_digest"], field: "manifest.interface_digest")
-    try musubiValidateRawDigest(object["archive_id"], field: "manifest.archive_id")
-    try musubiValidateRawDigest(
-        object["verification_lock_digest"], field: "manifest.verification_lock_digest"
-    )
+    let exports = try musubiRawArray(
+        object["exports"], field: "manifest.exports"
+    ).map { try musubiRawString($0, field: "manifest.exports[]") }
 
     guard let metadataValue = object["metadata"] else {
         throw MusubiV1Error.invalidValue("manifest.metadata is missing.")
@@ -2117,14 +2191,38 @@ private func musubiValidateManifest(_ value: MusubiJSONValueV1) throws -> Musubi
             _ = try musubiRawNewtypeText(metadata[key], field: "manifest.metadata.\(key)")
         }
     }
-    for keyword in try musubiRawArray(metadata["keywords"], field: "manifest.metadata.keywords") {
-        try musubiRequireASCIILowerKebab(
-            musubiRawNewtypeText(keyword, field: "manifest.metadata.keyword"),
-            maximum: 64,
-            field: "Musubi keyword"
-        )
+    let keywords = try musubiRawArray(
+        metadata["keywords"], field: "manifest.metadata.keywords"
+    ).map { try musubiRawNewtypeText($0, field: "manifest.metadata.keyword") }
+    let parsedMetadata = try MusubiReleaseMetadataV1(
+        description: metadata["description"] == .null
+            ? nil : musubiRawNewtypeText(metadata["description"], field: "manifest.metadata.description"),
+        readme: metadata["readme"] == .null
+            ? nil : musubiRawNewtypeText(metadata["readme"], field: "manifest.metadata.readme"),
+        license: metadata["license"] == .null
+            ? nil : musubiRawNewtypeText(metadata["license"], field: "manifest.metadata.license"),
+        repository: metadata["repository"] == .null
+            ? nil : musubiRawNewtypeText(metadata["repository"], field: "manifest.metadata.repository"),
+        keywords: keywords
+    )
+    guard let interfaceDigest = object["interface_digest"],
+          let archiveID = object["archive_id"],
+          let verificationLockDigest = object["verification_lock_digest"] else {
+        throw MusubiV1Error.invalidValue("Musubi manifest digests are missing.")
     }
-    return release
+    return try MusubiReleaseManifestV1(
+        release: release,
+        abi: abiBinding,
+        dependencies: dependencies,
+        exports: exports,
+        interfaceDigest: musubiDecodeRaw(interfaceDigest, as: MusubiDigest32V1.self),
+        metadata: parsedMetadata,
+        archiveID: musubiDecodeRaw(archiveID, as: MusubiDigest32V1.self),
+        verificationLockDigest: musubiDecodeRaw(
+            verificationLockDigest,
+            as: MusubiDigest32V1.self
+        )
+    )
 }
 
 private func musubiValidateYank(
@@ -2184,6 +2282,7 @@ private func musubiValidateGovernance(_ value: MusubiJSONValueV1?, field: String
 
 /// Exact immutable release with strict validation of its mutable projections.
 public struct MusubiReleaseRecordV1: Codable, Hashable, Sendable {
+    public let manifest: MusubiReleaseManifestV1
     public let release: MusubiReleaseIdV1
     public let releaseDigest: MusubiDigest32V1
     public let publishedBy: String
@@ -2201,7 +2300,8 @@ public struct MusubiReleaseRecordV1: Codable, Hashable, Sendable {
         guard let manifest = raw["manifest"], let digest = raw["release_digest"] else {
             throw MusubiV1Error.invalidValue("Musubi release response is incomplete.")
         }
-        release = try musubiValidateManifest(manifest)
+        self.manifest = try musubiParseManifest(manifest)
+        release = self.manifest.release
         releaseDigest = try musubiDecodeRaw(digest, as: MusubiDigest32V1.self)
         publishedBy = try musubiRawString(raw["published_by"], field: "published_by")
         publishedAtHeight = try musubiRawUnsigned(
@@ -2219,7 +2319,7 @@ public struct MusubiReleaseRecordV1: Codable, Hashable, Sendable {
             exactKeys: ["yank", "artifact_governance"]
         )
         let yankRevision = try musubiRawUnsigned(revisions["yank"], field: "revisions.yank")
-        guard releaseDigest.bytes.contains(where: { $0 != 0 }),
+        guard releaseDigest == (try musubiReleaseManifestDigestV1(self.manifest)),
               publishedAtHeight > 0,
               yankRevision > 0,
               try musubiRawUnsigned(
@@ -2260,6 +2360,7 @@ public struct MusubiReleaseRecordV1: Codable, Hashable, Sendable {
 public struct MusubiResolverReleaseRowV1: Codable, Hashable, Sendable {
     public let release: MusubiReleaseIdV1
     public let indexRevision: UInt64
+    public let storageIndexRevision: UInt64
     public let raw: [String: MusubiJSONValueV1]
 
     public init(from decoder: Decoder) throws {
@@ -2289,11 +2390,202 @@ public struct MusubiResolverReleaseRowV1: Codable, Hashable, Sendable {
             throw MusubiV1Error.unsupportedVersion("Musubi resolver row is not IVM ABI V1.")
         }
         try musubiValidateRawFixedBytes(abi["abi_hash"], field: "abi_hash")
+        guard let selectionValue = raw["selection"] else {
+            throw MusubiV1Error.invalidValue("resolver selection is missing.")
+        }
+        let selection = try musubiRawObject(
+            selectionValue,
+            field: "selection",
+            exactKeys: ["yank", "storage", "governance"]
+        )
+        guard let storageValue = selection["storage"] else {
+            throw MusubiV1Error.invalidValue("resolver storage projection is missing.")
+        }
+        let storage = try musubiRawObject(
+            storageValue,
+            field: "selection.storage",
+            exactKeys: [
+                "archive_id", "availability", "healthy_replicas", "active_locations",
+                "finalized_height", "finalized_block_hash", "index_revision"
+            ]
+        )
+        storageIndexRevision = try musubiRawUnsigned(
+            storage["index_revision"],
+            field: "selection.storage.index_revision"
+        )
+        guard storageIndexRevision > 0 else {
+            throw MusubiV1Error.invalidValue(
+                "Resolver storage index revision must be non-zero."
+            )
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(MusubiJSONValueV1.object(raw))
+    }
+}
+
+/// Finalized paired view of one release from its home dataspace and universal index.
+public struct MusubiExactReleaseSnapshotV1: Codable, Hashable, Sendable {
+    public let chainId: String
+    public let genesisHash: [UInt8]
+    public let snapshot: MusubiRegistrySnapshotV1
+    public let homeRelease: MusubiReleaseRecordV1
+    public let universalRelease: MusubiResolverReleaseRowV1
+
+    public init(
+        chainId: String,
+        genesisHash: [UInt8],
+        snapshot: MusubiRegistrySnapshotV1,
+        homeRelease: MusubiReleaseRecordV1,
+        universalRelease: MusubiResolverReleaseRowV1
+    ) throws {
+        try musubiRequireChainIDV1(chainId, field: "Musubi exact release chain ID")
+        guard let manifestValue = homeRelease.raw["manifest"],
+              let yankValue = homeRelease.raw["yank"],
+              let governanceValue = homeRelease.raw["artifact_governance"],
+              let revisionsValue = homeRelease.raw["revisions"],
+              let selectionValue = universalRelease.raw["selection"] else {
+            throw MusubiV1Error.invalidValue("Musubi exact release projection is incomplete.")
+        }
+        let manifest = try musubiRawObject(manifestValue, field: "home_release.manifest")
+        let yank = try musubiRawObject(yankValue, field: "home_release.yank")
+        let governance = try musubiRawObject(
+            governanceValue,
+            field: "home_release.artifact_governance"
+        )
+        let revisions = try musubiRawObject(
+            revisionsValue,
+            field: "home_release.revisions"
+        )
+        let selection = try musubiRawObject(
+            selectionValue,
+            field: "universal_release.selection"
+        )
+        guard let storageValue = selection["storage"] else {
+            throw MusubiV1Error.invalidValue("Musubi exact release storage projection is missing.")
+        }
+        let storage = try musubiRawObject(
+            storageValue,
+            field: "universal_release.selection.storage"
+        )
+        let yankChangedAtHeight = try musubiRawUnsigned(
+            yank["changed_at_height"],
+            field: "home_release.yank.changed_at_height"
+        )
+        let yankRevision = try musubiRawUnsigned(
+            yank["revision"],
+            field: "home_release.yank.revision"
+        )
+        let homeYankRevision = try musubiRawUnsigned(
+            revisions["yank"],
+            field: "home_release.revisions.yank"
+        )
+        let homeGovernanceRevision = try musubiRawUnsigned(
+            revisions["artifact_governance"],
+            field: "home_release.revisions.artifact_governance"
+        )
+        let storageFinalizedHeight = try musubiRawUnsigned(
+            storage["finalized_height"],
+            field: "universal_release.selection.storage.finalized_height"
+        )
+        let storageFinalizedHash = try musubiRawBytes(
+            storage["finalized_block_hash"],
+            field: "universal_release.selection.storage.finalized_block_hash",
+            count: 32
+        )
+        let governanceKind = try musubiRawString(
+            governance["kind"],
+            field: "home_release.artifact_governance.kind"
+        )
+        let takedownHeight: UInt64
+        if governanceKind == "TakenDown" {
+            guard let takedownValue = governance["value"] else {
+                throw MusubiV1Error.invalidValue("Musubi artifact takedown is missing.")
+            }
+            let takedown = try musubiRawObject(
+                takedownValue,
+                field: "home_release.artifact_governance.value"
+            )
+            takedownHeight = try musubiRawUnsigned(
+                takedown["applied_at_height"],
+                field: "home_release.artifact_governance.value.applied_at_height"
+            )
+        } else {
+            takedownHeight = 0
+        }
+
+        guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
+              homeRelease.release == universalRelease.release,
+              homeRelease.raw["release_digest"] == universalRelease.raw["release_digest"],
+              manifest["archive_id"] == universalRelease.raw["archive_id"],
+              manifest["archive_id"] == storage["archive_id"],
+              manifest["interface_digest"] == universalRelease.raw["interface_digest"],
+              manifest["abi"] == universalRelease.raw["abi"],
+              manifest["dependencies"] == universalRelease.raw["dependencies"],
+              homeRelease.raw["yank"] == selection["yank"],
+              homeRelease.raw["artifact_governance"] == selection["governance"],
+              yankRevision == homeYankRevision,
+              homeYankRevision <= snapshot.indexRevision,
+              homeGovernanceRevision <= snapshot.indexRevision,
+              homeRelease.publishedAtHeight <= snapshot.finalizedHeight,
+              universalRelease.storageIndexRevision <= universalRelease.indexRevision,
+              universalRelease.storageIndexRevision <= snapshot.indexRevision,
+              universalRelease.indexRevision <= snapshot.indexRevision,
+              yankChangedAtHeight >= homeRelease.publishedAtHeight,
+              yankChangedAtHeight <= snapshot.finalizedHeight,
+              (takedownHeight == 0 || takedownHeight >= homeRelease.publishedAtHeight),
+              takedownHeight <= snapshot.finalizedHeight,
+              storageFinalizedHeight <= snapshot.finalizedHeight,
+              (snapshot.finalizedHeight != 1 || genesisHash == snapshot.finalizedBlockHash),
+              (storageFinalizedHeight != snapshot.finalizedHeight ||
+                  storageFinalizedHash == snapshot.finalizedBlockHash) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi exact release projections are inconsistent with finality."
+            )
+        }
+        self.chainId = chainId
+        self.genesisHash = genesisHash
+        self.snapshot = snapshot
+        self.homeRelease = homeRelease
+        self.universalRelease = universalRelease
+    }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(
+            decoder,
+            ["chain_id", "genesis_hash", "snapshot", "home_release", "universal_release"]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            chainId: container.decode(String.self, forKey: .chainId),
+            genesisHash: container.decode([UInt8].self, forKey: .genesisHash),
+            snapshot: container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot),
+            homeRelease: container.decode(MusubiReleaseRecordV1.self, forKey: .homeRelease),
+            universalRelease: container.decode(
+                MusubiResolverReleaseRowV1.self,
+                forKey: .universalRelease
+            )
+        )
+    }
+
+    /// Require this paired snapshot to carry the requested immutable release.
+    public func requireMatches(_ request: MusubiExactReleaseQueryV1) throws {
+        guard homeRelease.release == request.release,
+              universalRelease.release == request.release else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi exact-release snapshot does not match the exact request."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chainId = "chain_id"
+        case genesisHash = "genesis_hash"
+        case snapshot
+        case homeRelease = "home_release"
+        case universalRelease = "universal_release"
     }
 }
 
@@ -3100,6 +3392,8 @@ public struct MusubiArchiveRecordV1: Codable, Hashable, Sendable {
 public struct MusubiArchiveLocationV1: Codable, Hashable, Sendable {
     public let locationId: MusubiDigest32V1
     public let archiveId: MusubiDigest32V1
+    public let providers: [String]
+    public let providerAttestationSetDigest: MusubiProviderBundleAttestationSetDigestV1
     public let finalizedHeight: UInt64
     public let revision: UInt64
     public let stateKind: String
@@ -3108,17 +3402,22 @@ public struct MusubiArchiveLocationV1: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let keys: Set<String> = [
             "location_id", "archive_id", "pin_manifest", "replication_order", "providers",
-            "provider_attestations", "renew_after_epoch", "expires_at_epoch",
+            "provider_attestation_set_digest", "renew_after_epoch", "expires_at_epoch",
             "finalized_height", "revision", "state"
         ]
         try musubiRequireExactKeys(decoder, keys)
         let value = try decoder.singleValueContainer().decode(MusubiJSONValueV1.self)
         raw = try musubiRawObject(value, field: "archive location", exactKeys: keys)
-        guard let locationRaw = raw["location_id"], let archiveRaw = raw["archive_id"] else {
+        guard let locationRaw = raw["location_id"], let archiveRaw = raw["archive_id"],
+              let providerAttestationSetDigestRaw = raw["provider_attestation_set_digest"] else {
             throw MusubiV1Error.invalidValue("archive location identity is missing.")
         }
         locationId = try musubiDecodeRaw(locationRaw, as: MusubiDigest32V1.self)
         archiveId = try musubiDecodeRaw(archiveRaw, as: MusubiDigest32V1.self)
+        providerAttestationSetDigest = try musubiDecodeRaw(
+            providerAttestationSetDigestRaw,
+            as: MusubiProviderBundleAttestationSetDigestV1.self
+        )
         finalizedHeight = try musubiRawUnsigned(
             raw["finalized_height"], field: "location.finalized_height"
         )
@@ -3126,9 +3425,17 @@ public struct MusubiArchiveLocationV1: Codable, Hashable, Sendable {
         stateKind = try musubiValidateTaggedUnit(
             raw["state"], field: "location.state", allowed: ["Pending", "Healthy", "Degraded", "Retired"]
         )
-        _ = try musubiRawArray(raw["providers"], field: "location.providers")
-        _ = try musubiRawArray(raw["provider_attestations"], field: "location.provider_attestations")
-        guard raw["pin_manifest"] != nil, raw["replication_order"] != nil, revision > 0 else {
+        providers = try musubiRawArray(raw["providers"], field: "location.providers").map {
+            try musubiRawNewtypeText($0, field: "location.provider")
+        }
+        let providerBytes = try providers.map(musubiProviderIDBytesV1)
+        let providerOrderingIsCanonical = zip(providerBytes, providerBytes.dropFirst()).allSatisfy {
+            $0.0.lexicographicallyPrecedes($0.1)
+        }
+        guard raw["pin_manifest"] != nil, raw["replication_order"] != nil,
+              !providers.isEmpty, providers.count <= 64,
+              providerOrderingIsCanonical,
+              revision > 0 else {
             throw MusubiV1Error.invalidValue("archive location is incomplete.")
         }
     }
@@ -4347,7 +4654,7 @@ private func musubiSigningAlgorithmV1(_ code: UInt64) -> SigningAlgorithm? {
 }
 
 /// Canonical controller key and typed-signature bytes used by Musubi signed proofs.
-public struct MusubiControllerApprovalV1: Hashable, Sendable, Comparable {
+public struct MusubiControllerApprovalV1: Codable, Hashable, Sendable, Comparable {
     public let publicKey: String
     public let signature: String
     let algorithm: SigningAlgorithm
@@ -4395,16 +4702,36 @@ public struct MusubiControllerApprovalV1: Hashable, Sendable, Comparable {
         self.signaturePayload = [UInt8](signatureBytes)
     }
 
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(decoder, ["public_key", "signature"])
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            publicKey: container.decode(String.self, forKey: .publicKey),
+            signature: container.decode(String.self, forKey: .signature)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(publicKey, forKey: .publicKey)
+        try container.encode(signature, forKey: .signature)
+    }
+
     public static func < (lhs: Self, rhs: Self) -> Bool {
         if lhs.algorithm.noritoDiscriminant != rhs.algorithm.noritoDiscriminant {
             return lhs.algorithm.noritoDiscriminant < rhs.algorithm.noritoDiscriminant
         }
         return lhs.publicKeyPayload.lexicographicallyPrecedes(rhs.publicKeyPayload)
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case publicKey = "public_key"
+        case signature
+    }
 }
 
 /// Governed identity of a provider-ingest completion signer policy.
-public struct MusubiProviderIngestCompletionSignerPolicyV1: Hashable, Sendable {
+public struct MusubiProviderIngestCompletionSignerPolicyV1: Codable, Hashable, Sendable {
     public let policyID: [UInt8]
     public let revision: UInt64
     public let predecessorDigest: [UInt8]?
@@ -4432,10 +4759,34 @@ public struct MusubiProviderIngestCompletionSignerPolicyV1: Hashable, Sendable {
         self.predecessorDigest = predecessorDigest
         self.policyDigest = policyDigest
     }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(
+            decoder,
+            ["policy_id", "revision", "predecessor_digest", "policy_digest"]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            policyID: container.decode([UInt8].self, forKey: .policyID),
+            revision: container.decode(UInt64.self, forKey: .revision),
+            predecessorDigest: container.decodeIfPresent(
+                [UInt8].self,
+                forKey: .predecessorDigest
+            ),
+            policyDigest: container.decode([UInt8].self, forKey: .policyDigest)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case policyID = "policy_id"
+        case revision
+        case predecessorDigest = "predecessor_digest"
+        case policyDigest = "policy_digest"
+    }
 }
 
 /// Chain-authoritative provider owner and governed completion signer policy.
-public struct MusubiProviderIngestCompletionAuthorityV1: Hashable, Sendable {
+public struct MusubiProviderIngestCompletionAuthorityV1: Codable, Hashable, Sendable {
     public let providerOwner: String
     public let signerPolicy: MusubiProviderIngestCompletionSignerPolicyV1
 
@@ -4447,10 +4798,27 @@ public struct MusubiProviderIngestCompletionAuthorityV1: Hashable, Sendable {
         self.providerOwner = providerOwner
         self.signerPolicy = signerPolicy
     }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(decoder, ["provider_owner", "signer_policy"])
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            providerOwner: container.decode(String.self, forKey: .providerOwner),
+            signerPolicy: container.decode(
+                MusubiProviderIngestCompletionSignerPolicyV1.self,
+                forKey: .signerPolicy
+            )
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerOwner = "provider_owner"
+        case signerPolicy = "signer_policy"
+    }
 }
 
 /// Finalized committed-chain anchor carried by one provider completion.
-public struct MusubiProviderIngestFinalizedAnchorV1: Hashable, Sendable {
+public struct MusubiProviderIngestFinalizedAnchorV1: Codable, Hashable, Sendable {
     public let height: UInt64
     public let blockHash: [UInt8]
 
@@ -4462,10 +4830,24 @@ public struct MusubiProviderIngestFinalizedAnchorV1: Hashable, Sendable {
         self.height = height
         self.blockHash = blockHash
     }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(decoder, ["height", "block_hash"])
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            height: container.decode(UInt64.self, forKey: .height),
+            blockHash: container.decode([UInt8].self, forKey: .blockHash)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case height
+        case blockHash = "block_hash"
+    }
 }
 
 /// Exact parsed-bundle and finalized-replication completion binding.
-public struct MusubiProviderBundleVerificationBindingV1: Hashable, Sendable {
+public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Sendable {
     public let chainID: String
     public let genesisBlockHash: [UInt8]
     public let providerID: MusubiDigest32V1
@@ -4533,10 +4915,109 @@ public struct MusubiProviderBundleVerificationBindingV1: Hashable, Sendable {
         self.verificationLockDigest = verificationLockDigest
         self.sourceTreeDigest = sourceTreeDigest
     }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(
+            decoder,
+            [
+                "chain_id", "genesis_block_hash", "provider_id", "completed_by",
+                "completion_authority", "replication_order", "assignment_revision",
+                "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
+                "descriptor_digest", "semantic_release_manifest_digest",
+                "verification_lock_digest", "source_tree_digest",
+            ]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            chainID: container.decode(String.self, forKey: .chainID),
+            genesisBlockHash: container.decode([UInt8].self, forKey: .genesisBlockHash),
+            providerID: MusubiDigest32V1(
+                bytes: musubiProviderIDBytesV1(
+                    container.decode(MusubiProviderIDJSONV1.self, forKey: .providerID).value
+                )
+            ),
+            completedBy: container.decode(String.self, forKey: .completedBy),
+            completionAuthority: container.decode(
+                MusubiProviderIngestCompletionAuthorityV1.self,
+                forKey: .completionAuthority
+            ),
+            replicationOrder: container.decode(
+                MusubiDigest32V1.self,
+                forKey: .replicationOrder
+            ),
+            assignmentRevision: container.decode(UInt64.self, forKey: .assignmentRevision),
+            completionEpoch: container.decode(UInt64.self, forKey: .completionEpoch),
+            finalizedAnchor: container.decode(
+                MusubiProviderIngestFinalizedAnchorV1.self,
+                forKey: .finalizedAnchor
+            ),
+            archiveID: container.decode(MusubiDigest32V1.self, forKey: .archiveID),
+            bundleDigest: container.decode(MusubiDigest32V1.self, forKey: .bundleDigest),
+            descriptorDigest: container.decode(
+                MusubiDigest32V1.self,
+                forKey: .descriptorDigest
+            ),
+            semanticReleaseManifestDigest: container.decode(
+                MusubiDigest32V1.self,
+                forKey: .semanticReleaseManifestDigest
+            ),
+            verificationLockDigest: container.decode(
+                MusubiDigest32V1.self,
+                forKey: .verificationLockDigest
+            ),
+            sourceTreeDigest: container.decode(
+                MusubiDigest32V1.self,
+                forKey: .sourceTreeDigest
+            )
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(chainID, forKey: .chainID)
+        try container.encode(genesisBlockHash, forKey: .genesisBlockHash)
+        try container.encode(
+            MusubiProviderIDJSONV1(Data(providerID.bytes).hexEncodedString().uppercased()),
+            forKey: .providerID
+        )
+        try container.encode(completedBy, forKey: .completedBy)
+        try container.encode(completionAuthority, forKey: .completionAuthority)
+        try container.encode(replicationOrder, forKey: .replicationOrder)
+        try container.encode(assignmentRevision, forKey: .assignmentRevision)
+        try container.encode(completionEpoch, forKey: .completionEpoch)
+        try container.encode(finalizedAnchor, forKey: .finalizedAnchor)
+        try container.encode(archiveID, forKey: .archiveID)
+        try container.encode(bundleDigest, forKey: .bundleDigest)
+        try container.encode(descriptorDigest, forKey: .descriptorDigest)
+        try container.encode(
+            semanticReleaseManifestDigest,
+            forKey: .semanticReleaseManifestDigest
+        )
+        try container.encode(verificationLockDigest, forKey: .verificationLockDigest)
+        try container.encode(sourceTreeDigest, forKey: .sourceTreeDigest)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chainID = "chain_id"
+        case genesisBlockHash = "genesis_block_hash"
+        case providerID = "provider_id"
+        case completedBy = "completed_by"
+        case completionAuthority = "completion_authority"
+        case replicationOrder = "replication_order"
+        case assignmentRevision = "assignment_revision"
+        case completionEpoch = "completion_epoch"
+        case finalizedAnchor = "finalized_anchor"
+        case archiveID = "archive_id"
+        case bundleDigest = "bundle_digest"
+        case descriptorDigest = "descriptor_digest"
+        case semanticReleaseManifestDigest = "semantic_release_manifest_digest"
+        case verificationLockDigest = "verification_lock_digest"
+        case sourceTreeDigest = "source_tree_digest"
+    }
 }
 
 /// Version-one provider parsed-bundle statement.
-public struct MusubiProviderBundleVerificationPayloadV1: Hashable, Sendable {
+public struct MusubiProviderBundleVerificationPayloadV1: Codable, Hashable, Sendable {
     public let version: UInt8
     public let binding: MusubiProviderBundleVerificationBindingV1
 
@@ -4552,12 +5033,26 @@ public struct MusubiProviderBundleVerificationPayloadV1: Hashable, Sendable {
         self.version = version
         self.binding = binding
     }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(decoder, ["version", "binding"])
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            version: container.decode(UInt8.self, forKey: .version),
+            binding: container.decode(
+                MusubiProviderBundleVerificationBindingV1.self,
+                forKey: .binding
+            )
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, binding }
 }
 
 public typealias MusubiProviderBundleVerificationApprovalV1 = MusubiControllerApprovalV1
 
 /// Signed provider proof that a canonical bundle was parsed before completion.
-public struct MusubiProviderBundleVerificationAttestationV1: Hashable, Sendable {
+public struct MusubiProviderBundleVerificationAttestationV1: Codable, Hashable, Sendable {
     public let payload: MusubiProviderBundleVerificationPayloadV1
     public let approvals: [MusubiProviderBundleVerificationApprovalV1]
 
@@ -4573,6 +5068,152 @@ public struct MusubiProviderBundleVerificationAttestationV1: Hashable, Sendable 
         }
         self.payload = payload
         self.approvals = approvals
+    }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(decoder, ["payload", "approvals"])
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            payload: container.decode(
+                MusubiProviderBundleVerificationPayloadV1.self,
+                forKey: .payload
+            ),
+            approvals: container.decode(
+                [MusubiProviderBundleVerificationApprovalV1].self,
+                forKey: .approvals
+            )
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey { case payload, approvals }
+}
+
+/// Immutable archive/order/provider identity of one registered provider proof.
+public struct MusubiProviderBundleAttestationKeyV1: Codable, Hashable, Sendable {
+    public let archiveID: MusubiDigest32V1
+    public let replicationOrder: MusubiDigest32V1
+    public let providerID: MusubiDigest32V1
+
+    public init(
+        archiveID: MusubiDigest32V1,
+        replicationOrder: MusubiDigest32V1,
+        providerID: MusubiDigest32V1
+    ) throws {
+        guard [archiveID, replicationOrder, providerID].allSatisfy({
+            $0.bytes.contains(where: { $0 != 0 })
+        }) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi provider bundle attestation key must be non-zero."
+            )
+        }
+        self.archiveID = archiveID
+        self.replicationOrder = replicationOrder
+        self.providerID = providerID
+    }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(decoder, ["archive_id", "replication_order", "provider_id"])
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            archiveID: container.decode(MusubiDigest32V1.self, forKey: .archiveID),
+            replicationOrder: container.decode(
+                MusubiDigest32V1.self,
+                forKey: .replicationOrder
+            ),
+            providerID: MusubiDigest32V1(
+                bytes: musubiProviderIDBytesV1(
+                    container.decode(MusubiProviderIDJSONV1.self, forKey: .providerID).value
+                )
+            )
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(archiveID, forKey: .archiveID)
+        try container.encode(replicationOrder, forKey: .replicationOrder)
+        try container.encode(
+            MusubiProviderIDJSONV1(Data(providerID.bytes).hexEncodedString().uppercased()),
+            forKey: .providerID
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case archiveID = "archive_id"
+        case replicationOrder = "replication_order"
+        case providerID = "provider_id"
+    }
+}
+
+/// Complete immutable provider proof returned by the exact audit query.
+public struct MusubiProviderBundleAttestationRecordV1: Codable, Hashable, Sendable {
+    public let key: MusubiProviderBundleAttestationKeyV1
+    public let attestationDigest: MusubiProviderBundleAttestationDigestV1
+    public let attestation: MusubiProviderBundleVerificationAttestationV1
+    public let registeredBy: String
+    public let registeredAtHeight: UInt64
+
+    public init(
+        key: MusubiProviderBundleAttestationKeyV1,
+        attestationDigest: MusubiProviderBundleAttestationDigestV1,
+        attestation: MusubiProviderBundleVerificationAttestationV1,
+        registeredBy: String,
+        registeredAtHeight: UInt64
+    ) throws {
+        let binding = attestation.payload.binding
+        guard key.archiveID == binding.archiveID,
+              key.replicationOrder == binding.replicationOrder,
+              key.providerID == binding.providerID,
+              attestationDigest == (try musubiProviderBundleAttestationDigestV1(attestation)),
+              registeredAtHeight > 0 else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi provider attestation record is inconsistent with its signed binding."
+            )
+        }
+        _ = try CanonicalNorito.encodeCompactAccountId(registeredBy)
+        self.key = key
+        self.attestationDigest = attestationDigest
+        self.attestation = attestation
+        self.registeredBy = registeredBy
+        self.registeredAtHeight = registeredAtHeight
+    }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(
+            decoder,
+            ["key", "attestation_digest", "attestation", "registered_by", "registered_at_height"]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            key: container.decode(MusubiProviderBundleAttestationKeyV1.self, forKey: .key),
+            attestationDigest: container.decode(
+                MusubiProviderBundleAttestationDigestV1.self,
+                forKey: .attestationDigest
+            ),
+            attestation: container.decode(
+                MusubiProviderBundleVerificationAttestationV1.self,
+                forKey: .attestation
+            ),
+            registeredBy: container.decode(String.self, forKey: .registeredBy),
+            registeredAtHeight: container.decode(UInt64.self, forKey: .registeredAtHeight)
+        )
+    }
+
+    /// Require this audit record to carry the requested immutable proof identity.
+    public func requireMatches(_ request: MusubiProviderBundleAttestationKeyV1) throws {
+        guard key == request else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi provider attestation response does not match the exact request."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case attestationDigest = "attestation_digest"
+        case attestation
+        case registeredBy = "registered_by"
+        case registeredAtHeight = "registered_at_height"
     }
 }
 

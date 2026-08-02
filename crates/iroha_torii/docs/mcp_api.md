@@ -294,6 +294,7 @@ Read tools:
 
 - `iroha.musubi.queries.exact_package`
 - `iroha.musubi.queries.exact_release`
+- `iroha.musubi.queries.provider_bundle_attestation`
 - `iroha.musubi.queries.resolver_index`
 - `iroha.musubi.queries.versions`
 - `iroha.musubi.queries.maintainers`
@@ -308,6 +309,7 @@ Instruction-builder tools:
 
 - `iroha.musubi.instructions.namespace_binding_register`
 - `iroha.musubi.instructions.archive_register`
+- `iroha.musubi.instructions.provider_bundle_attestation_register`
 - `iroha.musubi.instructions.archive_location_add`
 - `iroha.musubi.instructions.archive_location_retire`
 - `iroha.musubi.instructions.release_publish`

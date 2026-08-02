@@ -459,6 +459,12 @@ impl SignedBlock {
     }
 
     /// Replace durable independent-batch outcomes captured while executing this block.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SetBatchTransferOutcomesError`] when transaction results are absent,
+    /// their count differs from the entrypoint count, or an outcome references an
+    /// entrypoint that is not present in this block.
     #[cfg(feature = "transparent_api")]
     pub fn set_batch_transfer_outcomes(
         &mut self,

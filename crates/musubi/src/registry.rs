@@ -9,13 +9,17 @@
 //! signs one exact transaction, the publication journal persists it before submission,
 //! and recovery pairs that transaction identity with the authoritative archive embedded
 //! in a finalized archive-location page before any storage coordination begins.
+//! Release claims likewise reconstruct the journaled signature, query authoritative
+//! payload-hash status first, and replay the same locally verified Torii bytes only when
+//! the engine confirms that the signed location and readback floor is still current. The
+//! authorization-inclusive wire digest is a local replay-integrity binding; transaction
+//! status does not attest it.
 
 use std::{
     error::Error,
     fmt, fs,
     io::Read,
     path::{Path, PathBuf},
-    str::FromStr as _,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -36,13 +40,13 @@ use iroha_data_model::{
         MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1,
         MusubiArchiveLocationV1, MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionPageV1,
         MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
-        MusubiMaintainerPageV1, MusubiNamespaceBindingV1, MusubiOrderedPackagePageV1,
-        MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1, MusubiPackageIdV1,
-        MusubiPackagePageQueryV1, MusubiPackageRecordV1, MusubiPackageSelectorV1,
-        MusubiPageRequestV1, MusubiReleaseIdV1, MusubiReleaseRecordV1, MusubiResolverIndexPageV1,
+        MusubiExactReleaseSnapshotV1, MusubiMaintainerPageV1, MusubiNamespaceBindingV1,
+        MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
+        MusubiPackageIdV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
+        MusubiPackageSelectorV1, MusubiPageRequestV1, MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1, MusubiReleaseIdV1, MusubiResolverIndexPageV1,
         MusubiResolverIndexQueryV1, MusubiSearchPageV1, MusubiSearchQueryV1,
         MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1, MusubiVersionPageV1,
-        MusubiVersionReqV1,
     },
     sorafs::capacity::ProviderId,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
@@ -58,9 +62,14 @@ use crate::publish::{
     PublicationArchiveRegistrationTerminalV1, PublicationArchiveRegistrationV1, PublicationBackend,
     PublicationBackendError, PublicationBackendFailureClass, PublicationCarSource,
     PublicationEngine, PublicationError, PublicationFinalEvidenceV1, PublicationOperationIdV1,
-    PublicationReadbackEvidenceV1, PublicationRegisteredArchiveV1, PublicationReplicationAdvanceV1,
-    PublicationReplicationCheckpointV1, PublicationRequestV1, PublicationValidationEvidenceV1,
-    archive_registration_intent_valid_until_ms,
+    PublicationProviderRegistrationCheckpointAdvanceV1,
+    PublicationProviderRegistrationCheckpointV1, PublicationReadbackEvidenceV1,
+    PublicationRegisteredArchiveV1, PublicationReleaseAbsenceEvidenceV1,
+    PublicationReleasePreparationFloorV1, PublicationReleaseSubmissionAdvanceV1,
+    PublicationReleaseSubmissionIntentV1, PublicationReleaseSubmissionTerminalV1,
+    PublicationReplicationAdvanceV1, PublicationReplicationCheckpointV1, PublicationRequestV1,
+    PublicationValidationEvidenceV1, archive_registration_intent_valid_until_ms,
+    release_submission_valid_until_ms,
 };
 
 const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
@@ -90,14 +99,14 @@ pub(crate) enum RegistryTerminalTransactionStateV1 {
     Expired,
 }
 
-/// Exact transaction state recovered from the typed Torii status endpoint.
+/// Payload transaction state recovered from the typed Torii status endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RegistryTransactionStateV1 {
     /// No authoritative or pending record is currently visible.
     Absent,
     /// The transaction is pending or only has a non-authoritative terminal hint.
     Pending,
-    /// The transaction is durably applied at the reported block height.
+    /// The payload transaction is durably applied at the reported block height.
     Applied {
         /// Applied block height from authoritative state.
         block_height: u64,
@@ -114,21 +123,21 @@ pub(crate) enum RegistryTransactionStateV1 {
 /// Observed result of submitting and status-checking one locally signed mutation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RegistryMutationSubmissionV1 {
-    /// The exact transaction is applied.
+    /// The payload transaction is applied.
     Applied {
-        /// Locally derived exact signed-transaction hash.
+        /// Locally derived payload transaction hash.
         transaction_hash: [u8; 32],
         /// Applied block height from authoritative state.
         block_height: u64,
     },
-    /// The exact transaction has no authoritative terminal result yet.
+    /// The payload transaction has no authoritative terminal result yet.
     Pending {
-        /// Locally derived exact signed-transaction hash.
+        /// Locally derived payload transaction hash.
         transaction_hash: [u8; 32],
     },
-    /// The exact transaction reached an authoritative negative terminal state.
+    /// The payload transaction reached an authoritative negative terminal state.
     Terminal {
-        /// Locally derived exact signed-transaction hash.
+        /// Locally derived payload transaction hash.
         transaction_hash: [u8; 32],
         /// Terminal kind.
         kind: RegistryTerminalTransactionStateV1,
@@ -347,19 +356,41 @@ impl RegistryReadClientV1 {
         Ok(output)
     }
 
-    /// Fetch and validate one exact immutable release record.
+    /// Fetch and validate one paired finalized home/universal release snapshot.
     pub fn exact_release(
         &self,
         release: MusubiReleaseIdV1,
-    ) -> Result<Option<MusubiReleaseRecordV1>, RegistryErrorV1> {
-        let requested_release = release.clone();
-        let output = self.query_optional::<_, MusubiReleaseRecordV1>(
+    ) -> Result<Option<MusubiExactReleaseSnapshotV1>, RegistryErrorV1> {
+        let request = MusubiExactReleaseQueryV1 { release };
+        let output = self.query_optional::<_, MusubiExactReleaseSnapshotV1>(
             PublicMusubiQueryPathV1::ExactRelease,
-            &MusubiExactReleaseQueryV1 { release },
+            &request,
+        )?;
+        if let Some(snapshot) = &output {
+            snapshot
+                .validate_for(&request)
+                .map_err(|_| invalid_response())?;
+        }
+        Ok(output)
+    }
+
+    /// Fetch and validate one immutable finalized provider bundle-attestation audit record.
+    pub fn provider_bundle_attestation(
+        &self,
+        key: MusubiProviderBundleAttestationKeyV1,
+    ) -> Result<Option<MusubiProviderBundleAttestationRecordV1>, RegistryErrorV1> {
+        key.validate().map_err(|_| invalid_response())?;
+        let output = self.query_optional::<_, MusubiProviderBundleAttestationRecordV1>(
+            PublicMusubiQueryPathV1::ProviderBundleAttestation,
+            &key,
         )?;
         if let Some(record) = &output {
             record.validate().map_err(|_| invalid_response())?;
-            if record.manifest.release != requested_release {
+            record
+                .attestation
+                .verify(&record.attestation.payload.binding)
+                .map_err(|_| invalid_response())?;
+            if record.key != key {
                 return Err(invalid_response());
             }
         }
@@ -604,6 +635,7 @@ impl RegistrySigningClientV1 {
         Ok(Self::from_configuration(configuration))
     }
 
+    #[cfg(test)]
     pub(crate) fn load_with_publication_config(
         config: Option<&Path>,
     ) -> Result<(Self, iroha::config::MusubiPublicationConfig), RegistryErrorV1> {
@@ -936,6 +968,19 @@ pub trait PublicationRuntimeServicesV1 {
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError>;
 
+    /// Revalidate or append the durable provider-sidecar anchor before proof submission.
+    fn checkpoint_archive_location_provider_registrations(
+        &mut self,
+        _operation_id: PublicationOperationIdV1,
+        _request: &PublicationRequestV1,
+        _registered: &PublicationRegisteredArchiveV1,
+        _generation: u8,
+        _prior_location_ids: &[MusubiArchiveLocationIdV1],
+        _checkpoint: Option<&PublicationProviderRegistrationCheckpointV1>,
+    ) -> Result<PublicationProviderRegistrationCheckpointAdvanceV1, PublicationBackendError> {
+        Ok(PublicationProviderRegistrationCheckpointAdvanceV1::Ready)
+    }
+
     /// Coordinate and sign an exact location CAS without submitting it.
     ///
     /// The caller journals the returned transaction before invoking
@@ -1166,6 +1211,163 @@ impl<S> RegistryPublicationBackendV1<S> {
         }))
     }
 
+    fn finalized_release_absence(
+        &self,
+        request: &PublicationRequestV1,
+        minimum_finalized_height: Option<u64>,
+    ) -> Result<Option<PublicationReleaseAbsenceEvidenceV1>, PublicationBackendError> {
+        let requirement = format!("={}", request.publication.manifest.release.version)
+            .parse::<iroha_data_model::musubi::MusubiVersionReqV1>()
+            .map_err(|_| PublicationBackendError::permanent("RELEASE_REQUIREMENT_INVALID"))?;
+        let resolver_query = MusubiResolverIndexQueryV1 {
+            package: request.publication.manifest.release.package.clone(),
+            requirement: Some(requirement),
+            page: first_page(1),
+        };
+        let resolver_page = self
+            .read
+            .resolver_index(&resolver_query)
+            .map_err(registry_backend_error)?;
+        if minimum_finalized_height
+            .is_some_and(|height| resolver_page.snapshot.finalized_height < height)
+        {
+            return Ok(None);
+        }
+        if !resolver_page.items.is_empty() {
+            let Some(exact_release) = self
+                .read
+                .exact_release(request.publication.manifest.release.clone())
+                .map_err(registry_backend_error)?
+            else {
+                return Err(PublicationBackendError::retryable(
+                    "RELEASE_FINALIZED_SNAPSHOT_MOVED",
+                ));
+            };
+            validate_finalized_release_snapshot_progress(
+                resolver_page.snapshot,
+                exact_release.snapshot,
+            )?;
+            validate_finalized_idempotent_release(request, &exact_release)?;
+            // The authoritative status for this exact payload was checked before this lookup.
+            // Core accepts a byte-identical same-publisher release replay as an idempotent no-op,
+            // so keep the attempt live and let the existing location gate decide whether the
+            // journaled bytes may be submitted again. Never synthesize transaction application.
+            return Ok(None);
+        }
+        if resolver_page.next_cursor.is_some() {
+            return Err(PublicationBackendError::permanent(
+                "RELEASE_ABSENCE_RESPONSE_INVALID",
+            ));
+        }
+        let retention_query = MusubiArchiveRetentionQueryV1 {
+            archive_ids: vec![request.archive_commitment.archive_id()],
+            expected_snapshot: Some(resolver_page.snapshot),
+        };
+        let retention_page = match self.read.archive_retention(&retention_query) {
+            Ok(page) => page,
+            Err(error) if error.class() == RegistryFailureClassV1::StaleCursor => {
+                return Err(PublicationBackendError::retryable(
+                    "RELEASE_ABSENCE_SNAPSHOT_MOVED",
+                ));
+            }
+            Err(error) => return Err(registry_backend_error(error)),
+        };
+        let absence = PublicationReleaseAbsenceEvidenceV1 {
+            resolver_page,
+            retention_query,
+            retention_page,
+        };
+        absence
+            .validate_for(request)
+            .map_err(|_| PublicationBackendError::permanent("RELEASE_ABSENCE_RESPONSE_INVALID"))?;
+        Ok(Some(absence))
+    }
+
+    fn terminal_release_state(
+        &self,
+        request: &PublicationRequestV1,
+        intent: &PublicationReleaseSubmissionIntentV1,
+        kind: RegistryTerminalTransactionStateV1,
+        block_height: Option<u64>,
+    ) -> Result<PublicationReleaseSubmissionAdvanceV1, PublicationBackendError> {
+        if block_height == Some(0) {
+            return Err(PublicationBackendError::permanent(
+                "RELEASE_SUBMISSION_TERMINAL_STATUS_INVALID",
+            ));
+        }
+        let Some(absence) = self.finalized_release_absence(request, block_height)? else {
+            return Ok(PublicationReleaseSubmissionAdvanceV1::Pending);
+        };
+        let terminal = match (kind, block_height) {
+            (RegistryTerminalTransactionStateV1::Rejected, Some(block_height)) => {
+                PublicationReleaseSubmissionTerminalV1::registry_rejected(
+                    intent,
+                    block_height,
+                    absence,
+                )
+            }
+            (RegistryTerminalTransactionStateV1::Rejected, None) => {
+                return Err(PublicationBackendError::permanent(
+                    "RELEASE_SUBMISSION_TERMINAL_STATUS_INVALID",
+                ));
+            }
+            (RegistryTerminalTransactionStateV1::Expired, Some(block_height)) => {
+                PublicationReleaseSubmissionTerminalV1::registry_expired(
+                    intent,
+                    block_height,
+                    absence,
+                )
+            }
+            (RegistryTerminalTransactionStateV1::Expired, None) => {
+                let deadline = release_submission_valid_until_ms(intent).ok_or_else(|| {
+                    PublicationBackendError::permanent("RELEASE_SUBMISSION_INTENT_INVALID")
+                })?;
+                if absence.retention_page.finalized_time_ms <= deadline {
+                    return Ok(PublicationReleaseSubmissionAdvanceV1::Pending);
+                }
+                PublicationReleaseSubmissionTerminalV1::finalized_validity_window_elapsed(
+                    intent, absence,
+                )
+            }
+        };
+        Ok(PublicationReleaseSubmissionAdvanceV1::Terminal(terminal))
+    }
+
+    fn finalized_validity_window_release_state(
+        &self,
+        request: &PublicationRequestV1,
+        intent: &PublicationReleaseSubmissionIntentV1,
+    ) -> Result<Option<PublicationReleaseSubmissionTerminalV1>, PublicationBackendError> {
+        let Some(absence) = self.finalized_release_absence(request, None)? else {
+            return Ok(None);
+        };
+        let deadline = release_submission_valid_until_ms(intent).ok_or_else(|| {
+            PublicationBackendError::permanent("RELEASE_SUBMISSION_INTENT_INVALID")
+        })?;
+        if absence.retention_page.finalized_time_ms <= deadline {
+            return Ok(None);
+        }
+        Ok(Some(
+            PublicationReleaseSubmissionTerminalV1::finalized_validity_window_elapsed(
+                intent, absence,
+            ),
+        ))
+    }
+
+    fn pending_release_state(
+        &self,
+        request: &PublicationRequestV1,
+        intent: &PublicationReleaseSubmissionIntentV1,
+    ) -> Result<PublicationReleaseSubmissionAdvanceV1, PublicationBackendError> {
+        self.finalized_validity_window_release_state(request, intent)
+            .map(|terminal| {
+                terminal.map_or(
+                    PublicationReleaseSubmissionAdvanceV1::Pending,
+                    PublicationReleaseSubmissionAdvanceV1::Terminal,
+                )
+            })
+    }
+
     fn terminal_registration_state(
         &self,
         request: &PublicationRequestV1,
@@ -1219,6 +1421,62 @@ impl<S> RegistryPublicationBackendV1<S> {
     }
 }
 
+fn validate_finalized_idempotent_release(
+    request: &PublicationRequestV1,
+    exact_release: &MusubiExactReleaseSnapshotV1,
+) -> Result<(), PublicationBackendError> {
+    let manifest = &request.publication.manifest;
+    let home = &exact_release.home_release;
+    let universal = &exact_release.universal_release;
+    let exact_query = MusubiExactReleaseQueryV1 {
+        release: manifest.release.clone(),
+    };
+    if exact_release.validate_for(&exact_query).is_err()
+        || exact_release.chain_id != request.chain_id
+        || exact_release.genesis_hash != request.genesis_block_hash
+        || &home.manifest != manifest
+        || home.release_digest != manifest.release_digest()
+        || &universal.release != &manifest.release
+        || universal.release_digest != manifest.release_digest()
+        || universal.archive_id != manifest.archive_id
+        || universal.source_digest != request.archive_commitment.source_tree_digest
+        || universal.interface_digest != manifest.interface_digest
+        || universal.abi != manifest.abi
+        || &universal.dependencies != &manifest.dependencies
+    {
+        return Err(PublicationBackendError::permanent(
+            "RELEASE_FINALIZED_COMMITMENT_CONFLICT",
+        ));
+    }
+    if home.published_by != request.publisher {
+        return Err(PublicationBackendError::permanent(
+            "RELEASE_FINALIZED_PUBLISHER_CONFLICT",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_finalized_release_snapshot_progress(
+    resolver_snapshot: iroha_data_model::musubi::MusubiRegistrySnapshotV1,
+    exact_snapshot: iroha_data_model::musubi::MusubiRegistrySnapshotV1,
+) -> Result<(), PublicationBackendError> {
+    if exact_snapshot.finalized_height == resolver_snapshot.finalized_height
+        && exact_snapshot != resolver_snapshot
+    {
+        return Err(PublicationBackendError::permanent(
+            "RELEASE_FINALIZED_SNAPSHOT_CONFLICT",
+        ));
+    }
+    if exact_snapshot.finalized_height < resolver_snapshot.finalized_height
+        || exact_snapshot.index_revision < resolver_snapshot.index_revision
+    {
+        return Err(PublicationBackendError::retryable(
+            "RELEASE_FINALIZED_SNAPSHOT_MOVED",
+        ));
+    }
+    Ok(())
+}
+
 fn terminal_after_finalized_validity_window(
     request: &PublicationRequestV1,
     intent: &PublicationArchiveRegistrationIntentV1,
@@ -1252,6 +1510,26 @@ fn validate_registration_submission_hash(
             "ARCHIVE_REGISTRATION_TRANSACTION_HASH_MISMATCH",
         ))
     }
+}
+
+fn validate_release_submission_hash(
+    expected: [u8; 32],
+    submitted: [u8; 32],
+) -> Result<(), PublicationBackendError> {
+    if submitted == expected {
+        Ok(())
+    } else {
+        Err(PublicationBackendError::permanent(
+            "RELEASE_SUBMISSION_TRANSACTION_HASH_MISMATCH",
+        ))
+    }
+}
+
+fn submit_release_after_current_location_gate<T>(
+    location_matches_signed_floor: bool,
+    submit_exact_transaction: impl FnOnce() -> T,
+) -> Option<T> {
+    location_matches_signed_floor.then(submit_exact_transaction)
 }
 
 impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublicationBackendV1<S> {
@@ -1395,6 +1673,28 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
                 }
             }
         }
+    }
+
+    fn checkpoint_archive_location_provider_registrations(
+        &mut self,
+        operation_id: PublicationOperationIdV1,
+        request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
+        generation: u8,
+        prior_location_ids: &[MusubiArchiveLocationIdV1],
+        checkpoint: Option<&PublicationProviderRegistrationCheckpointV1>,
+    ) -> Result<PublicationProviderRegistrationCheckpointAdvanceV1, PublicationBackendError> {
+        self.check_operation(operation_id)?;
+        self.check_request(request)?;
+        self.services
+            .checkpoint_archive_location_provider_registrations(
+                operation_id,
+                request,
+                registered,
+                generation,
+                prior_location_ids,
+                checkpoint,
+            )
     }
 
     fn prepare_archive_location_intent(
@@ -1549,41 +1849,108 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             .readback_provider(operation_id, request, location, provider)
     }
 
-    fn submit_release_native_amx(
+    fn prepare_release_submission_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
-        instruction: &PublishMusubiReleaseV1,
-    ) -> Result<PublicationAmxSubmissionV1, PublicationBackendError> {
+        request: &PublicationRequestV1,
+        preparation: &PublicationReleasePreparationFloorV1,
+    ) -> Result<PublicationReleaseSubmissionIntentV1, PublicationBackendError> {
         self.check_operation(operation_id)?;
-        let submission = self
+        self.check_request(request)?;
+        let payload = self
             .signing
-            .submit_observed_v1(instruction.clone())
+            .prebuild_v1(request.publish_instruction())
             .map_err(registry_backend_error)?;
-        match submission {
-            RegistryMutationSubmissionV1::Applied {
-                transaction_hash,
-                block_height,
-            } => Ok(PublicationAmxSubmissionV1::new(
-                operation_id,
-                instruction,
-                transaction_hash,
-                block_height,
-            )),
-            RegistryMutationSubmissionV1::Pending { .. } => Err(
-                PublicationBackendError::retryable("RELEASE_SUBMISSION_TRANSACTION_PENDING"),
+        let signed_transaction = self
+            .signing
+            .quote_and_sign_v1(payload)
+            .map_err(registry_backend_error)?;
+        PublicationReleaseSubmissionIntentV1::try_new(
+            operation_id,
+            request,
+            preparation.clone(),
+            &signed_transaction,
+        )
+        .map_err(|_| PublicationBackendError::permanent("RELEASE_SUBMISSION_INTENT_INVALID"))
+    }
+
+    fn submit_or_recover_release_submission(
+        &mut self,
+        operation_id: PublicationOperationIdV1,
+        request: &PublicationRequestV1,
+        intent: &PublicationReleaseSubmissionIntentV1,
+        allow_absent_submission: bool,
+    ) -> Result<PublicationReleaseSubmissionAdvanceV1, PublicationBackendError> {
+        self.check_operation(operation_id)?;
+        self.check_request(request)?;
+        let signed_transaction = intent
+            .reconstruct_signed_transaction(operation_id, request)
+            .map_err(|_| PublicationBackendError::permanent("RELEASE_SUBMISSION_INTENT_INVALID"))?;
+        let initial_state = self
+            .signing
+            .transaction_application_state_v1(&signed_transaction)
+            .map_err(registry_backend_error)?;
+        match initial_state {
+            RegistryTransactionStateV1::Applied { block_height } => {
+                return Ok(PublicationReleaseSubmissionAdvanceV1::Applied(
+                    PublicationAmxSubmissionV1::new(
+                        operation_id,
+                        &request.publish_instruction(),
+                        intent.transaction_hash,
+                        block_height,
+                    ),
+                ));
+            }
+            RegistryTransactionStateV1::Pending => {
+                return self.pending_release_state(request, intent);
+            }
+            RegistryTransactionStateV1::Terminal { kind, block_height } => {
+                return self.terminal_release_state(request, intent, kind, block_height);
+            }
+            RegistryTransactionStateV1::Absent => {}
+        }
+
+        if let Some(terminal) = self.finalized_validity_window_release_state(request, intent)? {
+            return Ok(PublicationReleaseSubmissionAdvanceV1::Terminal(terminal));
+        }
+        let Some(submission) =
+            submit_release_after_current_location_gate(allow_absent_submission, || {
+                self.signing.submit_signed_v1(&signed_transaction)
+            })
+        else {
+            return Ok(PublicationReleaseSubmissionAdvanceV1::Pending);
+        };
+        if let Ok(transaction_hash) = submission {
+            validate_release_submission_hash(intent.transaction_hash, transaction_hash)?;
+        }
+        let observed_state = self
+            .signing
+            .transaction_application_state_v1(&signed_transaction)
+            .map_err(registry_backend_error)?;
+        match observed_state {
+            RegistryTransactionStateV1::Applied { block_height } => Ok(
+                PublicationReleaseSubmissionAdvanceV1::Applied(PublicationAmxSubmissionV1::new(
+                    operation_id,
+                    &request.publish_instruction(),
+                    intent.transaction_hash,
+                    block_height,
+                )),
             ),
-            RegistryMutationSubmissionV1::Terminal {
-                kind: RegistryTerminalTransactionStateV1::Expired,
-                ..
-            } => Err(PublicationBackendError::retryable(
-                "RELEASE_SUBMISSION_TRANSACTION_EXPIRED",
-            )),
-            RegistryMutationSubmissionV1::Terminal {
-                kind: RegistryTerminalTransactionStateV1::Rejected,
-                ..
-            } => Err(PublicationBackendError::permanent(
-                "RELEASE_SUBMISSION_TRANSACTION_REJECTED",
-            )),
+            RegistryTransactionStateV1::Pending => self.pending_release_state(request, intent),
+            RegistryTransactionStateV1::Terminal { kind, block_height } => {
+                self.terminal_release_state(request, intent, kind, block_height)
+            }
+            RegistryTransactionStateV1::Absent => {
+                if let Some(terminal) =
+                    self.finalized_validity_window_release_state(request, intent)?
+                {
+                    return Ok(PublicationReleaseSubmissionAdvanceV1::Terminal(terminal));
+                }
+                match submission {
+                    Ok(_) => Ok(PublicationReleaseSubmissionAdvanceV1::Pending),
+                    Err(error) => Err(registry_backend_error(error)),
+                }
+            }
         }
     }
 
@@ -1596,44 +1963,22 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         self.check_operation(operation_id)?;
         self.check_request(request)?;
         let release_id = request.publication.manifest.release.clone();
-        let Some(home_release) = self
+        let Some(exact_release) = self
             .read
-            .exact_release(release_id.clone())
+            .exact_release(release_id)
             .map_err(registry_backend_error)?
         else {
             return Ok(None);
         };
-        let requirement = MusubiVersionReqV1::from_str(&format!("={}", release_id.version))
-            .map_err(|_| PublicationBackendError::permanent("FINAL_QUERY_INVALID"))?;
-        let page = self
-            .read
-            .resolver_index(&MusubiResolverIndexQueryV1 {
-                package: release_id.package.clone(),
-                requirement: Some(requirement),
-                page: first_page(MUSUBI_MAX_PAGE_SIZE_V1 as u32),
-            })
-            .map_err(registry_backend_error)?;
-        if page.snapshot.finalized_height < submission.applied_height {
+        if exact_release.snapshot.finalized_height < submission.applied_height {
             return Ok(None);
-        }
-        let mut matching = page
-            .items
-            .into_iter()
-            .filter(|row| row.release == release_id);
-        let Some(universal_release) = matching.next() else {
-            return Ok(None);
-        };
-        if matching.next().is_some() {
-            return Err(PublicationBackendError::permanent(
-                "FINAL_QUERY_DUPLICATE_RELEASE",
-            ));
         }
         Ok(Some(PublicationFinalEvidenceV1 {
-            chain_id: page.chain_id,
-            genesis_block_hash: page.genesis_hash,
-            snapshot: page.snapshot,
-            home_release,
-            universal_release,
+            chain_id: exact_release.chain_id,
+            genesis_block_hash: exact_release.genesis_hash,
+            snapshot: exact_release.snapshot,
+            home_release: exact_release.home_release,
+            universal_release: exact_release.universal_release,
         }))
     }
 }
@@ -1824,30 +2169,37 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         account::AccountId,
-        isi::InstructionBox,
+        isi::{InstructionBox, musubi::AddMusubiArchiveLocationV1},
         musubi::{
-            ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveCommitmentV1,
-            MusubiArchiveRecordV1, MusubiArchiveRetentionDecisionV1,
+            ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveAvailabilityV1,
+            MusubiArchiveCommitmentV1, MusubiArchiveRecordV1, MusubiArchiveRetentionDecisionV1,
             MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionPageV1,
             MusubiArchiveRetentionQueryV1, MusubiArtifactGovernanceStateV1, MusubiContentDigestV1,
             MusubiInvitationStateV1, MusubiInviteIdV1, MusubiKotodamaEditionV1,
             MusubiMaintainerDirectoryEntryV1, MusubiMaintainerInvitationV1,
             MusubiNamespaceBindingDigestV1, MusubiNamespaceV1, MusubiPackageMemberV1,
             MusubiPackageRecordV1, MusubiPackageRevisionsV1, MusubiPackageRoleV1,
-            MusubiPackageScopeV1, MusubiPublicationV1, MusubiReasonV1, MusubiRegistrySnapshotV1,
-            MusubiReleaseIdV1, MusubiReleaseManifestV1, MusubiReleaseMetadataV1,
-            MusubiReleaseRecordV1, MusubiReleaseRevisionsV1, MusubiReleaseYankV1,
-            MusubiResolutionProofV1, MusubiSearchPageRequestV1, MusubiSeedIngressReceiptApprovalV1,
-            MusubiSeedIngressReceiptPayloadV1, MusubiSemanticReleaseDigestV1,
-            MusubiVerificationLockV1, MusubiVersionV1,
+            MusubiPackageScopeV1, MusubiProviderBundleAttestationSetDigestV1, MusubiPublicationV1,
+            MusubiReasonV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiReleaseManifestV1,
+            MusubiReleaseMetadataV1, MusubiReleaseRecordV1, MusubiReleaseRevisionsV1,
+            MusubiReleaseSelectionStateV1, MusubiReleaseYankV1, MusubiResolutionProofV1,
+            MusubiResolverReleaseRowV1, MusubiSearchPageRequestV1,
+            MusubiSeedIngressReceiptApprovalV1, MusubiSeedIngressReceiptPayloadV1,
+            MusubiSemanticReleaseDigestV1, MusubiStorageAvailabilityV1, MusubiVerificationLockV1,
+            MusubiVersionV1,
         },
         nexus::DataSpaceId,
-        sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
+        sorafs::pin_registry::{
+            ChunkerProfileHandle, ManifestDigest, ManifestRootCid, ReplicationOrderId,
+        },
         transaction::{Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder},
     };
     use tempfile::tempdir;
 
     use super::*;
+    use crate::publish::{
+        PublicationReleaseSignedEnvelopeV1, PublicationReleaseSubmissionTerminalReasonV1,
+    };
 
     fn serve_http_once(
         status: &'static str,
@@ -1904,6 +2256,77 @@ mod tests {
 
     fn serve_json_once(response: Vec<u8>) -> (Url, thread::JoinHandle<Vec<u8>>) {
         serve_http_once("200 OK", response)
+    }
+
+    #[derive(Debug)]
+    struct HttpRequestCapture {
+        path: String,
+        body: Vec<u8>,
+    }
+
+    fn serve_http_sequence(
+        responses: Vec<(&'static str, Vec<u8>)>,
+    ) -> (Url, thread::JoinHandle<Vec<HttpRequestCapture>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let address = listener.local_addr().expect("loopback address");
+        let server = thread::spawn(move || {
+            let mut request_bodies = Vec::with_capacity(responses.len());
+            for (status, response) in responses {
+                let (mut stream, _) = listener.accept().expect("query connection");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("read timeout");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 2_048];
+                let (header_end, content_length, path) = loop {
+                    let read = stream.read(&mut buffer).expect("read query request");
+                    assert_ne!(read, 0, "query request ended before its headers");
+                    request.extend_from_slice(&buffer[..read]);
+                    let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers =
+                        std::str::from_utf8(&request[..header_end]).expect("HTTP headers");
+                    let path = headers
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .expect("HTTP request path")
+                        .to_owned();
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().expect("content length"))
+                        })
+                        .unwrap_or(0);
+                    break (header_end + 4, content_length, path);
+                };
+                while request.len() < header_end + content_length {
+                    let read = stream.read(&mut buffer).expect("read query body");
+                    assert_ne!(read, 0, "query request ended before its body");
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                request_bodies.push(HttpRequestCapture {
+                    path,
+                    body: request[header_end..header_end + content_length].to_vec(),
+                });
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response.len()
+                )
+                .expect("write response headers");
+                stream.write_all(&response).expect("write response body");
+            }
+            request_bodies
+        });
+        (
+            format!("http://{address}/").parse().expect("loopback URL"),
+            server,
+        )
     }
 
     fn retention_page(
@@ -2232,8 +2655,10 @@ mod tests {
         let signer = KeyPair::try_from_seed(vec![97; 32], Algorithm::Ed25519)
             .expect("status signer fixture");
         let transaction = signed_status_probe(&signer);
+        let transaction_hash = transaction.hash().to_string();
+        let cached_rejection_hash = transaction_hash.clone();
         let cached_rejection = norito::json::to_vec(&norito::json!({
-            "hash": transaction.hash().to_string(),
+            "hash": cached_rejection_hash,
             "status": { "kind": "Rejected", "block_height": 44 },
             "scope": "local",
             "resolved_from": "cache",
@@ -2249,8 +2674,9 @@ mod tests {
         );
         server.join().expect("cached rejection server");
 
+        let heightless_applied_hash = transaction_hash.clone();
         let heightless_applied = norito::json::to_vec(&norito::json!({
-            "hash": transaction.hash().to_string(),
+            "hash": heightless_applied_hash,
             "status": { "kind": "Applied" },
             "scope": "local",
             "resolved_from": "state",
@@ -2279,7 +2705,7 @@ mod tests {
         server.join().expect("state-final expiry server");
 
         let zero_height_expiry = norito::json::to_vec(&norito::json!({
-            "hash": transaction.hash().to_string(),
+            "hash": transaction_hash,
             "status": { "kind": "Expired", "block_height": 0 },
             "scope": "local",
             "resolved_from": "state",
@@ -2413,35 +2839,20 @@ mod tests {
         assert_eq!(query.package, requested_package);
 
         let (request, _, _, _) = publication_fixture();
-        let manifest = request.publication.manifest.clone();
-        let published_release = manifest.release.clone();
-        let release_record = MusubiReleaseRecordV1 {
-            release_digest: manifest.release_digest(),
-            manifest,
-            published_by: request.publisher.clone(),
-            published_at_height: 20,
-            yank: MusubiReleaseYankV1 {
+        let published_release = request.publication.manifest.release.clone();
+        let release_snapshot = exact_release_snapshot(&request);
+        release_snapshot
+            .validate_for(&MusubiExactReleaseQueryV1 {
                 release: published_release.clone(),
-                yanked: false,
-                reason: MusubiReasonV1::new("initial publication").expect("yank reason"),
-                changed_by: request.publisher,
-                changed_at_height: 20,
-                revision: 1,
-            },
-            artifact_governance: MusubiArtifactGovernanceStateV1::Available,
-            revisions: MusubiReleaseRevisionsV1 {
-                yank: 1,
-                artifact_governance: 1,
-            },
-        };
-        release_record.validate().expect("valid release record");
+            })
+            .expect("valid paired release snapshot");
         let requested_release = MusubiReleaseIdV1::new(
             published_release.package,
             "2.0.0".parse::<MusubiVersionV1>().expect("other version"),
         );
         let release_response = {
             let _chain_discriminant = ChainDiscriminantGuard::enter(369);
-            norito::json::to_vec(&release_record).expect("release record JSON")
+            norito::json::to_vec(&release_snapshot).expect("release snapshot JSON")
         };
         let (url, server) = serve_json_once(release_response);
         let client =
@@ -2734,6 +3145,63 @@ mod tests {
         (request, publisher_key, broker_key, intent)
     }
 
+    fn exact_release_snapshot(request: &PublicationRequestV1) -> MusubiExactReleaseSnapshotV1 {
+        let manifest = request.publication.manifest.clone();
+        let yank = MusubiReleaseYankV1 {
+            release: manifest.release.clone(),
+            yanked: false,
+            reason: MusubiReasonV1::new("initial publication").expect("yank reason"),
+            changed_by: request.publisher.clone(),
+            changed_at_height: 50,
+            revision: 1,
+        };
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 60,
+            finalized_block_hash: [0x3e; 32],
+            index_revision: 4,
+        };
+        MusubiExactReleaseSnapshotV1 {
+            chain_id: request.chain_id.clone(),
+            genesis_hash: request.genesis_block_hash,
+            snapshot,
+            home_release: MusubiReleaseRecordV1 {
+                release_digest: manifest.release_digest(),
+                manifest: manifest.clone(),
+                published_by: request.publisher.clone(),
+                published_at_height: 50,
+                yank: yank.clone(),
+                artifact_governance: MusubiArtifactGovernanceStateV1::Available,
+                revisions: MusubiReleaseRevisionsV1 {
+                    yank: 1,
+                    artifact_governance: 1,
+                },
+            },
+            universal_release: MusubiResolverReleaseRowV1 {
+                release: manifest.release.clone(),
+                release_digest: manifest.release_digest(),
+                archive_id: manifest.archive_id,
+                source_digest: request.archive_commitment.source_tree_digest,
+                interface_digest: manifest.interface_digest,
+                abi: manifest.abi,
+                dependencies: manifest.dependencies.clone(),
+                selection: MusubiReleaseSelectionStateV1 {
+                    yank,
+                    storage: MusubiArchiveAvailabilityV1 {
+                        archive_id: manifest.archive_id,
+                        availability: MusubiStorageAvailabilityV1::Selectable,
+                        healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                        active_locations: 1,
+                        finalized_height: 55,
+                        finalized_block_hash: [0x3f; 32],
+                        index_revision: 3,
+                    },
+                    governance: MusubiArtifactGovernanceStateV1::Available,
+                },
+                index_revision: 4,
+            },
+        }
+    }
+
     fn archive_page(
         request: &PublicationRequestV1,
         receipt: MusubiSeedIngressReceiptV1,
@@ -2760,6 +3228,165 @@ mod tests {
         }
     }
 
+    fn release_resolver_page(
+        request: &PublicationRequestV1,
+        items: Vec<MusubiResolverReleaseRowV1>,
+        snapshot: MusubiRegistrySnapshotV1,
+    ) -> MusubiResolverIndexPageV1 {
+        MusubiResolverIndexPageV1 {
+            query: MusubiResolverIndexQueryV1 {
+                package: request.publication.manifest.release.package.clone(),
+                requirement: Some(
+                    format!("={}", request.publication.manifest.release.version)
+                        .parse()
+                        .expect("exact release requirement"),
+                ),
+                page: first_page(1),
+            },
+            chain_id: request.chain_id.clone(),
+            genesis_hash: request.genesis_block_hash,
+            items,
+            next_cursor: None,
+            snapshot,
+        }
+    }
+
+    fn release_absence_retention_page(
+        request: &PublicationRequestV1,
+        snapshot: MusubiRegistrySnapshotV1,
+        finalized_time_ms: u64,
+    ) -> MusubiArchiveRetentionPageV1 {
+        MusubiArchiveRetentionPageV1 {
+            chain_id: request.chain_id.clone(),
+            genesis_hash: request.genesis_block_hash,
+            items: vec![MusubiArchiveRetentionDecisionV1 {
+                archive_id: request.archive_commitment.archive_id(),
+                disposition: MusubiArchiveRetentionDispositionV1::PruneUnreferenced,
+                active_releases: 0,
+                yanked_releases: 0,
+                taken_down_releases: 0,
+                storage: Some(MusubiArchiveAvailabilityV1 {
+                    archive_id: request.archive_commitment.archive_id(),
+                    availability: MusubiStorageAvailabilityV1::Selectable,
+                    healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    active_locations: 1,
+                    finalized_height: snapshot.finalized_height - 1,
+                    finalized_block_hash: [0x61; 32],
+                    index_revision: snapshot.index_revision - 1,
+                }),
+            }],
+            snapshot,
+            finalized_time_ms,
+        }
+    }
+
+    fn release_submission_fixture() -> (
+        PublicationRequestV1,
+        KeyPair,
+        PublicationReleaseSubmissionIntentV1,
+    ) {
+        let (request, publisher_key, _, archive_intent) = publication_fixture();
+        let prepared_page = archive_page(&request, archive_intent.staging_receipt.clone());
+        let location_id = MusubiArchiveLocationIdV1::new([0x51; 32]);
+        let pin_manifest = ManifestDigest::new([0x52; 32]);
+        let replication_order = ReplicationOrderId::new([0x53; 32]);
+        let provider_attestation_set_digest =
+            MusubiProviderBundleAttestationSetDigestV1::new([0x54; 32]);
+        let location_instruction = AddMusubiArchiveLocationV1 {
+            archive_id: request.archive_commitment.archive_id(),
+            location_id,
+            pin_manifest,
+            replication_order,
+            provider_attestation_set_digest,
+            renew_after_epoch: 10,
+            expires_at_epoch: 20,
+            expected_location_revision: prepared_page.archive.location_revision,
+        };
+        let mut location_builder = TransactionBuilder::new(
+            request.chain_id.clone(),
+            request.publisher.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([location_instruction.clone()]);
+        location_builder.set_creation_time(Duration::from_millis(1_500));
+        let location_transaction = location_builder.sign(publisher_key.private_key());
+        let location_intent = PublicationArchiveLocationIntentV1::new(
+            request.operation_id(),
+            1,
+            prepared_page.clone(),
+            location_instruction,
+            location_transaction,
+        );
+        let providers = vec![
+            ProviderId::new([0x55; 32]),
+            ProviderId::new([0x56; 32]),
+            ProviderId::new([0x57; 32]),
+        ];
+        let location = MusubiArchiveLocationV1 {
+            location_id,
+            archive_id: request.archive_commitment.archive_id(),
+            pin_manifest,
+            replication_order,
+            providers: providers.clone(),
+            provider_attestation_set_digest,
+            renew_after_epoch: 10,
+            expires_at_epoch: 20,
+            finalized_height: 61,
+            revision: 2,
+            state: MusubiArchiveLocationStateV1::Healthy,
+        };
+        let mut finalized_page = prepared_page;
+        finalized_page.archive.location_revision = 2;
+        finalized_page.archive.location_ids = vec![location_id];
+        finalized_page.items = vec![location];
+        finalized_page.snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 61,
+            finalized_block_hash: [0x61; 32],
+            index_revision: 5,
+        };
+        let registration = PublicationArchiveRegistrationV1 {
+            intent: location_intent,
+            applied_height: 61,
+            finalized_page: finalized_page.clone(),
+        };
+        let readbacks = providers
+            .into_iter()
+            .take(2)
+            .map(|provider| PublicationReadbackEvidenceV1 {
+                provider,
+                location_id,
+                replication_order,
+                commitment: request.archive_commitment.clone(),
+                semantic_release_digest: request.publication.manifest.semantic_digest(),
+                verification_lock_digest: request.publication.manifest.verification_lock_digest,
+            })
+            .collect();
+        let preparation = PublicationReleasePreparationFloorV1::try_new(
+            1,
+            PublicationReplicationCheckpointV1 { finalized_page },
+            readbacks,
+            &request,
+            &registration,
+        )
+        .expect("valid release preparation fixture");
+        let mut release_builder = TransactionBuilder::new(
+            request.chain_id.clone(),
+            request.publisher.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([request.publish_instruction()]);
+        release_builder.set_creation_time(Duration::from_millis(2_000));
+        let release_transaction = release_builder.sign(publisher_key.private_key());
+        let intent = PublicationReleaseSubmissionIntentV1::try_new(
+            request.operation_id(),
+            &request,
+            preparation,
+            &release_transaction,
+        )
+        .expect("valid release submission fixture");
+        (request, publisher_key, intent)
+    }
+
     fn publication_absence(
         request: &PublicationRequestV1,
         finalized_time_ms: u64,
@@ -2782,6 +3409,195 @@ mod tests {
                 storage: None,
             },
         }
+    }
+
+    #[test]
+    fn finalized_idempotent_release_requires_exact_commitments_and_original_publisher() {
+        let (request, _, _, _) = publication_fixture();
+        let exact = exact_release_snapshot(&request);
+        validate_finalized_idempotent_release(&request, &exact)
+            .expect("same-publisher exact release is replay-safe");
+
+        let mut another_publisher = exact.clone();
+        another_publisher.home_release.published_by = account(99);
+        another_publisher
+            .validate()
+            .expect("publisher variation remains a structurally valid paired snapshot");
+        let error = validate_finalized_idempotent_release(&request, &another_publisher)
+            .expect_err("another publisher's release cannot authorize replay");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        assert_eq!(error.code(), "RELEASE_FINALIZED_PUBLISHER_CONFLICT");
+
+        let mut another_commitment = exact;
+        another_commitment.home_release.manifest.interface_digest =
+            MusubiContentDigestV1::new([0x91; 32]);
+        another_commitment.home_release.release_digest =
+            another_commitment.home_release.manifest.release_digest();
+        another_commitment.universal_release.interface_digest =
+            another_commitment.home_release.manifest.interface_digest;
+        another_commitment.universal_release.release_digest =
+            another_commitment.home_release.release_digest;
+        another_commitment
+            .validate()
+            .expect("commitment variation remains a structurally valid paired snapshot");
+        let error = validate_finalized_idempotent_release(&request, &another_commitment)
+            .expect_err("different immutable commitments cannot be replayed");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        assert_eq!(error.code(), "RELEASE_FINALIZED_COMMITMENT_CONFLICT");
+
+        let resolver_snapshot = another_commitment.snapshot;
+        let mut same_height_fork = resolver_snapshot;
+        same_height_fork.finalized_block_hash = [0x92; 32];
+        let error =
+            validate_finalized_release_snapshot_progress(resolver_snapshot, same_height_fork)
+                .expect_err("same-height finalized hash conflict must fail closed");
+        assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
+        assert_eq!(error.code(), "RELEASE_FINALIZED_SNAPSHOT_CONFLICT");
+    }
+
+    #[test]
+    fn absent_exact_transaction_with_matching_release_remains_location_gated() {
+        let (request, publisher_key, intent) = release_submission_fixture();
+        let exact = exact_release_snapshot(&request);
+        let resolver = release_resolver_page(
+            &request,
+            vec![exact.universal_release.clone()],
+            exact.snapshot,
+        );
+        let (resolver_json, exact_json) = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+            (
+                norito::json::to_vec(&resolver).expect("resolver page JSON"),
+                norito::json::to_vec(&exact).expect("exact release JSON"),
+            )
+        };
+        let (url, server) = serve_http_sequence(vec![
+            ("404 Not Found", Vec::new()),
+            ("200 OK", resolver_json),
+            ("200 OK", exact_json),
+        ]);
+        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+            .expect("registry reader");
+        let signing = signing_client_at(&url, &publisher_key);
+        let mut backend = RegistryPublicationBackendV1::new(
+            read,
+            signing,
+            UnavailablePublicationRuntimeV1,
+            &request,
+        )
+        .expect("publication backend");
+
+        assert!(matches!(
+            backend
+                .submit_or_recover_release_submission(
+                    request.operation_id(),
+                    &request,
+                    &intent,
+                    false,
+                )
+                .expect("matching finalized release keeps the exact absent attempt live"),
+            PublicationReleaseSubmissionAdvanceV1::Pending
+        ));
+        let requests = server.join().expect("status and release query server");
+        assert_eq!(
+            requests.len(),
+            3,
+            "the disabled location gate must not send"
+        );
+        assert!(
+            requests[0]
+                .path
+                .starts_with("/v1/pipeline/transactions/status"),
+            "the exact transaction status must be queried before release reads"
+        );
+        let resolver_query: MusubiResolverIndexQueryV1 =
+            norito::json::from_slice(&requests[1].body).expect("resolver query JSON");
+        assert_eq!(resolver_query, resolver.query);
+        let exact_query: MusubiExactReleaseQueryV1 =
+            norito::json::from_slice(&requests[2].body).expect("exact release query JSON");
+        assert_eq!(exact_query.release, request.publication.manifest.release);
+
+        validate_finalized_idempotent_release(&request, &exact)
+            .expect("matching finalized release authorizes exact replay");
+        let sends = Cell::new(0);
+        assert_eq!(
+            submit_release_after_current_location_gate(true, || {
+                sends.set(sends.get() + 1);
+                intent.transaction_hash
+            }),
+            Some(intent.transaction_hash)
+        );
+        assert_eq!(sends.get(), 1, "the current location gate permits one send");
+        assert_eq!(
+            submit_release_after_current_location_gate(false, || {
+                sends.set(sends.get() + 1);
+                intent.transaction_hash
+            }),
+            None
+        );
+        assert_eq!(sends.get(), 1, "a stale location gate suppresses the send");
+    }
+
+    #[test]
+    fn pending_release_becomes_terminal_after_finalized_deadline_and_exact_absence() {
+        let (request, publisher_key, intent) = release_submission_fixture();
+        let transaction = intent
+            .reconstruct_signed_transaction(request.operation_id(), &request)
+            .expect("reconstruct exact release transaction");
+        let deadline = release_submission_valid_until_ms(&intent).expect("release deadline");
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 62,
+            finalized_block_hash: [0x62; 32],
+            index_revision: 6,
+        };
+        let resolver = release_resolver_page(&request, Vec::new(), snapshot);
+        let retention = release_absence_retention_page(&request, snapshot, deadline + 1);
+        let (resolver_json, retention_json) = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+            (
+                norito::json::to_vec(&resolver).expect("resolver absence JSON"),
+                norito::json::to_vec(&retention).expect("retention absence JSON"),
+            )
+        };
+        let (url, server) = serve_http_sequence(vec![
+            ("200 OK", transaction_status_body(&transaction, "Queued")),
+            ("200 OK", resolver_json),
+            ("200 OK", retention_json),
+        ]);
+        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+            .expect("registry reader");
+        let signing = signing_client_at(&url, &publisher_key);
+        let mut backend = RegistryPublicationBackendV1::new(
+            read,
+            signing,
+            UnavailablePublicationRuntimeV1,
+            &request,
+        )
+        .expect("publication backend");
+
+        let terminal = match backend
+            .submit_or_recover_release_submission(request.operation_id(), &request, &intent, true)
+            .expect("pending status must still check the finalized deadline")
+        {
+            PublicationReleaseSubmissionAdvanceV1::Terminal(terminal) => terminal,
+            other => panic!("expected finalized deadline terminal state, got {other:?}"),
+        };
+        assert_eq!(terminal.transaction_hash, intent.transaction_hash);
+        assert_eq!(
+            terminal.signed_transaction_digest,
+            intent.signed_transaction_digest
+        );
+        match terminal.reason {
+            PublicationReleaseSubmissionTerminalReasonV1::FinalizedValidityWindowElapsed {
+                absence,
+            } => {
+                assert_eq!(absence.resolver_page, resolver);
+                assert_eq!(absence.retention_page, retention);
+            }
+            other => panic!("unexpected terminal reason: {other:?}"),
+        }
+        let requests = server.join().expect("status and absence query server");
+        assert_eq!(requests.len(), 3, "pending expiry must not resubmit");
     }
 
     #[test]
@@ -2846,6 +3662,14 @@ mod tests {
             error.code(),
             "ARCHIVE_REGISTRATION_TRANSACTION_HASH_MISMATCH"
         );
+        validate_release_submission_hash(intent.transaction_hash, intent.transaction_hash)
+            .expect("exact release submission hash");
+        assert_eq!(
+            validate_release_submission_hash(intent.transaction_hash, [0xfe; 32])
+                .expect_err("substituted release submission hash")
+                .code(),
+            "RELEASE_SUBMISSION_TRANSACTION_HASH_MISMATCH"
+        );
 
         let read = RegistryReadClientV1::new(
             "http://127.0.0.1:9/".parse().expect("loopback URL"),
@@ -2861,6 +3685,79 @@ mod tests {
         )
         .expect_err("read and signing clients must share one address profile");
         assert_eq!(error.code(), "MUSUBI_PUBLICATION_REGISTRY_PROFILE_MISMATCH");
+    }
+
+    #[test]
+    fn compact_release_reconstruction_matches_the_production_torii_body() {
+        let (request, publisher_key, _, _) = publication_fixture();
+        let signing = signing_client_at(
+            &"http://127.0.0.1:9/".parse().expect("loopback URL"),
+            &publisher_key,
+        );
+        let mut builder = TransactionBuilder::new(
+            request.chain_id.clone(),
+            request.publisher.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([request.publish_instruction()]);
+        builder.set_creation_time(Duration::from_millis(2_000));
+        let signed = builder.sign(publisher_key.private_key());
+        let envelope =
+            PublicationReleaseSignedEnvelopeV1::try_from_signed_transaction(&request, &signed)
+                .expect("compact exact release envelope");
+        let reconstructed = envelope
+            .reconstruct_signed_transaction(&request)
+            .expect("reconstructed exact release transaction");
+
+        let submitted = signing.client.prepare_transaction_payload(&signed);
+        let replayed = signing.client.prepare_transaction_payload(&reconstructed);
+        assert_eq!(replayed.hash(), submitted.hash());
+        assert_eq!(replayed.as_bytes(), submitted.as_bytes());
+    }
+
+    #[test]
+    fn final_publication_verification_uses_one_paired_exact_release_query() {
+        let (request, publisher_key, _, _) = publication_fixture();
+        let exact_release = exact_release_snapshot(&request);
+        let response = {
+            let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+            norito::json::to_vec(&exact_release).expect("exact release snapshot JSON")
+        };
+        let (url, server) = serve_json_once(response);
+        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+            .expect("registry reader");
+        let signing = signing_client_at(&url, &publisher_key);
+        let mut backend = RegistryPublicationBackendV1::new(
+            read,
+            signing,
+            UnavailablePublicationRuntimeV1,
+            &request,
+        )
+        .expect("publication backend");
+        let operation_id = request.operation_id();
+        let instruction = PublishMusubiReleaseV1::new(
+            request.namespace.clone(),
+            request.publication.clone(),
+            request.namespace_delegation.clone(),
+            request.expected_policy_revision,
+            request.expected_governance_revision,
+        );
+        let submission =
+            PublicationAmxSubmissionV1::new(operation_id, &instruction, [0x72; 32], 55);
+
+        let evidence = backend
+            .finalized_release_and_index(operation_id, &request, &submission)
+            .expect("paired final query succeeds")
+            .expect("paired final evidence is visible");
+        assert_eq!(evidence.chain_id, exact_release.chain_id);
+        assert_eq!(evidence.snapshot, exact_release.snapshot);
+        assert_eq!(evidence.home_release, exact_release.home_release);
+        assert_eq!(evidence.universal_release, exact_release.universal_release);
+
+        let request_body = server.join().expect("exact release query server");
+        let query: MusubiExactReleaseQueryV1 =
+            norito::json::from_slice(&request_body).expect("exact release query JSON");
+        assert_eq!(query.release, request.publication.manifest.release);
     }
 
     #[test]

@@ -4,6 +4,18 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Closed every governance mutation request shape before network I/O and reject
+  all retired private-key aliases, including inside ZK public inputs and the
+  nested V1 ballot proof. Deploy proposals now expose exact typed public
+  manifest provenance and reject the ignored `limits` field; legacy ZK public
+  inputs are closed to their six wire fields. Plain-ballot durations use
+  canonical u64 decimal strings and accept zero. Added typed Parliament ballot
+  parity for `/v1/gov/parliament/ballots`; governance drafts remain locally
+  signed. Finalize uses the shared governance hash grammar, enact accepts only
+  the exact lowercase committed proposal id, protected namespaces are exact
+  printable-ASCII tokens, and Ministry agenda drafts now validate a closed,
+  recursively secret-free typed V1 proposal while preserving full-u64
+  timestamps losslessly.
 - Replaced offset pagination on the six Explorer world collections with bounded,
   opaque seek cursors. Node and browser clients now send `cursor`/`limit`,
   validate the `{limit,next_cursor,has_more}` continuation contract, and the NFT
@@ -435,7 +447,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   definitions now encode the same order enum to keep JS-04 validation/typedef
   parity green.
 - Added governance HTTP helpers (`governanceProposeDeployContract`,
-  `governanceSubmitPlainBallot`, `governanceSubmitZkBallot`,
+  `governanceSubmitPlainBallot`, `governanceSubmitParliamentBallot`,
   `governanceSubmitZkBallotV1`, `governanceSubmitZkBallotProofV1`) with input
   validation, README snippets, and TypeScript definitions so the JS SDK covers
   the `/v1/gov/proposals/deploy-contract` and ballot DTOs described in

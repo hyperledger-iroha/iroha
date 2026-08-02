@@ -27,6 +27,7 @@ use iroha_data_model::{
         MusubiRegistrySnapshotV1, MusubiSeedIngressReceiptApprovalV1,
         MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
         MusubiSeedIngressReceiptV1, MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
+        validate_musubi_account_id_v1,
     },
     sorafs::{
         capacity::ProviderId,
@@ -642,31 +643,6 @@ impl MusubiStorageCoordinationResponseV1 {
                         "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
                     ));
                 }
-                for attestation in &location.provider_attestations {
-                    let binding = &attestation.payload.binding;
-                    attestation.verify(binding).map_err(|_| {
-                        MusubiPublicationRuntimeTransportErrorV1::permanent(
-                            "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
-                        )
-                    })?;
-                    if binding.chain_id != request.chain_id
-                        || binding.genesis_block_hash != request.genesis_block_hash
-                        || binding.bundle_digest != request.commitment.bundle_digest
-                        || binding.descriptor_digest != request.commitment.descriptor_digest
-                        || binding.source_tree_digest != request.commitment.source_tree_digest
-                        || binding.semantic_release_manifest_digest
-                            != request
-                                .staging_receipt
-                                .payload
-                                .binding
-                                .semantic_release_manifest_digest
-                        || binding.verification_lock_digest != request.verification_lock_digest
-                    {
-                        return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
-                            "MUSUBI_STORAGE_COORDINATION_RESPONSE_INVALID",
-                        ));
-                    }
-                }
             }
         }
         Ok(())
@@ -701,6 +677,11 @@ pub struct MusubiProviderReadbackRequestV1 {
 impl MusubiProviderReadbackRequestV1 {
     /// Validate exact location, provider, archive, and bundle bindings.
     pub fn validate(&self) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
+        validate_musubi_account_id_v1(&self.publisher).map_err(|_| {
+            MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_PROVIDER_READBACK_REQUEST_INVALID",
+            )
+        })?;
         self.location.validate().map_err(|_| {
             MusubiPublicationRuntimeTransportErrorV1::permanent(
                 "MUSUBI_PROVIDER_READBACK_REQUEST_INVALID",
@@ -713,6 +694,7 @@ impl MusubiProviderReadbackRequestV1 {
         })?;
         if self.version != 1
             || self.operation_id.iter().all(|byte| *byte == 0)
+            || self.chain_id.as_str().is_empty()
             || self.genesis_block_hash.iter().all(|byte| *byte == 0)
             || self.location.archive_id != self.commitment.archive_id()
             || self.location.state == MusubiArchiveLocationStateV1::Retired
@@ -728,23 +710,11 @@ impl MusubiProviderReadbackRequestV1 {
                 "MUSUBI_PROVIDER_READBACK_REQUEST_INVALID",
             ));
         }
-        for attestation in &self.location.provider_attestations {
-            let binding = &attestation.payload.binding;
-            if attestation.verify(binding).is_err()
-                || binding.chain_id != self.chain_id
-                || binding.genesis_block_hash != self.genesis_block_hash
-                || binding.archive_id != self.commitment.archive_id()
-                || binding.bundle_digest != self.commitment.bundle_digest
-                || binding.descriptor_digest != self.commitment.descriptor_digest
-                || binding.source_tree_digest != self.commitment.source_tree_digest
-                || binding.semantic_release_manifest_digest != self.semantic_release_digest
-                || binding.verification_lock_digest != self.verification_lock_digest
-            {
-                return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
-                    "MUSUBI_PROVIDER_READBACK_REQUEST_INVALID",
-                ));
-            }
-        }
+        // The finalized compact location commits the complete provider-attestation set by
+        // digest. Core already exact-read and verified every immutable proof before it admitted
+        // that location. Readback deliberately does not duplicate up to 64 full proofs in this
+        // request; the provider must reproduce and parse the independently supplied archive
+        // commitment and bundle digests instead.
         Ok(())
     }
 }
@@ -3483,6 +3453,7 @@ mod tests {
         musubi::{
             ArchiveId, MusubiContentDigestV1, MusubiProviderBundleVerificationApprovalV1,
             MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
+            musubi_provider_bundle_attestation_set_digest_v1,
         },
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
@@ -4210,6 +4181,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let provider = provider_attestations[0].payload.binding.provider_id;
+        let provider_attestation_references = provider_attestations
+            .iter()
+            .map(MusubiProviderBundleVerificationAttestationV1::reference)
+            .collect::<Vec<_>>();
+        let provider_attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+            commitment.archive_id(),
+            replication_order,
+            &provider_attestation_references,
+        )
+        .expect("canonical provider attestation set");
         let binding = MusubiSeedIngressReceiptBindingV1 {
             chain_id: client.chain.clone(),
             genesis_block_hash,
@@ -4298,7 +4279,7 @@ mod tests {
                 .iter()
                 .map(|attestation| attestation.payload.binding.provider_id)
                 .collect(),
-            provider_attestations,
+            provider_attestation_set_digest,
             renew_after_epoch: 10,
             expires_at_epoch: 20,
             finalized_height: 70,
@@ -5798,7 +5779,7 @@ mod tests {
     }
 
     #[test]
-    fn private_service_authenticates_control_requests_before_embedded_signatures() {
+    fn private_service_authenticates_control_requests_before_embedded_evidence() {
         let mut fixture = control_service_fixture(false, false);
         let attacker = KeyPair::try_from_seed(
             b"musubi-publication-control-signature-attacker".to_vec(),
@@ -5876,11 +5857,7 @@ mod tests {
         assert_eq!(valid_storage.status, 200);
 
         let mut readback_request = fixture.readback_request.clone();
-        let attestation = &mut readback_request.location.provider_attestations[0];
-        let attestation_hash = attestation.payload.signing_hash();
-        attestation.approvals[0].signature =
-            SignatureOf::try_from_hash(attacker.private_key(), attestation_hash)
-                .expect("mismatched provider signature");
+        readback_request.location.archive_id = ArchiveId::new([0xee; 32]);
         let readback_body =
             norito::encode_canonical(&readback_request).expect("readback request bytes");
         fixture.clock.store(3_001, Ordering::SeqCst);
@@ -6383,9 +6360,8 @@ mod tests {
 
         let mut later_current_archive = fixture.storage_response;
         later_current_archive.archive.location_revision = 2;
-        later_current_archive.archive.location_ids = vec![MusubiArchiveLocationIdV1::new([
-            0xdd; 32,
-        ])];
+        later_current_archive.archive.location_ids =
+            vec![MusubiArchiveLocationIdV1::new([0xdd; 32])];
         let MusubiStorageLocationDispositionV1::NeedsRegistration {
             expected_location_revision,
             ..

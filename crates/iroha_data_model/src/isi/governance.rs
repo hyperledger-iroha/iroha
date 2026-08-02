@@ -157,6 +157,9 @@ pub struct ProposeDeployContract {
 impl crate::seal::Instruction for ProposeDeployContract {}
 
 /// Propose a runtime upgrade manifest through governance.
+///
+/// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
+/// hash match the manifest; contract-deployment permissions do not authorize runtime upgrades.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeRuntimeUpgradeProposal {
     /// Canonical runtime-upgrade manifest payload.
@@ -224,7 +227,10 @@ pub struct CastZkBallot {
     pub election_id: String,
     /// Base64-encoded proof bytes (envelope routing determines backend)
     pub proof_b64: String,
-    /// Opaque JSON of public inputs as a UTF-8 string (for Norito)
+    /// Closed V1 JSON public-input object encoded as UTF-8 for Norito.
+    ///
+    /// The object accepts only `root_hint`, `owner`, `amount`, `duration_blocks`, `direction`, and
+    /// `nullifier`; `amount` is an exact canonical non-negative [`Quantity`] string.
     pub public_inputs_json: String,
 }
 
@@ -235,6 +241,7 @@ impl crate::seal::Instruction for CastZkBallot {}
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 /// Canonical V1 ZK ballot proof envelope.
 ///
 /// Opaque container for the ballot proof and minimal public context.
@@ -376,9 +383,9 @@ impl norito::json::JsonDeserialize for ParliamentDecision {
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
         match value.as_str() {
-            "approve" | "Approve" => Ok(Self::Approve),
-            "reject" | "Reject" => Ok(Self::Reject),
-            "abstain" | "Abstain" => Ok(Self::Abstain),
+            "approve" => Ok(Self::Approve),
+            "reject" => Ok(Self::Reject),
+            "abstain" => Ok(Self::Abstain),
             other => Err(norito::json::Error::UnknownField {
                 field: other.to_owned(),
             }),
@@ -805,6 +812,35 @@ mod tests {
             assert!(
                 norito::json::from_str::<VotingMode>(&json).is_err(),
                 "noncanonical voting mode alias must reject: {alias:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn parliament_decision_json_is_exact_lowercase() {
+        for (decision, label) in [
+            (ParliamentDecision::Approve, "approve"),
+            (ParliamentDecision::Reject, "reject"),
+            (ParliamentDecision::Abstain, "abstain"),
+        ] {
+            let json = format!("\"{label}\"");
+            assert_eq!(
+                norito::json::to_json(&decision).expect("serialize parliament decision"),
+                json
+            );
+            assert_eq!(
+                norito::json::from_str::<ParliamentDecision>(&json)
+                    .expect("decode canonical parliament decision"),
+                decision
+            );
+        }
+
+        for alias in ["Approve", "Reject", "Abstain", " approve", "approve "] {
+            let json = format!("\"{alias}\"");
+            assert!(
+                norito::json::from_str::<ParliamentDecision>(&json).is_err(),
+                "noncanonical parliament decision alias must reject: {alias:?}"
             );
         }
     }

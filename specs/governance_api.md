@@ -1,10 +1,20 @@
 ---
-title: Governance App API — Endpoints (Draft)
+title: Governance App API — Endpoints
 ---
 
-Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii returns unsigned instruction skeletons for governance transaction-producing flows. The draft request schemas that formerly exposed server-side signing inputs now exclude private signing material and reject `private_key` as an unknown field before constructing a request object. Clients sign locally and submit via `/v1/pipeline/transactions`.
+Status: first-release current contract. Determinism and RBAC policy are
+normative constraints; Torii returns unsigned instruction skeletons for
+governance transaction-producing flows. Request schemas exclude private
+signing material and reject unknown fields before constructing a request
+object. Clients sign locally and submit via `/v1/pipeline/transactions`.
 
-Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the bonded citizen registry. A citizen is an account that posted the configured minimum bond; the bond is an anti-Sybil/collateral floor and does not increase Parliament draw odds or vote weight above the minimum. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
+Important: we do not ship a standing council or “default” governance roster.
+Until governance persists a roster, the current-council endpoint returns the
+constant empty state; a read never scans assets or derives a hidden fallback.
+A citizen is an account that posted the configured minimum bond; the bond is
+an anti-Sybil/collateral floor and does not increase Parliament draw odds or
+vote weight above the minimum. There is no baked-in multisig, secret key, or
+privileged council account in this repository.
 
 Overview
 - Endpoints return JSON except where an endpoint explicitly documents a typed
@@ -19,7 +29,14 @@ Overview
 - SDK coverage:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`). `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for
+  proposals, referenda, tallies, locks, unlock stats, and the current council
+  projection (`getGovernanceCouncilCurrent`).
+  `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror
+  the Python helpers by always returning a structured draft (synthesising the
+  empty skeleton when Torii responds with `204 No Content`), which keeps
+  automation from branching on `null` before queueing transactions or
+  triggers.
 - Rust (`iroha::client::Client`):
   `post_validation_fee_plain_ballot_draft` accepts the typed
   `ValidationFeePlainBallotDraftRequestV1`, calls the proposal-bound route, and
@@ -116,23 +133,26 @@ Endpoints
     {
       "contract_alias": "router::universal"?,
       "contract_address": "irohac1..."?,
-      "code_hash": "blake2b32:…" | "…64hex",
-      "abi_hash": "blake2b32:…" | "…64hex",
+      "code_hash": "blake2b32:0x…" | "0x…" | "…64hex",
+      "abi_hash": "blake2b32:0x…" | "0x…" | "…64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
       "mode": "Zk" | "Plain",
-      "limits": { … }?,
-      "manifest_provenance": { … }?
+      "manifest_provenance": { "signer": "ed0120…", "signature": "…" }?
     }
   - Response (JSON):
     { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
   - Validation:
     - exactly one of `contract_address` or `contract_alias` must be provided;
     - aliases resolve to the current active canonical contract address before the proposal id is derived;
-    - `code_hash` and `abi_hash` are canonicalised to 32-byte lowercase hex;
-    - only `abi_version = "1"` is accepted, and `abi_hash` must equal the canonical ABI hash for that version (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
+    - `code_hash` and `abi_hash` accept only a 64-digit hexadecimal body,
+      optionally preceded by the case-insensitive `blake2b32:` scheme and/or
+      `0x` prefix, and are canonicalised to unprefixed lowercase hex;
+    - only the exact string `abi_version = "1"` is accepted, and `abi_hash`
+      must equal the canonical ABI hash for that version
+      (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
     - `window.upper` must be `>= window.lower`; and
-    - `mode`, when supplied, must be `Zk` or `Plain`.
+    - `mode`, when supplied, must be the exact canonical label `Zk` or `Plain`.
   - Submission model: this endpoint is draft-only. Its strict request schema
     contains neither authority nor private-key material; clients consume
     `tx_instructions`, sign locally, and submit via
@@ -172,15 +192,6 @@ Code Size Cap
   - Default: 16 MiB. Nodes reject `RegisterSmartContractBytes` when the `.to` image length exceeds the cap with an invariant violation error.
   - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
-- POST `/v1/gov/ballots/zk`
-  - Request: { "authority": "<i105-account-id>", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
-  - Notes:
-    - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
-    - When any lock hint is provided, the ballot must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required.
-    - ZK re-votes that attempt to shrink amount or expiry are rejected server-side with `BallotRejected` diagnostics.
-    - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
-
 - POST `/v1/gov/ballots/plain`
   - Request: { "authority": "<i105-account-id>", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": "6000", "direction": "Aye|Nay|Abstain" }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
@@ -192,12 +203,19 @@ Code Size Cap
     proposal-time Parliament body must first reach its exact snapshot quorum,
     after which consensus opens the referendum. Standalone PLAIN referenda
     retain their explicit non-proposal behavior.
+    Context identifiers are exact non-empty tokens. `amount` uses the same
+    canonical Kotodama V1 `Quantity` grammar as ZK lock hints, while
+    `duration_blocks` is a canonical decimal string in `0..=u64::MAX`.
 
 - POST `/v1/gov/finalize`
   - Strict request: { "referendum_id": "r1", "proposal_id": "…64hex" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
+    - `referendum_id` is an exact non-empty token. `proposal_id` uses the
+      shared governance hash grammar: one 64-hex body with an optional
+      case-insensitive `blake2b32:` scheme and optional `0x`/`0X` prefix.
+      Whitespace, empty/unknown schemes, and extra suffixes are rejected.
     - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
     - `h_end` is inclusive. PLAIN referenda close and tally at the start of
       `h_end + 1`, while finalization evidence remains anchored to `h_end`.
@@ -218,24 +236,36 @@ Code Size Cap
     after the approved close and rechecks both bindings.
 
 - GET `/v1/gov/proposals/{id}`
-  - Path `{id}`: proposal id hex (64 chars)
+  - Path `{id}`: exact lowercase proposal id hex (64 chars); `0x`, uppercase,
+    whitespace, and control-character aliases are rejected before lookup.
   - Response: { "found": bool, "proposal": { … }? }
 
 - GET `/v1/gov/locks/{rid}`
-  - Path `{rid}`: referendum id string
+  - Path `{rid}`: exact non-empty referendum token; whitespace and control
+    characters are rejected rather than trimmed or treated as a cache-miss.
   - Response: { "found": bool, "referendum_id": "rid", "locks": { … }? }
+
+- GET `/v1/gov/referenda/{id}` and GET `/v1/gov/tally/{id}`
+  - Path `{id}` follows the same exact non-empty referendum-token grammar as
+    the locks endpoint. Noncanonical variants fail before state lookup.
 
 - GET `/v1/gov/council/current`
   - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
-  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback from accounts holding at least `parliament_min_stake` of `parliament_eligibility_asset_id`.
+  - Notes: Returns the latest persisted council through the ordered council
+    index. When none exists, returns the constant empty state; it never derives
+    a roster by scanning account assets.
 
 - POST `/v1/gov/parliament/ballots`
-  - Request: { "authority": "<account>", "chain_id": "...", "proposal_id": "<hex32>", "body": "PolicyJury", "decision": "approve|reject|abstain" }
+  - Request: { "authority": "<account>", "chain_id": "...", "proposal_id": "<hex32>", "body": "policy-jury", "decision": "approve|reject|abstain" }
+  - `body` uses the exact canonical kebab-case Parliament body label.
+  - `decision` uses those exact lowercase spellings; capitalized aliases and
+    surrounding whitespace are rejected.
   - Behavior: Builds a `CastParliamentBallot` instruction skeleton. The transaction authority must be the seated body member; alternates cannot vote until promoted into the roster.
 
 ### Governance defaults (iroha_config `gov.*`)
 
-The council fallback used by Torii when no persisted roster exists is parameterised via `iroha_config`:
+Governance execution is parameterised via `iroha_config`; these settings do not
+make the current-council read endpoint derive an implicit roster:
 
 ```toml
 [gov]
@@ -256,30 +286,9 @@ The council fallback used by Torii when no persisted roster exists is parameteri
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
-  parliament_committee_size = 21
   parliament_term_blocks = 43200
   citizenship_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
   citizenship_bond_amount = "10000"    # exact Quantity of citizenship_asset_id
-```
-
-Equivalent environment overrides:
-
-```
-GOV_VK_BACKEND=halo2/ipa
-GOV_VK_NAME=ballot_v1
-GOV_VOTING_ASSET_ID=61CtjvNd9T3THAR65GsMVHr82Bjc
-GOV_MIN_BOND_AMOUNT=150
-GOV_BOND_ESCROW_ACCOUNT=<i105-account-id>
-GOV_SLASH_RECEIVER_ACCOUNT=<i105-account-id>
-GOV_SLASH_DOUBLE_VOTE_BPS=2500
-GOV_SLASH_INVALID_PROOF_BPS=5000
-GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
-GOV_PARLIAMENT_COMMITTEE_SIZE=21
-GOV_PARLIAMENT_TERM_BLOCKS=43200
-GOV_CITIZENSHIP_ASSET_ID=79jULkZVMgnbzxBe6NvqeDxVEeEk
-GOV_CITIZENSHIP_BOND_AMOUNT=10000
-GOV_ALIAS_TEU_MINIMUM=0
-GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
 
 Governance monetary parameters are canonical non-negative `Quantity` values. TOML
@@ -292,23 +301,51 @@ configured escrow account. Locks are created or extended when ballots land and
 released on expiry; bond lifecycle is emitted via `governance_bond_events_total`
 telemetry (lock_created|lock_extended|lock_unlocked|lock_slashed|lock_restituted).
 
-`parliament_committee_size` caps the number of fallback members returned when no council has been persisted, and `parliament_term_blocks` defines the epoch length used for seed derivation (`epoch = floor(height / term_blocks)`). SORA Parliament fallback eligibility is read from the bonded citizen registry: an account must have posted at least `citizenship_bond_amount` of `citizenship_asset_id`. Extra bond above the minimum does not add draw tickets or vote weight.
+`parliament_term_blocks` defines the epoch length used by explicit governance
+selection and persistence workflows (`epoch = floor(height / term_blocks)`).
+Bonded-citizen eligibility is consulted only when such a workflow performs a
+selection; `GET /v1/gov/council/current` never uses it as an implicit fallback.
+Extra bond above `citizenship_bond_amount` does not add draw tickets or vote
+weight.
 
 Governance VK verification has no bypass: ballot verification always requires an `Active` verifying key with inline bytes, and environments must not rely on test-only toggles to skip verification.
 
 RBAC
 - On-chain execution requires permissions:
   - Proposals: `CanProposeContractDeployment{ contract_address }`
+  - Runtime-upgrade proposals: `CanProposeRuntimeUpgrade{ abi_version, abi_hash }`
   - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
   - Enactment: `CanEnactGovernance`
   - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
+  - Citizen service outcomes: `CanRecordCitizenService{ owner }`
   - Council management: `CanManageParliament`
+- Scoped governance capabilities are bootstrapped by genesis and thereafter
+  delegable only by an existing holder of the exact same scope. In particular,
+  direct native ISIs require the exact encoded target (not only the permission
+  name), and `CanEnactGovernance` is not a grant root for runtime-upgrade
+  proposal scopes.
+- Enactment requires the exact unit token `CanEnactGovernance` before any
+  proposal lookup or state mutation; a same-name permission with a non-unit
+  payload is not equivalent. `FinalizeReferendum` is deliberately
+  permissionless because it only derives a deterministic result from existing
+  authenticated proposal, referendum, ballot, and Parliament records. It does
+  not confer enactment authority.
+- The fail-safe Initial executor admits the public native proposal, ballot,
+  slashing, restitution, and citizen-service instructions only because Core
+  enforces those exact scopes before mutation. The lower-level
+  `zk::SubmitBallot` vendor instruction is not part of that signed native
+  surface: an IVM host must first consume the one-shot
+  `ZK_VOTE_VERIFY_BALLOT` latch before enqueueing it, and Core rechecks its exact
+  ballot scope as defense in depth.
 - Slashing/appeals:
   - Double-vote/invalid/ineligible ballots apply configured slash percentages against the bond escrow, moving funds into `slash_receiver_account`, updating the slashing ledger, and emitting typed `LockSlashed` events (reason + destination + note).
   - Manual `SlashGovernanceLock`/`RestituteGovernanceLock` instructions support operator-driven penalties and appeals; restitution is capped by recorded slashes, restores funds to the bond escrow, updates the ledger, and emits `LockRestituted` while keeping the lock active until expiry.
 
 Protected Namespaces
 - Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
+- Each namespace is an exact non-empty printable-ASCII token (`[!-~]+`). Torii
+  rejects whitespace, control characters, non-ASCII text, and unknown request
+  fields; it never trims or silently drops an entry.
 - Clients must include transaction metadata key `gov_contract_address` for deploys targeting protected namespaces.
 - `gov_manifest_approvers`: optional JSON array of <i105-account-id> account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
 - Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_<i105-account-id>_authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
@@ -331,7 +368,10 @@ Convenience Endpoint
 - POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
   - Request: { "namespaces": ["apps", "system"] }
   - Response: { "ok": true, "applied": 1 }
-  - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
+  - Notes: The closed request accepts only `namespaces` and optional
+    `authority`; it contains no signing secret. Intended for admin/testing and
+    requires an API token if configured. For production, prefer submitting a
+    signed transaction with `SetParameter(Custom)`.
 
 CLI Helpers
 - `iroha --output-format text app gov deploy audit --contract-address irohac1...`
@@ -341,15 +381,16 @@ CLI Helpers
     - An enacted governance proposal exists for `(contract_address, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
 - `iroha app gov deploy meta --contract-address irohac1... [--approver <i105-account-id> --approver <i105-account-id>]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including `gov_contract_address` and optional `gov_manifest_approvers` for satisfying manifest quorum rules.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <i105-account-id> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - Validates canonical I105 account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+- `iroha app gov vote --mode zk --referendum-id <id> --backend <tag> --envelope-b64 <b64> [--owner <i105-account-id> --nullifier <32-byte-hex> --amount <Quantity> --duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - Submits the canonical flat ZK V1 envelope request. It validates canonical
+    I105 account ids, canonicalizes 32-byte nullifier hints, and merges the
+    closed optional hint set from `--public <path>` into the request.
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
   - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner <i105-account-id> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner <i105-account-id> --amount <Quantity> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--owner` accepts canonical I105 literals; Pass domain context through the surrounding scoped interface when required.
-  - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
   - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
 Governed Contract Lookup
@@ -376,6 +417,21 @@ Unlock Sweep (Operator/Audit)
       "nullifier": "blake2b32:…64hex?"
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes:
+    - `authority`, `chain_id`, `election_id`, and `backend` are exact
+      non-empty tokens; whitespace/control variants are rejected rather than
+      trimmed. `envelope_b64` must be canonical, non-empty standard base64.
+    - `amount` is an exact canonical non-negative Kotodama V1 `Quantity`
+      string. Fractional values through scale 28 are supported; JSON numbers,
+      signed/trimmed spellings, leading zeroes, and redundant fractional zeroes
+      are rejected. `duration_blocks` spans the complete `u64` domain.
+    - When any lock hint is provided, the ballot must supply `owner`,
+      `amount`, and `duration_blocks`; partial hints are rejected. Unknown
+      fields and private-key aliases fail before a draft is constructed.
+    - ZK re-votes are monotonic: attempts to shrink amount or expiry are
+      rejected with `BallotRejected` diagnostics.
+    - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` before enqueuing
+      `SubmitBallot`; hosts enforce a one-shot latch.
 
 - POST `/v1/gov/ballots/zk-v1/ballot-proof`
   - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.

@@ -5774,7 +5774,7 @@ pub mod tests {
             EventBox,
             data::{
                 self,
-                prelude::{AccountEvent, AssetChanged, AssetEvent, DomainEvent},
+                prelude::{AssetChanged, AssetEvent, DomainEvent},
             },
             trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
         },

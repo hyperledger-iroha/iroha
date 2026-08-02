@@ -1469,6 +1469,7 @@ macro_rules! impl_musubi_instruction_box {
 impl_musubi_instruction_box!(
     RegisterMusubiNamespaceBindingV1,
     RegisterMusubiArchiveV1,
+    RegisterMusubiProviderBundleAttestationV1,
     AddMusubiArchiveLocationV1,
     RetireMusubiArchiveLocationV1,
     PublishMusubiReleaseV1,
@@ -3775,7 +3776,7 @@ pub mod error {
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AssetTransferAdmissionError {
-            /// HoldingLimitExceeded: {0}
+            /// `HoldingLimitExceeded`: {0}
             HoldingLimitExceeded(Box<str>),
             /// Incoming asset movement is disabled: {0}
             IncomingDisabled(Box<str>),

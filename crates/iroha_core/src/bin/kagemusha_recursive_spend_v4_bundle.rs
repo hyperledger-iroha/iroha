@@ -127,6 +127,8 @@ selector-zero BootstrapWitness. Circuit parameters remain bounded inline in the
 authenticated profile and are digest-bound into every artifact header. It writes a
 reviewed-closure-bound, pre-evidence candidate record; that directory is not an
 approved release and contains no approval payload. Candidate generation requires
+at least four public validators in every supplied top-up finality roster window.
+It also requires
 the requested commit to be the signed checkout HEAD, with an empty tracked diff
 and no untracked files, and the complete clean checkout to match the independently
 pinned source-closure descriptor.
@@ -221,6 +223,7 @@ const PUBLICATION_COMMIT_UNCERTAIN_EXIT_CODE: u8 = 75;
 const MAX_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_ATTESTATION_BYTES: u64 = 1024 * 1024;
+const KAGEMUSHA_RELEASE_MIN_PUBLIC_VALIDATORS_V4: usize = 4;
 const BUILD_SOURCE_COMMIT: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_COMMIT");
 const BUILD_SOURCE_TREE_SHA256: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256");
 const BUILD_REVIEWED_SOURCE_CLOSURE: Option<&str> =
@@ -3138,6 +3141,12 @@ fn prepare_topup_finality_roster(
     roster
         .validate()
         .map_err(|error| format!("invalid top-up finality roster: {error}"))?;
+    validate_release_roster_validator_floor(
+        roster
+            .windows
+            .iter()
+            .map(|window| window.validator_set.len()),
+    )?;
     if roster.chain_id != metadata.chain_id
         || !roster_generation_matches_release(&roster.artifact_generation, &metadata.generation)
     {
@@ -3176,6 +3185,20 @@ fn prepare_topup_finality_roster(
         .validate()
         .map_err(|error| format!("invalid V4 roster descriptor: {error}"))?;
     Ok((bytes, descriptor))
+}
+
+fn validate_release_roster_validator_floor(
+    validator_counts: impl IntoIterator<Item = usize>,
+) -> Result<(), Box<dyn Error>> {
+    for (window_index, validator_count) in validator_counts.into_iter().enumerate() {
+        if validator_count < KAGEMUSHA_RELEASE_MIN_PUBLIC_VALIDATORS_V4 {
+            return Err(format!(
+                "top-up finality release roster window {window_index} has {validator_count} validators; at least {KAGEMUSHA_RELEASE_MIN_PUBLIC_VALIDATORS_V4} are required"
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 #[expect(
@@ -4125,6 +4148,25 @@ mod tests {
     impl Drop for LivePayload {
         fn drop(&mut self) {
             self.live.set(self.live.get() - 1);
+        }
+    }
+
+    #[test]
+    fn release_roster_requires_four_validators_in_every_window() {
+        validate_release_roster_validator_floor([4, 7, 4])
+            .expect("all release roster windows meet the public-validator floor");
+
+        for (counts, expected_window) in
+            [(vec![0], 0), (vec![1], 0), (vec![3], 0), (vec![4, 3, 9], 1)]
+        {
+            let error = validate_release_roster_validator_floor(counts)
+                .expect_err("a weak release roster window must reject")
+                .to_string();
+            assert!(
+                error.contains(&format!("window {expected_window}")),
+                "{error}"
+            );
+            assert!(error.contains("at least 4"), "{error}");
         }
     }
 

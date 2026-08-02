@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasHistoryEntry;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasQuery;
@@ -21,10 +22,13 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveCommitment;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRecord;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.AbiBinding;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ChunkerProfileHandle;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ComparatorOp;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Digest32;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.DependencyRequirement;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactPackageQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactReleaseSnapshot;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactReleaseQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.FinalizedCursor;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.MaintainerDirectoryEntry;
@@ -45,8 +49,21 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageSelector;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Page;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PageRequest;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PrereleaseIdentifier;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationDigest;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationKey;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationRecord;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationSetDigest;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationApproval;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationAttestation;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationBinding;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationPayload;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderCompletionAuthority;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderCompletionSignerPolicy;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderFinalizedAnchor;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.RegistrySnapshot;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseId;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseManifest;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseMetadata;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexPage;
@@ -86,8 +103,129 @@ final class MusubiJsonV1 {
     return parsePackageRecord(parse(payload, "Musubi exact-package response"), "response");
   }
 
-  static ReleaseRecord parseExactRelease(final byte[] payload) {
-    return parseReleaseRecord(parse(payload, "Musubi exact-release response"), "response");
+  static ExactReleaseSnapshot parseExactRelease(final byte[] payload) {
+    final Map<String, Object> root =
+        exactObject(
+            parse(payload, "Musubi exact-release response"),
+            "response",
+            keys("chain_id", "genesis_hash", "snapshot", "home_release", "universal_release"));
+    final String chainId = string(root.get("chain_id"), "response.chain_id");
+    final byte[] genesisHash = fixedBytes(root.get("genesis_hash"), "response.genesis_hash");
+    final RegistrySnapshot snapshot = parseSnapshot(root.get("snapshot"), "response.snapshot");
+    final ReleaseRecord homeRelease =
+        parseReleaseRecord(root.get("home_release"), "response.home_release");
+    final ResolverReleaseRow universalRelease =
+        parseResolverRow(root.get("universal_release"), "response.universal_release");
+    return new ExactReleaseSnapshot(
+        chainId, genesisHash, snapshot, homeRelease, universalRelease);
+  }
+
+  static void validateExactReleaseSnapshot(
+      final Map<String, Object> home,
+      final Map<String, Object> universal,
+      final byte[] genesisHash,
+      final RegistrySnapshot snapshot) {
+    final Map<String, Object> manifest =
+        object(home.get("manifest"), "response.home_release.manifest");
+    final Map<String, Object> yank = object(home.get("yank"), "response.home_release.yank");
+    final Map<String, Object> governance =
+        object(
+            home.get("artifact_governance"),
+            "response.home_release.artifact_governance");
+    final Map<String, Object> revisions =
+        object(home.get("revisions"), "response.home_release.revisions");
+    final Map<String, Object> selection =
+        object(universal.get("selection"), "response.universal_release.selection");
+    final Map<String, Object> storage =
+        object(
+            selection.get("storage"),
+            "response.universal_release.selection.storage");
+
+    final BigInteger publishedAtHeight =
+        nonZeroU64(
+            home.get("published_at_height"),
+            "response.home_release.published_at_height");
+    final BigInteger yankChangedAtHeight =
+        nonZeroU64(
+            yank.get("changed_at_height"),
+            "response.home_release.yank.changed_at_height");
+    final BigInteger yankRevision =
+        nonZeroU64(yank.get("revision"), "response.home_release.yank.revision");
+    final BigInteger homeYankRevision =
+        nonZeroU64(revisions.get("yank"), "response.home_release.revisions.yank");
+    final BigInteger homeGovernanceRevision =
+        nonZeroU64(
+            revisions.get("artifact_governance"),
+            "response.home_release.revisions.artifact_governance");
+    final BigInteger universalRevision =
+        nonZeroU64(
+            universal.get("index_revision"),
+            "response.universal_release.index_revision");
+    final BigInteger storageRevision =
+        nonZeroU64(
+            storage.get("index_revision"),
+            "response.universal_release.selection.storage.index_revision");
+    final BigInteger storageFinalizedHeight =
+        nonZeroU64(
+            storage.get("finalized_height"),
+            "response.universal_release.selection.storage.finalized_height");
+    final byte[] storageFinalizedHash =
+        fixedBytes(
+            storage.get("finalized_block_hash"),
+            "response.universal_release.selection.storage.finalized_block_hash");
+    final String governanceKind =
+        string(
+            governance.get("kind"),
+            "response.home_release.artifact_governance.kind");
+    final BigInteger takedownHeight;
+    if ("TakenDown".equals(governanceKind)) {
+      final Map<String, Object> takedown =
+          object(
+              governance.get("value"),
+              "response.home_release.artifact_governance.value");
+      takedownHeight =
+          nonZeroU64(
+              takedown.get("applied_at_height"),
+              "response.home_release.artifact_governance.value.applied_at_height");
+    } else {
+      takedownHeight = BigInteger.ZERO;
+    }
+
+    require(
+        Objects.equals(home.get("release_digest"), universal.get("release_digest"))
+            && Objects.equals(manifest.get("archive_id"), universal.get("archive_id"))
+            && Objects.equals(manifest.get("archive_id"), storage.get("archive_id"))
+            && Objects.equals(
+                manifest.get("interface_digest"), universal.get("interface_digest"))
+            && Objects.equals(manifest.get("abi"), universal.get("abi"))
+            && Objects.equals(manifest.get("dependencies"), universal.get("dependencies"))
+            && Objects.equals(home.get("yank"), selection.get("yank"))
+            && Objects.equals(
+                home.get("artifact_governance"), selection.get("governance"))
+            && yankRevision.equals(homeYankRevision)
+            && homeYankRevision.compareTo(snapshot.indexRevision()) <= 0
+            && homeGovernanceRevision.compareTo(snapshot.indexRevision()) <= 0
+            && universalRevision.compareTo(snapshot.indexRevision()) <= 0
+            && storageRevision.compareTo(universalRevision) <= 0
+            && storageRevision.compareTo(snapshot.indexRevision()) <= 0
+            && publishedAtHeight.compareTo(snapshot.finalizedHeight()) <= 0
+            && yankChangedAtHeight.compareTo(publishedAtHeight) >= 0
+            && yankChangedAtHeight.compareTo(snapshot.finalizedHeight()) <= 0
+            && (takedownHeight.signum() == 0
+                || takedownHeight.compareTo(publishedAtHeight) >= 0)
+            && takedownHeight.compareTo(snapshot.finalizedHeight()) <= 0
+            && storageFinalizedHeight.compareTo(snapshot.finalizedHeight()) <= 0
+            && (!BigInteger.ONE.equals(snapshot.finalizedHeight())
+                || Arrays.equals(genesisHash, snapshot.finalizedBlockHash()))
+            && (!storageFinalizedHeight.equals(snapshot.finalizedHeight())
+                || Arrays.equals(storageFinalizedHash, snapshot.finalizedBlockHash())),
+        "Musubi exact release snapshot is inconsistent or not finalized");
+  }
+
+  static ProviderBundleAttestationRecord parseProviderBundleAttestation(
+      final byte[] payload) {
+    return parseProviderBundleAttestationRecord(
+        parse(payload, "Musubi provider-bundle-attestation response"), "response");
   }
 
   static ResolverIndexPage parseResolverPage(final byte[] payload) {
@@ -278,6 +416,8 @@ final class MusubiJsonV1 {
         final Map<String, Object> root = exactObject(value, "request", keys("release"));
         return new ExactReleaseQuery(parseRelease(root.get("release"), "request.release"));
       }
+      case MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH:
+        return parseProviderBundleAttestationKey(value, "request");
       case MusubiToriiClientV1.RESOLVER_INDEX_PATH: {
         final Map<String, Object> root =
             exactObject(value, "request", keys("package", "requirement", "page"));
@@ -342,6 +482,8 @@ final class MusubiJsonV1 {
     switch (path) {
       case MusubiToriiClientV1.EXACT_PACKAGE_PATH: return parseExactPackage(payload);
       case MusubiToriiClientV1.EXACT_RELEASE_PATH: return parseExactRelease(payload);
+      case MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH:
+        return parseProviderBundleAttestation(payload);
       case MusubiToriiClientV1.RESOLVER_INDEX_PATH: return parseResolverPage(payload);
       case MusubiToriiClientV1.VERSIONS_PATH: return parseVersionPage(payload);
       case MusubiToriiClientV1.MAINTAINERS_PATH: return parseMaintainerPage(payload);
@@ -560,19 +702,19 @@ final class MusubiJsonV1 {
             value, field,
             keys("manifest", "release_digest", "published_by", "published_at_height", "yank",
                 "artifact_governance", "revisions"));
-    final ReleaseId release = validateManifest(root.get("manifest"), field + ".manifest");
-    digest(root.get("release_digest"), field + ".release_digest");
+    final ReleaseManifest manifest = parseManifest(root.get("manifest"), field + ".manifest");
+    final Digest32 releaseDigest = digest(root.get("release_digest"), field + ".release_digest");
     final String publisher = string(root.get("published_by"), field + ".published_by");
     final BigInteger height = nonZeroU64(root.get("published_at_height"), field + ".published_at_height");
-    validateYank(root.get("yank"), field + ".yank", release);
+    validateYank(root.get("yank"), field + ".yank", manifest.release());
     validateGovernance(root.get("artifact_governance"), field + ".artifact_governance");
     final Map<String, Object> revisions = exactObject(root.get("revisions"), field + ".revisions", keys("yank", "artifact_governance"));
     nonZeroU64(revisions.get("yank"), field + ".revisions.yank");
     nonZeroU64(revisions.get("artifact_governance"), field + ".revisions.artifact_governance");
-    return new ReleaseRecord(release, publisher, height, root);
+    return new ReleaseRecord(manifest, releaseDigest, publisher, height, root);
   }
 
-  private static ReleaseId validateManifest(final Object value, final String field) {
+  private static ReleaseManifest parseManifest(final Object value, final String field) {
     final Map<String, Object> root =
         exactObject(
             value, field,
@@ -580,47 +722,63 @@ final class MusubiJsonV1 {
                 "metadata", "archive_id", "verification_lock_digest"));
     final ReleaseId release = parseRelease(root.get("release"), field + ".release");
     taggedUnit(root.get("edition"), field + ".edition", keys("V1"));
-    validateAbi(root.get("abi"), field + ".abi");
+    final AbiBinding abi = parseAbi(root.get("abi"), field + ".abi");
     final List<Object> dependencies = list(root.get("dependencies"), field + ".dependencies");
+    final List<DependencyRequirement> parsedDependencies = new ArrayList<>();
     for (int index = 0; index < dependencies.size(); index++) {
-      validateDependency(dependencies.get(index), field + ".dependencies[" + index + "]");
+      parsedDependencies.add(
+          parseDependency(dependencies.get(index), field + ".dependencies[" + index + "]"));
     }
-    for (final String export : stringList(root.get("exports"), field + ".exports")) {
+    final List<String> exports = stringList(root.get("exports"), field + ".exports");
+    for (final String export : exports) {
       MusubiModelsV1.requireName(export, "Musubi export");
     }
-    digest(root.get("interface_digest"), field + ".interface_digest");
-    validateMetadata(root.get("metadata"), field + ".metadata");
-    digest(root.get("archive_id"), field + ".archive_id");
-    digest(root.get("verification_lock_digest"), field + ".verification_lock_digest");
-    return release;
+    return new ReleaseManifest(
+        release,
+        abi,
+        parsedDependencies,
+        exports,
+        digest(root.get("interface_digest"), field + ".interface_digest"),
+        parseMetadata(root.get("metadata"), field + ".metadata"),
+        digest(root.get("archive_id"), field + ".archive_id"),
+        digest(root.get("verification_lock_digest"), field + ".verification_lock_digest"));
   }
 
-  private static void validateAbi(final Object value, final String field) {
+  private static AbiBinding parseAbi(final Object value, final String field) {
     final Map<String, Object> root = exactObject(value, field, keys("abi_version", "abi_hash"));
     if (u16(root.get("abi_version"), field + ".abi_version") != 1) {
       throw new IllegalArgumentException(field + ".abi_version is unsupported; Musubi only supports V1");
     }
-    fixedBytes(root.get("abi_hash"), field + ".abi_hash");
+    return new AbiBinding(fixedBytes(root.get("abi_hash"), field + ".abi_hash"));
   }
 
-  private static void validateDependency(final Object value, final String field) {
+  private static DependencyRequirement parseDependency(final Object value, final String field) {
     final Map<String, Object> root = exactObject(value, field, keys("alias", "package", "requirement"));
-    MusubiModelsV1.requireName(string(root.get("alias"), field + ".alias"), field + ".alias");
-    parsePackage(root.get("package"), field + ".package");
-    parseRequirement(root.get("requirement"), field + ".requirement");
+    return new DependencyRequirement(
+        string(root.get("alias"), field + ".alias"),
+        parsePackage(root.get("package"), field + ".package"),
+        parseRequirement(root.get("requirement"), field + ".requirement"));
   }
 
-  private static void validateMetadata(final Object value, final String field) {
+  private static ReleaseMetadata parseMetadata(final Object value, final String field) {
     final Map<String, Object> root =
         exactObject(value, field, keys("description", "readme", "license", "repository", "keywords"));
-    for (final String key : Arrays.asList("description", "readme", "license", "repository")) {
-      if (root.get(key) != null) newtypeText(root.get(key), field + "." + key);
-    }
     final List<Object> keywords = list(root.get("keywords"), field + ".keywords");
+    final List<String> parsedKeywords = new ArrayList<>();
     for (int index = 0; index < keywords.size(); index++) {
-      MusubiModelsV1.requireAsciiKebab(
-          newtypeText(keywords.get(index), field + ".keywords[" + index + "]"), 64, "keyword");
+      parsedKeywords.add(newtypeText(
+          keywords.get(index), field + ".keywords[" + index + "]"));
     }
+    return new ReleaseMetadata(
+        root.get("description") == null
+            ? null : newtypeText(root.get("description"), field + ".description"),
+        root.get("readme") == null
+            ? null : newtypeText(root.get("readme"), field + ".readme"),
+        root.get("license") == null
+            ? null : newtypeText(root.get("license"), field + ".license"),
+        root.get("repository") == null
+            ? null : newtypeText(root.get("repository"), field + ".repository"),
+        parsedKeywords);
   }
 
   private static void validateYank(final Object value, final String field, final ReleaseId expected) {
@@ -661,17 +819,19 @@ final class MusubiJsonV1 {
     for (final String key : Arrays.asList("release_digest", "archive_id", "source_digest", "interface_digest")) {
       digest(root.get(key), field + "." + key);
     }
-    validateAbi(root.get("abi"), field + ".abi");
+    parseAbi(root.get("abi"), field + ".abi");
     final List<Object> dependencies = list(root.get("dependencies"), field + ".dependencies");
     for (int index = 0; index < dependencies.size(); index++) {
-      validateDependency(dependencies.get(index), field + ".dependencies[" + index + "]");
+      parseDependency(dependencies.get(index), field + ".dependencies[" + index + "]");
     }
-    validateSelection(root.get("selection"), field + ".selection", release);
+    final BigInteger storageRevision =
+        validateSelection(root.get("selection"), field + ".selection", release);
     final BigInteger revision = nonZeroU64(root.get("index_revision"), field + ".index_revision");
-    return new ResolverReleaseRow(release, revision, root);
+    return new ResolverReleaseRow(release, revision, storageRevision, root);
   }
 
-  private static void validateSelection(final Object value, final String field, final ReleaseId release) {
+  private static BigInteger validateSelection(
+      final Object value, final String field, final ReleaseId release) {
     final Map<String, Object> root = exactObject(value, field, keys("yank", "storage", "governance"));
     validateYank(root.get("yank"), field + ".yank", release);
     final Map<String, Object> storage =
@@ -684,8 +844,10 @@ final class MusubiJsonV1 {
     u8(storage.get("active_locations"), field + ".storage.active_locations");
     nonZeroU64(storage.get("finalized_height"), field + ".storage.finalized_height");
     fixedBytes(storage.get("finalized_block_hash"), field + ".storage.finalized_block_hash");
-    nonZeroU64(storage.get("index_revision"), field + ".storage.index_revision");
+    final BigInteger storageRevision =
+        nonZeroU64(storage.get("index_revision"), field + ".storage.index_revision");
     validateGovernance(root.get("governance"), field + ".governance");
+    return storageRevision;
   }
 
   private static MaintainerDirectoryEntry parseMaintainerDirectoryEntry(
@@ -840,21 +1002,38 @@ final class MusubiJsonV1 {
         exactObject(
             value, field,
             keys("location_id", "archive_id", "pin_manifest", "replication_order", "providers",
-                "provider_attestations", "renew_after_epoch", "expires_at_epoch", "finalized_height",
-                "revision", "state"));
+                "provider_attestation_set_digest", "renew_after_epoch", "expires_at_epoch",
+                "finalized_height", "revision", "state"));
     final Digest32 locationId = digest(root.get("location_id"), field + ".location_id");
     final Digest32 archiveId = digest(root.get("archive_id"), field + ".archive_id");
     require(root.get("pin_manifest") != null && root.get("replication_order") != null,
         field + " must carry SoraFS pin and order identities");
-    list(root.get("providers"), field + ".providers");
-    list(root.get("provider_attestations"), field + ".provider_attestations");
+    final List<String> providers = new ArrayList<>();
+    final List<Object> rawProviders = list(root.get("providers"), field + ".providers");
+    for (int index = 0; index < rawProviders.size(); index++) {
+      providers.add(newtypeText(rawProviders.get(index), field + ".providers[" + index + "]"));
+    }
+    final ProviderBundleAttestationSetDigest providerAttestationSetDigest =
+        ProviderBundleAttestationSetDigest.fromBytes(
+            digest(
+                    root.get("provider_attestation_set_digest"),
+                    field + ".provider_attestation_set_digest")
+                .bytes());
     u64(root.get("renew_after_epoch"), field + ".renew_after_epoch");
     u64(root.get("expires_at_epoch"), field + ".expires_at_epoch");
     final BigInteger finalizedHeight =
         nonZeroU64(root.get("finalized_height"), field + ".finalized_height");
     final BigInteger revision = nonZeroU64(root.get("revision"), field + ".revision");
     final String state = taggedUnit(root.get("state"), field + ".state", keys("Pending", "Healthy", "Degraded", "Retired"));
-    return new ArchiveLocation(locationId, archiveId, finalizedHeight, revision, state, root);
+    return new ArchiveLocation(
+        locationId,
+        archiveId,
+        providers,
+        providerAttestationSetDigest,
+        finalizedHeight,
+        revision,
+        state,
+        root);
   }
 
   private static ArchiveRecord parseArchiveRecord(final Object value, final String field) {
@@ -968,6 +1147,123 @@ final class MusubiJsonV1 {
               string(approval.get("signature"), approvalField + ".signature")));
     }
     return new SeedIngressReceipt(typedPayload, approvals);
+  }
+
+  private static ProviderBundleAttestationKey parseProviderBundleAttestationKey(
+      final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys("archive_id", "replication_order", "provider_id"));
+    return new ProviderBundleAttestationKey(
+        digest(root.get("archive_id"), field + ".archive_id"),
+        digest(root.get("replication_order"), field + ".replication_order"),
+        newtypeText(root.get("provider_id"), field + ".provider_id"));
+  }
+
+  private static ProviderBundleAttestationRecord parseProviderBundleAttestationRecord(
+      final Object value, final String field) {
+    final Map<String, Object> root =
+        exactObject(
+            value,
+            field,
+            keys(
+                "key", "attestation_digest", "attestation", "registered_by",
+                "registered_at_height"));
+    return new ProviderBundleAttestationRecord(
+        parseProviderBundleAttestationKey(root.get("key"), field + ".key"),
+        ProviderBundleAttestationDigest.fromBytes(
+            digest(root.get("attestation_digest"), field + ".attestation_digest").bytes()),
+        parseProviderBundleAttestation(root.get("attestation"), field + ".attestation"),
+        string(root.get("registered_by"), field + ".registered_by"),
+        nonZeroU64(root.get("registered_at_height"), field + ".registered_at_height"));
+  }
+
+  private static ProviderBundleVerificationAttestation parseProviderBundleAttestation(
+      final Object value, final String field) {
+    final Map<String, Object> root = exactObject(value, field, keys("payload", "approvals"));
+    final Map<String, Object> payload =
+        exactObject(root.get("payload"), field + ".payload", keys("version", "binding"));
+    require(
+        u8(payload.get("version"), field + ".payload.version") == 1,
+        field + ".payload.version is unsupported in Musubi V1");
+    final String bindingField = field + ".payload.binding";
+    final Map<String, Object> binding =
+        exactObject(
+            payload.get("binding"),
+            bindingField,
+            keys(
+                "chain_id", "genesis_block_hash", "provider_id", "completed_by",
+                "completion_authority", "replication_order", "assignment_revision",
+                "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
+                "descriptor_digest", "semantic_release_manifest_digest",
+                "verification_lock_digest", "source_tree_digest"));
+    final String authorityField = bindingField + ".completion_authority";
+    final Map<String, Object> authority =
+        exactObject(
+            binding.get("completion_authority"),
+            authorityField,
+            keys("provider_owner", "signer_policy"));
+    final String signerField = authorityField + ".signer_policy";
+    final Map<String, Object> signer =
+        exactObject(
+            authority.get("signer_policy"),
+            signerField,
+            keys("policy_id", "revision", "predecessor_digest", "policy_digest"));
+    final String anchorField = bindingField + ".finalized_anchor";
+    final Map<String, Object> anchor =
+        exactObject(
+            binding.get("finalized_anchor"),
+            anchorField,
+            keys("height", "block_hash"));
+    final ProviderBundleVerificationBinding typedBinding =
+        new ProviderBundleVerificationBinding(
+            string(binding.get("chain_id"), bindingField + ".chain_id"),
+            fixedBytes(binding.get("genesis_block_hash"), bindingField + ".genesis_block_hash"),
+            newtypeText(binding.get("provider_id"), bindingField + ".provider_id"),
+            string(binding.get("completed_by"), bindingField + ".completed_by"),
+            new ProviderCompletionAuthority(
+                string(authority.get("provider_owner"), authorityField + ".provider_owner"),
+                new ProviderCompletionSignerPolicy(
+                    fixedBytes(signer.get("policy_id"), signerField + ".policy_id"),
+                    nonZeroU64(signer.get("revision"), signerField + ".revision"),
+                    signer.get("predecessor_digest") == null
+                        ? null
+                        : fixedBytes(
+                            signer.get("predecessor_digest"),
+                            signerField + ".predecessor_digest"),
+                    fixedBytes(signer.get("policy_digest"), signerField + ".policy_digest"))),
+            digest(binding.get("replication_order"), bindingField + ".replication_order"),
+            nonZeroU64(binding.get("assignment_revision"), bindingField + ".assignment_revision"),
+            nonZeroU64(binding.get("completion_epoch"), bindingField + ".completion_epoch"),
+            new ProviderFinalizedAnchor(
+                nonZeroU64(anchor.get("height"), anchorField + ".height"),
+                fixedBytes(anchor.get("block_hash"), anchorField + ".block_hash")),
+            digest(binding.get("archive_id"), bindingField + ".archive_id"),
+            digest(binding.get("bundle_digest"), bindingField + ".bundle_digest"),
+            digest(binding.get("descriptor_digest"), bindingField + ".descriptor_digest"),
+            digest(
+                binding.get("semantic_release_manifest_digest"),
+                bindingField + ".semantic_release_manifest_digest"),
+            digest(
+                binding.get("verification_lock_digest"),
+                bindingField + ".verification_lock_digest"),
+            digest(binding.get("source_tree_digest"), bindingField + ".source_tree_digest"));
+    final List<Object> rawApprovals = list(root.get("approvals"), field + ".approvals");
+    final List<ProviderBundleVerificationApproval> approvals = new ArrayList<>();
+    for (int index = 0; index < rawApprovals.size(); index++) {
+      final String approvalField = field + ".approvals[" + index + "]";
+      final Map<String, Object> approval =
+          exactObject(
+              rawApprovals.get(index), approvalField, keys("public_key", "signature"));
+      approvals.add(
+          new ProviderBundleVerificationApproval(
+              string(approval.get("public_key"), approvalField + ".public_key"),
+              string(approval.get("signature"), approvalField + ".signature")));
+    }
+    return new ProviderBundleVerificationAttestation(
+        new ProviderBundleVerificationPayload(typedBinding), approvals);
   }
 
   private static AliasRecord parseAliasRecord(final Object value, final String field) {

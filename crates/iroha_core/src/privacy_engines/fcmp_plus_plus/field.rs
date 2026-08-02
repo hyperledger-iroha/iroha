@@ -19,8 +19,9 @@ use p256::elliptic_curve::bigint::{
     CtChoice, Encoding, U256, impl_modulus,
     modular::constant_mod::{Residue, ResidueParams},
 };
+use p256::elliptic_curve::subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 use sha3::{Digest as _, Keccak256};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::FcmpNativeErrorV1;
 
@@ -72,6 +73,14 @@ macro_rules! define_local_field {
             pub(super) const fn invert(&self) -> (Self, CtChoice) {
                 let (inverse, is_some) = self.0.invert();
                 (Self(inverse), is_some)
+            }
+
+            pub(super) fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
+                Self(<$residue>::conditional_select(&a.0, &b.0, choice))
+            }
+
+            pub(super) fn ct_is_zero(&self) -> Choice {
+                self.0.ct_eq(&<$residue>::ZERO)
             }
         }
 
@@ -128,6 +137,8 @@ macro_rules! define_local_field {
         impl Zeroize for $name {
             fn zeroize(&mut self) {
                 *self = Self::ZERO;
+                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                let _ = core::hint::black_box(&mut *self);
             }
         }
     };
@@ -227,8 +238,10 @@ macro_rules! define_cycle_point {
     (
         $name:ident,
         $field:ty,
+        $scalar:ty,
         $decode_field:ident,
         $encode_field:ident,
+        $encode_scalar:ident,
         $sqrt_field:ident,
         $is_zero:ident,
         $is_odd:ident,
@@ -269,7 +282,21 @@ macro_rules! define_cycle_point {
             }
 
             pub(super) fn is_identity(self) -> bool {
-                $is_zero(self.x)
+                bool::from(self.x.ct_is_zero())
+            }
+
+            pub(super) fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
+                Self {
+                    x: <$field>::conditional_select(&a.x, &b.x, choice),
+                    y: <$field>::conditional_select(&a.y, &b.y, choice),
+                    z: <$field>::conditional_select(&a.z, &b.z, choice),
+                }
+            }
+
+            pub(super) fn clear_secret(&mut self) {
+                self.zeroize();
+                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                let _ = core::hint::black_box(&mut *self);
             }
 
             pub(super) fn decode(
@@ -382,9 +409,6 @@ macro_rules! define_cycle_point {
 
             pub(super) fn double(self) -> Self {
                 // Bernstein-Lange dbl-2007-bl-2, specialized to a = -3.
-                if self.is_identity() {
-                    return Self::identity();
-                }
                 let w_base = (self.x - self.z) * (self.x + self.z);
                 let w = w_base + w_base + w_base;
                 let s = (self.y * self.z) + (self.y * self.z);
@@ -394,32 +418,32 @@ macro_rules! define_cycle_point {
                 let rr = r.square();
                 let b_twice = (self.x * r) + (self.x * r);
                 let h = w.square() - b_twice - b_twice;
-                Self {
+                let doubled = Self {
                     x: h * s,
                     y: w * (b_twice - h) - rr - rr,
                     z: sss,
-                }
+                };
+                Self::conditional_select(&doubled, &Self::identity(), self.x.ct_is_zero())
             }
 
             pub(super) fn negate(self) -> Self {
-                if self.is_identity() {
-                    self
-                } else {
-                    Self {
-                        x: self.x,
-                        y: -self.y,
-                        z: self.z,
-                    }
-                }
+                let negated = Self {
+                    x: self.x,
+                    y: -self.y,
+                    z: self.z,
+                };
+                Self::conditional_select(&negated, &Self::identity(), self.x.ct_is_zero())
             }
 
-            pub(super) fn mul(self, scalar: U256) -> Self {
+            pub(super) fn mul(self, scalar: $scalar) -> Self {
+                let scalar = Zeroizing::new(scalar);
+                let bytes = Zeroizing::new($encode_scalar(*scalar));
                 let mut result = Self::identity();
-                for bit in (0..255).rev() {
-                    result = result.double();
-                    if scalar.bit_vartime(bit) {
-                        result = result.add(self);
-                    }
+                for bit in (0..256).rev() {
+                    let doubled = result.double();
+                    let added = doubled.add(self);
+                    let choice = Choice::from((bytes[bit / 8] >> (bit % 8)) & 1);
+                    result = Self::conditional_select(&doubled, &added, choice);
                 }
                 result
             }
@@ -430,8 +454,10 @@ macro_rules! define_cycle_point {
 define_cycle_point!(
     HeliosPoint,
     Field25519,
+    HelioseleneField,
     decode_field25519,
     encode_field25519,
+    encode_helioselene,
     sqrt_field25519,
     field25519_is_zero,
     field25519_is_odd,
@@ -440,8 +466,10 @@ define_cycle_point!(
 define_cycle_point!(
     SelenePoint,
     HelioseleneField,
+    Field25519,
     decode_helioselene,
     encode_helioselene,
+    encode_field25519,
     sqrt_helioselene,
     helioselene_is_zero,
     helioselene_is_odd,
@@ -596,7 +624,7 @@ pub(super) fn hash_selene(values: &[Field25519]) -> Result<SelenePoint, FcmpNati
         .iter()
         .zip(selene_generators())
         .fold(selene_hash_initializer(), |hash, (scalar, generator)| {
-            hash.add(generator.mul(scalar.retrieve()))
+            hash.add(generator.mul(*scalar))
         }))
 }
 
@@ -608,7 +636,7 @@ pub(super) fn hash_helios(values: &[HelioseleneField]) -> Result<HeliosPoint, Fc
         .iter()
         .zip(helios_generators())
         .fold(helios_hash_initializer(), |hash, (scalar, generator)| {
-            hash.add(generator.mul(scalar.retrieve()))
+            hash.add(generator.mul(*scalar))
         }))
 }
 
@@ -738,9 +766,11 @@ mod tests {
         assert_eq!(identity.add(point), point);
         assert_eq!(point.add(identity), point);
         assert_eq!(point.double(), point.add(point));
-        assert_eq!(point.mul(U256::ZERO), identity);
-        assert_eq!(point.mul(U256::ONE), point);
-        assert_eq!(point.mul(U256::from(2_u8)), point.double());
+        assert_eq!(point.mul(Field25519::ZERO), identity);
+        assert_eq!(point.mul(Field25519::ONE), point);
+        assert_eq!(point.mul(field25519_from_u64(2)), point.double());
+        let field25519_max = Field25519::new(&FIELD25519_MODULUS.wrapping_sub(&U256::ONE));
+        assert_eq!(point.mul(field25519_max), point.negate());
 
         let mut negative_encoding = point.encode();
         negative_encoding[31] ^= 0x80;
@@ -758,6 +788,23 @@ mod tests {
             HeliosPoint::decode(negative_encoding, false).expect("opposite y is on curve");
         assert!(helios.add(negative).is_identity());
         assert_eq!(helios.double(), helios.add(helios));
+        assert_eq!(helios.mul(HelioseleneField::ZERO), HeliosPoint::identity());
+        assert_eq!(helios.mul(HelioseleneField::ONE), helios);
+        assert_eq!(
+            helios.mul(HelioseleneField::new(&U256::from(2_u8))),
+            helios.double()
+        );
+        let helioselene_max = HelioseleneField::new(&HELIOSELENE_MODULUS.wrapping_sub(&U256::ONE));
+        assert_eq!(helios.mul(helioselene_max), helios.negate());
+
+        assert_eq!(
+            SelenePoint::conditional_select(&identity, &point, Choice::from(0)),
+            identity
+        );
+        assert_eq!(
+            SelenePoint::conditional_select(&identity, &point, Choice::from(1)),
+            point
+        );
     }
 
     #[test]

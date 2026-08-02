@@ -2367,7 +2367,9 @@ fn gov_vote_zk_against_mock() {
             "ref-zk",
             "--mode",
             "zk",
-            "--proof-b64",
+            "--backend",
+            "halo2/ipa",
+            "--envelope-b64",
             "AAA=",
             "--owner",
             &owner_str,
@@ -2510,7 +2512,9 @@ fn gov_vote_zk_emits_summary_and_json() {
             "ref-zk",
             "--mode",
             "zk",
-            "--proof-b64",
+            "--backend",
+            "halo2/ipa",
+            "--envelope-b64",
             "BBB=",
             "--owner",
             &owner_str,
@@ -2547,7 +2551,9 @@ fn gov_vote_zk_emits_summary_and_json() {
             "ref-zk",
             "--mode",
             "zk",
-            "--proof-b64",
+            "--backend",
+            "halo2/ipa",
+            "--envelope-b64",
             "BBB=",
             "--owner",
             &owner_str,
@@ -2613,6 +2619,40 @@ fn gov_vote_zk_emits_summary_and_json() {
         entry.get("nullifier").and_then(norito::json::Value::as_str),
         Some(nullifier.as_str())
     );
+}
+
+#[test]
+fn gov_vote_rejects_retired_zk_flag_aliases() {
+    for (flag, value) in [
+        ("--proof-b64", "AAA="),
+        ("--lock-amount", "1"),
+        ("--lock-duration-blocks", "1"),
+    ] {
+        let output = command()
+            .args([
+                "app",
+                "gov",
+                "vote",
+                "--referendum-id",
+                "ref-zk",
+                "--mode",
+                "zk",
+                "--backend",
+                "halo2/ipa",
+                "--envelope-b64",
+                "AAA=",
+                flag,
+                value,
+            ])
+            .output()
+            .expect("run CLI with a retired ZK flag");
+        assert!(!output.status.success(), "{flag} must be absent");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument") && stderr.contains(flag),
+            "unexpected diagnostic for {flag}: {stderr}"
+        );
+    }
 }
 
 #[test]

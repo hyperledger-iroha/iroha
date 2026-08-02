@@ -38,7 +38,7 @@ use iroha::data_model::{
 use iroha_crypto::{Hash, KeyPair};
 use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
-    CanSubmitGovernanceBallot,
+    CanProposeRuntimeUpgrade, CanSubmitGovernanceBallot,
 };
 use iroha_test_network::{NetworkBuilder, NetworkPeer, ensure_domain_setup_for_network};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
@@ -69,8 +69,6 @@ const HOSTILE_HONEST_BLOCKED: usize = 4;
 const HOSTILE_ATTACKERS_CAPTURED: usize = 18;
 const HOSTILE_HONEST_CAPTURED: usize = 2;
 const HOSTILE_DEPLOY_CONTRACT_ID: &str = "parliament.hostile.capture.deploy.contract";
-const HOSTILE_RUNTIME_PERMISSION_CONTRACT_ID: &str =
-    "parliament.hostile.capture.runtime.permission";
 const HOSTILE_DEPLOY_CODE_HASH_HEX: &str =
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const HOSTILE_RUNTIME_START_HEIGHT: u64 = 1_000;
@@ -98,7 +96,6 @@ fn governance_contract_address(contract_id: &str) -> ContractAddress {
         FIRST_CONTRACT_ID => 1,
         SECOND_CONTRACT_ID => 2,
         HOSTILE_DEPLOY_CONTRACT_ID => 3,
-        HOSTILE_RUNTIME_PERMISSION_CONTRACT_ID => 4,
         other => panic!("unexpected governance smoke contract id `{other}`"),
     };
     ContractAddress::derive(
@@ -1047,6 +1044,13 @@ fn governance_builder_for_hostile_takeover() -> NetworkBuilder {
     let governance_asset_id = governance_asset_definition_id().to_string();
     NetworkBuilder::new()
         .with_peers(4)
+        .with_genesis_instruction(Grant::account_permission(
+            CanProposeRuntimeUpgrade {
+                abi_version: 1,
+                abi_hash: parse_hex32(&canonical_abi_hex()),
+            },
+            ALICE_ID.clone(),
+        ))
         .with_config_layer(move |layer| {
             layer
                 .write(["nexus", "governance", "default_module"], "parliament")
@@ -1204,17 +1208,12 @@ async fn setup_hostile_fixture(
         contract_address: governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID),
     }
     .into();
-    let runtime_perm: Permission = CanProposeContractDeployment {
-        contract_address: governance_contract_address(HOSTILE_RUNTIME_PERMISSION_CONTRACT_ID),
-    }
-    .into();
     let enact_perm: Permission = CanEnactGovernance.into();
     let manage_parliament_perm: Permission = CanManageParliament.into();
     submit_permission_grants_and_wait(
         &alice,
         vec![
             (ALICE_ID.clone(), deploy_perm),
-            (ALICE_ID.clone(), runtime_perm),
             (ALICE_ID.clone(), enact_perm),
             (ALICE_ID.clone(), manage_parliament_perm),
         ],

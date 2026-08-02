@@ -2200,7 +2200,7 @@ impl PorCoordinator {
         #[cfg(not(test))]
         let status_generation = self.require_authoritative_projection()?.indexes.generation;
         #[cfg(test)]
-        let status_generation = self.authoritative_projection.read().as_deref().map_or_else(
+        let status_generation = self.authoritative_projection.read().as_ref().map_or_else(
             || self.status_indexes.read().generation,
             |projection| projection.indexes.generation,
         );
@@ -6659,8 +6659,7 @@ mod tests {
             .expect("install empty authoritative projection");
         let projection_address = {
             let projection = coordinator.authoritative_projection.read();
-            projection.as_ref().expect("installed projection")
-                as *const AuthoritativePorProjectionV1 as usize
+            std::ptr::from_ref(projection.as_ref().expect("installed projection"))
         };
 
         let challenge = sample_challenge(false);
@@ -6692,8 +6691,7 @@ mod tests {
             .expect("replace one status and its indexes in place");
         let projection = coordinator.authoritative_projection.read();
         assert_eq!(
-            projection.as_ref().expect("projection remains installed")
-                as *const AuthoritativePorProjectionV1 as usize,
+            std::ptr::from_ref(projection.as_ref().expect("projection remains installed"),),
             projection_address,
             "incremental updates must mutate the installed projection rather than clone history"
         );

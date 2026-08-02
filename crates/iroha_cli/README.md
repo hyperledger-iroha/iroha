@@ -194,7 +194,8 @@ Responds with `{ ok, proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`
 - Submit a ballot (auto-detects referendum mode unless overridden):
 
 ```bash
-iroha app gov vote --referendum-id r1 --proof-b64 BASE64_PROOF \
+iroha app gov vote --referendum-id r1 --backend halo2/ipa \
+  --envelope-b64 BASE64_ENVELOPE \
   [--public public.json]
 ```
 

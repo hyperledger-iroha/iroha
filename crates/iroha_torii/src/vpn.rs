@@ -2592,13 +2592,17 @@ mod tests {
         operator_account_id: &AccountId,
     ) -> SharedAppState {
         let permission: Permission = CanIssueSoranetVpnQuote.into();
-        let permissions = world.account_permissions_mut_for_testing();
-        let mut operator_permissions = permissions
-            .get(operator_account_id)
-            .cloned()
-            .unwrap_or_default();
+        let mut operator_permissions = {
+            let permissions = world.account_permissions_mut_for_testing().view();
+            permissions
+                .get(operator_account_id)
+                .cloned()
+                .unwrap_or_default()
+        };
         operator_permissions.insert(permission);
-        permissions.insert(operator_account_id.clone(), operator_permissions);
+        world
+            .account_permissions_mut_for_testing()
+            .insert(operator_account_id.clone(), operator_permissions);
         vpn_enabled_app_with_operator_unchecked(world, operator_account_id)
     }
 

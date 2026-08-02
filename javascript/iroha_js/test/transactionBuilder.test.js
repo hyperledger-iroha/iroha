@@ -2879,7 +2879,7 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
   assert.equal(relayInstruction.relay.bandwidth_class, 6);
 });
 
-test("buildProposeDeployContractTransaction wraps proposal", () => {
+baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x10]),
@@ -2918,7 +2918,7 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
   );
 });
 
-test("buildCastZkBallotTransaction encodes ballot", () => {
+baseTest("buildCastZkBallotTransaction encodes ballot", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x11]),
@@ -2939,7 +2939,7 @@ test("buildCastZkBallotTransaction encodes ballot", () => {
         ballot: {
           electionId: "ref-1",
           proof: Buffer.alloc(32, 0x01),
-          publicInputs: { tally: "aye" },
+          publicInputs: { direction: "Aye" },
         },
         privateKey: PRIVATE_KEY,
       }),

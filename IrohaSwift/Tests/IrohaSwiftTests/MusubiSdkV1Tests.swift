@@ -129,7 +129,7 @@ final class MusubiSdkV1Tests: XCTestCase {
 
     func testEveryTypedRouteRoundTripsExactRequestAndResponseJSON() throws {
         let routes = try fixtureRoutes()
-        XCTAssertEqual(routes.count, 11)
+        XCTAssertEqual(routes.count, 12)
         XCTAssertEqual(Set(try routes.map { try path($0) }), expectedPaths)
         for route in routes {
             let routePath = try path(route)
@@ -206,8 +206,35 @@ final class MusubiSdkV1Tests: XCTestCase {
         )
 
         XCTAssertEqual(page.items.map { $0.locationId.bytes[0] }, [1, 2])
+        XCTAssertEqual(page.items.map { $0.providerAttestationSetDigest.bytes[0] }, [23, 23])
         XCTAssertEqual(page.items.map(\.finalizedHeight), [50, 50])
         XCTAssertEqual(page.items.map(\.revision), [1, 1])
+    }
+
+    func testArchiveLocationRejectsLegacyOrZeroAttestationCommitment() throws {
+        var legacy = try populatedArchiveLocationResponse(locationFills: [1])
+        var items = try array(legacy["items"])
+        var item = try object(items[0])
+        item.removeValue(forKey: "provider_attestation_set_digest")
+        item["provider_attestations"] = [Any]()
+        items[0] = item
+        legacy["items"] = items
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(MusubiArchiveLocationPageV1.self, from: jsonData(legacy))
+        )
+
+        var zeroCommitment = try populatedArchiveLocationResponse(locationFills: [1])
+        items = try array(zeroCommitment["items"])
+        item = try object(items[0])
+        item["provider_attestation_set_digest"] = [Array(repeating: 0, count: 32)]
+        items[0] = item
+        zeroCommitment["items"] = items
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiArchiveLocationPageV1.self,
+                from: jsonData(zeroCommitment)
+            )
+        )
     }
 
     func testArchiveLocationPageRejectsExcessUnorderedAndDuplicateItems() throws {
@@ -373,11 +400,11 @@ final class MusubiSdkV1Tests: XCTestCase {
             MusubiExactReleaseQueryV1.self,
             from: jsonData(releaseRoute["request"])
         )
-        let releaseRecord = try decoder.decode(
-            MusubiReleaseRecordV1.self,
+        let releaseSnapshot = try decoder.decode(
+            MusubiExactReleaseSnapshotV1.self,
             from: jsonData(releaseRoute["response"])
         )
-        try releaseRecord.requireMatches(releaseRequest)
+        try releaseSnapshot.requireMatches(releaseRequest)
         var wrongReleaseRequest = try object(deepMutableCopy(releaseRoute["request"]))
         var wrongRelease = try object(wrongReleaseRequest["release"])
         var wrongVersion = try object(wrongRelease["version"])
@@ -385,10 +412,31 @@ final class MusubiSdkV1Tests: XCTestCase {
         wrongRelease["version"] = wrongVersion
         wrongReleaseRequest["release"] = wrongRelease
         XCTAssertThrowsError(
-            try releaseRecord.requireMatches(
+            try releaseSnapshot.requireMatches(
                 decoder.decode(
                     MusubiExactReleaseQueryV1.self,
                     from: jsonData(wrongReleaseRequest)
+                )
+            )
+        )
+
+        let providerRoute = try route(MusubiToriiClientV1.providerBundleAttestationPath)
+        let providerRequest = try decoder.decode(
+            MusubiProviderBundleAttestationKeyV1.self,
+            from: jsonData(providerRoute["request"])
+        )
+        let providerRecord = try decoder.decode(
+            MusubiProviderBundleAttestationRecordV1.self,
+            from: jsonData(providerRoute["response"])
+        )
+        try providerRecord.requireMatches(providerRequest)
+        var wrongProviderRequest = try object(deepMutableCopy(providerRoute["request"]))
+        wrongProviderRequest["provider_id"] = [String(repeating: "FE", count: 32)]
+        XCTAssertThrowsError(
+            try providerRecord.requireMatches(
+                decoder.decode(
+                    MusubiProviderBundleAttestationKeyV1.self,
+                    from: jsonData(wrongProviderRequest)
                 )
             )
         )
@@ -634,7 +682,8 @@ final class MusubiSdkV1Tests: XCTestCase {
         let resolverRoute = try route(MusubiToriiClientV1.resolverIndexPath)
         var duplicateResolver = try object(deepMutableCopy(resolverRoute["response"]))
         let releaseRoute = try route(MusubiToriiClientV1.exactReleasePath)
-        let release = try object(releaseRoute["response"])
+        let releaseSnapshot = try object(releaseRoute["response"])
+        let release = try object(releaseSnapshot["home_release"])
         let manifest = try object(release["manifest"])
         let resolverRow: [String: Any] = [
             "release": try XCTUnwrap(manifest["release"]),
@@ -1018,8 +1067,9 @@ final class MusubiSdkV1Tests: XCTestCase {
     func testGovernedTakedownRequiresOnlyAppliedHeight() throws {
         let exactRelease = try route(MusubiToriiClientV1.exactReleasePath)
         var canonical = try object(deepMutableCopy(exactRelease["response"]))
-        let actionDigest = try XCTUnwrap(canonical["release_digest"])
-        canonical["artifact_governance"] = [
+        var homeRelease = try object(canonical["home_release"])
+        let actionDigest = try XCTUnwrap(homeRelease["release_digest"])
+        let governedState: [String: Any] = [
             "kind": "TakenDown",
             "value": [
                 "action_digest": actionDigest,
@@ -1027,34 +1077,299 @@ final class MusubiSdkV1Tests: XCTestCase {
                 "applied_at_height": 50
             ]
         ]
-        var revisions = try object(canonical["revisions"])
+        homeRelease["artifact_governance"] = governedState
+        var revisions = try object(homeRelease["revisions"])
         revisions["artifact_governance"] = 2
-        canonical["revisions"] = revisions
+        homeRelease["revisions"] = revisions
+        canonical["home_release"] = homeRelease
+        var universalRelease = try object(canonical["universal_release"])
+        var selection = try object(universalRelease["selection"])
+        selection["governance"] = deepMutableCopy(governedState)
+        universalRelease["selection"] = selection
+        canonical["universal_release"] = universalRelease
         XCTAssertNoThrow(
-            try JSONDecoder().decode(MusubiReleaseRecordV1.self, from: jsonData(canonical))
+            try JSONDecoder().decode(MusubiExactReleaseSnapshotV1.self, from: jsonData(canonical))
         )
 
         var legacy = try object(deepMutableCopy(canonical))
-        var legacyGovernance = try object(legacy["artifact_governance"])
+        var legacyHomeRelease = try object(legacy["home_release"])
+        var legacyGovernance = try object(legacyHomeRelease["artifact_governance"])
         var legacyPayload = try object(legacyGovernance["value"])
         legacyPayload["enacted_at_height"] = legacyPayload.removeValue(
             forKey: "applied_at_height"
         )
         legacyGovernance["value"] = legacyPayload
-        legacy["artifact_governance"] = legacyGovernance
+        legacyHomeRelease["artifact_governance"] = legacyGovernance
+        legacy["home_release"] = legacyHomeRelease
         XCTAssertThrowsError(
-            try JSONDecoder().decode(MusubiReleaseRecordV1.self, from: jsonData(legacy))
+            try JSONDecoder().decode(MusubiExactReleaseSnapshotV1.self, from: jsonData(legacy))
         )
 
         var zeroHeight = try object(deepMutableCopy(canonical))
-        var zeroGovernance = try object(zeroHeight["artifact_governance"])
+        var zeroHomeRelease = try object(zeroHeight["home_release"])
+        var zeroGovernance = try object(zeroHomeRelease["artifact_governance"])
         var zeroPayload = try object(zeroGovernance["value"])
         zeroPayload["applied_at_height"] = 0
         zeroGovernance["value"] = zeroPayload
-        zeroHeight["artifact_governance"] = zeroGovernance
+        zeroHomeRelease["artifact_governance"] = zeroGovernance
+        zeroHeight["home_release"] = zeroHomeRelease
         XCTAssertThrowsError(
-            try JSONDecoder().decode(MusubiReleaseRecordV1.self, from: jsonData(zeroHeight))
+            try JSONDecoder().decode(
+                MusubiExactReleaseSnapshotV1.self,
+                from: jsonData(zeroHeight)
+            )
         )
+    }
+
+    func testExactReleaseRejectsSubstitutedProjectionsAndNonfinalAnchors() throws {
+        let exactRelease = try route(MusubiToriiClientV1.exactReleasePath)
+
+        func assertRejected(
+            _ mutation: (inout [String: Any]) throws -> Void,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws {
+            var response = try object(deepMutableCopy(exactRelease["response"]))
+            try mutation(&response)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    MusubiExactReleaseSnapshotV1.self,
+                    from: jsonData(response)
+                ),
+                file: file,
+                line: line
+            )
+        }
+
+        try assertRejected { response in
+            var universal = try object(response["universal_release"])
+            universal["release_digest"] = [Array(repeating: 64, count: 32)]
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            let replacement = [Array(repeating: 64, count: 32)]
+            var home = try object(response["home_release"])
+            home["release_digest"] = replacement
+            response["home_release"] = home
+            var universal = try object(response["universal_release"])
+            universal["release_digest"] = replacement
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            home["published_by"] = "not-an-account"
+            response["home_release"] = home
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            home["published_at_height"] = 0
+            response["home_release"] = home
+        }
+        try assertRejected { response in
+            var universal = try object(response["universal_release"])
+            universal["archive_id"] = [Array(repeating: 65, count: 32)]
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var universal = try object(response["universal_release"])
+            universal["interface_digest"] = [Array(repeating: 66, count: 32)]
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var universal = try object(response["universal_release"])
+            var abi = try object(universal["abi"])
+            abi["abi_hash"] = Array(repeating: 67, count: 32)
+            universal["abi"] = abi
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            let home = try object(response["home_release"])
+            let manifest = try object(home["manifest"])
+            let release = try object(manifest["release"])
+            var dependencyPackage = try object(deepMutableCopy(release["package"]))
+            dependencyPackage["name"] = ["dependency"]
+            var universal = try object(response["universal_release"])
+            universal["dependencies"] = [[
+                "alias": "dependency",
+                "package": dependencyPackage,
+                "requirement": ["kind": "Any", "value": NSNull()]
+            ]]
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            var yank = try object(selection["yank"])
+            yank["reason"] = ["substituted state"]
+            selection["yank"] = yank
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            let home = try object(response["home_release"])
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            selection["governance"] = [
+                "kind": "TakenDown",
+                "value": [
+                    "action_digest": try XCTUnwrap(home["release_digest"]),
+                    "reason": ["substituted governance"],
+                    "applied_at_height": 50
+                ]
+            ]
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            var homeYank = try object(home["yank"])
+            homeYank["revision"] = 10
+            home["yank"] = homeYank
+            var revisions = try object(home["revisions"])
+            revisions["yank"] = 10
+            home["revisions"] = revisions
+            response["home_release"] = home
+
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            var universalYank = try object(selection["yank"])
+            universalYank["revision"] = 10
+            selection["yank"] = universalYank
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            var homeYank = try object(home["yank"])
+            homeYank["changed_at_height"] = 51
+            home["yank"] = homeYank
+            response["home_release"] = home
+
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            var universalYank = try object(selection["yank"])
+            universalYank["changed_at_height"] = 51
+            selection["yank"] = universalYank
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            var revisions = try object(home["revisions"])
+            revisions["artifact_governance"] = 10
+            home["revisions"] = revisions
+            response["home_release"] = home
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            var homeYank = try object(home["yank"])
+            homeYank["changed_at_height"] = 42
+            home["yank"] = homeYank
+            response["home_release"] = home
+
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            var universalYank = try object(selection["yank"])
+            universalYank["changed_at_height"] = 42
+            selection["yank"] = universalYank
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            let governed: [String: Any] = [
+                "kind": "TakenDown",
+                "value": [
+                    "action_digest": try XCTUnwrap(home["release_digest"]),
+                    "reason": ["nonfinal takedown"],
+                    "applied_at_height": 51
+                ]
+            ]
+            home["artifact_governance"] = governed
+            var revisions = try object(home["revisions"])
+            revisions["artifact_governance"] = 2
+            home["revisions"] = revisions
+            response["home_release"] = home
+
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            selection["governance"] = deepMutableCopy(governed)
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            home["published_at_height"] = 51
+            response["home_release"] = home
+        }
+        try assertRejected { response in
+            var universal = try object(response["universal_release"])
+            universal["index_revision"] = 10
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var home = try object(response["home_release"])
+            let governed: [String: Any] = [
+                "kind": "TakenDown",
+                "value": [
+                    "action_digest": try XCTUnwrap(home["release_digest"]),
+                    "reason": ["premature takedown"],
+                    "applied_at_height": 42
+                ]
+            ]
+            home["artifact_governance"] = governed
+            var revisions = try object(home["revisions"])
+            revisions["artifact_governance"] = 2
+            home["revisions"] = revisions
+            response["home_release"] = home
+
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            selection["governance"] = deepMutableCopy(governed)
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            var storage = try object(selection["storage"])
+            storage["finalized_height"] = 51
+            selection["storage"] = storage
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            var storage = try object(selection["storage"])
+            storage["finalized_block_hash"] = Array(repeating: 6, count: 32)
+            selection["storage"] = storage
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
+        try assertRejected { response in
+            var snapshot = try object(response["snapshot"])
+            snapshot["finalized_height"] = 1
+            response["snapshot"] = snapshot
+
+            var home = try object(response["home_release"])
+            home["published_at_height"] = 1
+            var homeYank = try object(home["yank"])
+            homeYank["changed_at_height"] = 1
+            home["yank"] = homeYank
+            response["home_release"] = home
+
+            var universal = try object(response["universal_release"])
+            var selection = try object(universal["selection"])
+            var universalYank = try object(selection["yank"])
+            universalYank["changed_at_height"] = 1
+            selection["yank"] = universalYank
+            var storage = try object(selection["storage"])
+            storage["finalized_height"] = 1
+            selection["storage"] = storage
+            universal["selection"] = selection
+            response["universal_release"] = universal
+        }
     }
 
     func testRejectsNoncanonicalInputsUnknownFieldsAndUnknownABIVersions() throws {
@@ -1084,15 +1399,42 @@ final class MusubiSdkV1Tests: XCTestCase {
 
         let releaseRoute = try route(MusubiToriiClientV1.exactReleasePath)
         var releaseResponse = try object(deepMutableCopy(releaseRoute["response"]))
-        var manifest = try object(releaseResponse["manifest"])
+        var homeRelease = try object(releaseResponse["home_release"])
+        var manifest = try object(homeRelease["manifest"])
         var abi = try object(manifest["abi"])
         abi["abi_version"] = 2
         manifest["abi"] = abi
-        releaseResponse["manifest"] = manifest
+        homeRelease["manifest"] = manifest
+        releaseResponse["home_release"] = homeRelease
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                MusubiReleaseRecordV1.self,
+                MusubiExactReleaseSnapshotV1.self,
                 from: jsonData(releaseResponse)
+            )
+        )
+
+        var futureStorage = try object(deepMutableCopy(releaseRoute["response"]))
+        var universalRelease = try object(futureStorage["universal_release"])
+        universalRelease["index_revision"] = 8
+        futureStorage["universal_release"] = universalRelease
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiExactReleaseSnapshotV1.self,
+                from: jsonData(futureStorage)
+            )
+        )
+
+        let providerRoute = try route(MusubiToriiClientV1.providerBundleAttestationPath)
+        var substitutedAttestationDigest = try object(
+            deepMutableCopy(providerRoute["response"])
+        )
+        substitutedAttestationDigest["attestation_digest"] = [
+            Array(repeating: 64, count: 32)
+        ]
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiProviderBundleAttestationRecordV1.self,
+                from: jsonData(substitutedAttestationDigest)
             )
         )
 
@@ -1127,6 +1469,10 @@ final class MusubiSdkV1Tests: XCTestCase {
         case MusubiToriiClientV1.exactReleasePath:
             _ = try await client.findExactRelease(
                 decoder.decode(MusubiExactReleaseQueryV1.self, from: request)
+            )
+        case MusubiToriiClientV1.providerBundleAttestationPath:
+            _ = try await client.findProviderBundleAttestation(
+                decoder.decode(MusubiProviderBundleAttestationKeyV1.self, from: request)
             )
         case MusubiToriiClientV1.resolverIndexPath:
             _ = try await client.findResolverIndex(
@@ -1176,6 +1522,10 @@ final class MusubiSdkV1Tests: XCTestCase {
             return try encodedObject(decoder.decode(MusubiExactPackageQueryV1.self, from: data))
         case MusubiToriiClientV1.exactReleasePath:
             return try encodedObject(decoder.decode(MusubiExactReleaseQueryV1.self, from: data))
+        case MusubiToriiClientV1.providerBundleAttestationPath:
+            return try encodedObject(
+                decoder.decode(MusubiProviderBundleAttestationKeyV1.self, from: data)
+            )
         case MusubiToriiClientV1.resolverIndexPath:
             return try encodedObject(decoder.decode(MusubiResolverIndexQueryV1.self, from: data))
         case MusubiToriiClientV1.versionsPath, MusubiToriiClientV1.maintainersPath:
@@ -1203,7 +1553,13 @@ final class MusubiSdkV1Tests: XCTestCase {
         case MusubiToriiClientV1.exactPackagePath:
             return try encodedObject(decoder.decode(MusubiPackageRecordV1.self, from: data))
         case MusubiToriiClientV1.exactReleasePath:
-            return try encodedObject(decoder.decode(MusubiReleaseRecordV1.self, from: data))
+            return try encodedObject(
+                decoder.decode(MusubiExactReleaseSnapshotV1.self, from: data)
+            )
+        case MusubiToriiClientV1.providerBundleAttestationPath:
+            return try encodedObject(
+                decoder.decode(MusubiProviderBundleAttestationRecordV1.self, from: data)
+            )
         case MusubiToriiClientV1.resolverIndexPath:
             return try encodedObject(decoder.decode(MusubiResolverIndexPageV1.self, from: data))
         case MusubiToriiClientV1.versionsPath:
@@ -1304,8 +1660,8 @@ final class MusubiSdkV1Tests: XCTestCase {
             "archive_id": archiveID,
             "pin_manifest": [Array(repeating: 21, count: 32)],
             "replication_order": [Array(repeating: 22, count: 32)],
-            "providers": [Any](),
-            "provider_attestations": [Any](),
+            "providers": [[String(repeating: "3F", count: 32)]],
+            "provider_attestation_set_digest": [Array(repeating: 23, count: 32)],
             "renew_after_epoch": 60,
             "expires_at_epoch": 120,
             "finalized_height": 50,
@@ -1362,6 +1718,7 @@ final class MusubiSdkV1Tests: XCTestCase {
         [
             MusubiToriiClientV1.exactPackagePath,
             MusubiToriiClientV1.exactReleasePath,
+            MusubiToriiClientV1.providerBundleAttestationPath,
             MusubiToriiClientV1.resolverIndexPath,
             MusubiToriiClientV1.versionsPath,
             MusubiToriiClientV1.maintainersPath,

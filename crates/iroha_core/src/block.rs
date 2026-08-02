@@ -1963,8 +1963,6 @@ mod prefetch_tests {
     #[test]
     fn parse_account_key_variants() {
         let alice = (*ALICE_ID).clone();
-        let wonderland: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let world = World::new();
         let world_view = world.view();
         let detail_key = format!("account.detail:{alice}:quota");
@@ -2190,8 +2188,6 @@ mod prefetch_tests {
     #[test]
     fn parse_lane_settlement_buffer_config_resolves_account() {
         let alice = (*ALICE_ID).clone();
-        let wonderland: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let world = World::new();
         let world_view = world.view();
         let mut lane = LaneConfig::default();
